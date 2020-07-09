@@ -1,5 +1,5 @@
-#ifndef PLATFORM_INTERFACE_H
-#define PLATFORM_INTERFACE_H
+#ifndef TGCALLS_PLATFORM_INTERFACE_H
+#define TGCALLS_PLATFORM_INTERFACE_H
 
 #include "rtc_base/thread.h"
 #include "api/video_codecs/video_encoder_factory.h"

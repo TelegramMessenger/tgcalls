@@ -1,5 +1,5 @@
-#ifndef TGVOIP_WEBRTC_MEDIA_MANAGER_H
-#define TGVOIP_WEBRTC_MEDIA_MANAGER_H
+#ifndef TGCALLS_MEDIA_MANAGER_H
+#define TGCALLS_MEDIA_MANAGER_H
 
 #include "rtc_base/thread.h"
 #include "rtc_base/copy_on_write_buffer.h"

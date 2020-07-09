@@ -1,5 +1,5 @@
-#ifndef VIDEOMETALVIEW_H
-#define VIDEOMETALVIEW_H
+#ifndef TGCALLS_VIDEO_METAL_VIEW_H
+#define TGCALLS_VIDEO_METAL_VIEW_H
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>

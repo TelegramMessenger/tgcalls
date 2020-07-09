@@ -1,5 +1,5 @@
-#ifndef TGVOIP_IMPL_H
-#define TGVOIP_IMPL_H
+#ifndef TGCALLS_INSTANCE_IMPL_H
+#define TGCALLS_INSTANCE_IMPL_H
 
 #include <iostream>
 
@@ -44,8 +44,6 @@ private:
 
 	std::unique_ptr<ThreadLocalObject<Manager>> _manager;
 	std::unique_ptr<LogSinkImpl> _logSink;
-	std::function<void(State)> _stateUpdated;
-	std::function<void(const std::vector<uint8_t> &)> _signalingDataEmitted;
 
 };
 

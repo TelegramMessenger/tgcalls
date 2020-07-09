@@ -93,9 +93,7 @@ void InstanceImpl::LogSinkImpl::OnLogMessage(const std::string &message) {
 }
 
 InstanceImpl::InstanceImpl(Descriptor &&descriptor)
-: _logSink(std::make_unique<LogSinkImpl>())
-, _stateUpdated(std::move(descriptor.stateUpdated))
-, _signalingDataEmitted(std::move(descriptor.signalingDataEmitted)) {
+: _logSink(std::make_unique<LogSinkImpl>()) {
 	static const auto onceToken = [] {
 		rtc::LogMessage::LogToDebug(rtc::LS_INFO);
 		rtc::LogMessage::SetLogToStderr(true);

@@ -1,5 +1,5 @@
-#ifndef NETWORK_MANAGER_H
-#define NETWORK_MANAGER_H
+#ifndef TGCALLS_NETWORK_MANAGER_H
+#define TGCALLS_NETWORK_MANAGER_H
 
 #include "rtc_base/thread.h"
 

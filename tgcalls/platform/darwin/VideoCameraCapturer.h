@@ -1,5 +1,5 @@
-#ifndef VIDEOCAMERACAPTURER_H
-#define VIDEOCAMERACAPTURER_H
+#ifndef TGCALLS_VIDEO_CAMERA_CAPTURER_H
+#define TGCALLS_VIDEO_CAMERA_CAPTURER_H
 
 #import <Foundation/Foundation.h>
 #import <AVFoundation/AVFoundation.h>

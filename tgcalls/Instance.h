@@ -1,5 +1,5 @@
-#ifndef TGVOIP_H
-#define TGVOIP_H
+#ifndef TGCALLS_INSTANCE_H
+#define TGCALLS_INSTANCE_H
 
 #include <functional>
 #include <vector>

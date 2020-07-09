@@ -3,14 +3,7 @@
 
 #include "VideoCapturerInterface.h"
 
-#include "sdk/objc/native/src/objc_video_track_source.h"
-#include "api/video_track_source_proxy.h"
-
-@interface VideoCapturerInterfaceImplHolder : NSObject
-
-@property (nonatomic) void *reference;
-
-@end
+#include "api/media_stream_interface.h"
 
 namespace tgcalls {
 
@@ -23,7 +16,7 @@ public:
 
 private:
 	rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _source;
-	VideoCapturerInterfaceImplHolder *_implReference;
+
 };
 
 } // namespace tgcalls

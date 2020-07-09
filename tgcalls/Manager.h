@@ -1,5 +1,5 @@
-#ifndef TGVOIP_WEBRTC_MANAGER_H
-#define TGVOIP_WEBRTC_MANAGER_H
+#ifndef TGCALLS_MANAGER_H
+#define TGCALLS_MANAGER_H
 
 #include "ThreadLocalObject.h"
 #include "NetworkManager.h"

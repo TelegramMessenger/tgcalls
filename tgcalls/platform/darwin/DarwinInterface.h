@@ -1,5 +1,5 @@
-#ifndef DARWIN_INTERFACE_H
-#define DARWIN_INTERFACE_H
+#ifndef TGCALLS_DARWIN_INTERFACE_H
+#define TGCALLS_DARWIN_INTERFACE_H
 
 #include "platform/PlatformInterface.h"
 
