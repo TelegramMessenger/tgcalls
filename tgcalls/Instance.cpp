@@ -1,5 +1,7 @@
 #include "Instance.h"
 
+#include "VideoCaptureInterfaceImpl.h"
+
 #include <algorithm>
 #include <stdarg.h>
 
@@ -47,6 +49,10 @@ void Meta::RegisterOne(std::unique_ptr<Meta> meta) {
 		const auto version = meta->version();
 		MetaMap().emplace(version, std::move(meta));
 	}
+}
+
+std::shared_ptr<VideoCaptureInterface> CreateVideoCapture() {
+	return std::make_shared<VideoCaptureInterfaceImpl>();
 }
 
 void SetLoggingFunction(std::function<void(std::string const &)> loggingFunction) {
