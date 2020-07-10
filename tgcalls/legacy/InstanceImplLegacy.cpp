@@ -253,12 +253,12 @@ int64_t InstanceImplLegacy::getPreferredRelayId() {
 TrafficStats InstanceImplLegacy::getTrafficStats() {
 	tgvoip::VoIPController::TrafficStats stats;
 	controller_->GetStats(&stats);
-	return {
-		.bytesSentWifi = stats.bytesSentWifi,
-		.bytesReceivedWifi = stats.bytesRecvdWifi,
-		.bytesSentMobile = stats.bytesSentMobile,
-		.bytesReceivedMobile = stats.bytesRecvdMobile
-	};
+	auto result = TrafficStats();
+	result.bytesSentWifi = stats.bytesSentWifi;
+	result.bytesReceivedWifi = stats.bytesRecvdWifi;
+	result.bytesSentMobile = stats.bytesSentMobile;
+	result.bytesReceivedMobile = stats.bytesRecvdMobile;
+	return result;
 }
 
 PersistentState InstanceImplLegacy::getPersistentState() {
@@ -268,17 +268,16 @@ PersistentState InstanceImplLegacy::getPersistentState() {
 FinalState InstanceImplLegacy::stop() {
 	controller_->Stop();
 
-	FinalState finalState = {
-		.persistentState = getPersistentState(),
-		.debugLog = controller_->GetDebugLog(),
-		.trafficStats = getTrafficStats(),
-		.isRatingSuggested = controller_->NeedRate()
-	};
+	auto result = FinalState();
+	result.persistentState = getPersistentState();
+	result.debugLog = controller_->GetDebugLog();
+	result.trafficStats = getTrafficStats();
+	result.isRatingSuggested = controller_->NeedRate();
 
 	delete controller_;
 	controller_ = nullptr;
 
-	return finalState;
+	return result;
 }
 
 void InstanceImplLegacy::ControllerStateCallback(tgvoip::VoIPController *controller, int state) {
