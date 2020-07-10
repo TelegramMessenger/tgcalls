@@ -106,10 +106,10 @@ static std::vector<cricket::VideoCodec> AssignPayloadTypesAndDefaultCodecs(std::
 
 static int sendCodecPriority(const cricket::VideoCodec &codec) {
 	int priotity = 0;
-	if (codec.name == cricket::kAv1CodecName) {
-		return priotity;
-	}
-	priotity++;
+	//if (codec.name == cricket::kAv1CodecName) {
+	//	return priotity;
+	//}
+	//priotity++;
 	if (codec.name == cricket::kH265CodecName) {
 		if (PlatformInterface::SharedInstance()->supportsH265Encoding()) {
 			return priotity;
@@ -168,8 +168,7 @@ MediaManager::MediaManager(
 	bool isOutgoing,
 	std::shared_ptr<VideoCaptureInterface> videoCapture,
 	std::function<void (const rtc::CopyOnWriteBuffer &)> packetEmitted,
-	std::function<void (bool)> localVideoCaptureActiveUpdated
-) :
+	std::function<void (bool)> localVideoCaptureActiveUpdated) :
 _packetEmitted(packetEmitted),
 _localVideoCaptureActiveUpdated(localVideoCaptureActiveUpdated),
 _thread(thread),
@@ -184,16 +183,6 @@ _videoCapture(videoCapture) {
 	_ssrcVideo.outgoing = (!isOutgoing) ? ssrcVideoIncoming : ssrcVideoOutgoing;
 	_ssrcVideo.fecIncoming = isOutgoing ? ssrcVideoFecIncoming : ssrcVideoFecOutgoing;
 	_ssrcVideo.fecOutgoing = (!isOutgoing) ? ssrcVideoFecIncoming : ssrcVideoFecOutgoing;
-
-	_enableFlexfec = true;
-
-	_isConnected = false;
-	_muteOutgoingAudio = false;
-
-	auto videoEncoderFactory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory();
-	_videoCodecs = AssignPayloadTypesAndDefaultCodecs(videoEncoderFactory->GetSupportedFormats());
-
-	_isSendingVideo = false;
 
 	_audioNetworkInterface = std::unique_ptr<MediaManager::NetworkInterfaceImpl>(new MediaManager::NetworkInterfaceImpl(this, false));
 	_videoNetworkInterface = std::unique_ptr<MediaManager::NetworkInterfaceImpl>(new MediaManager::NetworkInterfaceImpl(this, true));
@@ -217,6 +206,8 @@ _videoCapture(videoCapture) {
 
 	mediaDeps.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory();
 	mediaDeps.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactory();
+
+	_videoCodecs = AssignPayloadTypesAndDefaultCodecs(mediaDeps.video_encoder_factory->GetSupportedFormats());
 
 	mediaDeps.audio_processing = webrtc::AudioProcessingBuilder().Create();
 	_mediaEngine = cricket::CreateMediaEngine(std::move(mediaDeps));

@@ -9,6 +9,7 @@
 #include "rtc_base/copy_on_write_buffer.h"
 #include "api/candidate.h"
 #include "Instance.h"
+#include "SignalingMessage.h"
 
 namespace rtc {
 class BasicPacketSocketFactory;
@@ -28,10 +29,12 @@ class BasicAsyncResolverFactory;
 
 namespace tgcalls {
 
-class NetworkManager: public sigslot::has_slots<> {
+struct SignalingMessage;
+
+class NetworkManager : public sigslot::has_slots<> {
 public:
 	struct State {
-		bool isReadyToSendData;
+		bool isReadyToSendData = false;
 	};
 
 public:
@@ -42,11 +45,10 @@ public:
 		std::vector<RtcServer> const &rtcServers,
 		std::function<void (const NetworkManager::State &)> stateUpdated,
 		std::function<void (const rtc::CopyOnWriteBuffer &)> packetReceived,
-		std::function<void (const std::vector<uint8_t> &)> signalingDataEmitted
-	);
+		std::function<void (const SignalingMessage &)> signalingMessageEmitted);
 	~NetworkManager();
 
-	void receiveSignalingData(const rtc::CopyOnWriteBuffer &data);
+	void receiveSignalingMessage(SignalingMessage &&message);
 	void sendPacket(const rtc::CopyOnWriteBuffer &packet);
 
 private:
@@ -54,7 +56,7 @@ private:
 	EncryptionKey _encryptionKey;
 	std::function<void (const NetworkManager::State &)> _stateUpdated;
 	std::function<void (const rtc::CopyOnWriteBuffer &)> _packetReceived;
-	std::function<void (const std::vector<uint8_t> &)> _signalingDataEmitted;
+	std::function<void (const SignalingMessage &)> _signalingMessageEmitted;
 
 	std::unique_ptr<rtc::BasicPacketSocketFactory> _socketFactory;
 	std::unique_ptr<rtc::BasicNetworkManager> _networkManager;

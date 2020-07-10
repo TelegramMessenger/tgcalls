@@ -77,19 +77,19 @@ protected:
 	std::function<void (bool)> _localVideoCaptureActiveUpdated;
 
 private:
-	rtc::Thread *_thread;
+	rtc::Thread *_thread = nullptr;
 	std::unique_ptr<webrtc::RtcEventLogNull> _eventLog;
 	std::unique_ptr<webrtc::TaskQueueFactory> _taskQueueFactory;
 
 	SSRC _ssrcAudio;
 	SSRC _ssrcVideo;
-	bool _enableFlexfec;
+	bool _enableFlexfec = true;
 
-	bool _isConnected;
-	bool _muteOutgoingAudio;
+	bool _isConnected = false;
+	bool _muteOutgoingAudio = false;
 
 	std::vector<cricket::VideoCodec> _videoCodecs;
-	bool _isSendingVideo;
+	bool _isSendingVideo = false;
 
 	std::unique_ptr<cricket::MediaEngineInterface> _mediaEngine;
 	std::unique_ptr<webrtc::Call> _call;

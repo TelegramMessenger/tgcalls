@@ -1,5 +1,7 @@
 #include "NetworkManager.h"
 
+#include "SignalingMessage.h"
+
 #include "p2p/base/basic_packet_socket_factory.h"
 #include "p2p/client/basic_port_allocator.h"
 #include "p2p/base/p2p_transport_channel.h"
@@ -155,13 +157,12 @@ NetworkManager::NetworkManager(
 	std::vector<RtcServer> const &rtcServers,
 	std::function<void (const NetworkManager::State &)> stateUpdated,
 	std::function<void (const rtc::CopyOnWriteBuffer &)> packetReceived,
-	std::function<void (const std::vector<uint8_t> &)> signalingDataEmitted
-) :
+	std::function<void (const SignalingMessage &)> signalingMessageEmitted) :
 _thread(thread),
 _encryptionKey(encryptionKey),
 _stateUpdated(stateUpdated),
 _packetReceived(packetReceived),
-_signalingDataEmitted(signalingDataEmitted) {
+_signalingMessageEmitted(signalingMessageEmitted) {
 	assert(_thread->IsCurrent());
 
 	_socketFactory.reset(new rtc::BasicPacketSocketFactory(_thread));
@@ -250,31 +251,12 @@ NetworkManager::~NetworkManager() {
 	_socketFactory.reset();
 }
 
-void NetworkManager::receiveSignalingData(const rtc::CopyOnWriteBuffer &data) {
-	rtc::ByteBufferReader reader((const char *)data.data(), data.size());
-	uint32_t candidateCount = 0;
-	if (!reader.ReadUInt32(&candidateCount)) {
-		return;
-	}
-	std::vector<std::string> candidates;
-	for (uint32_t i = 0; i < candidateCount; i++) {
-		uint32_t candidateLength = 0;
-		if (!reader.ReadUInt32(&candidateLength)) {
-			return;
-		}
-		std::string candidate;
-		if (!reader.ReadString(&candidate, candidateLength)) {
-			return;
-		}
-		candidates.push_back(candidate);
-	}
+void NetworkManager::receiveSignalingMessage(SignalingMessage &&message) {
+	const auto list = absl::get_if<CandidatesListMessage>(&message.data);
+	assert(list != nullptr);
 
-	for (auto &serializedCandidate : candidates) {
-		webrtc::JsepIceCandidate parseCandidate("", 0);
-		if (parseCandidate.Initialize(serializedCandidate, nullptr)) {
-			auto parsedCandidate = parseCandidate.candidate();
-			_transportChannel->AddRemoteCandidate(parsedCandidate);
-		}
+	for (const auto &candidate : list->candidates) {
+		_transportChannel->AddRemoteCandidate(candidate);
 	}
 }
 
@@ -288,25 +270,7 @@ void NetworkManager::sendPacket(const rtc::CopyOnWriteBuffer &packet) {
 
 void NetworkManager::candidateGathered(cricket::IceTransportInternal *transport, const cricket::Candidate &candidate) {
 	assert(_thread->IsCurrent());
-	webrtc::JsepIceCandidate iceCandidate("", 0);
-	iceCandidate.SetCandidate(candidate);
-	std::string serializedCandidate;
-	if (!iceCandidate.ToString(&serializedCandidate)) {
-		return;
-	}
-	std::vector<std::string> candidates;
-	candidates.push_back(serializedCandidate);
-
-	rtc::ByteBufferWriter writer;
-	writer.WriteUInt32((uint32_t)candidates.size());
-	for (auto string : candidates) {
-		writer.WriteUInt32((uint32_t)string.size());
-		writer.WriteString(string);
-	}
-	std::vector<uint8_t> data;
-	data.resize(writer.Length());
-	memcpy(data.data(), writer.Data(), writer.Length());
-	_signalingDataEmitted(data);
+	_signalingMessageEmitted({ CandidatesListMessage{ std::vector<cricket::Candidate>(1, candidate) } });
 }
 
 void NetworkManager::candidateGatheringState(cricket::IceTransportInternal *transport) {

@@ -81,15 +81,8 @@ void Manager::start() {
 					});
 				});
 			},
-			[signalingDataEmitted](const std::vector<uint8_t> &data) {
-				rtc::CopyOnWriteBuffer buffer;
-				uint8_t mode = 3;
-				buffer.AppendData(&mode, 1);
-				buffer.AppendData(data.data(), data.size());
-				std::vector<uint8_t> augmentedData;
-				augmentedData.resize(buffer.size());
-				memcpy(augmentedData.data(), buffer.data(), buffer.size());
-				signalingDataEmitted(augmentedData);
+			[signalingDataEmitted](const SignalingMessage &message) {
+				signalingDataEmitted(SerializeMessage(message));
 			}
 		);
 	}));
@@ -124,35 +117,24 @@ void Manager::start() {
 }
 
 void Manager::receiveSignalingData(const std::vector<uint8_t> &data) {
-	rtc::CopyOnWriteBuffer buffer;
-	buffer.AppendData(data.data(), data.size());
-
-	if (buffer.size() < 1) {
-		return;
+	if (auto message = DeserializeMessage(data)) {
+		receiveSignalingMessage(std::move(*message));
 	}
+}
 
-	rtc::ByteBufferReader reader((const char *)buffer.data(), buffer.size());
-	uint8_t mode = 0;
-	if (!reader.ReadUInt8(&mode)) {
-		return;
-	}
-
-	if (mode == 1) {
+void Manager::receiveSignalingMessage(SignalingMessage &&message) {
+	const auto data = &message.data;
+	if (const auto switchToVideo = absl::get_if<SwitchToVideoMessage>(data)) {
 		_mediaManager->perform([](MediaManager *mediaManager) {
 			mediaManager->setSendVideo(true);
 		});
 		_videoStateUpdated(true);
-	} else if (mode == 2) {
-	} else if (mode == 3) {
-		auto candidatesData = buffer.Slice(1, buffer.size() - 1);
-		_networkManager->perform([candidatesData](NetworkManager *networkManager) {
-			networkManager->receiveSignalingData(candidatesData);
+	} else if (const auto remoteVideoIsActive = absl::get_if<RemoteVideoIsActiveMessage>(data)) {
+		_remoteVideoIsActiveUpdated(remoteVideoIsActive->active);
+	} else if (const auto candidatesList = absl::get_if<CandidatesListMessage>(data)) {
+		_networkManager->perform([message = std::move(message)](NetworkManager *networkManager) mutable {
+			networkManager->receiveSignalingMessage(std::move(message));
 		});
-	} else if (mode == 4) {
-		uint8_t value = 0;
-		if (reader.ReadUInt8(&value)) {
-			_remoteVideoIsActiveUpdated(value != 0);
-		}
 	}
 }
 
@@ -161,15 +143,7 @@ void Manager::setSendVideo(bool sendVideo) {
 		if (!_isVideoRequested) {
 			_isVideoRequested = true;
 
-			rtc::CopyOnWriteBuffer buffer;
-			uint8_t mode = 1;
-			buffer.AppendData(&mode, 1);
-
-			std::vector<uint8_t> data;
-			data.resize(buffer.size());
-			memcpy(data.data(), buffer.data(), buffer.size());
-
-			_signalingDataEmitted(data);
+			_signalingDataEmitted(SerializeMessage(SignalingMessage{ SwitchToVideoMessage{} }));
 
 			_mediaManager->perform([](MediaManager *mediaManager) {
 				mediaManager->setSendVideo(true);
@@ -187,16 +161,7 @@ void Manager::setMuteOutgoingAudio(bool mute) {
 }
 
 void Manager::notifyIsLocalVideoActive(bool isActive) {
-	rtc::CopyOnWriteBuffer buffer;
-	uint8_t mode = 4;
-	buffer.AppendData(&mode, 1);
-	uint8_t value = isActive ? 1 : 0;
-	buffer.AppendData(&value, 1);
-
-	std::vector<uint8_t> data;
-	data.resize(buffer.size());
-	memcpy(data.data(), buffer.data(), buffer.size());
-	_signalingDataEmitted(data);
+	_signalingDataEmitted(SerializeMessage(SignalingMessage{ RemoteVideoIsActiveMessage{ isActive } }));
 }
 
 void Manager::setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {

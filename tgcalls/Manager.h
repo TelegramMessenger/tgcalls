@@ -8,7 +8,7 @@
 
 namespace tgcalls {
 
-class Manager : public std::enable_shared_from_this<Manager> {
+class Manager final : public std::enable_shared_from_this<Manager> {
 public:
 	static rtc::Thread *getMediaThread();
 
@@ -23,6 +23,8 @@ public:
 	void setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
 
 private:
+	void receiveSignalingMessage(SignalingMessage &&message);
+
 	rtc::Thread *_thread;
 	EncryptionKey _encryptionKey;
 	bool _enableP2P = false;
