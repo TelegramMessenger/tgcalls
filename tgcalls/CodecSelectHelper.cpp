@@ -123,7 +123,7 @@ CommonFormats ComputeCommonFormats(
 	for (const auto &format : their.formats) {
 		RTC_LOG(LS_INFO) << "Their format: " << format.ToString();
 	}
-	RTC_LOG(LS_INFO) << "Their first" << their.encodersCount << " formats are supported encoders.";
+	RTC_LOG(LS_INFO) << "Their first " << their.encodersCount << " formats are supported encoders.";
 
 	const auto myBegin = begin(my.formats);
 	const auto myEnd = end(my.formats);

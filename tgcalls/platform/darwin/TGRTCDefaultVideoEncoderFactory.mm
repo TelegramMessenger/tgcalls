@@ -91,7 +91,7 @@
 #else // WEBRTC_IOS
   if (@available(macOS 10.13, *)) {
     if ([info.name isEqualToString:kRTCVideoCodecH265Name]) {
-      //return [[TGRTCVideoEncoderH265 alloc] initWithCodecInfo:info];
+      return [[TGRTCVideoEncoderH265 alloc] initWithCodecInfo:info];
     }
   }
 #endif // WEBRTC_IOS
