@@ -93,7 +93,8 @@ bool TryDeserialize(absl::optional<SignalingMessage> &to, const std::vector<uint
 std::vector<uint8_t> SerializeMessage(const SignalingMessage &message) {
 	auto result = std::vector<uint8_t>();
 	absl::visit([&](const auto &data) {
-		result.push_back(data.kId);
+		constexpr auto copy = std::decay_t<decltype(data)>::kId;
+		result.push_back(copy);
 		Serialize(result, data);
 	}, message.data);
 	return result;
