@@ -192,21 +192,47 @@ bool TryDeserialize(absl::optional<SignalingMessage> &to, const std::vector<uint
 	return true;
 }
 
+template <typename ...Types>
+struct TryDeserializeNext;
+
+template <>
+struct TryDeserializeNext<> {
+	static bool Call(absl::optional<SignalingMessage> &to, const std::vector<uint8_t> &from) {
+		return false;
+	}
+};
+
+template <typename T, typename ...Other>
+struct TryDeserializeNext<T, Other...> {
+	static bool Call(absl::optional<SignalingMessage> &to, const std::vector<uint8_t> &from) {
+		return TryDeserialize<T>(to, from)
+			|| TryDeserializeNext<Other...>::Call(to, from);
+	}
+};
+
+template <typename ...Types>
+bool TryDeserializeRecursive(
+		absl::optional<SignalingMessage> &to,
+		const std::vector<uint8_t> &from,
+		absl::variant<Types...> *) {
+	return TryDeserializeNext<Types...>::Call(to, from);
+}
+
 } // namespace
 
 std::vector<uint8_t> SerializeMessage(const SignalingMessage &message) {
-	auto result = std::vector<uint8_t>();
+	rtc::ByteBufferWriter writer;
 	absl::visit([&](const auto &data) {
-		constexpr auto id = std::decay_t<decltype(data)>::kId;
-		result.push_back(id);
-
-		rtc::ByteBufferWriter writer;
+		writer.WriteUInt8(std::decay_t<decltype(data)>::kId);
 		Serialize(writer, data);
-		const auto size = result.size();
-		const auto length = writer.Length();
-		result.resize(size + length);
-		memcpy(result.data() + size, writer.Data(), length);
 	}, message.data);
+
+	auto result = std::vector<uint8_t>();
+	const auto size = result.size();
+	const auto length = writer.Length();
+	result.resize(size + length);
+	memcpy(result.data() + size, writer.Data(), length);
+
 	return result;
 }
 
@@ -214,11 +240,9 @@ absl::optional<SignalingMessage> DeserializeMessage(const std::vector<uint8_t> &
 	if (data.empty()) {
 		return absl::nullopt;
 	}
+	using Variant = decltype(std::declval<SignalingMessage>().data);
 	auto result = absl::make_optional<SignalingMessage>();
-	return (TryDeserialize<SwitchToVideoMessage>(result, data)
-		|| TryDeserialize<RemoteVideoIsActiveMessage>(result, data)
-		|| TryDeserialize<CandidatesListMessage>(result, data)
-		|| TryDeserialize<VideoFormatsMessage>(result, data))
+	return TryDeserializeRecursive(result, data, (Variant*)nullptr)
 		? result
 		: absl::nullopt;
 }

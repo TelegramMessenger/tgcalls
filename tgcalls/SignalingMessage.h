@@ -37,7 +37,6 @@ struct VideoFormatsMessage {
 // 1. Add the message struct.
 // 2. Add the message to the variant in SignalingMessage struct.
 // 3. Add Serialize/Deserialize methods in SignalingMessage module.
-// 4. Add TryDeserialize call in DeserializeMessage method.
 
 struct SignalingMessage {
 	absl::variant<
