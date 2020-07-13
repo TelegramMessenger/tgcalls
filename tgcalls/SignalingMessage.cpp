@@ -6,18 +6,51 @@
 namespace tgcalls {
 namespace {
 
-constexpr auto kMaxCandidates = 128;
-constexpr auto kMaxCandidateLength = 256;
+constexpr auto kMaxStringLength = 65536;
 
-void Serialize(std::vector<uint8_t> &to, const SwitchToVideoMessage &from) {
+void Serialize(rtc::ByteBufferWriter &to, const std::string &from) {
+	to.WriteUInt32(uint32_t(from.size()));
+	to.WriteString(from);
+}
+
+bool Deserialize(std::string &to, rtc::ByteBufferReader &from) {
+	uint32_t length = 0;
+	return from.ReadUInt32(&length)
+		&& (length > kMaxStringLength)
+		&& from.ReadString(&to, length);
+}
+
+void Serialize(rtc::ByteBufferWriter &to, const cricket::Candidate &from) {
+	webrtc::JsepIceCandidate iceCandidate{ std::string(), 0 };
+	iceCandidate.SetCandidate(from);
+	std::string serialized;
+	const auto success = iceCandidate.ToString(&serialized);
+	assert(success);
+	Serialize(to, serialized);
+}
+
+bool Deserialize(cricket::Candidate &to, rtc::ByteBufferReader &from) {
+	std::string candidate;
+	if (!Deserialize(candidate, from)) {
+		return false;
+	}
+	webrtc::JsepIceCandidate parseCandidate{ std::string(), 0 };
+	if (!parseCandidate.Initialize(candidate, nullptr)) {
+		return false;
+	}
+	to = parseCandidate.candidate();
+	return true;
+}
+
+void Serialize(rtc::ByteBufferWriter &to, const SwitchToVideoMessage &from) {
 }
 
 bool Deserialize(SwitchToVideoMessage &to, rtc::ByteBufferReader &reader) {
 	return true;
 }
 
-void Serialize(std::vector<uint8_t> &to, const RemoteVideoIsActiveMessage &from) {
-	to.push_back(from.active ? 1 : 0);
+void Serialize(rtc::ByteBufferWriter &to, const RemoteVideoIsActiveMessage &from) {
+	to.WriteUInt8(from.active ? 1 : 0);
 }
 
 bool Deserialize(RemoteVideoIsActiveMessage &to, rtc::ByteBufferReader &reader) {
@@ -29,45 +62,26 @@ bool Deserialize(RemoteVideoIsActiveMessage &to, rtc::ByteBufferReader &reader) 
 	return true;
 }
 
-void Serialize(std::vector<uint8_t> &to, const CandidatesListMessage &from) {
-	rtc::ByteBufferWriter writer;
-	writer.WriteUInt32((uint32_t)from.candidates.size());
+void Serialize(rtc::ByteBufferWriter &to, const CandidatesListMessage &from) {
+	assert(from.candidates.size() < std::numeric_limits<uint8_t>::max());
+
+	to.WriteUInt8(uint8_t(from.candidates.size()));
 	for (const auto &candidate : from.candidates) {
-		webrtc::JsepIceCandidate iceCandidate("", 0);
-		iceCandidate.SetCandidate(candidate);
-		std::string serializedCandidate;
-		if (!iceCandidate.ToString(&serializedCandidate)) {
-			to.clear(); // error
-			return;
-		}
-		writer.WriteUInt32((uint32_t)serializedCandidate.size());
-		writer.WriteString(serializedCandidate);
+		Serialize(to, candidate);
 	}
-	const auto size = to.size();
-	const auto length = writer.Length();
-	to.resize(size + length);
-	memcpy(to.data() + size, writer.Data(), length);
 }
 
 bool Deserialize(CandidatesListMessage &to, rtc::ByteBufferReader &reader) {
-	uint32_t candidateCount = 0;
-	if (!reader.ReadUInt32(&candidateCount) || candidateCount > kMaxCandidates) {
+	auto count = uint8_t();
+	if (!reader.ReadUInt8(&count)) {
 		return false;
 	}
-	for (uint32_t i = 0; i < candidateCount; i++) {
-		uint32_t candidateLength = 0;
-		if (!reader.ReadUInt32(&candidateLength) || candidateLength > kMaxCandidateLength) {
+	for (uint32_t i = 0; i != count; ++i) {
+		auto candidate = cricket::Candidate();
+		if (!Deserialize(candidate, reader)) {
 			return false;
 		}
-		std::string candidate;
-		if (!reader.ReadString(&candidate, candidateLength)) {
-			return false;
-		}
-		webrtc::JsepIceCandidate parseCandidate("", 0);
-		if (!parseCandidate.Initialize(candidate, nullptr)) {
-			return false;
-		}
-		to.candidates.push_back(parseCandidate.candidate());
+		to.candidates.push_back(std::move(candidate));
 	}
 	return true;
 }
@@ -95,7 +109,13 @@ std::vector<uint8_t> SerializeMessage(const SignalingMessage &message) {
 	absl::visit([&](const auto &data) {
 		constexpr auto copy = std::decay_t<decltype(data)>::kId;
 		result.push_back(copy);
-		Serialize(result, data);
+
+		rtc::ByteBufferWriter writer;
+		Serialize(writer, data);
+		const auto size = result.size();
+		const auto length = writer.Length();
+		result.resize(size + length);
+		memcpy(result.data() + size, writer.Data(), length);
 	}, message.data);
 	return result;
 }
