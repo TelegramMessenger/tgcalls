@@ -199,6 +199,7 @@ void compressionOutputCallback(void* encoder,
 
 - (void)dealloc {
   [self destroyCompressionSession];
+  [super dealloc];
 }
 
 - (NSInteger)startEncodeWithSettings:(RTCVideoEncoderSettings*)settings

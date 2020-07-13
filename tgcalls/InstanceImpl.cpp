@@ -7,7 +7,7 @@
 #include "VideoCaptureInterfaceImpl.h"
 #include "VideoCapturerInterface.h"
 
-#if TARGET_OS_IPHONE || TARGET_OS_OSX
+#if WEBRTC_MAC
 #include <sys/time.h>
 #endif
 
@@ -58,7 +58,7 @@ void InstanceImpl::LogSinkImpl::OnLogMessage(const std::string &message) {
 	struct tm timeinfo;
 	timeval curTime = { 0 };
 
-#ifdef TARGET_OS_WIN
+#ifdef WEBRTC_WIN
 	localtime_s(&timeinfo, &rawTime);
 
 	FILETIME ft;

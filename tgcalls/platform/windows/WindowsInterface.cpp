@@ -17,7 +17,7 @@
 #include "sdk/media_constraints.h"
 #include "test/platform_video_capturer.h"
 
-#include "VideoCapturerInterfaceImpl.h"
+#include "platform/tdesktop/VideoCapturerInterfaceImpl.h"
 
 namespace tgcalls {
 namespace {
@@ -43,16 +43,16 @@ rtc::scoped_refptr<CapturerTrackSource> CapturerTrackSource::Create() {
 	const size_t kWidth = 640;
 	const size_t kHeight = 480;
 	const size_t kFps = 30;
-#ifndef TARGET_OS_OSX
+//#ifdef WEBRTC_MAC
+//	int num_devices = 1;
+//#else // WEBRTC_MAC
 	std::unique_ptr<webrtc::VideoCaptureModule::DeviceInfo> info(
 		webrtc::VideoCaptureFactory::CreateDeviceInfo());
 	if (!info) {
 		return nullptr;
 	}
 	int num_devices = info->NumberOfDevices();
-#else // TARGET_OS_OSX
-	int num_devices = 1;
-#endif // TARGET_OS_OSX
+//#endif // WEBRTC_MAC
 	for (int i = 0; i < num_devices; ++i) {
 		if (auto capturer = webrtc::test::CreateVideoCapturer(kWidth, kHeight, kFps, i)) {
 			return new rtc::RefCountedObject<CapturerTrackSource>(

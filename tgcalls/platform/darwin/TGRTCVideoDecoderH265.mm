@@ -72,7 +72,7 @@ static void tg_h265DecompressionOutputCallback(void* decoder,
 
 @interface TGRTCVideoDecoderH265RequestKeyframeHolder : NSObject
 
-@property (nonatomic) NSLock *lock;
+@property (nonatomic, strong) NSLock *lock;
 @property (nonatomic) bool shouldRequestKeyframe;
 
 @end
@@ -116,6 +116,7 @@ static void tg_h265DecompressionOutputCallback(void* decoder,
 - (void)dealloc {
   [self destroyDecompressionSession];
   [self setVideoFormat:nullptr];
+  [super dealloc];
 }
 
 - (NSInteger)startDecodeWithNumberOfCores:(int)numberOfCores {

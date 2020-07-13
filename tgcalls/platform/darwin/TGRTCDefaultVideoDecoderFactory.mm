@@ -72,17 +72,29 @@
     return [[RTCVideoDecoderH264 alloc] init];
   } else if ([info.name isEqualToString:kRTCVideoCodecVp8Name]) {
     return [RTCVideoDecoderVP8 vp8Decoder];
+  }
+
 #if defined(RTC_ENABLE_VP9)
-  } else if ([info.name isEqualToString:kRTCVideoCodecVp9Name]) {
+  if ([info.name isEqualToString:kRTCVideoCodecVp9Name]) {
     return [RTCVideoDecoderVP9 vp9Decoder];
+  }
 #endif
+
 #if !defined(DISABLE_H265)
-  } else if (@available(iOS 11, *)) {
+#ifdef WEBRTC_IOS
+  if (@available(iOS 11.0, *)) {
     if ([info.name isEqualToString:kRTCVideoCodecH265Name]) {
       return [[TGRTCVideoDecoderH265 alloc] init];
     }
-#endif
   }
+#else // WEBRTC_IOS
+  if (@available(macOS 10.13, *)) {
+    if ([info.name isEqualToString:kRTCVideoCodecH265Name]) {
+      return [[TGRTCVideoDecoderH265 alloc] init];
+    }
+  }
+#endif // WEBRTC_IOS
+#endif // !DISABLE_H265
 
   return nil;
 }

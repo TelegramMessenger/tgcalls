@@ -109,6 +109,7 @@
     assert([NSThread isMainThread]);
 
     [_videoCapturer stopCapture];
+    [super dealloc];
 }
 
 - (void)setIsEnabled:(bool)isEnabled {

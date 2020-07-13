@@ -1,15 +1,22 @@
 #include "DarwinInterface.h"
 
+#ifdef WEBRTC_APP_TDESKTOP
+#include "platform/tdesktop/VideoCapturerInterfaceImpl.h"
+#else // WEBRTC_APP_TDESKTOP
 #include "VideoCapturerInterfaceImpl.h"
+#endif
+
+#include "media/base/media_constants.h"
 #include "TGRTCDefaultVideoEncoderFactory.h"
 #include "TGRTCDefaultVideoDecoderFactory.h"
 #include "sdk/objc/native/api/video_encoder_factory.h"
 #include "sdk/objc/native/api/video_decoder_factory.h"
-#include "media/base/media_constants.h"
+#include "sdk/objc/native/src/objc_video_track_source.h"
+#include "api/video_track_source_proxy.h"
 
-#if defined(WEBRTC_IOS)
+#ifdef WEBRTC_IOS
 #include "sdk/objc/components/audio/RTCAudioSession.h"
-#endif
+#endif // WEBRTC_IOS
 
 #import <AVFoundation/AVFoundation.h>
 
@@ -29,17 +36,17 @@ std::unique_ptr<webrtc::VideoDecoderFactory> DarwinInterface::makeVideoDecoderFa
 }
 
 bool DarwinInterface::supportsEncoding(const std::string &codecName) {
-    if (codecName == cricket::kH265CodecName) {
-#ifdef WEBRTC_MAC
-	    if (@available(macOS 10.13, *)) {
-		    return [[AVAssetExportSession allExportPresets] containsObject:AVAssetExportPresetHEVCHighestQuality];
-        }
-#elif defined WEBRTC_IOS
-        if (@available(iOS 11.0, *)) {
-		    return [[AVAssetExportSession allExportPresets] containsObject:AVAssetExportPresetHEVCHighestQuality];
-        }
-#endif // WEBRTC_IOS
-    }
+	if (codecName == cricket::kH265CodecName) {
+#ifdef WEBRTC_IOS
+		if (@available(iOS 11.0, *)) {
+			return [[AVAssetExportSession allExportPresets] containsObject:AVAssetExportPresetHEVCHighestQuality];
+		}
+#elif defined WEBRTC_MAC // WEBRTC_IOS
+		if (@available(macOS 10.13, *)) {
+			return [[AVAssetExportSession allExportPresets] containsObject:AVAssetExportPresetHEVCHighestQuality];
+		}
+#endif // WEBRTC_IOS || WEBRTC_MAC
+	}
 	return (codecName == cricket::kH264CodecName);
 }
 
