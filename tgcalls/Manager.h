@@ -33,7 +33,7 @@ private:
 	std::function<void (const State &)> _stateUpdated;
 	std::function<void (bool)> _videoStateUpdated;
 	std::function<void (bool)> _remoteVideoIsActiveUpdated;
-	std::function<void (const std::vector<uint8_t> &)> _signalingDataEmitted;
+	std::function<void(const SignalingMessage &)> _sendSignalingMessage;
 	std::unique_ptr<ThreadLocalObject<NetworkManager>> _networkManager;
 	std::unique_ptr<ThreadLocalObject<MediaManager>> _mediaManager;
 	bool _isVideoRequested = false;

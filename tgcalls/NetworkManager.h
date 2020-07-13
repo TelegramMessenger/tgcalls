@@ -45,7 +45,7 @@ public:
 		std::vector<RtcServer> const &rtcServers,
 		std::function<void (const NetworkManager::State &)> stateUpdated,
 		std::function<void (const rtc::CopyOnWriteBuffer &)> packetReceived,
-		std::function<void (const SignalingMessage &)> signalingMessageEmitted);
+		std::function<void (const SignalingMessage &)> sendSignalingMessage);
 	~NetworkManager();
 
 	void receiveSignalingMessage(SignalingMessage &&message);
@@ -56,7 +56,7 @@ private:
 	EncryptionKey _encryptionKey;
 	std::function<void (const NetworkManager::State &)> _stateUpdated;
 	std::function<void (const rtc::CopyOnWriteBuffer &)> _packetReceived;
-	std::function<void (const SignalingMessage &)> _signalingMessageEmitted;
+	std::function<void (const SignalingMessage &)> _sendSignalingMessage;
 
 	std::unique_ptr<rtc::BasicPacketSocketFactory> _socketFactory;
 	std::unique_ptr<rtc::BasicNetworkManager> _networkManager;

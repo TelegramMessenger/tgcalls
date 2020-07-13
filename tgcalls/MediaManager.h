@@ -8,6 +8,7 @@
 #include "pc/rtp_sender.h"
 
 #include "Instance.h"
+#include "SignalingMessage.h"
 
 #include <functional>
 #include <memory>
@@ -31,12 +32,32 @@ namespace tgcalls {
 class VideoCapturerInterface;
 
 class MediaManager : public sigslot::has_slots<>, public std::enable_shared_from_this<MediaManager> {
+public:
+	static rtc::Thread *getWorkerThread();
+
+	MediaManager(
+		rtc::Thread *thread,
+		bool isOutgoing,
+		std::shared_ptr<VideoCaptureInterface> videoCapture,
+		std::function<void(const rtc::CopyOnWriteBuffer &)> packetEmitted,
+		std::function<void(bool)> localVideoCaptureActiveUpdated,
+		std::function<void(const SignalingMessage &)> sendSignalingMessage);
+	~MediaManager();
+
+	void setIsConnected(bool isConnected);
+	void receivePacket(const rtc::CopyOnWriteBuffer &packet);
+	void notifyPacketSent(const rtc::SentPacket &sentPacket);
+	void setSendVideo(bool sendVideo);
+	void setMuteOutgoingAudio(bool mute);
+	void setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
+	void receiveSignalingMessage(SignalingMessage &&message);
+
 private:
 	struct SSRC {
-		uint32_t incoming;
-		uint32_t outgoing;
-		uint32_t fecIncoming;
-		uint32_t fecOutgoing;
+		uint32_t incoming = 0;
+		uint32_t outgoing = 0;
+		uint32_t fecIncoming = 0;
+		uint32_t fecOutgoing = 0;
 	};
 
 	class NetworkInterfaceImpl : public cricket::MediaChannel::NetworkInterface {
@@ -47,39 +68,24 @@ private:
 		int SetOption(SocketType type, rtc::Socket::Option opt, int option) override;
 
 	private:
-		MediaManager *_mediaManager;
-		bool _isVideo;
+		MediaManager *_mediaManager = nullptr;
+		bool _isVideo = false;
 	};
 
 	friend class MediaManager::NetworkInterfaceImpl;
 
-public:
-	static rtc::Thread *getWorkerThread();
+	void setPeerVideoFormats(VideoFormatsMessage &&peerFormats);
 
-	MediaManager(
-		rtc::Thread *thread,
-		bool isOutgoing,
-		std::shared_ptr<VideoCaptureInterface> videoCapture,
-		std::function<void (const rtc::CopyOnWriteBuffer &)> packetEmitted,
-		std::function<void (bool)> localVideoCaptureActiveUpdated
-	);
-	~MediaManager();
+	bool computeIsSendingVideo() const;
+	void checkIsSendingVideoChanged(bool wasSending);
 
-	void setIsConnected(bool isConnected);
-	void receivePacket(const rtc::CopyOnWriteBuffer &packet);
-	void notifyPacketSent(const rtc::SentPacket &sentPacket);
-	void setSendVideo(bool sendVideo);
-	void setMuteOutgoingAudio(bool mute);
-	void setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
-
-protected:
-	std::function<void (const rtc::CopyOnWriteBuffer &)> _packetEmitted;
-	std::function<void (bool)> _localVideoCaptureActiveUpdated;
-
-private:
 	rtc::Thread *_thread = nullptr;
 	std::unique_ptr<webrtc::RtcEventLogNull> _eventLog;
 	std::unique_ptr<webrtc::TaskQueueFactory> _taskQueueFactory;
+
+	std::function<void(const rtc::CopyOnWriteBuffer &)> _packetEmitted;
+	std::function<void(bool)> _localVideoCaptureActiveUpdated;
+	std::function<void(const SignalingMessage &)> _sendSignalingMessage;
 
 	SSRC _ssrcAudio;
 	SSRC _ssrcVideo;
@@ -88,8 +94,10 @@ private:
 	bool _isConnected = false;
 	bool _muteOutgoingAudio = false;
 
+	VideoFormatsMessage _myVideoFormats;
 	std::vector<cricket::VideoCodec> _videoCodecs;
-	bool _isSendingVideo = false;
+	absl::optional<cricket::VideoCodec> _videoCodecOut;
+	bool _sendVideo = false;
 
 	std::unique_ptr<cricket::MediaEngineInterface> _mediaEngine;
 	std::unique_ptr<webrtc::Call> _call;

@@ -5,6 +5,7 @@
 #include "TGRTCDefaultVideoDecoderFactory.h"
 #include "sdk/objc/native/api/video_encoder_factory.h"
 #include "sdk/objc/native/api/video_decoder_factory.h"
+#include "media/base/media_constants.h"
 
 #if defined(WEBRTC_IOS)
 #include "sdk/objc/components/audio/RTCAudioSession.h"
@@ -27,17 +28,19 @@ std::unique_ptr<webrtc::VideoDecoderFactory> DarwinInterface::makeVideoDecoderFa
     return webrtc::ObjCToNativeVideoDecoderFactory([[TGRTCDefaultVideoDecoderFactory alloc] init]);
 }
 
-bool DarwinInterface::supportsH265Encoding() {
+bool DarwinInterface::supportsEncoding(const std::string &codecName) {
+    if (codecName == cricket::kH265CodecName) {
 #ifdef WEBRTC_MAC
-	if (@available(macOS 10.13, *)) {
-		return [[AVAssetExportSession allExportPresets] containsObject:AVAssetExportPresetHEVCHighestQuality];
-    }
+	    if (@available(macOS 10.13, *)) {
+		    return [[AVAssetExportSession allExportPresets] containsObject:AVAssetExportPresetHEVCHighestQuality];
+        }
 #elif defined WEBRTC_IOS
-    if (@available(iOS 11.0, *)) {
-		return [[AVAssetExportSession allExportPresets] containsObject:AVAssetExportPresetHEVCHighestQuality];
-    }
+        if (@available(iOS 11.0, *)) {
+		    return [[AVAssetExportSession allExportPresets] containsObject:AVAssetExportPresetHEVCHighestQuality];
+        }
 #endif // WEBRTC_IOS
-    return false;
+    }
+	return (codecName == cricket::kH264CodecName);
 }
 
 rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> DarwinInterface::makeVideoSource(rtc::Thread *signalingThread, rtc::Thread *workerThread) {

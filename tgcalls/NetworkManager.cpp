@@ -157,12 +157,12 @@ NetworkManager::NetworkManager(
 	std::vector<RtcServer> const &rtcServers,
 	std::function<void (const NetworkManager::State &)> stateUpdated,
 	std::function<void (const rtc::CopyOnWriteBuffer &)> packetReceived,
-	std::function<void (const SignalingMessage &)> signalingMessageEmitted) :
+	std::function<void (const SignalingMessage &)> sendSignalingMessage) :
 _thread(thread),
 _encryptionKey(encryptionKey),
-_stateUpdated(stateUpdated),
-_packetReceived(packetReceived),
-_signalingMessageEmitted(signalingMessageEmitted) {
+_stateUpdated(std::move(stateUpdated)),
+_packetReceived(std::move(packetReceived)),
+_sendSignalingMessage(std::move(sendSignalingMessage)) {
 	assert(_thread->IsCurrent());
 
 	_socketFactory.reset(new rtc::BasicPacketSocketFactory(_thread));
@@ -270,7 +270,7 @@ void NetworkManager::sendPacket(const rtc::CopyOnWriteBuffer &packet) {
 
 void NetworkManager::candidateGathered(cricket::IceTransportInternal *transport, const cricket::Candidate &candidate) {
 	assert(_thread->IsCurrent());
-	_signalingMessageEmitted({ CandidatesListMessage{ std::vector<cricket::Candidate>(1, candidate) } });
+	_sendSignalingMessage({ CandidatesListMessage{ std::vector<cricket::Candidate>(1, candidate) } });
 }
 
 void NetworkManager::candidateGatheringState(cricket::IceTransportInternal *transport) {

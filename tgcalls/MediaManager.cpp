@@ -1,162 +1,41 @@
 #include "MediaManager.h"
 
-#include "absl/strings/match.h"
+#include "Instance.h"
+#include "VideoCaptureInterfaceImpl.h"
+#include "VideoCapturerInterface.h"
+#include "CodecSelectHelper.h"
+#include "platform/PlatformInterface.h"
+
 #include "api/audio_codecs/audio_decoder_factory_template.h"
 #include "api/audio_codecs/audio_encoder_factory_template.h"
 #include "api/audio_codecs/opus/audio_decoder_opus.h"
 #include "api/audio_codecs/opus/audio_encoder_opus.h"
-#include "api/rtp_parameters.h"
 #include "api/task_queue/default_task_queue_factory.h"
-#include "media/base/codec.h"
-#include "media/base/media_constants.h"
 #include "media/engine/webrtc_media_engine.h"
-#include "modules/audio_device/include/audio_device_default.h"
-#include "rtc_base/task_utils/repeating_task.h"
 #include "system_wrappers/include/field_trial.h"
 #include "api/video/builtin_video_bitrate_allocator_factory.h"
-#include "api/video/video_bitrate_allocation.h"
 #include "call/call.h"
-#include "api/video_codecs/builtin_video_encoder_factory.h"
-
-#include "Instance.h"
-#include "VideoCaptureInterfaceImpl.h"
-#include "VideoCapturerInterface.h"
-#include "platform/PlatformInterface.h"
 
 namespace tgcalls {
+namespace {
 
-static const uint32_t ssrcAudioIncoming = 1;
-static const uint32_t ssrcAudioOutgoing = 2;
-static const uint32_t ssrcAudioFecIncoming = 5;
-static const uint32_t ssrcAudioFecOutgoing = 6;
-static const uint32_t ssrcVideoIncoming = 3;
-static const uint32_t ssrcVideoOutgoing = 4;
-static const uint32_t ssrcVideoFecIncoming = 7;
-static const uint32_t ssrcVideoFecOutgoing = 8;
+constexpr uint32_t ssrcAudioIncoming = 1;
+constexpr uint32_t ssrcAudioOutgoing = 2;
+constexpr uint32_t ssrcAudioFecIncoming = 5;
+constexpr uint32_t ssrcAudioFecOutgoing = 6;
+constexpr uint32_t ssrcVideoIncoming = 3;
+constexpr uint32_t ssrcVideoOutgoing = 4;
+constexpr uint32_t ssrcVideoFecIncoming = 7;
+constexpr uint32_t ssrcVideoFecOutgoing = 8;
 
-static void AddDefaultFeedbackParams(cricket::VideoCodec *codec) {
-	// Don't add any feedback params for RED and ULPFEC.
-	if (codec->name == cricket::kRedCodecName || codec->name == cricket::kUlpfecCodecName)
-		return;
-	codec->AddFeedbackParam(cricket::FeedbackParam(cricket::kRtcpFbParamRemb, cricket::kParamValueEmpty));
-	codec->AddFeedbackParam(
-							cricket::FeedbackParam(cricket::kRtcpFbParamTransportCc, cricket::kParamValueEmpty));
-	// Don't add any more feedback params for FLEXFEC.
-	if (codec->name == cricket::kFlexfecCodecName)
-		return;
-	codec->AddFeedbackParam(cricket::FeedbackParam(cricket::kRtcpFbParamCcm, cricket::kRtcpFbCcmParamFir));
-	codec->AddFeedbackParam(cricket::FeedbackParam(cricket::kRtcpFbParamNack, cricket::kParamValueEmpty));
-	codec->AddFeedbackParam(cricket::FeedbackParam(cricket::kRtcpFbParamNack, cricket::kRtcpFbNackParamPli));
-	if (codec->name == cricket::kVp8CodecName &&
-		webrtc::field_trial::IsEnabled("WebRTC-RtcpLossNotification")) {
-		codec->AddFeedbackParam(cricket::FeedbackParam(cricket::kRtcpFbParamLntf, cricket::kParamValueEmpty));
-	}
-}
-
-static std::vector<cricket::VideoCodec> AssignPayloadTypesAndDefaultCodecs(std::vector<webrtc::SdpVideoFormat> input_formats) {
-	if (input_formats.empty())
-		return std::vector<cricket::VideoCodec>();
-	static const int kFirstDynamicPayloadType = 96;
-	static const int kLastDynamicPayloadType = 127;
-	int payload_type = kFirstDynamicPayloadType;
-
-	input_formats.push_back(webrtc::SdpVideoFormat(cricket::kRedCodecName));
-	input_formats.push_back(webrtc::SdpVideoFormat(cricket::kUlpfecCodecName));
-
-	if (true) {
-		webrtc::SdpVideoFormat flexfec_format(cricket::kFlexfecCodecName);
-		// This value is currently arbitrarily set to 10 seconds. (The unit
-		// is microseconds.) This parameter MUST be present in the SDP, but
-		// we never use the actual value anywhere in our code however.
-		// TODO(brandtr): Consider honouring this value in the sender and receiver.
-		flexfec_format.parameters = {{cricket::kFlexfecFmtpRepairWindow, "10000000"}};
-		input_formats.push_back(flexfec_format);
-	}
-
-	std::vector<cricket::VideoCodec> output_codecs;
-	for (const webrtc::SdpVideoFormat& format : input_formats) {
-		cricket::VideoCodec codec(format);
-		codec.id = payload_type;
-		AddDefaultFeedbackParams(&codec);
-		output_codecs.push_back(codec);
-
-		// Increment payload type.
-		++payload_type;
-		if (payload_type > kLastDynamicPayloadType) {
-			RTC_LOG(LS_ERROR) << "Out of dynamic payload types, skipping the rest.";
-			break;
-		}
-
-		// Add associated RTX codec for non-FEC codecs.
-		if (!absl::EqualsIgnoreCase(codec.name, cricket::kUlpfecCodecName) &&
-			!absl::EqualsIgnoreCase(codec.name, cricket::kFlexfecCodecName)) {
-			output_codecs.push_back(
-									cricket::VideoCodec::CreateRtxCodec(payload_type, codec.id));
-
-			// Increment payload type.
-			++payload_type;
-			if (payload_type > kLastDynamicPayloadType) {
-				RTC_LOG(LS_ERROR) << "Out of dynamic payload types, skipping the rest.";
-				break;
-			}
-		}
-	}
-	return output_codecs;
-}
-
-static int sendCodecPriority(const cricket::VideoCodec &codec) {
-	int priotity = 0;
-	//if (codec.name == cricket::kAv1CodecName) {
-	//	return priotity;
-	//}
-	//priotity++;
-	if (codec.name == cricket::kH265CodecName) {
-		if (PlatformInterface::SharedInstance()->supportsH265Encoding()) {
-			return priotity;
-		}
-	}
-	priotity++;
-	if (codec.name == cricket::kH264CodecName) {
-		return priotity;
-	}
-	priotity++;
-	if (codec.name == cricket::kVp9CodecName) {
-		return priotity;
-	}
-	priotity++;
-	if (codec.name == cricket::kVp8CodecName) {
-		return priotity;
-	}
-	priotity++;
-	return -1;
-}
-
-static absl::optional<cricket::VideoCodec> selectVideoCodec(std::vector<cricket::VideoCodec> &codecs) {
-	std::vector<cricket::VideoCodec> sortedCodecs;
-	for (auto &codec : codecs) {
-		if (sendCodecPriority(codec) != -1) {
-			sortedCodecs.push_back(codec);
-		}
-	}
-
-	std::sort(sortedCodecs.begin(), sortedCodecs.end(), [](const cricket::VideoCodec &lhs, const cricket::VideoCodec &rhs) {
-		return sendCodecPriority(lhs) < sendCodecPriority(rhs);
-	});
-
-	if (sortedCodecs.size() != 0) {
-		return sortedCodecs[0];
-	} else {
-		return absl::nullopt;
-	}
-}
-
-static rtc::Thread *makeWorkerThread() {
+rtc::Thread *makeWorkerThread() {
 	static std::unique_ptr<rtc::Thread> value = rtc::Thread::Create();
 	value->SetName("WebRTC-Worker", nullptr);
 	value->Start();
 	return value.get();
 }
 
+} // namespace
 
 rtc::Thread *MediaManager::getWorkerThread() {
 	static rtc::Thread *value = makeWorkerThread();
@@ -167,14 +46,16 @@ MediaManager::MediaManager(
 	rtc::Thread *thread,
 	bool isOutgoing,
 	std::shared_ptr<VideoCaptureInterface> videoCapture,
-	std::function<void (const rtc::CopyOnWriteBuffer &)> packetEmitted,
-	std::function<void (bool)> localVideoCaptureActiveUpdated) :
-_packetEmitted(packetEmitted),
-_localVideoCaptureActiveUpdated(localVideoCaptureActiveUpdated),
+	std::function<void(const rtc::CopyOnWriteBuffer &)> packetEmitted,
+	std::function<void(bool)> localVideoCaptureActiveUpdated,
+	std::function<void(const SignalingMessage &)> sendSignalingMessage) :
 _thread(thread),
 _eventLog(std::make_unique<webrtc::RtcEventLogNull>()),
 _taskQueueFactory(webrtc::CreateDefaultTaskQueueFactory()),
-_videoCapture(videoCapture) {
+_packetEmitted(std::move(packetEmitted)),
+_localVideoCaptureActiveUpdated(std::move(localVideoCaptureActiveUpdated)),
+_sendSignalingMessage(std::move(sendSignalingMessage)),
+_videoCapture(std::move(videoCapture)) {
 	_ssrcAudio.incoming = isOutgoing ? ssrcAudioIncoming : ssrcAudioOutgoing;
 	_ssrcAudio.outgoing = (!isOutgoing) ? ssrcAudioIncoming : ssrcAudioOutgoing;
 	_ssrcAudio.fecIncoming = isOutgoing ? ssrcAudioFecIncoming : ssrcAudioFecOutgoing;
@@ -207,7 +88,9 @@ _videoCapture(videoCapture) {
 	mediaDeps.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory();
 	mediaDeps.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactory();
 
-	_videoCodecs = AssignPayloadTypesAndDefaultCodecs(mediaDeps.video_encoder_factory->GetSupportedFormats());
+	_myVideoFormats = ComposeSupportedFormats(
+		mediaDeps.video_encoder_factory->GetSupportedFormats(),
+		mediaDeps.video_decoder_factory->GetSupportedFormats());
 
 	mediaDeps.audio_processing = webrtc::AudioProcessingBuilder().Create();
 	_mediaEngine = cricket::CreateMediaEngine(std::move(mediaDeps));
@@ -268,6 +151,8 @@ _videoCapture(videoCapture) {
 
 	_videoChannel->SetInterface(_videoNetworkInterface.get(), webrtc::MediaTransportConfig());
 
+	_sendSignalingMessage({ _myVideoFormats });
+
 	if (_videoCapture != nullptr) {
 		((VideoCaptureInterfaceImpl *)_videoCapture.get())->_impl->getSyncAssumingSameThread()->setIsActiveUpdated(this->_localVideoCaptureActiveUpdated);
 
@@ -313,7 +198,7 @@ void MediaManager::setIsConnected(bool isConnected) {
 		_audioChannel->SetSend(_isConnected);
 		_audioChannel->SetAudioSend(_ssrcAudio.outgoing, _isConnected && !_muteOutgoingAudio, nullptr, &_audioSource);
 	}
-	if (_isSendingVideo && _videoChannel) {
+	if (computeIsSendingVideo() && _videoChannel) {
 		_videoChannel->OnReadyToSend(_isConnected);
 		_videoChannel->SetSend(_isConnected);
 	}
@@ -342,94 +227,124 @@ void MediaManager::notifyPacketSent(const rtc::SentPacket &sentPacket) {
 	_call->OnSentPacket(sentPacket);
 }
 
-void MediaManager::setSendVideo(bool sendVideo) {
-	if (_isSendingVideo == sendVideo) {
+void MediaManager::setPeerVideoFormats(VideoFormatsMessage &&peerFormats) {
+	if (!_videoCodecs.empty()) {
 		return;
 	}
-	_isSendingVideo = sendVideo;
 
-	if (_isSendingVideo) {
-		auto videoCodec = selectVideoCodec(_videoCodecs);
-		if (videoCodec.has_value()) {
-			auto codec = videoCodec.value();
+	assert(!_videoCodecOut.has_value());
+	auto formats = ComputeCommonFormats(
+		_myVideoFormats,
+		std::move(peerFormats));
+	auto codecs = AssignPayloadTypesAndDefaultCodecs(std::move(formats));
+	if (codecs.myEncoderIndex >= 0) {
+		assert(codecs.myEncoderIndex < codecs.list.size());
+		_videoCodecOut = codecs.list[codecs.myEncoderIndex];
+	}
+	_videoCodecs = std::move(codecs.list);
+	if (_videoCodecOut.has_value()) {
+		checkIsSendingVideoChanged(false);
+	}
+}
 
-			codec.SetParam(cricket::kCodecParamMinBitrate, 64);
-			codec.SetParam(cricket::kCodecParamStartBitrate, 512);
-			codec.SetParam(cricket::kCodecParamMaxBitrate, 2500);
+bool MediaManager::computeIsSendingVideo() const {
+	return _sendVideo && _videoCodecOut.has_value();
+}
 
-			cricket::VideoSendParameters videoSendParameters;
-			videoSendParameters.codecs.push_back(codec);
+void MediaManager::setSendVideo(bool sendVideo) {
+	if (_sendVideo == sendVideo) {
+		return;
+	}
+	const auto wasSending = computeIsSendingVideo();
+	_sendVideo = sendVideo;
+	checkIsSendingVideoChanged(wasSending);
+}
 
-			if (_enableFlexfec) {
-				for (auto &c : _videoCodecs) {
-					if (c.name == cricket::kFlexfecCodecName) {
-						videoSendParameters.codecs.push_back(c);
-						break;
-					}
-				}
-			}
+void MediaManager::checkIsSendingVideoChanged(bool wasSending) {
+	const auto sending = computeIsSendingVideo();
+	if (sending == wasSending) {
+		return;
+	} else if (sending) {
+		auto codec = *_videoCodecOut;
 
-			videoSendParameters.extensions.emplace_back(webrtc::RtpExtension::kTransportSequenceNumberUri, 1);
-			//send_parameters.max_bandwidth_bps = 800000;
-			//send_parameters.rtcp.reduced_size = true;
-			//videoSendParameters.rtcp.remote_estimate = true;
-			_videoChannel->SetSendParameters(videoSendParameters);
+		codec.SetParam(cricket::kCodecParamMinBitrate, 64);
+		codec.SetParam(cricket::kCodecParamStartBitrate, 512);
+		codec.SetParam(cricket::kCodecParamMaxBitrate, 2500);
 
-			if (_enableFlexfec) {
-				cricket::StreamParams videoSendStreamParams;
-				cricket::SsrcGroup videoSendSsrcGroup(cricket::kFecFrSsrcGroupSemantics, {_ssrcVideo.outgoing, _ssrcVideo.fecOutgoing});
-				videoSendStreamParams.ssrcs = {_ssrcVideo.outgoing};
-				videoSendStreamParams.ssrc_groups.push_back(videoSendSsrcGroup);
-				videoSendStreamParams.cname = "cname";
-				_videoChannel->AddSendStream(videoSendStreamParams);
+		cricket::VideoSendParameters videoSendParameters;
+		videoSendParameters.codecs.push_back(codec);
 
-				if (_videoCapture != nullptr) {
-					_videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, ((VideoCaptureInterfaceImpl *)_videoCapture.get())->_impl->getSyncAssumingSameThread()->_videoSource.get());
-				}
-				_videoChannel->SetVideoSend(_ssrcVideo.fecOutgoing, NULL, nullptr);
-			} else {
-				_videoChannel->AddSendStream(cricket::StreamParams::CreateLegacy(_ssrcVideo.outgoing));
-				if (_videoCapture != nullptr) {
-					_videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, ((VideoCaptureInterfaceImpl *)_videoCapture.get())->_impl->getSyncAssumingSameThread()->_videoSource);
-				}
-			}
-
-			cricket::VideoRecvParameters videoRecvParameters;
-
+		if (_enableFlexfec) {
 			for (auto &c : _videoCodecs) {
 				if (c.name == cricket::kFlexfecCodecName) {
-					videoRecvParameters.codecs.push_back(c);
-				} else if (c.name == cricket::kH264CodecName) {
-					videoRecvParameters.codecs.push_back(c);
-				} else if (c.name == cricket::kH265CodecName) {
-					videoRecvParameters.codecs.push_back(c);
-				} else if (c.name == cricket::kVp8CodecName) {
-					videoRecvParameters.codecs.push_back(c);
-				} else if (c.name == cricket::kVp9CodecName) {
-					videoRecvParameters.codecs.push_back(c);
-				} else if (c.name == cricket::kAv1CodecName) {
-					videoRecvParameters.codecs.push_back(c);
+					videoSendParameters.codecs.push_back(c);
+					break;
 				}
 			}
+		}
 
-			videoRecvParameters.extensions.emplace_back(webrtc::RtpExtension::kTransportSequenceNumberUri, 1);
-			//recv_parameters.rtcp.reduced_size = true;
-			videoRecvParameters.rtcp.remote_estimate = true;
+		videoSendParameters.extensions.emplace_back(webrtc::RtpExtension::kTransportSequenceNumberUri, 1);
+		//send_parameters.max_bandwidth_bps = 800000;
+		//send_parameters.rtcp.reduced_size = true;
+		//videoSendParameters.rtcp.remote_estimate = true;
+		_videoChannel->SetSendParameters(videoSendParameters);
 
-			cricket::StreamParams videoRecvStreamParams;
-			cricket::SsrcGroup videoRecvSsrcGroup(cricket::kFecFrSsrcGroupSemantics, {_ssrcVideo.incoming, _ssrcVideo.fecIncoming});
-			videoRecvStreamParams.ssrcs = {_ssrcVideo.incoming};
-			videoRecvStreamParams.ssrc_groups.push_back(videoRecvSsrcGroup);
-			videoRecvStreamParams.cname = "cname";
+		if (_enableFlexfec) {
+			cricket::StreamParams videoSendStreamParams;
+			cricket::SsrcGroup videoSendSsrcGroup(cricket::kFecFrSsrcGroupSemantics, {_ssrcVideo.outgoing, _ssrcVideo.fecOutgoing});
+			videoSendStreamParams.ssrcs = {_ssrcVideo.outgoing};
+			videoSendStreamParams.ssrc_groups.push_back(videoSendSsrcGroup);
+			videoSendStreamParams.cname = "cname";
+			_videoChannel->AddSendStream(videoSendStreamParams);
 
-			_videoChannel->AddRecvStream(videoRecvStreamParams);
-			_videoChannel->SetRecvParameters(videoRecvParameters);
-
-			if (_isSendingVideo && _videoChannel) {
-				_videoChannel->OnReadyToSend(_isConnected);
-				_videoChannel->SetSend(_isConnected);
+			if (_videoCapture != nullptr) {
+				_videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, ((VideoCaptureInterfaceImpl *)_videoCapture.get())->_impl->getSyncAssumingSameThread()->_videoSource.get());
+			}
+			_videoChannel->SetVideoSend(_ssrcVideo.fecOutgoing, NULL, nullptr);
+		} else {
+			_videoChannel->AddSendStream(cricket::StreamParams::CreateLegacy(_ssrcVideo.outgoing));
+			if (_videoCapture != nullptr) {
+				_videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, ((VideoCaptureInterfaceImpl *)_videoCapture.get())->_impl->getSyncAssumingSameThread()->_videoSource);
 			}
 		}
+
+		cricket::VideoRecvParameters videoRecvParameters;
+
+		const auto codecs = {
+			cricket::kFlexfecCodecName,
+			cricket::kH264CodecName,
+			cricket::kH265CodecName,
+			cricket::kVp8CodecName,
+			cricket::kVp9CodecName,
+			cricket::kAv1CodecName,
+		};
+		for (const auto &c : _videoCodecs) {
+			for (const auto known : codecs) {
+				if (c.name == known) {
+					videoRecvParameters.codecs.push_back(c);
+					break;
+				}
+			}
+		}
+
+		videoRecvParameters.extensions.emplace_back(webrtc::RtpExtension::kTransportSequenceNumberUri, 1);
+		//recv_parameters.rtcp.reduced_size = true;
+		videoRecvParameters.rtcp.remote_estimate = true;
+
+		cricket::StreamParams videoRecvStreamParams;
+		cricket::SsrcGroup videoRecvSsrcGroup(cricket::kFecFrSsrcGroupSemantics, {_ssrcVideo.incoming, _ssrcVideo.fecIncoming});
+		videoRecvStreamParams.ssrcs = {_ssrcVideo.incoming};
+		videoRecvStreamParams.ssrc_groups.push_back(videoRecvSsrcGroup);
+		videoRecvStreamParams.cname = "cname";
+
+		_videoChannel->AddRecvStream(videoRecvStreamParams);
+		_videoChannel->SetRecvParameters(videoRecvParameters);
+		if (_currentIncomingVideoSink) {
+			_videoChannel->SetSink(_ssrcVideo.incoming, _currentIncomingVideoSink.get());
+		}
+
+		_videoChannel->OnReadyToSend(_isConnected);
+		_videoChannel->SetSend(_isConnected);
 	} else {
 		_videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, nullptr);
 		_videoChannel->SetVideoSend(_ssrcVideo.fecOutgoing, NULL, nullptr);
@@ -452,6 +367,12 @@ void MediaManager::setMuteOutgoingAudio(bool mute) {
 void MediaManager::setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
 	_currentIncomingVideoSink = sink;
 	_videoChannel->SetSink(_ssrcVideo.incoming, _currentIncomingVideoSink.get());
+}
+
+void MediaManager::receiveSignalingMessage(SignalingMessage &&message) {
+	const auto formats = absl::get_if<VideoFormatsMessage>(&message.data);
+	assert(formats != nullptr);
+	setPeerVideoFormats(std::move(*formats));
 }
 
 MediaManager::NetworkInterfaceImpl::NetworkInterfaceImpl(MediaManager *mediaManager, bool isVideo) :

@@ -77,8 +77,9 @@ rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> WindowsInterface::makeVide
 	return webrtc::VideoTrackSourceProxy::Create(signalingThread, workerThread, videoTrackSource);
 }
 
-bool WindowsInterface::supportsH265Encoding() {
-	return false;
+bool WindowsInterface::supportsEncoding(const std::string &codecName) {
+	return (codecName == cricket::kH264CodecName)
+		|| (codecName == cricket::kVp8CodecName);
 }
 
 std::unique_ptr<VideoCapturerInterface> WindowsInterface::makeVideoCapturer(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, bool useFrontCamera, std::function<void(bool)> isActiveUpdated) {

@@ -3,26 +3,34 @@
 #include "rtc_base/byte_buffer.h"
 
 namespace tgcalls {
+namespace {
 
-static rtc::Thread *makeNetworkThread() {
+rtc::Thread *makeNetworkThread() {
 	static std::unique_ptr<rtc::Thread> value = rtc::Thread::CreateWithSocketServer();
 	value->SetName("WebRTC-Network", nullptr);
 	value->Start();
 	return value.get();
 }
 
-
-static rtc::Thread *getNetworkThread() {
+rtc::Thread *getNetworkThread() {
 	static rtc::Thread *value = makeNetworkThread();
 	return value;
 }
 
-static rtc::Thread *makeMediaThread() {
+rtc::Thread *makeMediaThread() {
 	static std::unique_ptr<rtc::Thread> value = rtc::Thread::Create();
 	value->SetName("WebRTC-Media", nullptr);
 	value->Start();
 	return value.get();
 }
+
+std::function<void(const SignalingMessage&)> SendSerialized(std::function<void(const std::vector<uint8_t> &)> send) {
+	return [send = std::move(send)](const SignalingMessage &message) {
+		send(SerializeMessage(message));
+	};
+}
+
+} // namespace
 
 rtc::Thread *Manager::getMediaThread() {
 	static rtc::Thread *value = makeMediaThread();
@@ -38,7 +46,7 @@ _videoCapture(std::move(descriptor.videoCapture)),
 _stateUpdated(std::move(descriptor.stateUpdated)),
 _videoStateUpdated(std::move(descriptor.videoStateUpdated)),
 _remoteVideoIsActiveUpdated(std::move(descriptor.remoteVideoIsActiveUpdated)),
-_signalingDataEmitted(std::move(descriptor.signalingDataEmitted)) {
+_sendSignalingMessage(SendSerialized(std::move(descriptor.signalingDataEmitted))) {
 	assert(_thread->IsCurrent());
 }
 
@@ -47,72 +55,69 @@ Manager::~Manager() {
 }
 
 void Manager::start() {
-	auto weakThis = std::weak_ptr<Manager>(shared_from_this());
-	_networkManager.reset(new ThreadLocalObject<NetworkManager>(getNetworkThread(), [encryptionKey = _encryptionKey, enableP2P = _enableP2P, rtcServers = _rtcServers, thread = _thread, weakThis, signalingDataEmitted = _signalingDataEmitted]() {
+	const auto weak = std::weak_ptr<Manager>(shared_from_this());
+	_networkManager.reset(new ThreadLocalObject<NetworkManager>(getNetworkThread(), [weak, encryptionKey = _encryptionKey, enableP2P = _enableP2P, rtcServers = _rtcServers, thread = _thread, sendSignalingMessage = _sendSignalingMessage] {
 		return new NetworkManager(
 			getNetworkThread(),
 			encryptionKey,
 			enableP2P,
 			rtcServers,
-			[thread, weakThis](const NetworkManager::State &state) {
-				thread->PostTask(RTC_FROM_HERE, [weakThis, state]() {
-					auto strongThis = weakThis.lock();
-					if (strongThis == nullptr) {
+			[=](const NetworkManager::State &state) {
+				thread->PostTask(RTC_FROM_HERE, [=] {
+					const auto strong = weak.lock();
+					if (!strong) {
 						return;
 					}
 					const auto mappedState = state.isReadyToSendData
 						? State::Established
 						: State::Reconnecting;
-					strongThis->_stateUpdated(mappedState);
+					strong->_stateUpdated(mappedState);
 
-					strongThis->_mediaManager->perform([state](MediaManager *mediaManager) {
+					strong->_mediaManager->perform([=](MediaManager *mediaManager) {
 						mediaManager->setIsConnected(state.isReadyToSendData);
 					});
 				});
 			},
-			[thread, weakThis](const rtc::CopyOnWriteBuffer &packet) {
-				thread->PostTask(RTC_FROM_HERE, [weakThis, packet]() {
-					auto strongThis = weakThis.lock();
-					if (strongThis == nullptr) {
+			[=](const rtc::CopyOnWriteBuffer &packet) {
+				thread->PostTask(RTC_FROM_HERE, [=] {
+					const auto strong = weak.lock();
+					if (!strong) {
 						return;
 					}
-					strongThis->_mediaManager->perform([packet](MediaManager *mediaManager) {
+					strong->_mediaManager->perform([=](MediaManager *mediaManager) {
 						mediaManager->receivePacket(packet);
 					});
 				});
 			},
-			[signalingDataEmitted](const SignalingMessage &message) {
-				signalingDataEmitted(SerializeMessage(message));
-			}
-		);
+			sendSignalingMessage);
 	}));
 	bool isOutgoing = _encryptionKey.isOutgoing;
-	_mediaManager.reset(new ThreadLocalObject<MediaManager>(getMediaThread(), [isOutgoing, thread = _thread, videoCapture = _videoCapture, weakThis]() {
+	_mediaManager.reset(new ThreadLocalObject<MediaManager>(getMediaThread(), [weak, isOutgoing, thread = _thread, videoCapture = _videoCapture, sendSignalingMessage = _sendSignalingMessage]() {
 		return new MediaManager(
 			getMediaThread(),
 			isOutgoing,
 			videoCapture,
-			[thread, weakThis](const rtc::CopyOnWriteBuffer &packet) {
-				thread->PostTask(RTC_FROM_HERE, [weakThis, packet]() {
-					auto strongThis = weakThis.lock();
-					if (strongThis == nullptr) {
+			[=](const rtc::CopyOnWriteBuffer &packet) {
+				thread->PostTask(RTC_FROM_HERE, [=] {
+					const auto strong = weak.lock();
+					if (!strong) {
 						return;
 					}
-					strongThis->_networkManager->perform([packet](NetworkManager *networkManager) {
+					strong->_networkManager->perform([packet](NetworkManager *networkManager) {
 						networkManager->sendPacket(packet);
 					});
 				});
 			},
-			[thread, weakThis](bool isActive) {
-				thread->PostTask(RTC_FROM_HERE, [weakThis, isActive]() {
-					auto strongThis = weakThis.lock();
-					if (strongThis == nullptr) {
+			[=](bool isActive) {
+				thread->PostTask(RTC_FROM_HERE, [=] {
+					const auto strong = weak.lock();
+					if (!strong) {
 						return;
 					}
-					strongThis->notifyIsLocalVideoActive(isActive);
+					strong->notifyIsLocalVideoActive(isActive);
 				});
-			}
-		);
+			},
+			sendSignalingMessage);
 	}));
 }
 
@@ -135,6 +140,10 @@ void Manager::receiveSignalingMessage(SignalingMessage &&message) {
 		_networkManager->perform([message = std::move(message)](NetworkManager *networkManager) mutable {
 			networkManager->receiveSignalingMessage(std::move(message));
 		});
+	} else if (const auto videoFormats = absl::get_if<VideoFormatsMessage>(data)) {
+		_mediaManager->perform([message = std::move(message)](MediaManager *mediaManager) mutable {
+			mediaManager->receiveSignalingMessage(std::move(message));
+		});
 	}
 }
 
@@ -143,7 +152,7 @@ void Manager::setSendVideo(bool sendVideo) {
 		if (!_isVideoRequested) {
 			_isVideoRequested = true;
 
-			_signalingDataEmitted(SerializeMessage(SignalingMessage{ SwitchToVideoMessage{} }));
+			_sendSignalingMessage({ SwitchToVideoMessage{} });
 
 			_mediaManager->perform([](MediaManager *mediaManager) {
 				mediaManager->setSendVideo(true);
@@ -161,7 +170,7 @@ void Manager::setMuteOutgoingAudio(bool mute) {
 }
 
 void Manager::notifyIsLocalVideoActive(bool isActive) {
-	_signalingDataEmitted(SerializeMessage(SignalingMessage{ RemoteVideoIsActiveMessage{ isActive } }));
+	_sendSignalingMessage({ RemoteVideoIsActiveMessage{ isActive } });
 }
 
 void Manager::setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
