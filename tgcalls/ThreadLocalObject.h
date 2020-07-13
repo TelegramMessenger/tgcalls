@@ -13,7 +13,7 @@ class ThreadLocalObject {
 public:
 	template <
 		typename Generator,
-		typename = std::enable_if_t<std::is_same_v<T*, decltype(std::declval<Generator>()())>>>
+		typename = std::enable_if_t<std::is_same<T*, decltype(std::declval<Generator>()())>::value>>
 	ThreadLocalObject(rtc::Thread *thread, Generator &&generator) :
 	_thread(thread),
 	_valueHolder(std::make_unique<ValueHolder>()) {

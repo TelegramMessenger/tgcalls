@@ -3,7 +3,7 @@
 #include "VideoCapturerInterface.h"
 #include "Manager.h"
 #include "MediaManager.h"
-#include "Platform/PlatformInterface.h"
+#include "platform/PlatformInterface.h"
 
 namespace tgcalls {
 

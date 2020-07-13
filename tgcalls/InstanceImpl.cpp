@@ -8,7 +8,6 @@
 #include "VideoCapturerInterface.h"
 
 #if TARGET_OS_IPHONE || TARGET_OS_OSX
-#import <Foundation/Foundation.h>
 #include <sys/time.h>
 #endif
 

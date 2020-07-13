@@ -3,6 +3,8 @@
 #include "VideoCapturerInterfaceImpl.h"
 #include "TGRTCDefaultVideoEncoderFactory.h"
 #include "TGRTCDefaultVideoDecoderFactory.h"
+#include "sdk/objc/native/api/video_encoder_factory.h"
+#include "sdk/objc/native/api/video_decoder_factory.h"
 
 #if defined(WEBRTC_IOS)
 #include "sdk/objc/components/audio/RTCAudioSession.h"
@@ -26,11 +28,16 @@ std::unique_ptr<webrtc::VideoDecoderFactory> DarwinInterface::makeVideoDecoderFa
 }
 
 bool DarwinInterface::supportsH265Encoding() {
-    if (@available(iOS 11.0, *)) {
-        return [[AVAssetExportSession allExportPresets] containsObject:AVAssetExportPresetHEVCHighestQuality];
-    } else {
-        return false;
+#ifdef WEBRTC_MAC
+	if (@available(macOS 10.13, *)) {
+		return [[AVAssetExportSession allExportPresets] containsObject:AVAssetExportPresetHEVCHighestQuality];
     }
+#elif defined WEBRTC_IOS
+    if (@available(iOS 11.0, *)) {
+		return [[AVAssetExportSession allExportPresets] containsObject:AVAssetExportPresetHEVCHighestQuality];
+    }
+#endif // WEBRTC_IOS
+    return false;
 }
 
 rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> DarwinInterface::makeVideoSource(rtc::Thread *signalingThread, rtc::Thread *workerThread) {

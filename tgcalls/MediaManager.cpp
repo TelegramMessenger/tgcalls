@@ -21,7 +21,7 @@
 #include "Instance.h"
 #include "VideoCaptureInterfaceImpl.h"
 #include "VideoCapturerInterface.h"
-#include "Platform/PlatformInterface.h"
+#include "platform/PlatformInterface.h"
 
 namespace tgcalls {
 
