@@ -36,6 +36,10 @@ public:
 	struct State {
 		bool isReadyToSendData = false;
 	};
+    
+public:
+    static absl::optional<rtc::Buffer> encryptPacket(const rtc::CopyOnWriteBuffer &packet, const EncryptionKey &encryptionKey);
+    static absl::optional<rtc::CopyOnWriteBuffer> decryptPacket(const rtc::CopyOnWriteBuffer &packet, const EncryptionKey &encryptionKey);
 
 public:
 	NetworkManager(

@@ -118,11 +118,17 @@ void InstanceImpl::receiveSignalingData(const std::vector<uint8_t> &data) {
 	});
 };
 
-void InstanceImpl::setSendVideo(bool sendVideo) {
-	_manager->perform([sendVideo](Manager *manager) {
-		manager->setSendVideo(sendVideo);
-	});
-};
+void InstanceImpl::requestVideo(std::shared_ptr<VideoCaptureInterface> videoCapture) {
+    _manager->perform([videoCapture](Manager *manager) {
+        manager->requestVideo(videoCapture);
+    });
+}
+
+void InstanceImpl::acceptVideo(std::shared_ptr<VideoCaptureInterface> videoCapture) {
+    _manager->perform([videoCapture](Manager *manager) {
+        manager->acceptVideo(videoCapture);
+    });
+}
 
 void InstanceImpl::setNetworkType(NetworkType networkType) {
 	/*message::NetworkType mappedType;

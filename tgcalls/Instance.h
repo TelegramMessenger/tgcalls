@@ -100,7 +100,17 @@ struct Config {
 
 struct EncryptionKey {
 	std::vector<uint8_t> value;
-	bool isOutgoing = false;
+	bool isOutgoing;
+    
+    EncryptionKey(std::vector<uint8_t> const &value, bool isOutgoing) {
+        this->value = value;
+        this->isOutgoing = isOutgoing;
+    }
+    
+    EncryptionKey(const EncryptionKey& other) {
+        this->value = other.value;
+        this->isOutgoing = other.isOutgoing;
+    }
 };
 
 enum class State {
@@ -109,6 +119,13 @@ enum class State {
 	Established,
 	Failed,
 	Reconnecting
+};
+
+enum class VideoState {
+    Possible,
+    OutgoingRequested,
+    IncomingRequested,
+    Active
 };
 
 struct TrafficStats {
@@ -152,7 +169,8 @@ public:
 	virtual PersistentState getPersistentState() = 0;
 
 	virtual void receiveSignalingData(const std::vector<uint8_t> &data) = 0;
-	virtual void setSendVideo(bool sendVideo) = 0;
+	virtual void requestVideo(std::shared_ptr<VideoCaptureInterface> videoCapture) = 0;
+    virtual void acceptVideo(std::shared_ptr<VideoCaptureInterface> videoCapture) = 0;
 
 	virtual FinalState stop() = 0;
 
@@ -170,8 +188,7 @@ struct Descriptor {
 	NetworkType initialNetworkType = NetworkType();
 	EncryptionKey encryptionKey;
 	std::shared_ptr<VideoCaptureInterface> videoCapture;
-	std::function<void(State)> stateUpdated;
-	std::function<void(bool)> videoStateUpdated;
+	std::function<void(State, VideoState)> stateUpdated;
 	std::function<void(int)> signalBarsUpdated;
 	std::function<void(bool)> remoteVideoIsActiveUpdated;
 	std::function<void(const std::vector<uint8_t> &)> signalingDataEmitted;

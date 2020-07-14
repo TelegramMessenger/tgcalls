@@ -47,7 +47,7 @@ public:
 	void setIsConnected(bool isConnected);
 	void receivePacket(const rtc::CopyOnWriteBuffer &packet);
 	void notifyPacketSent(const rtc::SentPacket &sentPacket);
-	void setSendVideo(bool sendVideo);
+	void setSendVideo(std::shared_ptr<VideoCaptureInterface> videoCapture);
 	void setMuteOutgoingAudio(bool mute);
 	void setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
 	void receiveSignalingMessage(SignalingMessage &&message);
@@ -97,7 +97,7 @@ private:
 	VideoFormatsMessage _myVideoFormats;
 	std::vector<cricket::VideoCodec> _videoCodecs;
 	absl::optional<cricket::VideoCodec> _videoCodecOut;
-	bool _sendVideo = false;
+	bool _isSendingVideo = false;
 
 	std::unique_ptr<cricket::MediaEngineInterface> _mediaEngine;
 	std::unique_ptr<webrtc::Call> _call;

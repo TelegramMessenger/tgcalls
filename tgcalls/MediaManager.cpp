@@ -55,6 +55,7 @@ _taskQueueFactory(webrtc::CreateDefaultTaskQueueFactory()),
 _packetEmitted(std::move(packetEmitted)),
 _localVideoCaptureActiveUpdated(std::move(localVideoCaptureActiveUpdated)),
 _sendSignalingMessage(std::move(sendSignalingMessage)),
+_isSendingVideo(false),
 _videoCapture(std::move(videoCapture)) {
 	_ssrcAudio.incoming = isOutgoing ? ssrcAudioIncoming : ssrcAudioOutgoing;
 	_ssrcAudio.outgoing = (!isOutgoing) ? ssrcAudioIncoming : ssrcAudioOutgoing;
@@ -154,10 +155,8 @@ _videoCapture(std::move(videoCapture)) {
 	_sendSignalingMessage({ _myVideoFormats });
 
 	if (_videoCapture != nullptr) {
-		((VideoCaptureInterfaceImpl *)_videoCapture.get())->_impl->getSyncAssumingSameThread()->setIsActiveUpdated(this->_localVideoCaptureActiveUpdated);
-
-		setSendVideo(true);
-	}
+        setSendVideo(_videoCapture);
+    }
 }
 
 MediaManager::~MediaManager() {
@@ -177,7 +176,7 @@ MediaManager::~MediaManager() {
 
 	_audioChannel->SetInterface(nullptr, webrtc::MediaTransportConfig());
 
-	setSendVideo(false);
+	setSendVideo(nullptr);
 }
 
 void MediaManager::setIsConnected(bool isConnected) {
@@ -248,16 +247,18 @@ void MediaManager::setPeerVideoFormats(VideoFormatsMessage &&peerFormats) {
 }
 
 bool MediaManager::computeIsSendingVideo() const {
-	return _sendVideo && _videoCodecOut.has_value();
+	return _videoCapture != nullptr && _videoCodecOut.has_value();
 }
 
-void MediaManager::setSendVideo(bool sendVideo) {
-	if (_sendVideo == sendVideo) {
-		return;
-	}
-	const auto wasSending = computeIsSendingVideo();
-	_sendVideo = sendVideo;
-	checkIsSendingVideoChanged(wasSending);
+void MediaManager::setSendVideo(std::shared_ptr<VideoCaptureInterface> videoCapture) {
+    const auto wasSending = computeIsSendingVideo();
+    
+    if (_videoCapture != nullptr) {
+        ((VideoCaptureInterfaceImpl *)_videoCapture.get())->_impl->getSyncAssumingSameThread()->setIsActiveUpdated(this->_localVideoCaptureActiveUpdated);
+    }
+    _videoCapture = videoCapture;
+    
+    checkIsSendingVideoChanged(wasSending);
 }
 
 void MediaManager::checkIsSendingVideoChanged(bool wasSending) {

@@ -17,7 +17,8 @@ public:
 
 	void start();
 	void receiveSignalingData(const std::vector<uint8_t> &data);
-	void setSendVideo(bool sendVideo);
+	void requestVideo(std::shared_ptr<VideoCaptureInterface> videoCapture);
+    void acceptVideo(std::shared_ptr<VideoCaptureInterface> videoCapture);
 	void setMuteOutgoingAudio(bool mute);
 	void notifyIsLocalVideoActive(bool isActive);
 	void setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
@@ -30,13 +31,14 @@ private:
 	bool _enableP2P = false;
 	std::vector<RtcServer> _rtcServers;
 	std::shared_ptr<VideoCaptureInterface> _videoCapture;
-	std::function<void (const State &)> _stateUpdated;
-	std::function<void (bool)> _videoStateUpdated;
+	std::function<void (const State &, VideoState)> _stateUpdated;
 	std::function<void (bool)> _remoteVideoIsActiveUpdated;
 	std::function<void(const SignalingMessage &)> _sendSignalingMessage;
 	std::unique_ptr<ThreadLocalObject<NetworkManager>> _networkManager;
 	std::unique_ptr<ThreadLocalObject<MediaManager>> _mediaManager;
-	bool _isVideoRequested = false;
+	State _state;
+    VideoState _videoState;
+    bool _didConnectOnce;
 
 };
 

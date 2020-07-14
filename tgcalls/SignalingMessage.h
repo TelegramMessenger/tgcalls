@@ -5,32 +5,37 @@
 #include "api/video_codecs/sdp_video_format.h"
 #include "absl/types/variant.h"
 #include "absl/types/optional.h"
+#include "rtc_base/copy_on_write_buffer.h"
 
 #include <vector>
 
 namespace tgcalls {
 
-struct SwitchToVideoMessage {
-	static constexpr uint8_t kId = 1;
-};
-
-struct RemoteVideoIsActiveMessage {
-	static constexpr uint8_t kId = 2;
-
-	bool active = false;
-};
-
 struct CandidatesListMessage {
-	static constexpr uint8_t kId = 3;
+	static constexpr uint8_t kId = 1;
 
 	std::vector<cricket::Candidate> candidates;
 };
 
 struct VideoFormatsMessage {
-	static constexpr uint8_t kId = 4;
+	static constexpr uint8_t kId = 2;
 
 	std::vector<webrtc::SdpVideoFormat> formats;
 	int encodersCount = 0;
+};
+
+struct RequestVideoMessage {
+    static constexpr uint8_t kId = 3;
+};
+
+struct AcceptVideoMessage {
+    static constexpr uint8_t kId = 4;
+};
+
+struct RemoteVideoIsActiveMessage {
+    static constexpr uint8_t kId = 5;
+
+    bool active = false;
 };
 
 // To add a new message you should:
@@ -40,14 +45,15 @@ struct VideoFormatsMessage {
 
 struct SignalingMessage {
 	absl::variant<
-		SwitchToVideoMessage,
-		RemoteVideoIsActiveMessage,
 		CandidatesListMessage,
-		VideoFormatsMessage> data;
+		VideoFormatsMessage,
+        RequestVideoMessage,
+        AcceptVideoMessage,
+        RemoteVideoIsActiveMessage> data;
 };
 
-std::vector<uint8_t> SerializeMessage(const SignalingMessage &message);
-absl::optional<SignalingMessage> DeserializeMessage(const std::vector<uint8_t> &data);
+rtc::CopyOnWriteBuffer SerializeMessage(const SignalingMessage &message);
+absl::optional<SignalingMessage> DeserializeMessage(const rtc::CopyOnWriteBuffer &data);
 
 } // namespace tgcalls
 

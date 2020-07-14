@@ -24,9 +24,15 @@ rtc::Thread *makeMediaThread() {
 	return value.get();
 }
 
-std::function<void(const SignalingMessage&)> SendSerialized(std::function<void(const std::vector<uint8_t> &)> send) {
-	return [send = std::move(send)](const SignalingMessage &message) {
-		send(SerializeMessage(message));
+std::function<void(const SignalingMessage&)> SendSerialized(std::function<void(const std::vector<uint8_t> &packet)> send, EncryptionKey encryptionKey) {
+	return [send = std::move(send), encryptionKey](const SignalingMessage &message) {
+        auto encryptedPacket = NetworkManager::encryptPacket(SerializeMessage(message), encryptionKey);
+        if (encryptedPacket.has_value()) {
+            std::vector<uint8_t> result;
+            result.resize(encryptedPacket->size());
+            memcpy(result.data(), encryptedPacket->data(), encryptedPacket->size());
+            send(result);
+        }
 	};
 }
 
@@ -44,10 +50,15 @@ _enableP2P(descriptor.config.enableP2P),
 _rtcServers(std::move(descriptor.rtcServers)),
 _videoCapture(std::move(descriptor.videoCapture)),
 _stateUpdated(std::move(descriptor.stateUpdated)),
-_videoStateUpdated(std::move(descriptor.videoStateUpdated)),
 _remoteVideoIsActiveUpdated(std::move(descriptor.remoteVideoIsActiveUpdated)),
-_sendSignalingMessage(SendSerialized(std::move(descriptor.signalingDataEmitted))) {
+_sendSignalingMessage(SendSerialized(std::move(descriptor.signalingDataEmitted), descriptor.encryptionKey)),
+_state(State::Reconnecting),
+_videoState(VideoState::Possible),
+_didConnectOnce(false) {
 	assert(_thread->IsCurrent());
+    if (_videoCapture != nullptr) {
+        _videoState = VideoState::OutgoingRequested;
+    }
 }
 
 Manager::~Manager() {
@@ -71,7 +82,16 @@ void Manager::start() {
 					const auto mappedState = state.isReadyToSendData
 						? State::Established
 						: State::Reconnecting;
-					strong->_stateUpdated(mappedState);
+                    if (state.isReadyToSendData) {
+                        if (!strong->_didConnectOnce) {
+                            strong->_didConnectOnce = true;
+                            if (strong->_videoState == VideoState::OutgoingRequested) {
+                                strong->_videoState = VideoState::Active;
+                            }
+                        }
+                    }
+                    strong->_state = mappedState;
+					strong->_stateUpdated(mappedState, strong->_videoState);
 
 					strong->_mediaManager->perform([=](MediaManager *mediaManager) {
 						mediaManager->setIsConnected(state.isReadyToSendData);
@@ -122,19 +142,33 @@ void Manager::start() {
 }
 
 void Manager::receiveSignalingData(const std::vector<uint8_t> &data) {
-	if (auto message = DeserializeMessage(data)) {
-		receiveSignalingMessage(std::move(*message));
-	}
+    rtc::CopyOnWriteBuffer packet;
+    packet.AppendData(data.data(), data.size());
+    auto decryptedPacket = NetworkManager::decryptPacket(packet, _encryptionKey);
+    if (decryptedPacket.has_value()) {
+        if (auto message = DeserializeMessage(decryptedPacket.value())) {
+            receiveSignalingMessage(std::move(*message));
+        }
+    }
 }
 
 void Manager::receiveSignalingMessage(SignalingMessage &&message) {
 	const auto data = &message.data;
-	if (const auto switchToVideo = absl::get_if<SwitchToVideoMessage>(data)) {
-		_mediaManager->perform([](MediaManager *mediaManager) {
-			mediaManager->setSendVideo(true);
-		});
-		_videoStateUpdated(true);
-	} else if (const auto remoteVideoIsActive = absl::get_if<RemoteVideoIsActiveMessage>(data)) {
+	if (const auto switchToVideo = absl::get_if<RequestVideoMessage>(data)) {
+		if (_videoState == VideoState::Possible) {
+            _videoState = VideoState::IncomingRequested;
+            _stateUpdated(_state, _videoState);
+        }
+	} else if (const auto switchToVideo = absl::get_if<AcceptVideoMessage>(data)) {
+        if (_videoState == VideoState::OutgoingRequested) {
+            _videoState = VideoState::Active;
+            _stateUpdated(_state, _videoState);
+            
+            _mediaManager->perform([videoCapture = _videoCapture](MediaManager *mediaManager) {
+                mediaManager->setSendVideo(videoCapture);
+            });
+        }
+    } else if (const auto remoteVideoIsActive = absl::get_if<RemoteVideoIsActiveMessage>(data)) {
 		_remoteVideoIsActiveUpdated(remoteVideoIsActive->active);
 	} else if (const auto candidatesList = absl::get_if<CandidatesListMessage>(data)) {
 		_networkManager->perform([message = std::move(message)](NetworkManager *networkManager) mutable {
@@ -147,20 +181,32 @@ void Manager::receiveSignalingMessage(SignalingMessage &&message) {
 	}
 }
 
-void Manager::setSendVideo(bool sendVideo) {
-	if (sendVideo) {
-		if (!_isVideoRequested) {
-			_isVideoRequested = true;
+void Manager::requestVideo(std::shared_ptr<VideoCaptureInterface> videoCapture) {
+    if (videoCapture != nullptr) {
+        _videoCapture = videoCapture;
+        if (_videoState == VideoState::Possible) {
+            _videoState = VideoState::OutgoingRequested;
+            
+            _sendSignalingMessage({ RequestVideoMessage() });
+            _stateUpdated(_state, _videoState);
+        }
+    }
+}
 
-			_sendSignalingMessage({ SwitchToVideoMessage{} });
-
-			_mediaManager->perform([](MediaManager *mediaManager) {
-				mediaManager->setSendVideo(true);
-			});
-
-			_videoStateUpdated(true);
-		}
-	}
+void Manager::acceptVideo(std::shared_ptr<VideoCaptureInterface> videoCapture) {
+    if (videoCapture != nullptr) {
+        _videoCapture = videoCapture;
+        if (_videoState == VideoState::IncomingRequested) {
+            _videoState = VideoState::Active;
+            
+            _sendSignalingMessage({ AcceptVideoMessage() });
+            _stateUpdated(_state, _videoState);
+            
+            _mediaManager->perform([videoCapture](MediaManager *mediaManager) {
+                mediaManager->setSendVideo(videoCapture);
+            });
+        }
+    }
 }
 
 void Manager::setMuteOutgoingAudio(bool mute) {

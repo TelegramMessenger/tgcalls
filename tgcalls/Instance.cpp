@@ -60,21 +60,3 @@ void SetLoggingFunction(std::function<void(std::string const &)> loggingFunction
 }
 
 } // namespace tgcalls
-
-void __tgvoip_call_tglog(const char *format, ...) {
-	va_list vaArgs;
-	va_start(vaArgs, format);
-
-	va_list vaCopy;
-	va_copy(vaCopy, vaArgs);
-	const int length = std::vsnprintf(nullptr, 0, format, vaCopy);
-	va_end(vaCopy);
-
-	std::vector<char> zc(length + 1);
-	std::vsnprintf(zc.data(), zc.size(), format, vaArgs);
-	va_end(vaArgs);
-
-	if (tgcalls::globalLoggingFunction != nullptr) {
-		tgcalls::globalLoggingFunction(std::string(zc.data(), zc.size()));
-	}
-}

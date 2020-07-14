@@ -90,11 +90,18 @@ bool Deserialize(cricket::Candidate &to, rtc::ByteBufferReader &from) {
 	return true;
 }
 
-void Serialize(rtc::ByteBufferWriter &to, const SwitchToVideoMessage &from) {
+void Serialize(rtc::ByteBufferWriter &to, const RequestVideoMessage &from) {
 }
 
-bool Deserialize(SwitchToVideoMessage &to, rtc::ByteBufferReader &reader) {
+bool Deserialize(RequestVideoMessage &to, rtc::ByteBufferReader &reader) {
 	return true;
+}
+
+void Serialize(rtc::ByteBufferWriter &to, const AcceptVideoMessage &from) {
+}
+
+bool Deserialize(AcceptVideoMessage &to, rtc::ByteBufferReader &reader) {
+    return true;
 }
 
 void Serialize(rtc::ByteBufferWriter &to, const RemoteVideoIsActiveMessage &from) {
@@ -175,8 +182,8 @@ bool Deserialize(VideoFormatsMessage &to, rtc::ByteBufferReader &from) {
 }
 
 template <typename T>
-bool TryDeserialize(absl::optional<SignalingMessage> &to, const std::vector<uint8_t> &from) {
-	assert(!from.empty());
+bool TryDeserialize(absl::optional<SignalingMessage> &to, const rtc::CopyOnWriteBuffer &from) {
+	assert(from.size() != 0);
 
 	constexpr auto id = T::kId;
 	if (from[0] != id) {
@@ -197,14 +204,14 @@ struct TryDeserializeNext;
 
 template <>
 struct TryDeserializeNext<> {
-	static bool Call(absl::optional<SignalingMessage> &to, const std::vector<uint8_t> &from) {
+	static bool Call(absl::optional<SignalingMessage> &to, const rtc::CopyOnWriteBuffer &from) {
 		return false;
 	}
 };
 
 template <typename T, typename ...Other>
 struct TryDeserializeNext<T, Other...> {
-	static bool Call(absl::optional<SignalingMessage> &to, const std::vector<uint8_t> &from) {
+	static bool Call(absl::optional<SignalingMessage> &to, const rtc::CopyOnWriteBuffer &from) {
 		return TryDeserialize<T>(to, from)
 			|| TryDeserializeNext<Other...>::Call(to, from);
 	}
@@ -213,31 +220,28 @@ struct TryDeserializeNext<T, Other...> {
 template <typename ...Types>
 bool TryDeserializeRecursive(
 		absl::optional<SignalingMessage> &to,
-		const std::vector<uint8_t> &from,
+		const rtc::CopyOnWriteBuffer &from,
 		absl::variant<Types...> *) {
 	return TryDeserializeNext<Types...>::Call(to, from);
 }
 
 } // namespace
 
-std::vector<uint8_t> SerializeMessage(const SignalingMessage &message) {
+rtc::CopyOnWriteBuffer SerializeMessage(const SignalingMessage &message) {
 	rtc::ByteBufferWriter writer;
 	absl::visit([&](const auto &data) {
 		writer.WriteUInt8(std::decay_t<decltype(data)>::kId);
 		Serialize(writer, data);
 	}, message.data);
 
-	auto result = std::vector<uint8_t>();
-	const auto size = result.size();
-	const auto length = writer.Length();
-	result.resize(size + length);
-	memcpy(result.data() + size, writer.Data(), length);
+    auto result = rtc::CopyOnWriteBuffer();
+    result.AppendData(writer.Data(), writer.Length());
 
 	return result;
 }
 
-absl::optional<SignalingMessage> DeserializeMessage(const std::vector<uint8_t> &data) {
-	if (data.empty()) {
+absl::optional<SignalingMessage> DeserializeMessage(const rtc::CopyOnWriteBuffer &data) {
+    if (data.size() == 0) {
 		return absl::nullopt;
 	}
 	using Variant = decltype(std::declval<SignalingMessage>().data);

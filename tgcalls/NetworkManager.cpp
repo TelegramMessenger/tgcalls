@@ -50,10 +50,14 @@ static void aesIgeDecrypt(uint8_t *in, uint8_t *out, size_t length, uint8_t *key
 	AES_ige_encrypt(in, out, length, &akey, iv, AES_DECRYPT);
 }
 
-static absl::optional<rtc::CopyOnWriteBuffer> decryptPacket(const rtc::CopyOnWriteBuffer &packet, const EncryptionKey &encryptionKey) {
+absl::optional<rtc::CopyOnWriteBuffer> NetworkManager::decryptPacket(const rtc::CopyOnWriteBuffer &packet, const EncryptionKey &encryptionKey) {
 	if (packet.size() < 16 + 16) {
 		return absl::nullopt;
 	}
+    if (encryptionKey.value.size() != 256) {
+        return absl::nullopt;
+    }
+    
 	unsigned char msgKey[16];
 	memcpy(msgKey, packet.data(), 16);
 
@@ -97,10 +101,13 @@ static absl::optional<rtc::CopyOnWriteBuffer> decryptPacket(const rtc::CopyOnWri
 	return decryptedPacket;
 }
 
-static absl::optional<rtc::Buffer> encryptPacket(const rtc::CopyOnWriteBuffer &packet, const EncryptionKey &encryptionKey) {
+absl::optional<rtc::Buffer> NetworkManager::encryptPacket(const rtc::CopyOnWriteBuffer &packet, const EncryptionKey &encryptionKey) {
 	if (packet.size() > UINT16_MAX) {
 		return absl::nullopt;
 	}
+    if (encryptionKey.value.size() != 256) {
+        return absl::nullopt;
+    }
 
 	rtc::ByteBufferWriter innerData;
 	uint16_t packetSize = (uint16_t)packet.size();
@@ -139,13 +146,6 @@ static absl::optional<rtc::Buffer> encryptPacket(const rtc::CopyOnWriteBuffer &p
 	aesIgeEncrypt((uint8_t *)innerData.Data(), encryptionBuffer.begin(), innerData.Length(), aesKey, aesIv);
 
 	encryptedPacket.AppendData(encryptionBuffer.begin(), encryptionBuffer.size());
-
-	/*rtc::CopyOnWriteBuffer testBuffer;
-	testBuffer.AppendData(encryptedPacket.data(), encryptedPacket.size());
-	EncryptionKey testKey;
-	testKey.value = encryptionKey.value;
-	testKey.isOutgoing = !encryptionKey.isOutgoing;
-	decryptPacket(testBuffer, testKey);*/
 
 	return encryptedPacket;
 }
