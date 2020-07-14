@@ -55,7 +55,6 @@ _taskQueueFactory(webrtc::CreateDefaultTaskQueueFactory()),
 _packetEmitted(std::move(packetEmitted)),
 _localVideoCaptureActiveUpdated(std::move(localVideoCaptureActiveUpdated)),
 _sendSignalingMessage(std::move(sendSignalingMessage)),
-_isSendingVideo(false),
 _videoCapture(std::move(videoCapture)) {
 	_ssrcAudio.incoming = isOutgoing ? ssrcAudioIncoming : ssrcAudioOutgoing;
 	_ssrcAudio.outgoing = (!isOutgoing) ? ssrcAudioIncoming : ssrcAudioOutgoing;
