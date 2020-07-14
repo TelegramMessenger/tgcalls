@@ -2,8 +2,10 @@
 
 #ifdef WEBRTC_APP_TDESKTOP
 #include "platform/tdesktop/VideoCapturerInterfaceImpl.h"
+#include "platform/tdesktop/VideoCapturerTrackSource.h"
 #else // WEBRTC_APP_TDESKTOP
 #include "VideoCapturerInterfaceImpl.h"
+#include "sdk/objc/native/src/objc_video_track_source.h"
 #endif
 
 #include "media/base/media_constants.h"
@@ -11,7 +13,6 @@
 #include "TGRTCDefaultVideoDecoderFactory.h"
 #include "sdk/objc/native/api/video_encoder_factory.h"
 #include "sdk/objc/native/api/video_decoder_factory.h"
-#include "sdk/objc/native/src/objc_video_track_source.h"
 #include "api/video_track_source_proxy.h"
 
 #ifdef WEBRTC_IOS
@@ -51,8 +52,13 @@ bool DarwinInterface::supportsEncoding(const std::string &codecName) {
 }
 
 rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> DarwinInterface::makeVideoSource(rtc::Thread *signalingThread, rtc::Thread *workerThread) {
+#ifdef WEBRTC_APP_TDESKTOP
+	const auto videoTrackSource = VideoCapturerTrackSource::Create();
+	return webrtc::VideoTrackSourceProxy::Create(signalingThread, workerThread, videoTrackSource);
+#else // WEBRTC_APP_TDESKTOP
     rtc::scoped_refptr<webrtc::ObjCVideoTrackSource> objCVideoTrackSource(new rtc::RefCountedObject<webrtc::ObjCVideoTrackSource>());
     return webrtc::VideoTrackSourceProxy::Create(signalingThread, workerThread, objCVideoTrackSource);
+#endif // WEBRTC_APP_TDESKTOP
 }
 
 std::unique_ptr<VideoCapturerInterface> DarwinInterface::makeVideoCapturer(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, bool useFrontCamera, std::function<void(bool)> isActiveUpdated) {
