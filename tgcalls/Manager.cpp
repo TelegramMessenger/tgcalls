@@ -45,13 +45,13 @@ rtc::Thread *Manager::getMediaThread() {
 
 Manager::Manager(rtc::Thread *thread, Descriptor &&descriptor) :
 _thread(thread),
-_encryptionKey(std::move(descriptor.encryptionKey)),
+_encryptionKey(descriptor.encryptionKey),
 _enableP2P(descriptor.config.enableP2P),
 _rtcServers(std::move(descriptor.rtcServers)),
 _videoCapture(std::move(descriptor.videoCapture)),
 _stateUpdated(std::move(descriptor.stateUpdated)),
 _remoteVideoIsActiveUpdated(std::move(descriptor.remoteVideoIsActiveUpdated)),
-_sendSignalingMessage(SendSerialized(std::move(descriptor.signalingDataEmitted), descriptor.encryptionKey)),
+_sendSignalingMessage(SendSerialized(std::move(descriptor.signalingDataEmitted), std::move(descriptor.encryptionKey))),
 _state(State::Reconnecting),
 _videoState(VideoState::Possible),
 _didConnectOnce(false) {
@@ -163,7 +163,7 @@ void Manager::receiveSignalingMessage(SignalingMessage &&message) {
         if (_videoState == VideoState::OutgoingRequested) {
             _videoState = VideoState::Active;
             _stateUpdated(_state, _videoState);
-            
+
             _mediaManager->perform([videoCapture = _videoCapture](MediaManager *mediaManager) {
                 mediaManager->setSendVideo(videoCapture);
             });
@@ -186,7 +186,7 @@ void Manager::requestVideo(std::shared_ptr<VideoCaptureInterface> videoCapture) 
         _videoCapture = videoCapture;
         if (_videoState == VideoState::Possible) {
             _videoState = VideoState::OutgoingRequested;
-            
+
             _sendSignalingMessage({ RequestVideoMessage() });
             _stateUpdated(_state, _videoState);
         }
@@ -198,10 +198,10 @@ void Manager::acceptVideo(std::shared_ptr<VideoCaptureInterface> videoCapture) {
         _videoCapture = videoCapture;
         if (_videoState == VideoState::IncomingRequested) {
             _videoState = VideoState::Active;
-            
+
             _sendSignalingMessage({ AcceptVideoMessage() });
             _stateUpdated(_state, _videoState);
-            
+
             _mediaManager->perform([videoCapture](MediaManager *mediaManager) {
                 mediaManager->setSendVideo(videoCapture);
             });

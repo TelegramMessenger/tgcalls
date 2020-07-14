@@ -196,7 +196,10 @@ void InstanceImplLegacy::setMuteMicrophone(bool muteMicrophone) {
 void InstanceImplLegacy::receiveSignalingData(const std::vector<uint8_t> &data) {
 }
 
-void InstanceImplLegacy::setSendVideo(bool sendVideo) {
+void InstanceImplLegacy::requestVideo(std::shared_ptr<VideoCaptureInterface> videoCapture) {
+}
+
+void InstanceImplLegacy::acceptVideo(std::shared_ptr<VideoCaptureInterface> videoCapture) {
 }
 
 void InstanceImplLegacy::setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
@@ -300,7 +303,7 @@ void InstanceImplLegacy::ControllerStateCallback(tgvoip::VoIPController *control
 			}
 		}();
 
-		self->onStateUpdated_(mappedState);
+		self->onStateUpdated_(mappedState, VideoState::Possible);
 	}
 }
 

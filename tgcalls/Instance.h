@@ -100,16 +100,10 @@ struct Config {
 
 struct EncryptionKey {
 	std::vector<uint8_t> value;
-	bool isOutgoing;
-    
-    EncryptionKey(std::vector<uint8_t> const &value, bool isOutgoing) {
-        this->value = value;
-        this->isOutgoing = isOutgoing;
-    }
-    
-    EncryptionKey(const EncryptionKey& other) {
-        this->value = other.value;
-        this->isOutgoing = other.isOutgoing;
+	bool isOutgoing = false;
+
+    EncryptionKey(std::vector<uint8_t> const &value, bool isOutgoing)
+	: value(value), isOutgoing(isOutgoing) {
     }
 };
 
