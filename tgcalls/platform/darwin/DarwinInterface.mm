@@ -47,8 +47,16 @@ bool DarwinInterface::supportsEncoding(const std::string &codecName) {
 			return [[AVAssetExportSession allExportPresets] containsObject:AVAssetExportPresetHEVCHighestQuality];
 		}
 #endif // WEBRTC_IOS || WEBRTC_MAC
-	}
-	return (codecName == cricket::kH264CodecName);
+    } else if (codecName == cricket::kH264CodecName) {
+        return true;
+    } else if (codecName == cricket::kVp8CodecName) {
+        return true;
+    } else if (codecName == cricket::kVp9CodecName) {
+        if (@available(macOS 10.13, *)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> DarwinInterface::makeVideoSource(rtc::Thread *signalingThread, rtc::Thread *workerThread) {
