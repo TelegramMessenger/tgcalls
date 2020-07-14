@@ -66,7 +66,7 @@ static void tg_h265DecompressionOutputCallback(void* decoder,
       initWithBuffer:frameBuffer
             rotation:RTCVideoRotation_0
          timeStampNs:CMTimeGetSeconds(timestamp) * rtc::kNumNanosecsPerSec];
-  decodedFrame.timeStamp = decodeParams->timestamp;
+  decodedFrame.timeStamp = (int32_t)decodeParams->timestamp;
   decodeParams->callback(decodedFrame);
 }
 
@@ -116,7 +116,6 @@ static void tg_h265DecompressionOutputCallback(void* decoder,
 - (void)dealloc {
   [self destroyDecompressionSession];
   [self setVideoFormat:nullptr];
-  [super dealloc];
 }
 
 - (NSInteger)startDecodeWithNumberOfCores:(int)numberOfCores {
