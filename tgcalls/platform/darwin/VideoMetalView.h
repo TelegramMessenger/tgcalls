@@ -20,6 +20,7 @@
 - (void)renderFrame:(nullable RTCVideoFrame *)frame;
 
 - (std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)getSink;
+- (void)setOnFirstFrameReceived:(void (^ _Nullable)())onFirstFrameReceived;
 
 @end
 
