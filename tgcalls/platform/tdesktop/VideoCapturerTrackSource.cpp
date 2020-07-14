@@ -1,12 +1,14 @@
 #include "VideoCapturerTrackSource.h"
 
+#include "modules/video_capture/video_capture_factory.h"
+
 namespace tgcalls {
 
 rtc::scoped_refptr<VideoCapturerTrackSource> VideoCapturerTrackSource::Create() {
 	const size_t kWidth = 640;
 	const size_t kHeight = 480;
 	const size_t kFps = 30;
-	
+
 #ifdef WEBRTC_MAC
 	int num_devices = 1;
 #else // WEBRTC_MAC
