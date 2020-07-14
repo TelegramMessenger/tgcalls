@@ -61,6 +61,16 @@ private:
 
 @implementation VideoMetalView
 
++ (bool)isSupported {
+    static bool value;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+        value = device != nil;
+    });
+    return value;
+}
+
 - (instancetype)initWithFrame:(CGRect)frameRect {
     self = [super initWithFrame:frameRect];
     if (self) {

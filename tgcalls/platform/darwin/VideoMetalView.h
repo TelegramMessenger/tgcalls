@@ -12,6 +12,8 @@
 
 @interface VideoMetalView : UIView
 
++ (bool)isSupported;
+
 @property(nonatomic) UIViewContentMode videoContentMode;
 @property(nonatomic, getter=isEnabled) BOOL enabled;
 @property(nonatomic, nullable) NSValue* rotationOverride;
