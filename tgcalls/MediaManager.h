@@ -97,7 +97,6 @@ private:
 	VideoFormatsMessage _myVideoFormats;
 	std::vector<cricket::VideoCodec> _videoCodecs;
 	absl::optional<cricket::VideoCodec> _videoCodecOut;
-	bool _isSendingVideo = false;
 
 	std::unique_ptr<cricket::MediaEngineInterface> _mediaEngine;
 	std::unique_ptr<webrtc::Call> _call;
