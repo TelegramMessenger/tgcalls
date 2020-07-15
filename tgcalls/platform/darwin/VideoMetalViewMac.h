@@ -1,8 +1,8 @@
-#ifndef TGCALLS_VIDEO_METAL_VIEW_H
-#define TGCALLS_VIDEO_METAL_VIEW_H
-#if TARGET_OS_IOS
+#ifndef TGCALLS_VIDEO_METAL_VIEW_MAC_H
+#define TGCALLS_VIDEO_METAL_VIEW_MAC_H
+#if WEBRTC_MAC
 #import <Foundation/Foundation.h>
-#import <UIKit/UIKit.h>
+#import <AppKit/AppKit.h>
 
 #import "api/media_stream_interface.h"
 
@@ -10,11 +10,11 @@
 
 @class RTCVideoFrame;
 
-@interface VideoMetalView : UIView
+@interface VideoMetalView : NSView
 
 + (bool)isSupported;
 
-@property(nonatomic) UIViewContentMode videoContentMode;
+@property(nonatomic) CALayerContentsGravity _Nullable videoContentMode;
 @property(nonatomic, getter=isEnabled) BOOL enabled;
 @property(nonatomic, nullable) NSValue* rotationOverride;
 
@@ -24,7 +24,8 @@
 - (std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)getSink;
 - (void)setOnFirstFrameReceived:(void (^ _Nullable)())onFirstFrameReceived;
 
+
 @end
 
-#endif //WEBRTC_IOS
+#endif // WEBRTC_MAC
 #endif

@@ -23,8 +23,11 @@
 #include "sdk/objc/native/api/video_frame.h"
 #include "api/media_types.h"
 
+#if WEBRTC_MAC
+#import "VideoCameraCapturerMac.h"
+#else
 #import "VideoCameraCapturer.h"
-
+#endif
 #import <AVFoundation/AVFoundation.h>
 
 @interface VideoCapturerInterfaceImplReference : NSObject {
@@ -44,7 +47,7 @@
 
         AVCaptureDevice *selectedCamera = nil;
 
-#if TARGET_OS_IOS
+#if WEBRTC_IOS
         AVCaptureDevice *frontCamera = nil;
         AVCaptureDevice *backCamera = nil;
         for (AVCaptureDevice *device in [VideoCameraCapturer captureDevices]) {

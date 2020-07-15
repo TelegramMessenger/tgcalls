@@ -1,6 +1,6 @@
-#ifndef TGCALLS_VIDEO_CAMERA_CAPTURER_H
-#define TGCALLS_VIDEO_CAMERA_CAPTURER_H
-#if WEBRTC_IOS
+#ifndef TGCALLS_VIDEO_CAMERA_CAPTURER_MAC_H
+#define TGCALLS_VIDEO_CAMERA_CAPTURER_MAC_H
+#if WEBRTC_MAC
 #import <Foundation/Foundation.h>
 #import <AVFoundation/AVFoundation.h>
 
@@ -18,7 +18,8 @@
 - (void)startCaptureWithDevice:(AVCaptureDevice *)device format:(AVCaptureDeviceFormat *)format fps:(NSInteger)fps;
 - (void)stopCapture;
 - (void)setIsEnabled:(bool)isEnabled;
+    
 
 @end
-#endif // WEBRTC_IOS
+#endif //WEBRTC_MAC
 #endif
