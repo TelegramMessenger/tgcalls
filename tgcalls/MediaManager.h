@@ -78,6 +78,7 @@ private:
 
 	bool computeIsSendingVideo() const;
 	void checkIsSendingVideoChanged(bool wasSending);
+	bool videoCodecsNegotiated() const;
 
 	rtc::Thread *_thread = nullptr;
 	std::unique_ptr<webrtc::RtcEventLogNull> _eventLog;
@@ -93,6 +94,7 @@ private:
 
 	bool _isConnected = false;
 	bool _muteOutgoingAudio = false;
+	bool _readyToReceiveVideo = false;
 
 	VideoFormatsMessage _myVideoFormats;
 	std::vector<cricket::VideoCodec> _videoCodecs;

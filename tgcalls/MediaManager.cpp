@@ -103,8 +103,6 @@ _videoCapture(std::move(videoCapture)) {
 	_audioChannel.reset(_mediaEngine->voice().CreateMediaChannel(_call.get(), cricket::MediaConfig(), cricket::AudioOptions(), webrtc::CryptoOptions::NoGcm()));
 	_videoChannel.reset(_mediaEngine->video().CreateMediaChannel(_call.get(), cricket::MediaConfig(), cricket::VideoOptions(), webrtc::CryptoOptions::NoGcm(), _videoBitrateAllocatorFactory.get()));
 
-	_audioChannel->AddSendStream(cricket::StreamParams::CreateLegacy(_ssrcAudio.outgoing));
-
 	const uint32_t opusClockrate = 48000;
 	const uint16_t opusSdpPayload = 111;
 	const char *opusSdpName = "opus";
@@ -137,6 +135,7 @@ _videoCapture(std::move(videoCapture)) {
 	audioSendPrameters.rtcp.reduced_size = true;
 	audioSendPrameters.rtcp.remote_estimate = true;
 	_audioChannel->SetSendParameters(audioSendPrameters);
+	_audioChannel->AddSendStream(cricket::StreamParams::CreateLegacy(_ssrcAudio.outgoing));
 	_audioChannel->SetInterface(_audioNetworkInterface.get(), webrtc::MediaTransportConfig());
 
 	cricket::AudioRecvParameters audioRecvParameters;
@@ -216,7 +215,11 @@ void MediaManager::receivePacket(const rtc::CopyOnWriteBuffer &packet) {
 		}
 	} else if (header == 0xbf) {
 		if (_videoChannel) {
-			_videoChannel->OnPacketReceived(unwrappedPacket, -1);
+			if (_readyToReceiveVideo) {
+				_videoChannel->OnPacketReceived(unwrappedPacket, -1);
+			} else {
+				// maybe we need to queue packets for some time?
+			}
 		}
 	}
 }
@@ -245,18 +248,22 @@ void MediaManager::setPeerVideoFormats(VideoFormatsMessage &&peerFormats) {
 	}
 }
 
+bool MediaManager::videoCodecsNegotiated() const {
+	return !_videoCodecs.empty();
+}
+
 bool MediaManager::computeIsSendingVideo() const {
 	return _videoCapture != nullptr && _videoCodecOut.has_value();
 }
 
 void MediaManager::setSendVideo(std::shared_ptr<VideoCaptureInterface> videoCapture) {
     const auto wasSending = computeIsSendingVideo();
-    
+
     if (_videoCapture != nullptr) {
         ((VideoCaptureInterfaceImpl *)_videoCapture.get())->_impl->getSyncAssumingSameThread()->setIsActiveUpdated(this->_localVideoCaptureActiveUpdated);
     }
     _videoCapture = videoCapture;
-    
+
     checkIsSendingVideoChanged(wasSending);
 }
 
@@ -337,8 +344,9 @@ void MediaManager::checkIsSendingVideoChanged(bool wasSending) {
 		videoRecvStreamParams.ssrc_groups.push_back(videoRecvSsrcGroup);
 		videoRecvStreamParams.cname = "cname";
 
-		_videoChannel->AddRecvStream(videoRecvStreamParams);
 		_videoChannel->SetRecvParameters(videoRecvParameters);
+		_videoChannel->AddRecvStream(videoRecvStreamParams);
+		_readyToReceiveVideo = true;
 		if (_currentIncomingVideoSink) {
 			_videoChannel->SetSink(_ssrcVideo.incoming, _currentIncomingVideoSink.get());
 		}
@@ -351,6 +359,8 @@ void MediaManager::checkIsSendingVideoChanged(bool wasSending) {
 
 		_videoChannel->RemoveRecvStream(_ssrcVideo.incoming);
 		_videoChannel->RemoveRecvStream(_ssrcVideo.fecIncoming);
+		_readyToReceiveVideo = false;
+
 		_videoChannel->RemoveSendStream(_ssrcVideo.outgoing);
 		if (_enableFlexfec) {
 			_videoChannel->RemoveSendStream(_ssrcVideo.fecOutgoing);
