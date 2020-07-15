@@ -3,6 +3,7 @@
 #include "platform/PlatformInterface.h"
 
 #include "media/base/media_constants.h"
+#include "media/base/codec.h"
 #include "absl/strings/match.h"
 #include "rtc_base/logging.h"
 #include "system_wrappers/include/field_trial.h"
@@ -30,11 +31,22 @@ int FormatPriority(const VideoFormat &format) {
 		std::string(cricket::kH264CodecName),
 		std::string(cricket::kVp8CodecName),
 	};
-	const auto platform = PlatformInterface::SharedInstance();
+	static const auto kSupported = [] {
+		const auto platform = PlatformInterface::SharedInstance();
+
+		auto result = std::vector<std::string>();
+		result.reserve(kCodecs.size());
+		for (const auto &codec : kCodecs) {
+			if (platform->supportsEncoding(codec)) {
+				result.push_back(codec);
+			}
+		}
+		return result;
+	}();
 
 	auto result = 0;
-	for (const auto &name : kCodecs) {
-		if (format.name == name && platform->supportsEncoding(name)) {
+	for (const auto &name : kSupported) {
+		if (absl::EqualsIgnoreCase(format.name, name)) {
 			return result;
 		}
 		++result;
@@ -76,6 +88,24 @@ std::vector<VideoFormat> AppendUnique(
 		}
 	}
 	return list;
+}
+
+std::vector<VideoFormat>::const_iterator FindEqualFormat(
+		const std::vector<VideoFormat> &list,
+		const VideoFormat &format) {
+	return std::find_if(list.begin(), list.end(), [&](const VideoFormat &other) {
+		return cricket::IsSameCodec(
+			format.name,
+			format.parameters,
+			other.name,
+			other.parameters);
+	});
+}
+
+bool ContainsEqualFormat(
+		const std::vector<VideoFormat> &list,
+		const VideoFormat &format) {
+	return FindEqualFormat(list, format) != list.end();
 }
 
 void AddDefaultFeedbackParams(cricket::VideoCodec *codec) {
@@ -125,44 +155,49 @@ CommonFormats ComputeCommonFormats(
 	}
 	RTC_LOG(LS_INFO) << "Their first " << their.encodersCount << " formats are supported encoders.";
 
-	const auto myBegin = begin(my.formats);
-	const auto myEnd = end(my.formats);
-	const auto myEncodersBegin = myBegin;
-	const auto myEncodersEnd = myBegin + my.encodersCount;
-	const auto theirBegin = begin(their.formats);
-	const auto theirEnd = end(their.formats);
-	const auto theirEncodersBegin = theirBegin;
-	const auto theirEncodersEnd = theirBegin + their.encodersCount;
+	const auto myEncodersBegin = begin(my.formats);
+	const auto myEncodersEnd = myEncodersBegin + my.encodersCount;
+	const auto theirEncodersBegin = begin(their.formats);
+	const auto theirEncodersEnd = theirEncodersBegin + their.encodersCount;
 
 	auto result = CommonFormats();
-	auto myEncoderFormat = VideoFormat(std::string());
-	auto theirEncoderIndex = their.encodersCount;
-	result.list.reserve(my.formats.size() + their.formats.size());
-	for (auto i = myEncodersBegin; i != myEncodersEnd; ++i) {
-		const auto j = std::find(theirBegin, theirEnd, *i);
-		if (j != theirEnd) {
-			if (myEncoderFormat.name.empty()) {
-				myEncoderFormat = *i;
-			}
-			result.list.push_back(*i);
+	const auto addUnique = [&](const VideoFormat &format) {
+		const auto already = std::find(
+			result.list.begin(),
+			result.list.end(),
+			format);
+		if (already == result.list.end()) {
+			result.list.push_back(format);
+		}
+	};
+	const auto addCommonAndFindFirst = [&](
+			std::vector<VideoFormat>::const_iterator begin,
+			std::vector<VideoFormat>::const_iterator end,
+			const std::vector<VideoFormat> &decoders) {
+		auto first = VideoFormat(std::string());
+		for (auto i = begin; i != end; ++i) {
+			const auto &format = *i;
+			const auto j = FindEqualFormat(decoders, format);
+			if (j != decoders.end()) {
+				if (first.name.empty()) {
+					first = format;
+				}
+				addUnique(format);
+				addUnique(*j);
+			};
+		}
+		return first;
+	};
 
-			const auto theirIndex = (j - theirBegin);
-			if (theirIndex < theirEncoderIndex) {
-				theirEncoderIndex = theirIndex;
-			}
-		}
-	}
-	auto theirEncoderFormat = (theirEncoderIndex < their.encodersCount)
-		? their.formats[theirEncoderIndex]
-		: VideoFormat(std::string());
-	for (auto i = theirEncodersBegin; i != theirEncodersEnd; ++i) {
-		if (std::find(myEncodersEnd, myEnd, *i) != myEnd) {
-			if (theirEncoderFormat.name.empty()) {
-				theirEncoderFormat = *i;
-			}
-			result.list.push_back(std::move(*i));
-		}
-	}
+	result.list.reserve(my.formats.size() + their.formats.size());
+	auto myEncoderFormat = addCommonAndFindFirst(
+		myEncodersBegin,
+		myEncodersEnd,
+		their.formats);
+	auto theirEncoderFormat = addCommonAndFindFirst(
+		theirEncodersBegin,
+		theirEncodersEnd,
+		my.formats);
 	std::sort(begin(result.list), end(result.list), CompareFormats);
 	if (!myEncoderFormat.name.empty()) {
 		const auto i = std::find(begin(result.list), end(result.list), myEncoderFormat);
