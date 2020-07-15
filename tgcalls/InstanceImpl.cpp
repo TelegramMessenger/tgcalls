@@ -7,10 +7,11 @@
 #include "VideoCaptureInterfaceImpl.h"
 #include "VideoCapturerInterface.h"
 
-#if WEBRTC_MAC
+#ifndef WEBRTC_IOS
+#ifdef WEBRTC_MAC
 #include <sys/time.h>
-#endif
-
+#endif //WEBRTC_MAC
+#endif //WEBRTC_IOS
 namespace tgcalls {
 namespace {
 

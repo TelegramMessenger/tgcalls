@@ -1,6 +1,6 @@
 #ifndef TGCALLS_VIDEO_METAL_VIEW_MAC_H
 #define TGCALLS_VIDEO_METAL_VIEW_MAC_H
-#if WEBRTC_MAC
+#ifndef WEBRTC_IOS
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
 

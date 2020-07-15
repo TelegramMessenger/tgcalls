@@ -1,6 +1,6 @@
 #ifndef TGCALLS_VIDEO_METAL_VIEW_H
 #define TGCALLS_VIDEO_METAL_VIEW_H
-#if TARGET_OS_IOS
+#ifdef WEBRTC_IOS
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 

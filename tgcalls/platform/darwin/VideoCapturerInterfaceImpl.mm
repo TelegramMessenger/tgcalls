@@ -23,7 +23,7 @@
 #include "sdk/objc/native/api/video_frame.h"
 #include "api/media_types.h"
 
-#if WEBRTC_MAC
+#ifndef WEBRTC_IOS
 #import "VideoCameraCapturerMac.h"
 #else
 #import "VideoCameraCapturer.h"

@@ -1,6 +1,6 @@
 #ifndef TGCALLS_VIDEO_CAMERA_CAPTURER_H
 #define TGCALLS_VIDEO_CAMERA_CAPTURER_H
-#if WEBRTC_IOS
+#ifdef WEBRTC_IOS
 #import <Foundation/Foundation.h>
 #import <AVFoundation/AVFoundation.h>
 
