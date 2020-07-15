@@ -7,12 +7,6 @@
 #import "components/video_frame_buffer/RTCCVPixelBuffer.h"
 #import "sdk/objc/native/src/objc_video_track_source.h"
 #import "api/video_track_source_proxy.h"
-
-
-#if WEBRTC_IOS
-#import "helpers/UIDevice+RTCDevice.h"
-#endif
-
 #import "helpers/AVCaptureSession+DevicePosition.h"
 #import "helpers/RTCDispatcher+Private.h"
 #import "base/RTCVideoFrame.h"
