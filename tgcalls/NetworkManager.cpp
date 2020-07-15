@@ -57,7 +57,7 @@ absl::optional<rtc::CopyOnWriteBuffer> NetworkManager::decryptPacket(const rtc::
     if (encryptionKey.value.size() != 256) {
         return absl::nullopt;
     }
-    
+
 	unsigned char msgKey[16];
 	memcpy(msgKey, packet.data(), 16);
 
@@ -304,9 +304,8 @@ void NetworkManager::transportPacketReceived(rtc::PacketTransportInternal *trans
 	rtc::CopyOnWriteBuffer packet;
 	packet.AppendData(bytes, size);
 
-	auto decryptedPacket = decryptPacket(packet, _encryptionKey);
-	if (decryptedPacket.has_value()) {
-		_packetReceived(decryptedPacket.value());
+	if (auto decryptedPacket = decryptPacket(packet, _encryptionKey)) {
+		_packetReceived(*decryptedPacket);
 	}
 }
 

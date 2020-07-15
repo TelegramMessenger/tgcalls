@@ -144,9 +144,8 @@ void Manager::start() {
 void Manager::receiveSignalingData(const std::vector<uint8_t> &data) {
     rtc::CopyOnWriteBuffer packet;
     packet.AppendData(data.data(), data.size());
-    auto decryptedPacket = NetworkManager::decryptPacket(packet, _encryptionKey);
-    if (decryptedPacket.has_value()) {
-        if (auto message = DeserializeMessage(decryptedPacket.value())) {
+    if (auto decryptedPacket = NetworkManager::decryptPacket(packet, _encryptionKey)) {
+        if (auto message = DeserializeMessage(*decryptedPacket)) {
             receiveSignalingMessage(std::move(*message));
         }
     }
