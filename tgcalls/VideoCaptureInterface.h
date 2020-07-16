@@ -3,8 +3,14 @@
 
 #include <memory>
 
-#include "api/video/video_sink_interface.h"
-#include "api/video/video_frame.h"
+namespace rtc {
+template <typename VideoFrameT>
+class VideoSinkInterface;
+} // namespace rtc
+
+namespace webrtc {
+class VideoFrame;
+} // namespace webrtc
 
 namespace tgcalls {
 
@@ -13,13 +19,14 @@ protected:
 	VideoCaptureInterface() = default;
 
 public:
-	static std::shared_ptr<VideoCaptureInterface> makeInstance();
+	static std::shared_ptr<VideoCaptureInterface> Create();
 
 	virtual ~VideoCaptureInterface();
 
 	virtual void switchCamera() = 0;
 	virtual void setIsVideoEnabled(bool isVideoEnabled) = 0;
 	virtual void setVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) = 0;
+
 };
 
 } // namespace tgcalls

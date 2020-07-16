@@ -4,8 +4,8 @@
 
 namespace tgcalls {
 
-std::shared_ptr<VideoCaptureInterface> VideoCaptureInterface::makeInstance() {
-	return std::shared_ptr<VideoCaptureInterface>(new VideoCaptureInterfaceImpl());
+std::shared_ptr<VideoCaptureInterface> VideoCaptureInterface::Create() {
+	return std::make_shared<VideoCaptureInterfaceImpl>();
 }
 
 VideoCaptureInterface::~VideoCaptureInterface() = default;

@@ -51,10 +51,6 @@ void Meta::RegisterOne(std::unique_ptr<Meta> meta) {
 	}
 }
 
-std::shared_ptr<VideoCaptureInterface> CreateVideoCapture() {
-	return std::make_shared<VideoCaptureInterfaceImpl>();
-}
-
 void SetLoggingFunction(std::function<void(std::string const &)> loggingFunction) {
 	globalLoggingFunction = loggingFunction;
 }

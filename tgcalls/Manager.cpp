@@ -153,12 +153,12 @@ void Manager::receiveSignalingData(const std::vector<uint8_t> &data) {
 
 void Manager::receiveSignalingMessage(SignalingMessage &&message) {
 	const auto data = &message.data;
-	if (const auto switchToVideo = absl::get_if<RequestVideoMessage>(data)) {
+	if (absl::get_if<RequestVideoMessage>(data)) {
 		if (_videoState == VideoState::Possible) {
             _videoState = VideoState::IncomingRequested;
             _stateUpdated(_state, _videoState);
         }
-	} else if (const auto switchToVideo = absl::get_if<AcceptVideoMessage>(data)) {
+	} else if (absl::get_if<AcceptVideoMessage>(data)) {
         if (_videoState == VideoState::OutgoingRequested) {
             _videoState = VideoState::Active;
             _stateUpdated(_state, _videoState);

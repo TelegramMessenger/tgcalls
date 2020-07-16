@@ -10,11 +10,11 @@
 namespace rtc {
 template <typename VideoFrameT>
 class VideoSinkInterface;
-}
+} // namespace rtc
 
 namespace webrtc {
 class VideoFrame;
-}
+} // namespace webrtc
 
 namespace tgcalls {
 
@@ -229,8 +229,6 @@ bool Meta::RegisterOne() {
 	RegisterOne(std::make_unique<MetaImpl>());
 	return true;
 }
-
-std::shared_ptr<VideoCaptureInterface> CreateVideoCapture();
 
 void SetLoggingFunction(std::function<void(std::string const &)> loggingFunction);
 
