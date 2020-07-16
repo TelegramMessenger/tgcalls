@@ -47,9 +47,11 @@ bool DarwinInterface::supportsEncoding(const std::string &codecName) {
     } else if (codecName == cricket::kVp8CodecName) {
         return true;
     } else if (codecName == cricket::kVp9CodecName) {
-        if (@available(macOS 10.13, *)) {
-            return true;
-        }
+        #ifndef WEBRTC_IOS
+        return true;
+        #else
+        return false;
+        #endif
     }
     return false;
 }
