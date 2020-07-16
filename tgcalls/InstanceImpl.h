@@ -1,11 +1,11 @@
 #ifndef TGCALLS_INSTANCE_IMPL_H
 #define TGCALLS_INSTANCE_IMPL_H
 
-#include <iostream>
-
 #include "Instance.h"
 
 namespace tgcalls {
+
+class LogSinkImpl;
 
 class Manager;
 template <typename T>
@@ -41,8 +41,6 @@ public:
 	//void controllerStateCallback(Controller::State state);
 
 private:
-	class LogSinkImpl;
-
 	std::unique_ptr<ThreadLocalObject<Manager>> _manager;
 	std::unique_ptr<LogSinkImpl> _logSink;
 

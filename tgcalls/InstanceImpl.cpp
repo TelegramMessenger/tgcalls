@@ -1,17 +1,11 @@
 #include "InstanceImpl.h"
 
-#include <mutex>
-
+#include "LogSinkImpl.h"
 #include "Manager.h"
 #include "MediaManager.h"
 #include "VideoCaptureInterfaceImpl.h"
 #include "VideoCapturerInterface.h"
 
-#ifndef WEBRTC_IOS
-#ifdef WEBRTC_MAC
-#include <sys/time.h>
-#endif //WEBRTC_MAC
-#endif //WEBRTC_IOS
 namespace tgcalls {
 namespace {
 
@@ -30,70 +24,8 @@ rtc::Thread *getManagerThread() {
 
 } // namespace
 
-class InstanceImpl::LogSinkImpl final : public rtc::LogSink {
-public:
-	LogSinkImpl() = default;
-	~LogSinkImpl() = default;
-
-	void OnLogMessage(const std::string &msg, rtc::LoggingSeverity severity, const char *tag) override;
-	void OnLogMessage(const std::string &message, rtc::LoggingSeverity severity) override;
-	void OnLogMessage(const std::string &message) override;
-
-public:
-	std::ostringstream _data;
-
-};
-
-
-void InstanceImpl::LogSinkImpl::OnLogMessage(const std::string &msg, rtc::LoggingSeverity severity, const char *tag) {
-	OnLogMessage(std::string(tag) + ": " + msg);
-}
-
-void InstanceImpl::LogSinkImpl::OnLogMessage(const std::string &message, rtc::LoggingSeverity severity) {
-	OnLogMessage(message);
-}
-
-void InstanceImpl::LogSinkImpl::OnLogMessage(const std::string &message) {
-	time_t rawTime;
-	time(&rawTime);
-	struct tm timeinfo;
-	timeval curTime = { 0 };
-
-#ifdef WEBRTC_WIN
-	localtime_s(&timeinfo, &rawTime);
-
-	FILETIME ft;
-	unsigned __int64 full = 0;
-	GetSystemTimeAsFileTime(&ft);
-
-	full |= ft.dwHighDateTime;
-	full <<= 32;
-	full |= ft.dwLowDateTime;
-
-	const auto deltaEpochInMicrosecs = 11644473600000000Ui64;
-	full -= deltaEpochInMicrosecs;
-	full /= 10;
-	curTime.tv_sec = (long)(full / 1000000UL);
-	curTime.tv_usec = (long)(full % 1000000UL);
-#else
-	localtime_r(&rawTime, &timeinfo);
-	gettimeofday(&curTime, nullptr);
-#endif
-
-	int32_t milliseconds = curTime.tv_usec / 1000;
-
-	_data << (timeinfo.tm_year + 1900);
-	_data << "-" << (timeinfo.tm_mon + 1);
-	_data << "-" << (timeinfo.tm_mday);
-	_data << " " << timeinfo.tm_hour;
-	_data << ":" << timeinfo.tm_min;
-	_data << ":" << timeinfo.tm_sec;
-	_data << ":" << milliseconds;
-	_data << " " << message;
-}
-
 InstanceImpl::InstanceImpl(Descriptor &&descriptor)
-: _logSink(std::make_unique<LogSinkImpl>()) {
+: _logSink(std::make_unique<LogSinkImpl>(descriptor.config)) {
 	static const auto onceToken = [] {
 		rtc::LogMessage::LogToDebug(rtc::LS_INFO);
 		rtc::LogMessage::SetLogToStderr(true);
@@ -239,7 +171,7 @@ PersistentState InstanceImpl::getPersistentState() {
 
 FinalState InstanceImpl::stop() {
 	FinalState finalState;
-	finalState.debugLog = _logSink->_data.str();
+	finalState.debugLog = _logSink->result();
 	finalState.isRatingSuggested = false;
 
 	return finalState;
