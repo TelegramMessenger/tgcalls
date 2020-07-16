@@ -28,12 +28,8 @@ struct RequestVideoMessage {
     static constexpr uint8_t kId = 3;
 };
 
-struct AcceptVideoMessage {
-    static constexpr uint8_t kId = 4;
-};
-
 struct RemoteVideoIsActiveMessage {
-    static constexpr uint8_t kId = 5;
+    static constexpr uint8_t kId = 4;
 
     bool active = false;
 };
@@ -48,7 +44,6 @@ struct SignalingMessage {
 		CandidatesListMessage,
 		VideoFormatsMessage,
         RequestVideoMessage,
-        AcceptVideoMessage,
         RemoteVideoIsActiveMessage> data;
 };
 

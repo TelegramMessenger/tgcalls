@@ -199,9 +199,6 @@ void InstanceImplLegacy::receiveSignalingData(const std::vector<uint8_t> &data) 
 void InstanceImplLegacy::requestVideo(std::shared_ptr<VideoCaptureInterface> videoCapture) {
 }
 
-void InstanceImplLegacy::acceptVideo(std::shared_ptr<VideoCaptureInterface> videoCapture) {
-}
-
 void InstanceImplLegacy::setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
 }
 

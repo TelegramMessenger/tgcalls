@@ -40,8 +40,11 @@ public:
 	void setIsVideoEnabled(bool isVideoEnabled) override;
 	void setVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) override;
 
-public:
-	std::unique_ptr<ThreadLocalObject<VideoCaptureInterfaceObject>> _impl;
+	ThreadLocalObject<VideoCaptureInterfaceObject> *object();
+
+private:
+	ThreadLocalObject<VideoCaptureInterfaceObject> _impl;
+
 };
 
 } // namespace tgcalls

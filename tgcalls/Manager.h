@@ -18,8 +18,7 @@ public:
 	void start();
 	void receiveSignalingData(const std::vector<uint8_t> &data);
 	void requestVideo(std::shared_ptr<VideoCaptureInterface> videoCapture);
-    void acceptVideo(std::shared_ptr<VideoCaptureInterface> videoCapture);
-	void setMuteOutgoingAudio(bool mute);
+    void setMuteOutgoingAudio(bool mute);
 	void notifyIsLocalVideoActive(bool isActive);
 	void setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
 
@@ -36,9 +35,9 @@ private:
 	std::function<void(const SignalingMessage &)> _sendSignalingMessage;
 	std::unique_ptr<ThreadLocalObject<NetworkManager>> _networkManager;
 	std::unique_ptr<ThreadLocalObject<MediaManager>> _mediaManager;
-	State _state;
-    VideoState _videoState;
-    bool _didConnectOnce;
+	State _state = State::Reconnecting;
+    VideoState _videoState = VideoState::Possible;
+    bool _didConnectOnce = false;
 
 };
 

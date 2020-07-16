@@ -97,13 +97,6 @@ bool Deserialize(RequestVideoMessage &to, rtc::ByteBufferReader &reader) {
 	return true;
 }
 
-void Serialize(rtc::ByteBufferWriter &to, const AcceptVideoMessage &from) {
-}
-
-bool Deserialize(AcceptVideoMessage &to, rtc::ByteBufferReader &reader) {
-    return true;
-}
-
 void Serialize(rtc::ByteBufferWriter &to, const RemoteVideoIsActiveMessage &from) {
 	to.WriteUInt8(from.active ? 1 : 0);
 }

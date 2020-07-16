@@ -55,33 +55,34 @@ void VideoCaptureInterfaceObject::setIsActiveUpdated(std::function<void (bool)> 
 	_isActiveUpdated = isActiveUpdated;
 }
 
-VideoCaptureInterfaceImpl::VideoCaptureInterfaceImpl() {
-	_impl.reset(new ThreadLocalObject<VideoCaptureInterfaceObject>(
-		Manager::getMediaThread(),
-		[]() {
-			return new VideoCaptureInterfaceObject();
-		}
-	));
+VideoCaptureInterfaceImpl::VideoCaptureInterfaceImpl() :
+_impl(Manager::getMediaThread(), []() {
+	return new VideoCaptureInterfaceObject();
+}) {
 }
 
 VideoCaptureInterfaceImpl::~VideoCaptureInterfaceImpl() = default;
 
 void VideoCaptureInterfaceImpl::switchCamera() {
-	_impl->perform([](VideoCaptureInterfaceObject *impl) {
+	_impl.perform([](VideoCaptureInterfaceObject *impl) {
 		impl->switchCamera();
 	});
 }
 
 void VideoCaptureInterfaceImpl::setIsVideoEnabled(bool isVideoEnabled) {
-	_impl->perform([isVideoEnabled](VideoCaptureInterfaceObject *impl) {
+	_impl.perform([isVideoEnabled](VideoCaptureInterfaceObject *impl) {
 		impl->setIsVideoEnabled(isVideoEnabled);
 	});
 }
 
 void VideoCaptureInterfaceImpl::setVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
-	_impl->perform([sink](VideoCaptureInterfaceObject *impl) {
+	_impl.perform([sink](VideoCaptureInterfaceObject *impl) {
 		impl->setVideoOutput(sink);
 	});
+}
+
+ThreadLocalObject<VideoCaptureInterfaceObject> *VideoCaptureInterfaceImpl::object() {
+	return &_impl;
 }
 
 } // namespace tgcalls

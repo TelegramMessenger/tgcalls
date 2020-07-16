@@ -57,12 +57,6 @@ void InstanceImpl::requestVideo(std::shared_ptr<VideoCaptureInterface> videoCapt
     });
 }
 
-void InstanceImpl::acceptVideo(std::shared_ptr<VideoCaptureInterface> videoCapture) {
-    _manager->perform([videoCapture](Manager *manager) {
-        manager->acceptVideo(videoCapture);
-    });
-}
-
 void InstanceImpl::setNetworkType(NetworkType networkType) {
 	/*message::NetworkType mappedType;
 

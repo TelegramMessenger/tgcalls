@@ -51,13 +51,11 @@ _rtcServers(std::move(descriptor.rtcServers)),
 _videoCapture(std::move(descriptor.videoCapture)),
 _stateUpdated(std::move(descriptor.stateUpdated)),
 _remoteVideoIsActiveUpdated(std::move(descriptor.remoteVideoIsActiveUpdated)),
-_sendSignalingMessage(SendSerialized(std::move(descriptor.signalingDataEmitted), std::move(descriptor.encryptionKey))),
-_state(State::Reconnecting),
-_videoState(VideoState::Possible),
-_didConnectOnce(false) {
+_sendSignalingMessage(SendSerialized(std::move(descriptor.signalingDataEmitted), std::move(descriptor.encryptionKey))) {
 	assert(_thread->IsCurrent());
-    if (_videoCapture != nullptr) {
-        _videoState = VideoState::OutgoingRequested;
+
+    if (_videoCapture) {
+		_videoState = VideoState::OutgoingRequested;
     }
 }
 
@@ -157,9 +155,7 @@ void Manager::receiveSignalingMessage(SignalingMessage &&message) {
 		if (_videoState == VideoState::Possible) {
             _videoState = VideoState::IncomingRequested;
             _stateUpdated(_state, _videoState);
-        }
-	} else if (absl::get_if<AcceptVideoMessage>(data)) {
-        if (_videoState == VideoState::OutgoingRequested) {
+		} else if (_videoState == VideoState::OutgoingRequested) {
             _videoState = VideoState::Active;
             _stateUpdated(_state, _videoState);
 
@@ -181,31 +177,31 @@ void Manager::receiveSignalingMessage(SignalingMessage &&message) {
 }
 
 void Manager::requestVideo(std::shared_ptr<VideoCaptureInterface> videoCapture) {
-    if (videoCapture != nullptr) {
-        _videoCapture = videoCapture;
-        if (_videoState == VideoState::Possible) {
-            _videoState = VideoState::OutgoingRequested;
+	assert(videoCapture != nullptr);
 
-            _sendSignalingMessage({ RequestVideoMessage() });
-            _stateUpdated(_state, _videoState);
-        }
-    }
-}
+	if (_videoCapture == videoCapture || !_didConnectOnce) {
+		return;
+	}
+    _videoCapture = videoCapture;
+    if (_videoState == VideoState::Possible) {
+        _videoState = VideoState::OutgoingRequested;
 
-void Manager::acceptVideo(std::shared_ptr<VideoCaptureInterface> videoCapture) {
-    if (videoCapture != nullptr) {
-        _videoCapture = videoCapture;
-        if (_videoState == VideoState::IncomingRequested) {
-            _videoState = VideoState::Active;
+        _sendSignalingMessage({ RequestVideoMessage() });
+        _stateUpdated(_state, _videoState);
+    } else if (_videoState == VideoState::IncomingRequested) {
+        _videoState = VideoState::Active;
 
-            _sendSignalingMessage({ AcceptVideoMessage() });
-            _stateUpdated(_state, _videoState);
+        _sendSignalingMessage({ RequestVideoMessage() });
+        _stateUpdated(_state, _videoState);
 
-            _mediaManager->perform([videoCapture](MediaManager *mediaManager) {
-                mediaManager->setSendVideo(videoCapture);
-            });
-        }
-    }
+        _mediaManager->perform([videoCapture](MediaManager *mediaManager) {
+            mediaManager->setSendVideo(videoCapture);
+        });
+	} else if (_videoState == VideoState::Active) {
+        _mediaManager->perform([videoCapture](MediaManager *mediaManager) {
+            mediaManager->setSendVideo(videoCapture);
+        });
+	}
 }
 
 void Manager::setMuteOutgoingAudio(bool mute) {

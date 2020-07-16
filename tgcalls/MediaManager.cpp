@@ -35,6 +35,12 @@ rtc::Thread *makeWorkerThread() {
 	return value.get();
 }
 
+VideoCaptureInterfaceObject *GetVideoCaptureAssumingSameThread(VideoCaptureInterface *videoCapture) {
+	return videoCapture
+		? static_cast<VideoCaptureInterfaceImpl*>(videoCapture)->object()->getSyncAssumingSameThread()
+		: nullptr;
+}
+
 } // namespace
 
 rtc::Thread *MediaManager::getWorkerThread() {
@@ -259,10 +265,13 @@ bool MediaManager::computeIsSendingVideo() const {
 void MediaManager::setSendVideo(std::shared_ptr<VideoCaptureInterface> videoCapture) {
     const auto wasSending = computeIsSendingVideo();
 
-    if (_videoCapture != nullptr) {
-        ((VideoCaptureInterfaceImpl *)_videoCapture.get())->_impl->getSyncAssumingSameThread()->setIsActiveUpdated(this->_localVideoCaptureActiveUpdated);
+    if (_videoCapture) {
+		GetVideoCaptureAssumingSameThread(_videoCapture.get())->setIsActiveUpdated(nullptr);
     }
     _videoCapture = videoCapture;
+	if (_videoCapture) {
+		GetVideoCaptureAssumingSameThread(_videoCapture.get())->setIsActiveUpdated(this->_localVideoCaptureActiveUpdated);
+	}
 
     checkIsSendingVideoChanged(wasSending);
 }
@@ -303,16 +312,11 @@ void MediaManager::checkIsSendingVideoChanged(bool wasSending) {
 			videoSendStreamParams.ssrc_groups.push_back(videoSendSsrcGroup);
 			videoSendStreamParams.cname = "cname";
 			_videoChannel->AddSendStream(videoSendStreamParams);
-
-			if (_videoCapture != nullptr) {
-				_videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, ((VideoCaptureInterfaceImpl *)_videoCapture.get())->_impl->getSyncAssumingSameThread()->_videoSource.get());
-			}
+			_videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, GetVideoCaptureAssumingSameThread(_videoCapture.get())->_videoSource);
 			_videoChannel->SetVideoSend(_ssrcVideo.fecOutgoing, NULL, nullptr);
 		} else {
 			_videoChannel->AddSendStream(cricket::StreamParams::CreateLegacy(_ssrcVideo.outgoing));
-			if (_videoCapture != nullptr) {
-				_videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, ((VideoCaptureInterfaceImpl *)_videoCapture.get())->_impl->getSyncAssumingSameThread()->_videoSource);
-			}
+			_videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, GetVideoCaptureAssumingSameThread(_videoCapture.get())->_videoSource);
 		}
 
 		cricket::VideoRecvParameters videoRecvParameters;

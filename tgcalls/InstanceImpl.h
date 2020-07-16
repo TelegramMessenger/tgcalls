@@ -21,7 +21,6 @@ public:
 
 	void receiveSignalingData(const std::vector<uint8_t> &data) override;
 	void requestVideo(std::shared_ptr<VideoCaptureInterface> videoCapture) override;
-    void acceptVideo(std::shared_ptr<VideoCaptureInterface> videoCapture) override;
 	void setNetworkType(NetworkType networkType) override;
 	void setMuteMicrophone(bool muteMicrophone) override;
 	void setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) override;
