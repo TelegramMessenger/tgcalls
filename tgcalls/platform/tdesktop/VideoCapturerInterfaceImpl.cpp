@@ -21,7 +21,8 @@ VideoCapturerInterfaceImpl::VideoCapturerInterfaceImpl(
 	rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source,
 	bool useFrontCamera,
 	std::function<void(bool)> isActiveUpdated)
-: _source(source) {
+: _source(source)
+, _isActiveUpdated(isActiveUpdated) {
 }
 
 VideoCapturerInterfaceImpl::~VideoCapturerInterfaceImpl() {
@@ -29,6 +30,9 @@ VideoCapturerInterfaceImpl::~VideoCapturerInterfaceImpl() {
 
 void VideoCapturerInterfaceImpl::setIsEnabled(bool isEnabled) {
 	GetCapturer(_source)->setIsEnabled(isEnabled);
+	if (_isActiveUpdated) {
+		_isActiveUpdated(isEnabled);
+	}
 }
 
 } // namespace tgcalls

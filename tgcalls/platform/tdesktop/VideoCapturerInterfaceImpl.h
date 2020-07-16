@@ -16,6 +16,7 @@ public:
 
 private:
 	rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _source;
+	std::function<void(bool)> _isActiveUpdated;
 
 };
 
