@@ -34,17 +34,21 @@ rtc::Thread *Manager::getMediaThread() {
 Manager::Manager(rtc::Thread *thread, Descriptor &&descriptor) :
 _thread(thread),
 _encryptionKey(descriptor.encryptionKey),
-_signaling(EncryptedConnection::Type::Signaling, _encryptionKey),
+_signaling(
+	EncryptedConnection::Type::Signaling,
+	_encryptionKey,
+	[=](int delayMs, int cause) { sendSignalingAsync(delayMs, cause); }),
 _enableP2P(descriptor.config.enableP2P),
 _rtcServers(std::move(descriptor.rtcServers)),
 _videoCapture(std::move(descriptor.videoCapture)),
 _stateUpdated(std::move(descriptor.stateUpdated)),
-_remoteVideoIsActiveUpdated(std::move(descriptor.remoteVideoIsActiveUpdated)) {
+_remoteVideoIsActiveUpdated(std::move(descriptor.remoteVideoIsActiveUpdated)),
+_signalingDataEmitted(std::move(descriptor.signalingDataEmitted)) {
 	assert(_thread->IsCurrent());
 
-	_sendSignalingMessage = [=, send = std::move(descriptor.signalingDataEmitted)](const Message &message) {
-		if (auto prepared = _signaling.prepareForSending(message)) {
-			send(prepared->bytes);
+	_sendSignalingMessage = [=](const Message &message) {
+		if (const auto prepared = _signaling.prepareForSending(message)) {
+			_signalingDataEmitted(prepared->bytes);
 			return prepared->counter;
 		}
 		return uint32_t(0);
@@ -62,6 +66,23 @@ _remoteVideoIsActiveUpdated(std::move(descriptor.remoteVideoIsActiveUpdated)) {
 
 Manager::~Manager() {
 	assert(_thread->IsCurrent());
+}
+
+void Manager::sendSignalingAsync(int delayMs, int cause) {
+	auto task = [weak = std::weak_ptr<Manager>(shared_from_this()), cause] {
+		const auto strong = weak.lock();
+		if (!strong) {
+			return;
+		}
+		if (const auto prepared = strong->_signaling.prepareForSendingService(cause)) {
+			strong->_signalingDataEmitted(prepared->bytes);
+		}
+	};
+	if (delayMs) {
+		_thread->PostDelayedTask(RTC_FROM_HERE, std::move(task), delayMs);
+	} else {
+		_thread->PostTask(RTC_FROM_HERE, std::move(task));
+	}
 }
 
 void Manager::start() {
@@ -91,21 +112,21 @@ void Manager::start() {
 					const auto mappedState = state.isReadyToSendData
 						? State::Established
 						: State::Reconnecting;
-                    if (state.isReadyToSendData) {
-                        if (!strong->_didConnectOnce) {
-                            strong->_didConnectOnce = true;
-                            if (strong->_videoState == VideoState::OutgoingRequested) {
-                                strong->_videoState = VideoState::Active;
-                            }
-                        }
-                    }
-                    strong->_state = mappedState;
+					if (state.isReadyToSendData) {
+						if (!strong->_didConnectOnce) {
+							strong->_didConnectOnce = true;
+							if (strong->_videoState == VideoState::OutgoingRequested) {
+								strong->_videoState = VideoState::Active;
+							}
+						}
+					}
+					strong->_state = mappedState;
 					strong->_stateUpdated(mappedState, strong->_videoState);
 
 					strong->_mediaManager->perform([=](MediaManager *mediaManager) {
 						mediaManager->setIsConnected(state.isReadyToSendData);
+						});
 					});
-				});
 			},
 			[=](DecryptedMessage &&message) {
 				thread->PostTask(RTC_FROM_HERE, [=, message = std::move(message)]() mutable {
@@ -114,7 +135,21 @@ void Manager::start() {
 					}
 				});
 			},
-			sendSignalingMessage);
+			sendSignalingMessage,
+			[=](int delayMs, int cause) {
+				const auto task = [=] {
+					if (const auto strong = weak.lock()) {
+						strong->_networkManager->perform([=](NetworkManager *networkManager) {
+							networkManager->sendTransportService(cause);
+							});
+					}
+				};
+				if (delayMs) {
+					thread->PostDelayedTask(RTC_FROM_HERE, task, delayMs);
+				} else {
+					thread->PostTask(RTC_FROM_HERE, task);
+				}
+			});
 	}));
 	bool isOutgoing = _encryptionKey.isOutgoing;
 	_mediaManager.reset(new ThreadLocalObject<MediaManager>(getMediaThread(), [weak, isOutgoing, thread, sendSignalingMessage, videoCapture = _videoCapture]() {

@@ -14,7 +14,7 @@ namespace tgcalls {
 
 struct CandidatesListMessage {
 	static constexpr uint8_t kId = 1;
-	static constexpr bool kRequiresAck = false;
+	static constexpr bool kRequiresAck = true;
 
 	std::vector<cricket::Candidate> candidates;
 };

@@ -57,9 +57,13 @@ NetworkManager::NetworkManager(
 	std::vector<RtcServer> const &rtcServers,
 	std::function<void(const NetworkManager::State &)> stateUpdated,
 	std::function<void(DecryptedMessage &&)> transportMessageReceived,
-	std::function<void(Message &&)> sendSignalingMessage) :
+	std::function<void(Message &&)> sendSignalingMessage,
+	std::function<void(int delayMs, int cause)> sendTransportServiceAsync) :
 _thread(thread),
-_transport(EncryptedConnection::Type::Transport, encryptionKey),
+_transport(
+	EncryptedConnection::Type::Transport,
+	encryptionKey,
+	[=](int delayMs, int cause) { sendTransportServiceAsync(delayMs, cause); }),
 _isOutgoing(encryptionKey.isOutgoing),
 _stateUpdated(std::move(stateUpdated)),
 _transportMessageReceived(std::move(transportMessageReceived)),
@@ -162,12 +166,19 @@ void NetworkManager::receiveSignalingMessage(DecryptedMessage &&message) {
 }
 
 uint32_t NetworkManager::sendMessage(const Message &message) {
-	if (auto prepared = _transport.prepareForSending(message)) {
+	if (const auto prepared = _transport.prepareForSending(message)) {
 		rtc::PacketOptions packetOptions;
 		_transportChannel->SendPacket((const char *)prepared->bytes.data(), prepared->bytes.size(), packetOptions, 0);
 		return prepared->counter;
 	}
 	return 0;
+}
+
+void NetworkManager::sendTransportService(int cause) {
+	if (const auto prepared = _transport.prepareForSendingService(cause)) {
+		rtc::PacketOptions packetOptions;
+		_transportChannel->SendPacket((const char *)prepared->bytes.data(), prepared->bytes.size(), packetOptions, 0);
+	}
 }
 
 void NetworkManager::candidateGathered(cricket::IceTransportInternal *transport, const cricket::Candidate &candidate) {

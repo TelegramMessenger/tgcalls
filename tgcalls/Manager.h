@@ -23,6 +23,7 @@ public:
 	void setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
 
 private:
+	void sendSignalingAsync(int delayMs, int cause);
 	void receiveMessage(DecryptedMessage &&message);
 
 	rtc::Thread *_thread;
@@ -33,6 +34,7 @@ private:
 	std::shared_ptr<VideoCaptureInterface> _videoCapture;
 	std::function<void(const State &, VideoState)> _stateUpdated;
 	std::function<void(bool)> _remoteVideoIsActiveUpdated;
+	std::function<void(const std::vector<uint8_t> &)> _signalingDataEmitted;
 	std::function<uint32_t(const Message &)> _sendSignalingMessage;
 	std::function<void(Message&&)> _sendTransportMessage;
 	std::unique_ptr<ThreadLocalObject<NetworkManager>> _networkManager;

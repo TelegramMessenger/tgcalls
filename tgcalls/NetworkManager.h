@@ -46,11 +46,13 @@ public:
 		std::vector<RtcServer> const &rtcServers,
 		std::function<void(const State &)> stateUpdated,
 		std::function<void(DecryptedMessage &&)> transportMessageReceived,
-		std::function<void(Message &&)> sendSignalingMessage);
+		std::function<void(Message &&)> sendSignalingMessage,
+		std::function<void(int delayMs, int cause)> sendTransportServiceAsync);
 	~NetworkManager();
 
 	void receiveSignalingMessage(DecryptedMessage &&message);
 	uint32_t sendMessage(const Message &message);
+	void sendTransportService(int cause);
 
 private:
 	void candidateGathered(cricket::IceTransportInternal *transport, const cricket::Candidate &candidate);
