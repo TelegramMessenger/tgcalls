@@ -34,9 +34,6 @@ public:
 	};
 	absl::optional<DecryptedPacket> handleIncomingPacket(const char *bytes, size_t size);
 
-	static constexpr uint8_t kAckId = uint8_t(-1);
-	static constexpr uint8_t kEmptyId = uint8_t(-2);
-
 private:
 	struct DelayIntervals {
 		// In milliseconds.

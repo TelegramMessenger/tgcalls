@@ -29,6 +29,9 @@ constexpr auto kMaxOuterPacketSize = kMaxFullPacketSize - 48;
 constexpr auto kServiceCauseAcks = 1;
 constexpr auto kServiceCauseResend = 2;
 
+static constexpr uint8_t kAckId = uint8_t(-1);
+static constexpr uint8_t kEmptyId = uint8_t(-2);
+
 void AppendSeq(rtc::CopyOnWriteBuffer &buffer, uint32_t seq) {
 	const auto bytes = rtc::HostToNetwork32(seq);
 	buffer.AppendData(reinterpret_cast<const char*>(&bytes), sizeof(bytes));
