@@ -99,11 +99,15 @@ struct Config {
 };
 
 struct EncryptionKey {
-	std::vector<uint8_t> value;
+	static constexpr int kSize = 256;
+
+	std::shared_ptr<const std::array<uint8_t, kSize>> value;
 	bool isOutgoing = false;
 
-    EncryptionKey(std::vector<uint8_t> const &value, bool isOutgoing)
-	: value(value), isOutgoing(isOutgoing) {
+    EncryptionKey(
+		std::shared_ptr<std::array<uint8_t, kSize>> value,
+		bool isOutgoing)
+	: value(std::move(value)), isOutgoing(isOutgoing) {
     }
 };
 

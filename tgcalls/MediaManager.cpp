@@ -4,6 +4,7 @@
 #include "VideoCaptureInterfaceImpl.h"
 #include "VideoCapturerInterface.h"
 #include "CodecSelectHelper.h"
+#include "Message.h"
 #include "platform/PlatformInterface.h"
 
 #include "api/audio_codecs/audio_decoder_factory_template.h"
@@ -52,15 +53,13 @@ MediaManager::MediaManager(
 	rtc::Thread *thread,
 	bool isOutgoing,
 	std::shared_ptr<VideoCaptureInterface> videoCapture,
-	std::function<void(const rtc::CopyOnWriteBuffer &)> packetEmitted,
-	std::function<void(bool)> localVideoCaptureActiveUpdated,
-	std::function<void(const SignalingMessage &)> sendSignalingMessage) :
+	std::function<void(Message &&)> sendSignalingMessage,
+	std::function<void(Message &&)> sendTransportMessage) :
 _thread(thread),
 _eventLog(std::make_unique<webrtc::RtcEventLogNull>()),
 _taskQueueFactory(webrtc::CreateDefaultTaskQueueFactory()),
-_packetEmitted(std::move(packetEmitted)),
-_localVideoCaptureActiveUpdated(std::move(localVideoCaptureActiveUpdated)),
 _sendSignalingMessage(std::move(sendSignalingMessage)),
+_sendTransportMessage(std::move(sendTransportMessage)),
 _videoCapture(std::move(videoCapture)) {
 	_ssrcAudio.incoming = isOutgoing ? ssrcAudioIncoming : ssrcAudioOutgoing;
 	_ssrcAudio.outgoing = (!isOutgoing) ? ssrcAudioIncoming : ssrcAudioOutgoing;
@@ -207,29 +206,6 @@ void MediaManager::setIsConnected(bool isConnected) {
 	}
 }
 
-void MediaManager::receivePacket(const rtc::CopyOnWriteBuffer &packet) {
-	if (packet.size() < 1) {
-		return;
-	}
-
-	uint8_t header = ((uint8_t *)packet.data())[0];
-	rtc::CopyOnWriteBuffer unwrappedPacket = packet.Slice(1, packet.size() - 1);
-
-	if (header == 0xba) {
-		if (_audioChannel) {
-			_audioChannel->OnPacketReceived(unwrappedPacket, -1);
-		}
-	} else if (header == 0xbf) {
-		if (_videoChannel) {
-			if (_readyToReceiveVideo) {
-				_videoChannel->OnPacketReceived(unwrappedPacket, -1);
-			} else {
-				// maybe we need to queue packets for some time?
-			}
-		}
-	}
-}
-
 void MediaManager::notifyPacketSent(const rtc::SentPacket &sentPacket) {
 	_call->OnSentPacket(sentPacket);
 }
@@ -270,7 +246,10 @@ void MediaManager::setSendVideo(std::shared_ptr<VideoCaptureInterface> videoCapt
     }
     _videoCapture = videoCapture;
 	if (_videoCapture) {
-		GetVideoCaptureAssumingSameThread(_videoCapture.get())->setIsActiveUpdated(this->_localVideoCaptureActiveUpdated);
+		const auto sendTransportMessage = _sendTransportMessage;
+		GetVideoCaptureAssumingSameThread(_videoCapture.get())->setIsActiveUpdated([=](bool isActive) {
+			sendTransportMessage({ RemoteVideoIsActiveMessage{ isActive } });
+		});
 	}
 
     checkIsSendingVideoChanged(wasSending);
@@ -383,10 +362,23 @@ void MediaManager::setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterfac
 	_videoChannel->SetSink(_ssrcVideo.incoming, _currentIncomingVideoSink.get());
 }
 
-void MediaManager::receiveSignalingMessage(SignalingMessage &&message) {
-	const auto formats = absl::get_if<VideoFormatsMessage>(&message.data);
-	assert(formats != nullptr);
-	setPeerVideoFormats(std::move(*formats));
+void MediaManager::receiveMessage(DecryptedMessage &&message) {
+	const auto data = &message.message.data;
+	if (const auto formats = absl::get_if<VideoFormatsMessage>(data)) {
+		setPeerVideoFormats(std::move(*formats));
+	} else if (const auto audio = absl::get_if<AudioDataMessage>(data)) {
+		if (_audioChannel) {
+			_audioChannel->OnPacketReceived(audio->data, -1);
+		}
+	} else if (const auto video = absl::get_if<VideoDataMessage>(data)) {
+		if (_videoChannel) {
+			if (_readyToReceiveVideo) {
+				_videoChannel->OnPacketReceived(video->data, -1);
+			} else {
+				// maybe we need to queue packets for some time?
+			}
+		}
+	}
 }
 
 MediaManager::NetworkInterfaceImpl::NetworkInterfaceImpl(MediaManager *mediaManager, bool isVideo) :
@@ -395,24 +387,17 @@ _isVideo(isVideo) {
 }
 
 bool MediaManager::NetworkInterfaceImpl::SendPacket(rtc::CopyOnWriteBuffer *packet, const rtc::PacketOptions& options) {
-	rtc::CopyOnWriteBuffer wrappedPacket;
-	uint8_t header = _isVideo ? 0xbf : 0xba;
-	wrappedPacket.AppendData(&header, 1);
-	wrappedPacket.AppendData(*packet);
-
-	_mediaManager->_packetEmitted(wrappedPacket);
-	rtc::SentPacket sentPacket(options.packet_id, rtc::TimeMillis(), options.info_signaled_after_sent);
-	_mediaManager->notifyPacketSent(sentPacket);
-	return true;
+	return sendTransportMessage(packet, options);
 }
 
 bool MediaManager::NetworkInterfaceImpl::SendRtcp(rtc::CopyOnWriteBuffer *packet, const rtc::PacketOptions& options) {
-	rtc::CopyOnWriteBuffer wrappedPacket;
-	uint8_t header = _isVideo ? 0xbf : 0xba;
-	wrappedPacket.AppendData(&header, 1);
-	wrappedPacket.AppendData(*packet);
+	return sendTransportMessage(packet, options);
+}
 
-	_mediaManager->_packetEmitted(wrappedPacket);
+bool MediaManager::NetworkInterfaceImpl::sendTransportMessage(rtc::CopyOnWriteBuffer *packet, const rtc::PacketOptions& options) {
+	_mediaManager->_sendTransportMessage(_isVideo
+		? Message{ VideoDataMessage{ *packet } }
+		: Message{ AudioDataMessage{ *packet } });
 	rtc::SentPacket sentPacket(options.packet_id, rtc::TimeMillis(), options.info_signaled_after_sent);
 	_mediaManager->notifyPacketSent(sentPacket);
 	return true;

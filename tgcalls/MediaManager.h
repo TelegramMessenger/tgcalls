@@ -8,7 +8,7 @@
 #include "pc/rtp_sender.h"
 
 #include "Instance.h"
-#include "SignalingMessage.h"
+#include "Message.h"
 
 #include <functional>
 #include <memory>
@@ -39,18 +39,16 @@ public:
 		rtc::Thread *thread,
 		bool isOutgoing,
 		std::shared_ptr<VideoCaptureInterface> videoCapture,
-		std::function<void(const rtc::CopyOnWriteBuffer &)> packetEmitted,
-		std::function<void(bool)> localVideoCaptureActiveUpdated,
-		std::function<void(const SignalingMessage &)> sendSignalingMessage);
+		std::function<void(Message &&)> sendSignalingMessage,
+		std::function<void(Message &&)> sendTransportMessage);
 	~MediaManager();
 
 	void setIsConnected(bool isConnected);
-	void receivePacket(const rtc::CopyOnWriteBuffer &packet);
 	void notifyPacketSent(const rtc::SentPacket &sentPacket);
 	void setSendVideo(std::shared_ptr<VideoCaptureInterface> videoCapture);
 	void setMuteOutgoingAudio(bool mute);
 	void setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
-	void receiveSignalingMessage(SignalingMessage &&message);
+	void receiveMessage(DecryptedMessage &&message);
 
 private:
 	struct SSRC {
@@ -68,8 +66,11 @@ private:
 		int SetOption(SocketType type, rtc::Socket::Option opt, int option) override;
 
 	private:
+		bool sendTransportMessage(rtc::CopyOnWriteBuffer *packet, const rtc::PacketOptions& options);
+
 		MediaManager *_mediaManager = nullptr;
 		bool _isVideo = false;
+
 	};
 
 	friend class MediaManager::NetworkInterfaceImpl;
@@ -84,9 +85,8 @@ private:
 	std::unique_ptr<webrtc::RtcEventLogNull> _eventLog;
 	std::unique_ptr<webrtc::TaskQueueFactory> _taskQueueFactory;
 
-	std::function<void(const rtc::CopyOnWriteBuffer &)> _packetEmitted;
-	std::function<void(bool)> _localVideoCaptureActiveUpdated;
-	std::function<void(const SignalingMessage &)> _sendSignalingMessage;
+	std::function<void(Message &&)> _sendSignalingMessage;
+	std::function<void(Message &&)> _sendTransportMessage;
 
 	SSRC _ssrcAudio;
 	SSRC _ssrcVideo;

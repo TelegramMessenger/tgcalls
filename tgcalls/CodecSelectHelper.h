@@ -1,7 +1,7 @@
 #ifndef TGCALLS_CODEC_SELECT_HELPER_H
 #define TGCALLS_CODEC_SELECT_HELPER_H
 
-#include "SignalingMessage.h"
+#include "Message.h"
 #include "media/base/codec.h"
 
 namespace tgcalls {

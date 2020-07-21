@@ -3,13 +3,15 @@
 
 #include "rtc_base/thread.h"
 
-#include <functional>
-#include <memory>
+#include "EncryptedConnection.h"
+#include "Instance.h"
+#include "Message.h"
 
 #include "rtc_base/copy_on_write_buffer.h"
 #include "api/candidate.h"
-#include "Instance.h"
-#include "SignalingMessage.h"
+
+#include <functional>
+#include <memory>
 
 namespace rtc {
 class BasicPacketSocketFactory;
@@ -29,44 +31,26 @@ class BasicAsyncResolverFactory;
 
 namespace tgcalls {
 
-struct SignalingMessage;
+struct Message;
 
 class NetworkManager : public sigslot::has_slots<> {
 public:
 	struct State {
 		bool isReadyToSendData = false;
 	};
-    
-public:
-    static absl::optional<rtc::Buffer> encryptPacket(const rtc::CopyOnWriteBuffer &packet, const EncryptionKey &encryptionKey);
-    static absl::optional<rtc::CopyOnWriteBuffer> decryptPacket(const rtc::CopyOnWriteBuffer &packet, const EncryptionKey &encryptionKey);
 
-public:
 	NetworkManager(
 		rtc::Thread *thread,
 		EncryptionKey encryptionKey,
 		bool enableP2P,
 		std::vector<RtcServer> const &rtcServers,
-		std::function<void (const NetworkManager::State &)> stateUpdated,
-		std::function<void (const rtc::CopyOnWriteBuffer &)> packetReceived,
-		std::function<void (const SignalingMessage &)> sendSignalingMessage);
+		std::function<void(const State &)> stateUpdated,
+		std::function<void(DecryptedMessage &&)> transportMessageReceived,
+		std::function<void(Message &&)> sendSignalingMessage);
 	~NetworkManager();
 
-	void receiveSignalingMessage(SignalingMessage &&message);
-	void sendPacket(const rtc::CopyOnWriteBuffer &packet);
-
-private:
-	rtc::Thread *_thread;
-	EncryptionKey _encryptionKey;
-	std::function<void (const NetworkManager::State &)> _stateUpdated;
-	std::function<void (const rtc::CopyOnWriteBuffer &)> _packetReceived;
-	std::function<void (const SignalingMessage &)> _sendSignalingMessage;
-
-	std::unique_ptr<rtc::BasicPacketSocketFactory> _socketFactory;
-	std::unique_ptr<rtc::BasicNetworkManager> _networkManager;
-	std::unique_ptr<cricket::BasicPortAllocator> _portAllocator;
-	std::unique_ptr<webrtc::BasicAsyncResolverFactory> _asyncResolverFactory;
-	std::unique_ptr<cricket::P2PTransportChannel> _transportChannel;
+	void receiveSignalingMessage(DecryptedMessage &&message);
+	uint32_t sendMessage(const Message &message);
 
 private:
 	void candidateGathered(cricket::IceTransportInternal *transport, const cricket::Candidate &candidate);
@@ -74,6 +58,19 @@ private:
 	void transportStateChanged(cricket::IceTransportInternal *transport);
 	void transportReadyToSend(cricket::IceTransportInternal *transport);
 	void transportPacketReceived(rtc::PacketTransportInternal *transport, const char *bytes, size_t size, const int64_t &timestamp, int unused);
+
+	rtc::Thread *_thread = nullptr;
+	EncryptedConnection _transport;
+	bool _isOutgoing = false;
+	std::function<void(const NetworkManager::State &)> _stateUpdated;
+	std::function<void(DecryptedMessage &&)> _transportMessageReceived;
+	std::function<void(Message &&)> _sendSignalingMessage;
+
+	std::unique_ptr<rtc::BasicPacketSocketFactory> _socketFactory;
+	std::unique_ptr<rtc::BasicNetworkManager> _networkManager;
+	std::unique_ptr<cricket::BasicPortAllocator> _portAllocator;
+	std::unique_ptr<webrtc::BasicAsyncResolverFactory> _asyncResolverFactory;
+	std::unique_ptr<cricket::P2PTransportChannel> _transportChannel;
 
 };
 

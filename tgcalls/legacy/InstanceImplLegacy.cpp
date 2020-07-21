@@ -139,8 +139,7 @@ onSignalBarsUpdated_(std::move(descriptor.signalBarsUpdated)) {
 
 	setNetworkType(descriptor.initialNetworkType);
 
-	std::vector<uint8_t> encryptionKeyValue = descriptor.encryptionKey.value;
-	controller_->SetEncryptionKey((char *)(encryptionKeyValue.data()), descriptor.encryptionKey.isOutgoing);
+	controller_->SetEncryptionKey((char *)(descriptor.encryptionKey.value->data()), descriptor.encryptionKey.isOutgoing);
 	controller_->SetRemoteEndpoints(mappedEndpoints, descriptor.config.enableP2P, descriptor.config.maxApiLayer);
 
 	controller_->Start();

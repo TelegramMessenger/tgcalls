@@ -1,6 +1,6 @@
 #include "NetworkManager.h"
 
-#include "SignalingMessage.h"
+#include "Message.h"
 
 #include "p2p/base/basic_packet_socket_factory.h"
 #include "p2p/client/basic_port_allocator.h"
@@ -50,118 +50,19 @@ static void aesIgeDecrypt(uint8_t *in, uint8_t *out, size_t length, uint8_t *key
 	AES_ige_encrypt(in, out, length, &akey, iv, AES_DECRYPT);
 }
 
-absl::optional<rtc::CopyOnWriteBuffer> NetworkManager::decryptPacket(const rtc::CopyOnWriteBuffer &packet, const EncryptionKey &encryptionKey) {
-	if (packet.size() < 16 + 16) {
-		return absl::nullopt;
-	}
-    if (encryptionKey.value.size() != 256) {
-        return absl::nullopt;
-    }
-
-	unsigned char msgKey[16];
-	memcpy(msgKey, packet.data(), 16);
-
-	int x = encryptionKey.isOutgoing ? 8 : 0;
-
-	unsigned char aesKey[32];
-	unsigned char aesIv[32];
-	KDF2((unsigned char *)encryptionKey.value.data(), msgKey, x, aesKey, aesIv);
-	size_t decryptedSize = packet.size() - 16;
-	if (decryptedSize < 0 || decryptedSize > 128 * 1024) {
-		return absl::nullopt;
-	}
-	if (decryptedSize % 16 != 0) {
-		return absl::nullopt;
-	}
-	rtc::Buffer decryptionBuffer(decryptedSize);
-	aesIgeDecrypt(((uint8_t *)packet.data()) + 16, decryptionBuffer.begin(), decryptionBuffer.size(), aesKey, aesIv);
-
-	rtc::ByteBufferWriter msgKeyData;
-	msgKeyData.WriteBytes((const char *)encryptionKey.value.data() + 88 + x, 32);
-	msgKeyData.WriteBytes((const char *)decryptionBuffer.data(), decryptionBuffer.size());
-	unsigned char msgKeyLarge[32];
-	SHA256((uint8_t *)msgKeyData.Data(), msgKeyData.Length(), msgKeyLarge);
-
-	uint16_t innerSize;
-	memcpy(&innerSize, decryptionBuffer.data(), 2);
-
-	unsigned char checkMsgKey[16];
-	memcpy(checkMsgKey, msgKeyLarge + 8, 16);
-
-	if (memcmp(checkMsgKey, msgKey, 16) != 0) {
-		return absl::nullopt;
-	}
-
-	if (innerSize < 0 || innerSize > decryptionBuffer.size() - 2) {
-		return absl::nullopt;
-	}
-
-	rtc::CopyOnWriteBuffer decryptedPacket;
-	decryptedPacket.AppendData((const char *)decryptionBuffer.data() + 2, innerSize);
-	return decryptedPacket;
-}
-
-absl::optional<rtc::Buffer> NetworkManager::encryptPacket(const rtc::CopyOnWriteBuffer &packet, const EncryptionKey &encryptionKey) {
-	if (packet.size() > UINT16_MAX) {
-		return absl::nullopt;
-	}
-    if (encryptionKey.value.size() != 256) {
-        return absl::nullopt;
-    }
-
-	rtc::ByteBufferWriter innerData;
-	uint16_t packetSize = (uint16_t)packet.size();
-	innerData.WriteBytes((const char *)&packetSize, 2);
-	innerData.WriteBytes((const char *)packet.data(), packet.size());
-
-	size_t innerPadding = 16 - innerData.Length() % 16;
-	uint8_t paddingData[16];
-	RAND_bytes(paddingData, (int)innerPadding);
-	innerData.WriteBytes((const char *)paddingData, innerPadding);
-
-	if (innerData.Length() % 16 != 0) {
-		assert(false);
-		return absl::nullopt;
-	}
-
-	int x = encryptionKey.isOutgoing ? 0 : 8;
-
-	rtc::ByteBufferWriter msgKeyData;
-	msgKeyData.WriteBytes((const char *)encryptionKey.value.data() + 88 + x, 32);
-	msgKeyData.WriteBytes(innerData.Data(), innerData.Length());
-	unsigned char msgKeyLarge[32];
-	SHA256((uint8_t *)msgKeyData.Data(), msgKeyData.Length(), msgKeyLarge);
-
-	unsigned char msgKey[16];
-	memcpy(msgKey, msgKeyLarge + 8, 16);
-
-	unsigned char aesKey[32];
-	unsigned char aesIv[32];
-	KDF2((unsigned char *)encryptionKey.value.data(), msgKey, x, aesKey, aesIv);
-
-	rtc::Buffer encryptedPacket;
-	encryptedPacket.AppendData((const char *)msgKey, 16);
-
-	rtc::Buffer encryptionBuffer(innerData.Length());
-	aesIgeEncrypt((uint8_t *)innerData.Data(), encryptionBuffer.begin(), innerData.Length(), aesKey, aesIv);
-
-	encryptedPacket.AppendData(encryptionBuffer.begin(), encryptionBuffer.size());
-
-	return encryptedPacket;
-}
-
 NetworkManager::NetworkManager(
 	rtc::Thread *thread,
 	EncryptionKey encryptionKey,
 	bool enableP2P,
 	std::vector<RtcServer> const &rtcServers,
-	std::function<void (const NetworkManager::State &)> stateUpdated,
-	std::function<void (const rtc::CopyOnWriteBuffer &)> packetReceived,
-	std::function<void (const SignalingMessage &)> sendSignalingMessage) :
+	std::function<void(const NetworkManager::State &)> stateUpdated,
+	std::function<void(DecryptedMessage &&)> transportMessageReceived,
+	std::function<void(Message &&)> sendSignalingMessage) :
 _thread(thread),
-_encryptionKey(encryptionKey),
+_transport(EncryptedConnection::Type::Transport, encryptionKey),
+_isOutgoing(encryptionKey.isOutgoing),
 _stateUpdated(std::move(stateUpdated)),
-_packetReceived(std::move(packetReceived)),
+_transportMessageReceived(std::move(transportMessageReceived)),
 _sendSignalingMessage(std::move(sendSignalingMessage)) {
 	assert(_thread->IsCurrent());
 
@@ -227,8 +128,8 @@ _sendSignalingMessage(std::move(sendSignalingMessage)) {
 		false
 	);
 
-	_transportChannel->SetIceParameters(_encryptionKey.isOutgoing ? localIceParameters : remoteIceParameters);
-	_transportChannel->SetIceRole(_encryptionKey.isOutgoing ? cricket::ICEROLE_CONTROLLING : cricket::ICEROLE_CONTROLLED);
+	_transportChannel->SetIceParameters(_isOutgoing ? localIceParameters : remoteIceParameters);
+	_transportChannel->SetIceRole(_isOutgoing ? cricket::ICEROLE_CONTROLLING : cricket::ICEROLE_CONTROLLED);
 
 	_transportChannel->SignalCandidateGathered.connect(this, &NetworkManager::candidateGathered);
 	_transportChannel->SignalGatheringState.connect(this, &NetworkManager::candidateGatheringState);
@@ -238,7 +139,7 @@ _sendSignalingMessage(std::move(sendSignalingMessage)) {
 	_transportChannel->MaybeStartGathering();
 
 	_transportChannel->SetRemoteIceMode(cricket::ICEMODE_FULL);
-	_transportChannel->SetRemoteIceParameters((!_encryptionKey.isOutgoing) ? localIceParameters : remoteIceParameters);
+	_transportChannel->SetRemoteIceParameters(_isOutgoing ? remoteIceParameters : localIceParameters);
 }
 
 NetworkManager::~NetworkManager() {
@@ -251,8 +152,8 @@ NetworkManager::~NetworkManager() {
 	_socketFactory.reset();
 }
 
-void NetworkManager::receiveSignalingMessage(SignalingMessage &&message) {
-	const auto list = absl::get_if<CandidatesListMessage>(&message.data);
+void NetworkManager::receiveSignalingMessage(DecryptedMessage &&message) {
+	const auto list = absl::get_if<CandidatesListMessage>(&message.message.data);
 	assert(list != nullptr);
 
 	for (const auto &candidate : list->candidates) {
@@ -260,12 +161,13 @@ void NetworkManager::receiveSignalingMessage(SignalingMessage &&message) {
 	}
 }
 
-void NetworkManager::sendPacket(const rtc::CopyOnWriteBuffer &packet) {
-	auto encryptedPacket = encryptPacket(packet, _encryptionKey);
-	if (encryptedPacket.has_value()) {
+uint32_t NetworkManager::sendMessage(const Message &message) {
+	if (auto prepared = _transport.prepareForSending(message)) {
 		rtc::PacketOptions packetOptions;
-		_transportChannel->SendPacket((const char *)encryptedPacket->data(), encryptedPacket->size(), packetOptions, 0);
+		_transportChannel->SendPacket((const char *)prepared->bytes.data(), prepared->bytes.size(), packetOptions, 0);
+		return prepared->counter;
 	}
+	return 0;
 }
 
 void NetworkManager::candidateGathered(cricket::IceTransportInternal *transport, const cricket::Candidate &candidate) {
@@ -301,11 +203,14 @@ void NetworkManager::transportReadyToSend(cricket::IceTransportInternal *transpo
 
 void NetworkManager::transportPacketReceived(rtc::PacketTransportInternal *transport, const char *bytes, size_t size, const int64_t &timestamp, int unused) {
 	assert(_thread->IsCurrent());
-	rtc::CopyOnWriteBuffer packet;
-	packet.AppendData(bytes, size);
 
-	if (auto decryptedPacket = decryptPacket(packet, _encryptionKey)) {
-		_packetReceived(*decryptedPacket);
+	if (auto decrypted = _transport.handleIncomingPacket(bytes, size)) {
+		if (_transportMessageReceived) {
+			_transportMessageReceived(std::move(decrypted->main));
+			for (auto &message : decrypted->additional) {
+				_transportMessageReceived(std::move(message));
+			}
+		}
 	}
 }
 

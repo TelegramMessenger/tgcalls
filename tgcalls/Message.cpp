@@ -1,4 +1,4 @@
-#include "SignalingMessage.h"
+#include "Message.h"
 
 #include "rtc_base/byte_buffer.h"
 #include "api/jsep_ice_candidate.h"
@@ -90,18 +90,18 @@ bool Deserialize(cricket::Candidate &to, rtc::ByteBufferReader &from) {
 	return true;
 }
 
-void Serialize(rtc::ByteBufferWriter &to, const RequestVideoMessage &from) {
+void Serialize(rtc::ByteBufferWriter &to, const RequestVideoMessage &from, bool singleMessagePacket) {
 }
 
-bool Deserialize(RequestVideoMessage &to, rtc::ByteBufferReader &reader) {
+bool Deserialize(RequestVideoMessage &to, rtc::ByteBufferReader &reader, bool singleMessagePacket) {
 	return true;
 }
 
-void Serialize(rtc::ByteBufferWriter &to, const RemoteVideoIsActiveMessage &from) {
+void Serialize(rtc::ByteBufferWriter &to, const RemoteVideoIsActiveMessage &from, bool singleMessagePacket) {
 	to.WriteUInt8(from.active ? 1 : 0);
 }
 
-bool Deserialize(RemoteVideoIsActiveMessage &to, rtc::ByteBufferReader &reader) {
+bool Deserialize(RemoteVideoIsActiveMessage &to, rtc::ByteBufferReader &reader, bool singleMessagePacket) {
 	uint8_t value = 0;
 	if (!reader.ReadUInt8(&value)) {
 		RTC_LOG(LS_ERROR) << "Could not read videoIsActive.";
@@ -111,7 +111,7 @@ bool Deserialize(RemoteVideoIsActiveMessage &to, rtc::ByteBufferReader &reader) 
 	return true;
 }
 
-void Serialize(rtc::ByteBufferWriter &to, const CandidatesListMessage &from) {
+void Serialize(rtc::ByteBufferWriter &to, const CandidatesListMessage &from, bool singleMessagePacket) {
 	assert(from.candidates.size() < std::numeric_limits<uint8_t>::max());
 
 	to.WriteUInt8(uint8_t(from.candidates.size()));
@@ -120,7 +120,7 @@ void Serialize(rtc::ByteBufferWriter &to, const CandidatesListMessage &from) {
 	}
 }
 
-bool Deserialize(CandidatesListMessage &to, rtc::ByteBufferReader &reader) {
+bool Deserialize(CandidatesListMessage &to, rtc::ByteBufferReader &reader, bool singleMessagePacket) {
 	auto count = uint8_t();
 	if (!reader.ReadUInt8(&count)) {
 		RTC_LOG(LS_ERROR) << "Could not read candidates count.";
@@ -137,7 +137,7 @@ bool Deserialize(CandidatesListMessage &to, rtc::ByteBufferReader &reader) {
 	return true;
 }
 
-void Serialize(rtc::ByteBufferWriter &to, const VideoFormatsMessage &from) {
+void Serialize(rtc::ByteBufferWriter &to, const VideoFormatsMessage &from, bool singleMessagePacket) {
 	assert(from.formats.size() < std::numeric_limits<uint8_t>::max());
 	assert(from.encodersCount <= from.formats.size());
 
@@ -148,7 +148,7 @@ void Serialize(rtc::ByteBufferWriter &to, const VideoFormatsMessage &from) {
 	to.WriteUInt8(uint8_t(from.encodersCount));
 }
 
-bool Deserialize(VideoFormatsMessage &to, rtc::ByteBufferReader &from) {
+bool Deserialize(VideoFormatsMessage &to, rtc::ByteBufferReader &from, bool singleMessagePacket) {
 	auto count = uint8_t();
 	if (!from.ReadUInt8(&count)) {
 		RTC_LOG(LS_ERROR) << "Could not read video formats count.";
@@ -174,21 +174,64 @@ bool Deserialize(VideoFormatsMessage &to, rtc::ByteBufferReader &from) {
 	return true;
 }
 
+void Serialize(rtc::ByteBufferWriter &to, const rtc::CopyOnWriteBuffer &from, bool singleMessagePacket) {
+	if (!singleMessagePacket) {
+		assert(from.size() <= UINT16_MAX);
+		to.WriteUInt16(from.size());
+	}
+	to.WriteBytes(reinterpret_cast<const char*>(from.cdata()), from.size());
+}
+
+bool Deserialize(rtc::CopyOnWriteBuffer &to, rtc::ByteBufferReader &from, bool singleMessagePacket) {
+	auto length = uint16_t(from.Length());
+	if (!singleMessagePacket) {
+		if (!from.ReadUInt16(&length)) {
+			RTC_LOG(LS_ERROR) << "Could not read buffer length.";
+			return false;
+		} else if (from.Length() < length) {
+			RTC_LOG(LS_ERROR) << "Invalid buffer length: " << length << ", available: " << from.Length();
+			return false;
+		}
+	}
+	to.AppendData(from.Data(), length);
+	from.Consume(length);
+	return true;
+}
+
+void Serialize(rtc::ByteBufferWriter &to, const AudioDataMessage &from, bool singleMessagePacket) {
+	Serialize(to, from.data, singleMessagePacket);
+}
+
+bool Deserialize(AudioDataMessage &to, rtc::ByteBufferReader &from, bool singleMessagePacket) {
+	return Deserialize(to.data, from, singleMessagePacket);
+}
+
+void Serialize(rtc::ByteBufferWriter &to, const VideoDataMessage &from, bool singleMessagePacket) {
+	Serialize(to, from.data, singleMessagePacket);
+}
+
+bool Deserialize(VideoDataMessage &to, rtc::ByteBufferReader &from, bool singleMessagePacket) {
+	return Deserialize(to.data, from, singleMessagePacket);
+}
+
 template <typename T>
-bool TryDeserialize(absl::optional<SignalingMessage> &to, const rtc::CopyOnWriteBuffer &from) {
-	assert(from.size() != 0);
+bool TryDeserialize(
+		absl::optional<Message> &to,
+		rtc::ByteBufferReader &reader,
+		bool singleMessagePacket) {
+	assert(reader.Length() != 0);
 
 	constexpr auto id = T::kId;
-	if (from[0] != id) {
+	if (uint8_t(*reader.Data()) != id) {
 		return false;
 	}
+	reader.Consume(1);
 	auto parsed = T();
-	rtc::ByteBufferReader reader((const char *)from.data() + 1, from.size());
-	if (!Deserialize(parsed, reader)) {
+	if (!Deserialize(parsed, reader, singleMessagePacket)) {
 		RTC_LOG(LS_ERROR) << "Could not read message with kId: " << id;
 		return false;
 	}
-	to = SignalingMessage{ parsed };
+	to = Message{ parsed };
 	return true;
 }
 
@@ -197,49 +240,63 @@ struct TryDeserializeNext;
 
 template <>
 struct TryDeserializeNext<> {
-	static bool Call(absl::optional<SignalingMessage> &to, const rtc::CopyOnWriteBuffer &from) {
+	static bool Call(
+			absl::optional<Message> &to,
+			rtc::ByteBufferReader &reader,
+			bool singleMessagePacket) {
 		return false;
 	}
 };
 
 template <typename T, typename ...Other>
 struct TryDeserializeNext<T, Other...> {
-	static bool Call(absl::optional<SignalingMessage> &to, const rtc::CopyOnWriteBuffer &from) {
-		return TryDeserialize<T>(to, from)
-			|| TryDeserializeNext<Other...>::Call(to, from);
+	static bool Call(
+			absl::optional<Message> &to,
+			rtc::ByteBufferReader &reader,
+			bool singleMessagePacket) {
+		return TryDeserialize<T>(to, reader, singleMessagePacket)
+			|| TryDeserializeNext<Other...>::Call(to, reader, singleMessagePacket);
 	}
 };
 
 template <typename ...Types>
 bool TryDeserializeRecursive(
-		absl::optional<SignalingMessage> &to,
-		const rtc::CopyOnWriteBuffer &from,
+		absl::optional<Message> &to,
+		rtc::ByteBufferReader &reader,
+		bool singleMessagePacket,
 		absl::variant<Types...> *) {
-	return TryDeserializeNext<Types...>::Call(to, from);
+	return TryDeserializeNext<Types...>::Call(to, reader, singleMessagePacket);
 }
 
 } // namespace
 
-rtc::CopyOnWriteBuffer SerializeMessage(const SignalingMessage &message) {
+
+rtc::CopyOnWriteBuffer SerializeMessageWithSeq(
+		const Message &message,
+		uint32_t seq,
+		bool singleMessagePacket) {
 	rtc::ByteBufferWriter writer;
+	writer.WriteUInt32(seq);
 	absl::visit([&](const auto &data) {
 		writer.WriteUInt8(std::decay_t<decltype(data)>::kId);
-		Serialize(writer, data);
+		Serialize(writer, data, singleMessagePacket);
 	}, message.data);
 
-    auto result = rtc::CopyOnWriteBuffer();
-    result.AppendData(writer.Data(), writer.Length());
+	auto result = rtc::CopyOnWriteBuffer();
+	result.AppendData(writer.Data(), writer.Length());
 
 	return result;
 }
 
-absl::optional<SignalingMessage> DeserializeMessage(const rtc::CopyOnWriteBuffer &data) {
-    if (data.size() == 0) {
+absl::optional<Message> DeserializeMessage(
+		rtc::ByteBufferReader &reader,
+		bool singleMessagePacket) {
+	if (!reader.Length()) {
 		return absl::nullopt;
 	}
-	using Variant = decltype(std::declval<SignalingMessage>().data);
-	auto result = absl::make_optional<SignalingMessage>();
-	return TryDeserializeRecursive(result, data, (Variant*)nullptr)
+	using Variant = decltype(std::declval<Message>().data);
+	auto result = absl::make_optional<Message>();
+	return TryDeserializeRecursive(result, reader, singleMessagePacket, (Variant*)nullptr)
 		? result
 		: absl::nullopt;
 }
