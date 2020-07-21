@@ -418,9 +418,9 @@ public:
     void receiveSignalingData(const std::vector<uint8_t> &data) {
         rtc::CopyOnWriteBuffer packet;
         packet.AppendData(data.data(), data.size());
-        if (auto decryptedPacket = NetworkManager::decryptPacket(packet, _encryptionKey)) {
-            processSignalingData(*decryptedPacket);
-        }
+        
+        // Wait for EncryptedConnection API to be finalized
+        processSignalingData(packet);
     }
     
     void processSignalingData(const rtc::CopyOnWriteBuffer &decryptedPacket) {
@@ -602,13 +602,10 @@ private:
         rtc::CopyOnWriteBuffer packet;
         packet.SetData(buffer.Data(), buffer.Length());
         
-        auto encryptedPacket = NetworkManager::encryptPacket(packet, _encryptionKey);
-        if (encryptedPacket.has_value()) {
-            std::vector<uint8_t> result;
-            result.resize(encryptedPacket->size());
-            memcpy(result.data(), encryptedPacket->data(), encryptedPacket->size());
-            _signalingDataEmitted(result);
-        }
+        // Wait for EncryptedConnection API to be finalized
+        std::vector<uint8_t> result;
+        result.resize(packet.size());
+        memcpy(result.data(), packet.data(), packet.size());
     }
     
     void emitIceCandidate(std::string sdp, int mid, std::string sdpMid) {
