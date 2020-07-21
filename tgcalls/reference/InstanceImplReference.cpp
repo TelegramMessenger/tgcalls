@@ -606,6 +606,8 @@ private:
         std::vector<uint8_t> result;
         result.resize(packet.size());
         memcpy(result.data(), packet.data(), packet.size());
+        
+        _signalingDataEmitted(result);
     }
     
     void emitIceCandidate(std::string sdp, int mid, std::string sdpMid) {
