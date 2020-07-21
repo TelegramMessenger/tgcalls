@@ -21,35 +21,6 @@ extern "C" {
 
 namespace tgcalls {
 
-static void KDF2(unsigned char *encryptionKey, unsigned char *msgKey, size_t x, unsigned char *aesKey, unsigned char *aesIv) {
-	uint8_t sA[32], sB[32];
-	uint8_t buf[16 + 36];
-	memcpy(buf, msgKey, 16);
-	memcpy(buf + 16, encryptionKey + x, 36);
-	SHA256(buf, 16 + 36, sA);
-	memcpy(buf, encryptionKey + 40 + x, 36);
-	memcpy(buf + 36, msgKey, 16);
-	SHA256(buf, 36 + 16, sB);
-	memcpy(aesKey, sA, 8);
-	memcpy(aesKey + 8, sB + 8, 16);
-	memcpy(aesKey + 8 + 16, sA + 24, 8);
-	memcpy(aesIv, sB, 8);
-	memcpy(aesIv + 8, sA + 8, 16);
-	memcpy(aesIv + 8 + 16, sB + 24, 8);
-}
-
-static void aesIgeEncrypt(uint8_t *in, uint8_t *out, size_t length, uint8_t *key, uint8_t *iv) {
-	AES_KEY akey;
-	AES_set_encrypt_key(key, 32*8, &akey);
-	AES_ige_encrypt(in, out, length, &akey, iv, AES_ENCRYPT);
-}
-
-static void aesIgeDecrypt(uint8_t *in, uint8_t *out, size_t length, uint8_t *key, uint8_t *iv) {
-	AES_KEY akey;
-	AES_set_decrypt_key(key, 32*8, &akey);
-	AES_ige_encrypt(in, out, length, &akey, iv, AES_DECRYPT);
-}
-
 NetworkManager::NetworkManager(
 	rtc::Thread *thread,
 	EncryptionKey encryptionKey,
