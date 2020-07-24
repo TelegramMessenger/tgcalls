@@ -261,6 +261,30 @@ public:
     void start() {
         const auto weak = std::weak_ptr<InstanceImplReferenceInternal>(shared_from_this());
         
+        _signalingConnection.reset(new EncryptedConnection(
+            EncryptedConnection::Type::Signaling,
+            _encryptionKey,
+            [weak](int delayMs, int cause) {
+                if (delayMs == 0) {
+                    getMediaThread()->PostTask(RTC_FROM_HERE, [weak, cause](){
+                        auto strong = weak.lock();
+                        if (!strong) {
+                            return;
+                        }
+                        strong->sendPendingServiceMessages(cause);
+                    });
+                } else {
+                    getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak, cause]() {
+                        auto strong = weak.lock();
+                        if (!strong) {
+                            return;
+                        }
+                        strong->sendPendingServiceMessages(cause);
+                    }, delayMs);
+                }
+            }
+        ));
+        
         if (_videoCapture) {
             _videoState = VideoState::OutgoingRequested;
         }
@@ -416,11 +440,18 @@ public:
     }
     
     void receiveSignalingData(const std::vector<uint8_t> &data) {
-        rtc::CopyOnWriteBuffer packet;
-        packet.AppendData(data.data(), data.size());
-        
-        // Wait for EncryptedConnection API to be finalized
-        processSignalingData(packet);
+        if (const auto packet = _signalingConnection->handleIncomingPacket((const char *)data.data(), data.size())) {
+            const auto mainMessage = &packet->main.message.data;
+            if (const auto signalingData = absl::get_if<UnstructuredDataMessage>(mainMessage)) {
+                processSignalingData(signalingData->data);
+            }
+            for (auto &it : packet->additional) {
+                const auto additionalMessage = &it.message.data;
+                if (const auto signalingData = absl::get_if<UnstructuredDataMessage>(additionalMessage)) {
+                    processSignalingData(signalingData->data);
+                }
+            }
+        }
     }
     
     void processSignalingData(const rtc::CopyOnWriteBuffer &decryptedPacket) {
@@ -598,16 +629,19 @@ private:
         }
     }
     
+    void sendPendingServiceMessages(int cause) {
+        if (const auto prepared = _signalingConnection->prepareForSendingService(cause)) {
+            _signalingDataEmitted(prepared->bytes);
+        }
+    }
+    
     void emitSignaling(const rtc::ByteBufferWriter &buffer) {
         rtc::CopyOnWriteBuffer packet;
         packet.SetData(buffer.Data(), buffer.Length());
         
-        // Wait for EncryptedConnection API to be finalized
-        std::vector<uint8_t> result;
-        result.resize(packet.size());
-        memcpy(result.data(), packet.data(), packet.size());
-        
-        _signalingDataEmitted(result);
+        if (const auto prepared = _signalingConnection->prepareForSending(Message{ UnstructuredDataMessage{ packet } })) {
+            _signalingDataEmitted(prepared->bytes);
+        }
     }
     
     void emitIceCandidate(std::string sdp, int mid, std::string sdpMid) {
@@ -805,6 +839,7 @@ private:
     std::function<void(const std::vector<uint8_t> &)> _signalingDataEmitted;
     std::function<void(bool)> _remoteVideoIsActiveUpdated;
     std::shared_ptr<VideoCaptureInterface> _videoCapture;
+    std::unique_ptr<EncryptedConnection> _signalingConnection;
     
     State _state;
     VideoState _videoState;

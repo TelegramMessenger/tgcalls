@@ -214,6 +214,14 @@ bool Deserialize(VideoDataMessage &to, rtc::ByteBufferReader &from, bool singleM
 	return Deserialize(to.data, from, singleMessagePacket);
 }
 
+void Serialize(rtc::ByteBufferWriter &to, const UnstructuredDataMessage &from, bool singleMessagePacket) {
+    Serialize(to, from.data, singleMessagePacket);
+}
+
+bool Deserialize(UnstructuredDataMessage &to, rtc::ByteBufferReader &from, bool singleMessagePacket) {
+    return Deserialize(to.data, from, singleMessagePacket);
+}
+
 template <typename T>
 bool TryDeserialize(
 		absl::optional<Message> &to,

@@ -53,6 +53,13 @@ struct VideoDataMessage {
 	rtc::CopyOnWriteBuffer data;
 };
 
+struct UnstructuredDataMessage {
+    static constexpr uint8_t kId = 7;
+    static constexpr bool kRequiresAck = true;
+
+    rtc::CopyOnWriteBuffer data;
+};
+
 // To add a new message you should:
 // 1. Add the message struct.
 // 2. Add the message to the variant in Message struct.
@@ -65,7 +72,8 @@ struct Message {
         RequestVideoMessage,
         RemoteVideoIsActiveMessage,
 		AudioDataMessage,
-		VideoDataMessage> data;
+		VideoDataMessage,
+        UnstructuredDataMessage> data;
 };
 
 rtc::CopyOnWriteBuffer SerializeMessageWithSeq(
