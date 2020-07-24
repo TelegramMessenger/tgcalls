@@ -223,11 +223,9 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
         _didAdjustMirroring = true;
         
         if ([connection isVideoMirroringSupported] && [connection isVideoOrientationSupported]) {
-            connection.videoMirrored = YES;
             if (_isFrontCamera) {
+                connection.videoMirrored = YES;
                 [connection setVideoOrientation:AVCaptureVideoOrientationLandscapeRight];
-            } else {
-                [connection setVideoOrientation:AVCaptureVideoOrientationLandscapeLeft];
             }
         }
     }
