@@ -72,7 +72,6 @@ private:
 	Type _type = Type();
 	EncryptionKey _key;
 	uint32_t _counter = 0;
-	uint32_t _maxIncomingCounter = 0;
 	DelayIntervals _delayIntervals;
 	std::vector<uint32_t> _largestIncomingCounters;
 	std::vector<uint32_t> _ackedIncomingCounters;

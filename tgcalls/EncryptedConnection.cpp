@@ -285,7 +285,7 @@ bool EncryptedConnection::registerIncomingCounter(uint32_t incomingCounter) {
 		return false;
 	}
 	const auto eraseTill = std::find_if(list.begin(), list.end(), [&](uint32_t counter) {
-		return (counter + kKeepIncomingCountersCount <= incomingCounter);
+		return (counter + kKeepIncomingCountersCount > incomingCounter);
 	});
 	const auto eraseCount = eraseTill - list.begin();
 	const auto positionIndex = (position - list.begin()) - eraseCount;
