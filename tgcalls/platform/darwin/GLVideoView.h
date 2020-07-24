@@ -43,8 +43,11 @@ NS_EXTENSION_UNAVAILABLE_IOS("Rendering not available in app extensions.")
  */
 @property(nonatomic, nullable) NSValue *rotationOverride;
 
+@property (nonatomic, readwrite) int internalOrientation;
+
 - (std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)getSink;
 - (void)setOnFirstFrameReceived:(void (^ _Nullable)())onFirstFrameReceived;
+- (void)internalSetOnOrientationUpdated:(void (^ _Nullable)(int))onOrientationUpdated;
 
 @end
 

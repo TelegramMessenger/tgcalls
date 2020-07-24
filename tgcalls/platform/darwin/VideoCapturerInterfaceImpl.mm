@@ -43,7 +43,7 @@
     if (self != nil) {
         assert([NSThread isMainThread]);
 
-        _videoCapturer = [[VideoCameraCapturer alloc] initWithSource:source isActiveUpdated:isActiveUpdated];
+        _videoCapturer = [[VideoCameraCapturer alloc] initWithSource:source useFrontCamera:useFrontCamera isActiveUpdated:isActiveUpdated];
 
         AVCaptureDevice *selectedCamera = nil;
 

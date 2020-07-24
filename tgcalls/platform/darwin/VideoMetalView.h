@@ -18,11 +18,14 @@
 @property(nonatomic, getter=isEnabled) BOOL enabled;
 @property(nonatomic, nullable) NSValue* rotationOverride;
 
+@property (nonatomic, readwrite) int internalOrientation;
+
 - (void)setSize:(CGSize)size;
 - (void)renderFrame:(nullable RTCVideoFrame *)frame;
 
 - (std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)getSink;
 - (void)setOnFirstFrameReceived:(void (^ _Nullable)())onFirstFrameReceived;
+- (void)internalSetOnOrientationUpdated:(void (^ _Nullable)(int))onOrientationUpdated;
 
 @end
 

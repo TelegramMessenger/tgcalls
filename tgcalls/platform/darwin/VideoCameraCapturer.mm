@@ -25,6 +25,8 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 @interface VideoCameraCapturer () <AVCaptureVideoDataOutputSampleBufferDelegate> {
     rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _source;
     
+    bool _isFrontCamera;
+    
     dispatch_queue_t _frameQueue;
     AVCaptureDevice *_currentDevice;
     BOOL _hasRetriedOnFatalError;
@@ -37,6 +39,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     FourCharCode _outputPixelFormat;
     RTCVideoRotation _rotation;
     UIDeviceOrientation _orientation;
+    bool _didAdjustMirroring;
     
     void (^_isActiveUpdated)(bool);
     bool _isActiveValue;
@@ -48,10 +51,11 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 
 @implementation VideoCameraCapturer
 
-- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source isActiveUpdated:(void (^)(bool))isActiveUpdated {
+- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source useFrontCamera:(bool)useFrontCamera isActiveUpdated:(void (^)(bool))isActiveUpdated {
     self = [super init];
     if (self != nil) {
         _source = source;
+        _isFrontCamera = useFrontCamera;
         _isActiveValue = true;
         _inForegroundValue = true;
         _isPaused = false;
@@ -214,6 +218,19 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
            fromConnection:(AVCaptureConnection *)connection {
     NSParameterAssert(captureOutput == _videoDataOutput);
+    
+    if (!_didAdjustMirroring) {
+        _didAdjustMirroring = true;
+        
+        if ([connection isVideoMirroringSupported] && [connection isVideoOrientationSupported]) {
+            connection.videoMirrored = YES;
+            if (_isFrontCamera) {
+                [connection setVideoOrientation:AVCaptureVideoOrientationLandscapeRight];
+            } else {
+                [connection setVideoOrientation:AVCaptureVideoOrientationLandscapeLeft];
+            }
+        }
+    }
     
     if (CMSampleBufferGetNumSamples(sampleBuffer) != 1 || !CMSampleBufferIsValid(sampleBuffer) ||
         !CMSampleBufferDataIsReady(sampleBuffer)) {

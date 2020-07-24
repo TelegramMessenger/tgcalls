@@ -21,26 +21,44 @@
 #import "base/RTCVideoFrameBuffer.h"
 #import "components/video_frame_buffer/RTCCVPixelBuffer.h"
 #include "sdk/objc/native/api/video_frame.h"
+#import "rtc_base/time_utils.h"
+#include "sdk/objc/native/src/objc_frame_buffer.h"
+
+namespace {
+
+static RTCVideoFrame *customToObjCVideoFrame(const webrtc::VideoFrame &frame, RTCVideoRotation &rotation) {
+    rotation = RTCVideoRotation(frame.rotation());
+  RTCVideoFrame *videoFrame =
+      [[RTCVideoFrame alloc] initWithBuffer:webrtc::ToObjCVideoFrameBuffer(frame.video_frame_buffer())
+                                   rotation:RTCVideoRotation_90
+                                timeStampNs:frame.timestamp_us() * rtc::kNumNanosecsPerMicrosec];
+  videoFrame.timeStamp = frame.timestamp();
+
+  return videoFrame;
+}
 
 class VideoRendererAdapterImpl : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
  public:
-    VideoRendererAdapterImpl(void (^frameReceived)(CGSize, RTCVideoFrame *)) {
+    VideoRendererAdapterImpl(void (^frameReceived)(CGSize, RTCVideoFrame *, RTCVideoRotation)) {
         _frameReceived = [frameReceived copy];
     }
     
     void OnFrame(const webrtc::VideoFrame& nativeVideoFrame) override {
-        RTCVideoFrame* videoFrame = NativeToObjCVideoFrame(nativeVideoFrame);
+        RTCVideoRotation rotation = RTCVideoRotation_90;
+        RTCVideoFrame* videoFrame = customToObjCVideoFrame(nativeVideoFrame, rotation);
         
-        CGSize currentSize = (videoFrame.rotation % 180 == 0) ? CGSizeMake(videoFrame.width, videoFrame.height) : CGSizeMake(videoFrame.height, videoFrame.width);
+        CGSize currentSize = CGSizeMake(videoFrame.height, videoFrame.width);
         
         if (_frameReceived) {
-            _frameReceived(currentSize, videoFrame);
+            _frameReceived(currentSize, videoFrame, rotation);
         }
     }
     
 private:
-    void (^_frameReceived)(CGSize, RTCVideoFrame *);
+    void (^_frameReceived)(CGSize, RTCVideoFrame *, RTCVideoRotation);
 };
+
+}
 
 static CGSize scaleToFillSize(CGSize size, CGSize maxSize) {
     if (size.width < 1.0f) {
@@ -96,6 +114,8 @@ static CGSize scaleToFillSize(CGSize size, CGSize maxSize) {
     
     void (^_onFirstFrameReceived)();
     bool _firstFrameReceivedReported;
+    
+    void (^_onOrientationUpdated)(int);
     
     std::shared_ptr<VideoRendererAdapterImpl> _sink;
 }
@@ -182,7 +202,7 @@ static CGSize scaleToFillSize(CGSize size, CGSize maxSize) {
         [self setupGL];
     }
     
-    _sink.reset(new VideoRendererAdapterImpl(^(CGSize size, RTCVideoFrame *videoFrame) {
+    _sink.reset(new VideoRendererAdapterImpl(^(CGSize size, RTCVideoFrame *videoFrame, RTCVideoRotation rotation) {
         dispatch_async(dispatch_get_main_queue(), ^{
             __strong GLVideoView *strongSelf = weakSelf;
             if (strongSelf == nil) {
@@ -192,6 +212,23 @@ static CGSize scaleToFillSize(CGSize size, CGSize maxSize) {
                 strongSelf->_currentSize = size;
                 [strongSelf setSize:size];
             }
+            
+            int mappedValue = 0;
+            switch (rotation) {
+                case RTCVideoRotation_90:
+                    mappedValue = 0;
+                    break;
+                case RTCVideoRotation_180:
+                    mappedValue = 1;
+                    break;
+                case RTCVideoRotation_270:
+                    mappedValue = 2;
+                    break;
+                default:
+                    mappedValue = 0;
+                    break;
+            }
+            [strongSelf setInternalOrientation:mappedValue];
             
             [strongSelf renderFrame:videoFrame];
         });
@@ -365,6 +402,17 @@ static CGSize scaleToFillSize(CGSize size, CGSize maxSize) {
 - (void)setOnFirstFrameReceived:(void (^ _Nullable)())onFirstFrameReceived {
     _onFirstFrameReceived = [onFirstFrameReceived copy];
     _firstFrameReceivedReported = false;
+}
+
+- (void)setInternalOrientation:(int)internalOrientation {
+    _internalOrientation = internalOrientation;
+    if (_onOrientationUpdated) {
+        _onOrientationUpdated(internalOrientation);
+    }
+}
+
+- (void)internalSetOnOrientationUpdated:(void (^ _Nullable)(int))onOrientationUpdated {
+    _onOrientationUpdated = [onOrientationUpdated copy];
 }
 
 @end
