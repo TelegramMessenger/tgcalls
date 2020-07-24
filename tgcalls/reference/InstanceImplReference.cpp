@@ -261,6 +261,8 @@ public:
     void start() {
         const auto weak = std::weak_ptr<InstanceImplReferenceInternal>(shared_from_this());
         
+        PlatformInterface::SharedInstance()->configurePlatformAudio();
+        
         _signalingConnection.reset(new EncryptedConnection(
             EncryptedConnection::Type::Signaling,
             _encryptionKey,

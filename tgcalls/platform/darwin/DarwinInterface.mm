@@ -19,8 +19,8 @@
 namespace tgcalls {
 
 void DarwinInterface::configurePlatformAudio() {
-    //[RTCAudioSession sharedInstance].useManualAudio = true;
-    //[RTCAudioSession sharedInstance].isAudioEnabled = true;
+    [RTCAudioSession sharedInstance].useManualAudio = true;
+    [RTCAudioSession sharedInstance].isAudioEnabled = true;
 }
 
 std::unique_ptr<webrtc::VideoEncoderFactory> DarwinInterface::makeVideoEncoderFactory() {
