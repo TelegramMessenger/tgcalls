@@ -32,6 +32,7 @@ void VideoCaptureInterfaceObject::switchCamera() {
 			this->_isActiveUpdated(isActive);
 		}
 	});
+    _videoCapturer->setIsEnabled(_isVideoEnabled);
 }
 
 void VideoCaptureInterfaceObject::setIsVideoEnabled(bool isVideoEnabled) {
