@@ -26,6 +26,8 @@ constexpr auto kMaxFullPacketSize = 1500; // IP_PACKET_SIZE from webrtc.
 // Max seen turn_overhead is around 36.
 constexpr auto kMaxOuterPacketSize = kMaxFullPacketSize - 48;
 
+constexpr auto kMaxSignalingPacketSize = 16 * 1024;
+
 constexpr auto kServiceCauseAcks = 1;
 constexpr auto kServiceCauseResend = 2;
 
@@ -163,7 +165,12 @@ absl::optional<uint32_t> EncryptedConnection::computeNextSeq(
 }
 
 size_t EncryptedConnection::packetLimit() const {
-	return kMaxOuterPacketSize;
+    switch (_type) {
+        case Type::Signaling:
+            return kMaxSignalingPacketSize;
+        default:
+            return kMaxOuterPacketSize;
+    }
 }
 
 bool EncryptedConnection::enoughSpaceInPacket(const rtc::CopyOnWriteBuffer &buffer, size_t amount) const {
