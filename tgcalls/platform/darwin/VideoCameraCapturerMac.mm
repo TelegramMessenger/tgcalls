@@ -372,8 +372,10 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     }
     AVCaptureConnection *connection = [_videoDataOutput connectionWithMediaType:AVMediaTypeVideo];
     
-    [connection setVideoMirrored:YES];
-    [connection setAutomaticallyAdjustsVideoMirroring:NO];
+    
+    if ([connection isVideoMirroringSupported]) {
+        [connection setVideoMirrored:YES];
+    }
 }
 
 #pragma mark - Private, called inside capture queue

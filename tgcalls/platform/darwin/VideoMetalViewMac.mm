@@ -53,6 +53,7 @@ private:
     
     void (^_onFirstFrameReceived)();
     bool _firstFrameReceivedReported;
+    void (^_onOrientationUpdated)(int);
 
 }
 
@@ -260,6 +261,18 @@ private:
 - (void)setOnFirstFrameReceived:(void (^ _Nullable)())onFirstFrameReceived {
     _onFirstFrameReceived = [onFirstFrameReceived copy];
     _firstFrameReceivedReported = false;
+}
+
+- (void)setInternalOrientation:(int)internalOrientation {
+    if (_internalOrientation != internalOrientation) {
+        _internalOrientation = internalOrientation;
+        if (_onOrientationUpdated) {
+            _onOrientationUpdated(internalOrientation);
+        }
+    }
+}
+- (void)internalSetOnOrientationUpdated:(void (^ _Nullable)(int))onOrientationUpdated {
+    _onOrientationUpdated = [onOrientationUpdated copy];
 }
 
 @end

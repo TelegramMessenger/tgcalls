@@ -42,12 +42,14 @@
     self = [super init];
     if (self != nil) {
         assert([NSThread isMainThread]);
-
+    #ifdef WEBRTC_IOS
         _videoCapturer = [[VideoCameraCapturer alloc] initWithSource:source useFrontCamera:useFrontCamera isActiveUpdated:isActiveUpdated];
-
+    #else
+        _videoCapturer = [[VideoCameraCapturer alloc] initWithSource:source isActiveUpdated:isActiveUpdated];
+    #endif
         AVCaptureDevice *selectedCamera = nil;
 
-#if WEBRTC_IOS
+#ifdef WEBRTC_IOS
         AVCaptureDevice *frontCamera = nil;
         AVCaptureDevice *backCamera = nil;
         for (AVCaptureDevice *device in [VideoCameraCapturer captureDevices]) {
