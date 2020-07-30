@@ -37,8 +37,7 @@ public:
 
 private:
     std::unique_ptr<ThreadLocalObject<InstanceImplReferenceInternal>> internal_;
-	std::function<void(State, VideoState)> onStateUpdated_;
-	std::function<void(int)> onSignalBarsUpdated_;
+
 };
 
 } // namespace tgcalls

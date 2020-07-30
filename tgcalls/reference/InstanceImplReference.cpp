@@ -234,11 +234,12 @@ public:
     _videoState(VideoState::Possible) {
         assert(getMediaThread()->IsCurrent());
         
-        __unused static const auto onceToken = [] {
+        static const auto onceToken = [] {
             rtc::LogMessage::LogToDebug(rtc::LS_INFO);
             rtc::LogMessage::SetLogToStderr(true);
             return 0;
         }();
+        (void)onceToken;
         
         webrtc::field_trial::InitFieldTrialsFromString(
             "WebRTC-Audio-SendSideBwe/Enabled/"
@@ -862,9 +863,7 @@ private:
     std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _currentSink;
 };
 
-InstanceImplReference::InstanceImplReference(Descriptor &&descriptor) :
-onStateUpdated_(std::move(descriptor.stateUpdated)),
-onSignalBarsUpdated_(std::move(descriptor.signalBarsUpdated)) {
+InstanceImplReference::InstanceImplReference(Descriptor &&descriptor) {
 	internal_.reset(new ThreadLocalObject<InstanceImplReferenceInternal>(getMediaThread(), [descriptor = std::move(descriptor)]() {
         return new InstanceImplReferenceInternal(
             descriptor.encryptionKey,
