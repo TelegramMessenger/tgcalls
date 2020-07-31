@@ -33,7 +33,7 @@ static RTCVideoFrame *customToObjCVideoFrame(const webrtc::VideoFrame &frame, RT
     rotation = RTCVideoRotation(frame.rotation());
     RTCVideoFrame *videoFrame =
     [[RTCVideoFrame alloc] initWithBuffer:webrtc::ToObjCVideoFrameBuffer(frame.video_frame_buffer())
-                                 rotation:RTCVideoRotation_0
+                                 rotation:rotation
                               timeStampNs:frame.timestamp_us() * rtc::kNumNanosecsPerMicrosec];
     videoFrame.timeStamp = frame.timestamp();
     
@@ -50,8 +50,8 @@ public:
         RTCVideoRotation rotation = RTCVideoRotation_0;
         RTCVideoFrame* videoFrame = customToObjCVideoFrame(nativeVideoFrame, rotation);
         
-        CGSize currentSize = CGSizeMake(videoFrame.height, videoFrame.width);
-        
+        CGSize currentSize = (videoFrame.rotation % 180 == 0) ? CGSizeMake(videoFrame.width, videoFrame.height) : CGSizeMake(videoFrame.height, videoFrame.width);
+
         if (_frameReceived) {
             _frameReceived(currentSize, videoFrame, rotation);
         }
@@ -224,10 +224,6 @@ private:
     [renderer drawFrame:videoFrame];
     _lastFrameTimeNs = videoFrame.timeStampNs;
     
-    if (!_firstFrameReceivedReported && _onFirstFrameReceived) {
-        _firstFrameReceivedReported = true;
-        _onFirstFrameReceived();
-    }
 }
 
 - (void)mtkView:(MTKView *)view drawableSizeWillChange:(CGSize)size {
@@ -289,6 +285,10 @@ private:
 - (void)renderFrame:(nullable RTCVideoFrame *)frame {
     assert([NSThread isMainThread]);
 
+    if (!_firstFrameReceivedReported && _onFirstFrameReceived) {
+        _firstFrameReceivedReported = true;
+        _onFirstFrameReceived();
+    }
     
     if (!self.isEnabled) {
         return;
