@@ -2,6 +2,7 @@
 #define TGCALLS_THREAD_LOCAL_OBJECT_H
 
 #include "rtc_base/thread.h"
+#include "rtc_base/location.h"
 
 #include <functional>
 #include <memory>
@@ -30,8 +31,8 @@ public:
 	}
 
 	template <typename FunctorT>
-	void perform(FunctorT &&functor) {
-		_thread->PostTask(RTC_FROM_HERE, [valueHolder = _valueHolder.get(), f = std::forward<FunctorT>(functor)]() mutable {
+	void perform(const rtc::Location& posted_from, FunctorT &&functor) {
+		_thread->PostTask(posted_from, [valueHolder = _valueHolder.get(), f = std::forward<FunctorT>(functor)]() mutable {
 			assert(valueHolder->_value != nullptr);
 			f(valueHolder->_value.get());
 		});

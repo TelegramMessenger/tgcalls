@@ -64,6 +64,10 @@ void LogSinkImpl::OnLogMessage(const std::string &message) {
 		<< ":" << timeinfo.tm_sec
 		<< ":" << milliseconds
 		<< " " << message;
+    
+#if DEBUG
+    printf("%d-%d-%d %d:%d:%d:%d %s\n", timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec, milliseconds, message.c_str());
+#endif
 }
 
 } // namespace tgcalls

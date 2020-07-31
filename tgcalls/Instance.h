@@ -96,6 +96,7 @@ struct Config {
 	std::wstring logPath;
 #endif
 	int maxApiLayer = 0;
+    float preferredAspectRatio;
 };
 
 struct EncryptionKey {
@@ -123,6 +124,7 @@ enum class VideoState {
     Possible,
     OutgoingRequested,
     IncomingRequested,
+    IncomingRequestedAndActive,
     Active
 };
 

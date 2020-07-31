@@ -5,6 +5,7 @@
 #include <memory>
 #include "ThreadLocalObject.h"
 #include "api/media_stream_interface.h"
+#include "platform/PlatformInterface.h"
 
 namespace tgcalls {
 
@@ -17,12 +18,13 @@ public:
 
 	void switchCamera();
 	void setIsVideoEnabled(bool isVideoEnabled);
+    void setPreferredAspectRatio(float aspectRatio);
 	void setVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
 	void setIsActiveUpdated(std::function<void (bool)> isActiveUpdated);
 
 public:
 	rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _videoSource;
-	std::unique_ptr<VideoCapturerInterface> _videoCapturer;
+    std::shared_ptr<VideoCapturer> _platformCapturer;
 
 private:
 	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _currentSink;
@@ -38,6 +40,7 @@ public:
 
 	void switchCamera() override;
 	void setIsVideoEnabled(bool isVideoEnabled) override;
+    void setPreferredAspectRatio(float aspectRatio) override;
 	void setVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) override;
 
 	ThreadLocalObject<VideoCaptureInterfaceObject> *object();

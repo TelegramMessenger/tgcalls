@@ -3,6 +3,7 @@
 #include <memory>
 #include "api/scoped_refptr.h"
 #include "rtc_base/thread.h"
+#include "rtc_base/logging.h"
 #include "api/peer_connection_interface.h"
 #include "api/task_queue/default_task_queue_factory.h"
 #include "media/engine/webrtc_media_engine.h"
@@ -20,6 +21,7 @@
 #include "NetworkManager.h"
 #include "VideoCaptureInterfaceImpl.h"
 #include "platform/PlatformInterface.h"
+#include "LogSinkImpl.h"
 
 namespace tgcalls {
 namespace {
@@ -208,47 +210,49 @@ struct StatsData {
     int32_t packetsLost = 0;
 };
 
+struct IceCandidateData {
+    std::string sdpMid;
+    int mid;
+    std::string sdp;
+    
+    IceCandidateData(std::string _sdpMid, int _mid, std::string _sdp) :
+    sdpMid(_sdpMid),
+    mid(_mid),
+    sdp(_sdp) {
+    }
+};
+
 } //namespace
 
 class InstanceImplReferenceInternal final : public std::enable_shared_from_this<InstanceImplReferenceInternal> {
 public:
     InstanceImplReferenceInternal(
-        EncryptionKey encryptionKey,
-        std::vector<RtcServer> const &rtcServers,
-        bool enableP2P,
-        std::function<void(State, VideoState)> stateUpdated,
-        std::function<void(int)> signalBarsUpdated,
-        std::function<void(const std::vector<uint8_t> &)> signalingDataEmitted,
-        std::function<void(bool)> remoteVideoIsActiveUpdated,
-        std::shared_ptr<VideoCaptureInterface> videoCapture
+        const Descriptor &descriptor
     ) :
-    _encryptionKey(encryptionKey),
-    _rtcServers(rtcServers),
-    _enableP2P(enableP2P),
-    _stateUpdated(stateUpdated),
-    _signalBarsUpdated(signalBarsUpdated),
-    _signalingDataEmitted(signalingDataEmitted),
-    _remoteVideoIsActiveUpdated(remoteVideoIsActiveUpdated),
-    _videoCapture(videoCapture),
+    _encryptionKey(descriptor.encryptionKey),
+    _rtcServers(descriptor.rtcServers),
+    _enableP2P(descriptor.config.enableP2P),
+    _stateUpdated(descriptor.stateUpdated),
+    _signalBarsUpdated(descriptor.signalBarsUpdated),
+    _signalingDataEmitted(descriptor.signalingDataEmitted),
+    _remoteVideoIsActiveUpdated(descriptor.remoteVideoIsActiveUpdated),
+    _videoCapture(descriptor.videoCapture),
     _state(State::Reconnecting),
-    _videoState(VideoState::Possible) {
+    _videoState(VideoState::Possible),
+    _localPreferredVideoAspectRatio(descriptor.config.preferredAspectRatio) {
         assert(getMediaThread()->IsCurrent());
         
-        static const auto onceToken = [] {
-            rtc::LogMessage::LogToDebug(rtc::LS_INFO);
-            rtc::LogMessage::SetLogToStderr(true);
-            return 0;
-        }();
-        (void)onceToken;
+        rtc::LogMessage::LogToDebug(rtc::LS_INFO);
+        rtc::LogMessage::SetLogToStderr(false);
         
-        webrtc::field_trial::InitFieldTrialsFromString(
+        /*webrtc::field_trial::InitFieldTrialsFromString(
             "WebRTC-Audio-SendSideBwe/Enabled/"
             "WebRTC-Audio-Allocation/min:6kbps,max:32kbps/"
             "WebRTC-Audio-OpusMinPacketLossRate/Enabled-1/"
             "WebRTC-FlexFEC-03/Enabled/"
             "WebRTC-FlexFEC-03-Advertised/Enabled/"
             "WebRTC-Audio-BitrateAdaptation/Enabled/WebRTC-Audio-FecAdaptation/Enabled/"
-        );
+        );*/
         
         _streamIds.push_back("stream");
     }
@@ -329,11 +333,11 @@ public:
         
         webrtc::PeerConnectionInterface::RTCConfiguration config;
         config.sdp_semantics = webrtc::SdpSemantics::kUnifiedPlan;
-        config.continual_gathering_policy = webrtc::PeerConnectionInterface::ContinualGatheringPolicy::GATHER_CONTINUALLY;
-        config.audio_jitter_buffer_fast_accelerate = true;
+        //config.continual_gathering_policy = webrtc::PeerConnectionInterface::ContinualGatheringPolicy::GATHER_CONTINUALLY;
+        /*config.audio_jitter_buffer_fast_accelerate = true;
         config.prioritize_most_likely_ice_candidate_pairs = true;
         config.presume_writable_when_fully_relayed = true;
-        config.audio_jitter_buffer_enable_rtx_handling = true;
+        config.audio_jitter_buffer_enable_rtx_handling = true;*/
         
         for (auto &server : _rtcServers) {
             if (server.isTurn) {
@@ -425,6 +429,12 @@ public:
     
     void requestVideo(std::shared_ptr<VideoCaptureInterface> videoCapture) {
         _videoCapture = videoCapture;
+        
+        if (_preferredAspectRatio > 0.01f) {
+            VideoCaptureInterfaceObject *videoCaptureImpl = GetVideoCaptureAssumingSameThread(_videoCapture.get());
+            videoCaptureImpl->setPreferredAspectRatio(_preferredAspectRatio);
+        }
+        
         if (_videoState == VideoState::Possible) {
             _videoState = VideoState::OutgoingRequested;
 
@@ -443,6 +453,13 @@ public:
     }
     
     void receiveSignalingData(const std::vector<uint8_t> &data) {
+        if (true) {
+            rtc::CopyOnWriteBuffer packet;
+            packet.SetData(data.data(), data.size());
+            processSignalingData(packet);
+            return;
+        }
+        
         if (const auto packet = _signalingConnection->handleIncomingPacket((const char *)data.data(), data.size())) {
             const auto mainMessage = &packet->main.message.data;
             if (const auto signalingData = absl::get_if<UnstructuredDataMessage>(mainMessage)) {
@@ -484,13 +501,8 @@ public:
             if (!reader.ReadString(&sdpMid, sdpMidLength)) {
                 return;
             }
-            webrtc::SdpParseError error;
-            webrtc::IceCandidateInterface *iceCandidate = webrtc::CreateIceCandidate(sdpMid, mid, sdp, &error);
-            if (iceCandidate != nullptr) {
-                std::unique_ptr<webrtc::IceCandidateInterface> nativeCandidate = std::unique_ptr<webrtc::IceCandidateInterface>(iceCandidate);
-                _peerConnection->AddIceCandidate(std::move(nativeCandidate), [](auto error) {
-                });
-            }
+            _pendingRemoteIceCandidates.push_back(std::make_shared<IceCandidateData>(sdpMid, mid, sdp));
+            processRemoteIceCandidatesIfReady();
         } else if (command == 2) {
             uint32_t sdpLength = 0;
             if (!reader.ReadUInt32(&sdpLength)) {
@@ -522,6 +534,8 @@ public:
                     });
                 }));
                 _peerConnection->SetRemoteDescription(observer, sessionDescription);
+                _didSetRemoteDescription = true;
+                processRemoteIceCandidatesIfReady();
             }
         } else if (command == 3) {
             uint32_t sdpLength = 0;
@@ -546,6 +560,8 @@ public:
                 rtc::scoped_refptr<SetSessionDescriptionObserverImpl> observer(new rtc::RefCountedObject<SetSessionDescriptionObserverImpl>([]() {
                 }));
                 _peerConnection->SetRemoteDescription(observer, sessionDescription);
+                _didSetRemoteDescription = true;
+                processRemoteIceCandidatesIfReady();
             }
         } else if (command == 4) {
             uint8_t value = 0;
@@ -562,6 +578,16 @@ public:
                 _stateUpdated(_state, _videoState);
                 
                 beginSendingVideo();
+            }
+        } else if (command == 6) {
+            uint32_t value = 0;
+            if (!reader.ReadUInt32(&value)) {
+                return;
+            }
+            _preferredAspectRatio = ((float)value) / 1000.0f;
+            if (_videoCapture) {
+                VideoCaptureInterfaceObject *videoCaptureImpl = GetVideoCaptureAssumingSameThread(_videoCapture.get());
+                videoCaptureImpl->setPreferredAspectRatio(_preferredAspectRatio);
             }
         }
     }
@@ -642,12 +668,22 @@ private:
         rtc::CopyOnWriteBuffer packet;
         packet.SetData(buffer.Data(), buffer.Length());
         
+        if (true) {
+            std::vector<uint8_t> result;
+            result.resize(buffer.Length());
+            memcpy(result.data(), buffer.Data(), buffer.Length());
+            _signalingDataEmitted(result);
+            return;
+        }
+        
         if (const auto prepared = _signalingConnection->prepareForSending(Message{ UnstructuredDataMessage{ packet } })) {
             _signalingDataEmitted(prepared->bytes);
         }
     }
     
     void emitIceCandidate(std::string sdp, int mid, std::string sdpMid) {
+        RTC_LOG(LS_INFO) << "emitIceCandidate " << sdp << ", " << mid << ", " << sdpMid;
+        
         rtc::ByteBufferWriter writer;
         writer.WriteUInt8(1);
         writer.WriteUInt32((uint32_t)sdp.size());
@@ -763,6 +799,33 @@ private:
         emitSignaling(writer);
     }
     
+    void emitVideoParameters() {
+        if (_localPreferredVideoAspectRatio > 0.01f) {
+            rtc::ByteBufferWriter writer;
+            writer.WriteUInt8(6);
+            writer.WriteUInt32((uint32_t)(_localPreferredVideoAspectRatio * 1000.0f));
+            
+            emitSignaling(writer);
+        }
+    }
+    
+    void processRemoteIceCandidatesIfReady() {
+        if (_pendingRemoteIceCandidates.size() == 0 || !_didSetRemoteDescription) {
+            return;
+        }
+        
+        for (auto &it : _pendingRemoteIceCandidates) {
+            webrtc::SdpParseError error;
+            webrtc::IceCandidateInterface *iceCandidate = webrtc::CreateIceCandidate(it->sdpMid, it->mid, it->sdp, &error);
+            if (iceCandidate != nullptr) {
+                std::unique_ptr<webrtc::IceCandidateInterface> nativeCandidate = std::unique_ptr<webrtc::IceCandidateInterface>(iceCandidate);
+                _peerConnection->AddIceCandidate(std::move(nativeCandidate), [](auto error) {
+                });
+            }
+        }
+        _pendingRemoteIceCandidates.clear();
+    }
+    
     void updateIsConnected(bool isConnected) {
         if (isConnected) {
             _state = State::Established;
@@ -831,6 +894,8 @@ private:
         if (_didConnectOnce && _encryptionKey.isOutgoing) {
             emitOffer();
         }
+        
+        emitVideoParameters();
     }
     
 private:
@@ -843,6 +908,8 @@ private:
     std::function<void(bool)> _remoteVideoIsActiveUpdated;
     std::shared_ptr<VideoCaptureInterface> _videoCapture;
     std::unique_ptr<EncryptedConnection> _signalingConnection;
+    float _localPreferredVideoAspectRatio = 0.0f;
+    float _preferredAspectRatio = 0.0f;
     
     State _state;
     VideoState _videoState;
@@ -861,53 +928,52 @@ private:
     rtc::scoped_refptr<webrtc::VideoTrackInterface> _remoteVideoTrack;
     
     std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _currentSink;
+    
+    bool _didSetRemoteDescription = false;
+    std::vector<std::shared_ptr<IceCandidateData>> _pendingRemoteIceCandidates;
 };
 
-InstanceImplReference::InstanceImplReference(Descriptor &&descriptor) {
+InstanceImplReference::InstanceImplReference(Descriptor &&descriptor) :
+    logSink_(std::make_unique<LogSinkImpl>(descriptor.config)) {
+    rtc::LogMessage::AddLogToStream(logSink_.get(), rtc::LS_INFO);
+        
 	internal_.reset(new ThreadLocalObject<InstanceImplReferenceInternal>(getMediaThread(), [descriptor = std::move(descriptor)]() {
         return new InstanceImplReferenceInternal(
-            descriptor.encryptionKey,
-            descriptor.rtcServers,
-            descriptor.config.enableP2P,
-            descriptor.stateUpdated,
-            descriptor.signalBarsUpdated,
-            descriptor.signalingDataEmitted,
-            descriptor.remoteVideoIsActiveUpdated,
-            descriptor.videoCapture
+            descriptor
         );
     }));
-    internal_->perform([](InstanceImplReferenceInternal *internal){
+    internal_->perform(RTC_FROM_HERE, [](InstanceImplReferenceInternal *internal){
         internal->start();
     });
 }
 
 InstanceImplReference::~InstanceImplReference() {
-	
+	rtc::LogMessage::RemoveLogToStream(logSink_.get());
 }
 
 void InstanceImplReference::setNetworkType(NetworkType networkType) {
 }
 
 void InstanceImplReference::setMuteMicrophone(bool muteMicrophone) {
-    internal_->perform([muteMicrophone = muteMicrophone](InstanceImplReferenceInternal *internal) {
+    internal_->perform(RTC_FROM_HERE, [muteMicrophone = muteMicrophone](InstanceImplReferenceInternal *internal) {
         internal->setMuteMicrophone(muteMicrophone);
     });
 }
 
 void InstanceImplReference::receiveSignalingData(const std::vector<uint8_t> &data) {
-    internal_->perform([data](InstanceImplReferenceInternal *internal) {
+    internal_->perform(RTC_FROM_HERE, [data](InstanceImplReferenceInternal *internal) {
         internal->receiveSignalingData(data);
     });
 }
 
 void InstanceImplReference::requestVideo(std::shared_ptr<VideoCaptureInterface> videoCapture) {
-    internal_->perform([videoCapture](InstanceImplReferenceInternal *internal) {
+    internal_->perform(RTC_FROM_HERE, [videoCapture](InstanceImplReferenceInternal *internal) {
         internal->requestVideo(videoCapture);
     });
 }
 
 void InstanceImplReference::setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
-    internal_->perform([sink](InstanceImplReferenceInternal *internal) {
+    internal_->perform(RTC_FROM_HERE, [sink](InstanceImplReferenceInternal *internal) {
         internal->setIncomingVideoOutput(sink);
     });
 }
@@ -966,7 +1032,7 @@ FinalState InstanceImplReference::stop() {
 	auto result = FinalState();
 
 	result.persistentState = getPersistentState();
-	result.debugLog = "";
+	result.debugLog = logSink_->result();
 	result.trafficStats = getTrafficStats();
 	result.isRatingSuggested = false;
 

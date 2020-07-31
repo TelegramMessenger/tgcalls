@@ -10,6 +10,18 @@ namespace tgcalls {
 
 class VideoCapturerInterface;
 
+class VideoCapturer {
+protected:
+    VideoCapturer() = default;
+    
+public:
+    virtual ~VideoCapturer() = default;
+    
+    virtual void setPreferredCaptureAspectRatio(float aspectRatio) = 0;
+    virtual void setVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) = 0;
+    virtual std::shared_ptr<VideoCapturerInterface> getVideoCapturerInterface() = 0;
+};
+
 class PlatformInterface {
 public:
 	static PlatformInterface *SharedInstance();
@@ -17,9 +29,13 @@ public:
 
 	virtual void configurePlatformAudio() {
 	}
+    virtual float getDisplayAspectRatio() {
+        return 0.0f;
+    }
 	virtual std::unique_ptr<webrtc::VideoEncoderFactory> makeVideoEncoderFactory() = 0;
 	virtual std::unique_ptr<webrtc::VideoDecoderFactory> makeVideoDecoderFactory() = 0;
 	virtual bool supportsEncoding(const std::string &codecName) = 0;
+    virtual std::shared_ptr<VideoCapturer> makePlatformVideoCapturer(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, bool useFrontCamera, std::function<void(bool)> isActiveUpdated) = 0;
 	virtual rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> makeVideoSource(rtc::Thread *signalingThread, rtc::Thread *workerThread) = 0;
 	virtual std::unique_ptr<VideoCapturerInterface> makeVideoCapturer(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, bool useFrontCamera, std::function<void(bool)> isActiveUpdated) = 0;
 

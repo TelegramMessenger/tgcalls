@@ -43,7 +43,8 @@ _rtcServers(std::move(descriptor.rtcServers)),
 _videoCapture(std::move(descriptor.videoCapture)),
 _stateUpdated(std::move(descriptor.stateUpdated)),
 _remoteVideoIsActiveUpdated(std::move(descriptor.remoteVideoIsActiveUpdated)),
-_signalingDataEmitted(std::move(descriptor.signalingDataEmitted)) {
+_signalingDataEmitted(std::move(descriptor.signalingDataEmitted)),
+_localPreferredVideoAspectRatio(descriptor.config.preferredAspectRatio) {
 	assert(_thread->IsCurrent());
 
 	_sendSignalingMessage = [=](const Message &message) {
@@ -54,7 +55,7 @@ _signalingDataEmitted(std::move(descriptor.signalingDataEmitted)) {
 		return uint32_t(0);
 	};
 	_sendTransportMessage = [=](Message &&message) {
-		_networkManager->perform([message = std::move(message)](NetworkManager *networkManager) {
+		_networkManager->perform(RTC_FROM_HERE, [message = std::move(message)](NetworkManager *networkManager) {
 			networkManager->sendMessage(message);
 		});
 	};
@@ -123,7 +124,7 @@ void Manager::start() {
 					strong->_state = mappedState;
 					strong->_stateUpdated(mappedState, strong->_videoState);
 
-					strong->_mediaManager->perform([=](MediaManager *mediaManager) {
+					strong->_mediaManager->perform(RTC_FROM_HERE, [=](MediaManager *mediaManager) {
 						mediaManager->setIsConnected(state.isReadyToSendData);
 						});
 					});
@@ -139,7 +140,7 @@ void Manager::start() {
 			[=](int delayMs, int cause) {
 				const auto task = [=] {
 					if (const auto strong = weak.lock()) {
-						strong->_networkManager->perform([=](NetworkManager *networkManager) {
+						strong->_networkManager->perform(RTC_FROM_HERE, [=](NetworkManager *networkManager) {
 							networkManager->sendTransportService(cause);
 							});
 					}
@@ -152,7 +153,7 @@ void Manager::start() {
 			});
 	}));
 	bool isOutgoing = _encryptionKey.isOutgoing;
-	_mediaManager.reset(new ThreadLocalObject<MediaManager>(getMediaThread(), [weak, isOutgoing, thread, sendSignalingMessage, videoCapture = _videoCapture]() {
+	_mediaManager.reset(new ThreadLocalObject<MediaManager>(getMediaThread(), [weak, isOutgoing, thread, sendSignalingMessage, videoCapture = _videoCapture, localPreferredVideoAspectRatio = _localPreferredVideoAspectRatio]() {
 		return new MediaManager(
 			getMediaThread(),
 			isOutgoing,
@@ -166,7 +167,8 @@ void Manager::start() {
 					}
 					strong->_sendTransportMessage(std::move(message));
 				});
-			});
+			},
+            localPreferredVideoAspectRatio);
 	}));
 }
 
@@ -182,29 +184,29 @@ void Manager::receiveSignalingData(const std::vector<uint8_t> &data) {
 void Manager::receiveMessage(DecryptedMessage &&message) {
 	const auto data = &message.message.data;
 	if (const auto candidatesList = absl::get_if<CandidatesListMessage>(data)) {
-		_networkManager->perform([message = std::move(message)](NetworkManager *networkManager) mutable {
+		_networkManager->perform(RTC_FROM_HERE, [message = std::move(message)](NetworkManager *networkManager) mutable {
 			networkManager->receiveSignalingMessage(std::move(message));
 		});
 	} else if (const auto videoFormats = absl::get_if<VideoFormatsMessage>(data)) {
-		_mediaManager->perform([message = std::move(message)](MediaManager *mediaManager) mutable {
+		_mediaManager->perform(RTC_FROM_HERE, [message = std::move(message)](MediaManager *mediaManager) mutable {
 			mediaManager->receiveMessage(std::move(message));
 		});
 	} else if (absl::get_if<RequestVideoMessage>(data)) {
 		if (_videoState == VideoState::Possible) {
-            _videoState = VideoState::IncomingRequested;
+            _videoState = VideoState::IncomingRequestedAndActive;
             _stateUpdated(_state, _videoState);
 		} else if (_videoState == VideoState::OutgoingRequested) {
             _videoState = VideoState::Active;
             _stateUpdated(_state, _videoState);
 
-            _mediaManager->perform([videoCapture = _videoCapture](MediaManager *mediaManager) {
+            _mediaManager->perform(RTC_FROM_HERE, [videoCapture = _videoCapture](MediaManager *mediaManager) {
                 mediaManager->setSendVideo(videoCapture);
             });
         }
     } else if (const auto remoteVideoIsActive = absl::get_if<RemoteVideoIsActiveMessage>(data)) {
 		_remoteVideoIsActiveUpdated(remoteVideoIsActive->active);
 	} else {
-		_mediaManager->perform([=, message = std::move(message)](MediaManager *mediaManager) mutable {
+		_mediaManager->perform(RTC_FROM_HERE, [=, message = std::move(message)](MediaManager *mediaManager) mutable {
 			mediaManager->receiveMessage(std::move(message));
 		});
 	}
@@ -222,30 +224,34 @@ void Manager::requestVideo(std::shared_ptr<VideoCaptureInterface> videoCapture) 
 
 		_sendTransportMessage({ RequestVideoMessage() });
         _stateUpdated(_state, _videoState);
-    } else if (_videoState == VideoState::IncomingRequested) {
+        
+        _mediaManager->perform(RTC_FROM_HERE, [videoCapture](MediaManager *mediaManager) {
+            mediaManager->setSendVideo(videoCapture);
+        });
+    } else if (_videoState == VideoState::IncomingRequested || _videoState == VideoState::IncomingRequestedAndActive) {
         _videoState = VideoState::Active;
 
 		_sendTransportMessage({ RequestVideoMessage() });
         _stateUpdated(_state, _videoState);
 
-        _mediaManager->perform([videoCapture](MediaManager *mediaManager) {
+        _mediaManager->perform(RTC_FROM_HERE, [videoCapture](MediaManager *mediaManager) {
             mediaManager->setSendVideo(videoCapture);
         });
 	} else if (_videoState == VideoState::Active) {
-        _mediaManager->perform([videoCapture](MediaManager *mediaManager) {
+        _mediaManager->perform(RTC_FROM_HERE, [videoCapture](MediaManager *mediaManager) {
             mediaManager->setSendVideo(videoCapture);
         });
 	}
 }
 
 void Manager::setMuteOutgoingAudio(bool mute) {
-	_mediaManager->perform([mute](MediaManager *mediaManager) {
+	_mediaManager->perform(RTC_FROM_HERE, [mute](MediaManager *mediaManager) {
 		mediaManager->setMuteOutgoingAudio(mute);
 	});
 }
 
 void Manager::setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
-	_mediaManager->perform([sink](MediaManager *mediaManager) {
+	_mediaManager->perform(RTC_FROM_HERE, [sink](MediaManager *mediaManager) {
 		mediaManager->setIncomingVideoOutput(sink);
 	});
 }

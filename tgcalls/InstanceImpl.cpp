@@ -26,17 +26,14 @@ rtc::Thread *getManagerThread() {
 
 InstanceImpl::InstanceImpl(Descriptor &&descriptor)
 : _logSink(std::make_unique<LogSinkImpl>(descriptor.config)) {
-	static const auto onceToken = [] {
-		rtc::LogMessage::LogToDebug(rtc::LS_INFO);
-		rtc::LogMessage::SetLogToStderr(true);
-		return 0;
-	}();
+    rtc::LogMessage::LogToDebug(rtc::LS_INFO);
+    rtc::LogMessage::SetLogToStderr(false);
 	rtc::LogMessage::AddLogToStream(_logSink.get(), rtc::LS_INFO);
 
 	_manager.reset(new ThreadLocalObject<Manager>(getManagerThread(), [descriptor = std::move(descriptor)]() mutable {
 		return new Manager(getManagerThread(), std::move(descriptor));
 	}));
-	_manager->perform([](Manager *manager) {
+	_manager->perform(RTC_FROM_HERE, [](Manager *manager) {
 		manager->start();
 	});
 }
@@ -46,13 +43,13 @@ InstanceImpl::~InstanceImpl() {
 }
 
 void InstanceImpl::receiveSignalingData(const std::vector<uint8_t> &data) {
-	_manager->perform([data](Manager *manager) {
+	_manager->perform(RTC_FROM_HERE, [data](Manager *manager) {
 		manager->receiveSignalingData(data);
 	});
 };
 
 void InstanceImpl::requestVideo(std::shared_ptr<VideoCaptureInterface> videoCapture) {
-    _manager->perform([videoCapture](Manager *manager) {
+    _manager->perform(RTC_FROM_HERE, [videoCapture](Manager *manager) {
         manager->requestVideo(videoCapture);
     });
 }
@@ -106,13 +103,13 @@ void InstanceImpl::setNetworkType(NetworkType networkType) {
 }
 
 void InstanceImpl::setMuteMicrophone(bool muteMicrophone) {
-	_manager->perform([muteMicrophone](Manager *manager) {
+	_manager->perform(RTC_FROM_HERE, [muteMicrophone](Manager *manager) {
 		manager->setMuteOutgoingAudio(muteMicrophone);
 	});
 }
 
 void InstanceImpl::setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
-	_manager->perform([sink](Manager *manager) {
+	_manager->perform(RTC_FROM_HERE, [sink](Manager *manager) {
 		manager->setIncomingVideoOutput(sink);
 	});
 }

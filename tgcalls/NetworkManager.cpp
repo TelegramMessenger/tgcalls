@@ -57,31 +57,19 @@ _sendSignalingMessage(std::move(sendSignalingMessage)) {
 	cricket::ServerAddresses stunServers;
 	std::vector<cricket::RelayServerConfig> turnServers;
 
-	if (rtcServers.size() == 0) {
-		rtc::SocketAddress defaultStunAddress = rtc::SocketAddress("134.122.52.178", 3478);
-		stunServers.insert(defaultStunAddress);
-
-		turnServers.push_back(cricket::RelayServerConfig(
-			rtc::SocketAddress("134.122.52.178", 3478),
-			"openrelay",
-			"openrelay",
-			cricket::PROTO_UDP
-		));
-	} else {
-		for (auto &server : rtcServers) {
-			if (server.isTurn) {
-				turnServers.push_back(cricket::RelayServerConfig(
-					rtc::SocketAddress(server.host, server.port),
-					server.login,
-					server.password,
-					cricket::PROTO_UDP
-				));
-			} else {
-				rtc::SocketAddress stunAddress = rtc::SocketAddress(server.host, server.port);
-				stunServers.insert(stunAddress);
-			}
-		}
-	}
+    for (auto &server : rtcServers) {
+        if (server.isTurn) {
+            turnServers.push_back(cricket::RelayServerConfig(
+                rtc::SocketAddress(server.host, server.port),
+                server.login,
+                server.password,
+                cricket::PROTO_UDP
+            ));
+        } else {
+            rtc::SocketAddress stunAddress = rtc::SocketAddress(server.host, server.port);
+            stunServers.insert(stunAddress);
+        }
+    }
 
 	_portAllocator->SetConfiguration(stunServers, turnServers, 2, webrtc::NO_PRUNE);
 
@@ -92,6 +80,7 @@ _sendSignalingMessage(std::move(sendSignalingMessage)) {
 	iceConfig.continual_gathering_policy = cricket::GATHER_CONTINUALLY;
 	_transportChannel->SetIceConfig(iceConfig);
 
+    // TODO: randomize
 	cricket::IceParameters localIceParameters(
 		"gcp3",
 		"zWDKozH8/3JWt8he3M/CMj5R",

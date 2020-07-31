@@ -18,11 +18,39 @@
 
 namespace tgcalls {
 
+class DarwinVideoCapturerImpl: public VideoCapturer {
+public:
+    DarwinVideoCapturerImpl(std::unique_ptr<VideoCapturerInterfaceImpl> &&videoInterface) :
+    _videoInterface(std::move(videoInterface)) {
+        
+    }
+    
+    virtual void setPreferredCaptureAspectRatio(float aspectRatio) override {
+        _videoInterface->setPreferredCaptureAspectRatio(aspectRatio);
+    }
+    
+    virtual void setVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) override {
+        _videoInterface->setSink(sink);
+    }
+    
+    virtual std::shared_ptr<VideoCapturerInterface> getVideoCapturerInterface() override {
+        return _videoInterface;
+    }
+    
+private:
+    std::shared_ptr<VideoCapturerInterfaceImpl> _videoInterface;
+    
+};
+
 void DarwinInterface::configurePlatformAudio() {
 #ifdef WEBRTC_IOS
     [RTCAudioSession sharedInstance].useManualAudio = true;
     [RTCAudioSession sharedInstance].isAudioEnabled = true;
 #endif
+}
+
+float DarwinInterface::getDisplayAspectRatio() {
+    return 0.0f;
 }
 
 std::unique_ptr<webrtc::VideoEncoderFactory> DarwinInterface::makeVideoEncoderFactory() {
@@ -56,6 +84,11 @@ bool DarwinInterface::supportsEncoding(const std::string &codecName) {
         #endif
     }
     return false;
+}
+
+std::shared_ptr<VideoCapturer> DarwinInterface::makePlatformVideoCapturer(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, bool useFrontCamera, std::function<void(bool)> isActiveUpdated) {
+    auto capturer = std::make_unique<VideoCapturerInterfaceImpl>(source, useFrontCamera, isActiveUpdated);
+    return std::make_shared<DarwinVideoCapturerImpl>(std::move(capturer));
 }
 
 rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> DarwinInterface::makeVideoSource(rtc::Thread *signalingThread, rtc::Thread *workerThread) {

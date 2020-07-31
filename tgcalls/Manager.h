@@ -42,6 +42,7 @@ private:
 	State _state = State::Reconnecting;
     VideoState _videoState = VideoState::Possible;
     bool _didConnectOnce = false;
+    float _localPreferredVideoAspectRatio;
 
 };
 

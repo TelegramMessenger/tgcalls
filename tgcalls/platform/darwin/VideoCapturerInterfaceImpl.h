@@ -20,6 +20,8 @@ public:
 	~VideoCapturerInterfaceImpl() override;
 
 	void setIsEnabled(bool isEnabled) override;
+    void setPreferredCaptureAspectRatio(float aspectRatio);
+    void setSink(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
 
 private:
 	rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _source;

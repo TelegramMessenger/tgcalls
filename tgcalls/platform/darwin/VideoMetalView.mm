@@ -29,7 +29,7 @@ static RTCVideoFrame *customToObjCVideoFrame(const webrtc::VideoFrame &frame, RT
     rotation = RTCVideoRotation(frame.rotation());
   RTCVideoFrame *videoFrame =
       [[RTCVideoFrame alloc] initWithBuffer:webrtc::ToObjCVideoFrameBuffer(frame.video_frame_buffer())
-                                   rotation:RTCVideoRotation_90
+                                   rotation:rotation
                                 timeStampNs:frame.timestamp_us() * rtc::kNumNanosecsPerMicrosec];
   videoFrame.timeStamp = frame.timestamp();
 
@@ -46,7 +46,7 @@ class VideoRendererAdapterImpl : public rtc::VideoSinkInterface<webrtc::VideoFra
         RTCVideoRotation rotation = RTCVideoRotation_90;
         RTCVideoFrame* videoFrame = customToObjCVideoFrame(nativeVideoFrame, rotation);
         
-        CGSize currentSize = CGSizeMake(videoFrame.height, videoFrame.width);
+        CGSize currentSize = (videoFrame.rotation % 180 == 0) ? CGSizeMake(videoFrame.width, videoFrame.height) : CGSizeMake(videoFrame.height, videoFrame.width);
         
         if (_frameReceived) {
             _frameReceived(currentSize, videoFrame, rotation);
@@ -97,6 +97,7 @@ private:
         [self configure];
         
         _currentSize = CGSizeZero;
+        //_rotationOverride = @(RTCVideoRotation_90);
         
         __weak VideoMetalView *weakSelf = self;
         _sink.reset(new VideoRendererAdapterImpl(^(CGSize size, RTCVideoFrame *videoFrame, RTCVideoRotation rotation) {
