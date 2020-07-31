@@ -363,7 +363,7 @@ public:
             }
         }
         
-        if (!_enableP2P) {
+        if (true || !_enableP2P) {
             config.type = webrtc::PeerConnectionInterface::kRelay;
         }
         
