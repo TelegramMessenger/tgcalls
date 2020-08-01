@@ -33,6 +33,16 @@ void AesProcessCtr(MemorySpan from, void *to, AesKeyIv &&aesKeyIv) {
 	unsigned char ecountBuf[16] = { 0 };
 	unsigned int offsetInBlock = 0;
 
+#ifdef OPENSSL_IS_BORINGSSL
+	AES_ctr128_encrypt(
+			reinterpret_cast<const unsigned char*>(from.data),
+			reinterpret_cast<unsigned char*>(to),
+			from.size,
+			&aes,
+			reinterpret_cast<unsigned char*>(aesKeyIv.iv.data()),
+			ecountBuf,
+			&offsetInBlock);
+#else
 	CRYPTO_ctr128_encrypt(
 		reinterpret_cast<const unsigned char*>(from.data),
 		reinterpret_cast<unsigned char*>(to),
@@ -42,6 +52,7 @@ void AesProcessCtr(MemorySpan from, void *to, AesKeyIv &&aesKeyIv) {
 		ecountBuf,
 		&offsetInBlock,
 		block128_f(AES_encrypt));
+#endif
 }
 
 } // namespace tgcalls
