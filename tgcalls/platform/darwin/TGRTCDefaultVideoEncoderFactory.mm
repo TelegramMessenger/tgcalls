@@ -56,17 +56,24 @@
   RTCVideoCodecInfo *h265Info = [[RTCVideoCodecInfo alloc] initWithName:kRTCVideoCodecH265Name];
 #endif
 
-  return @[
+  NSMutableArray *result = [[NSMutableArray alloc] initWithArray:@[
     constrainedHighInfo,
     constrainedBaselineInfo,
     vp8Info,
 #if defined(RTC_ENABLE_VP9)
     vp9Info,
 #endif
-#if !defined(DISABLE_H265)
-    h265Info,
-#endif
-  ];
+  ]];
+    
+    #if !defined(DISABLE_H265)
+    if (@available(iOS 11.0, *)) {
+        if ([[AVAssetExportSession allExportPresets] containsObject:AVAssetExportPresetHEVCHighestQuality]) {
+            [result addObject:h265Info];
+        }
+    }
+    #endif
+    
+    return result;
 }
 
 - (id<RTCVideoEncoder>)createEncoder:(RTCVideoCodecInfo *)info {
