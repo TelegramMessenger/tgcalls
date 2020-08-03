@@ -179,7 +179,7 @@ void VideoCapturerInterfaceImpl::setPreferredCaptureAspectRatio(float aspectRati
     });
 }
 
-void VideoCapturerInterfaceImpl::setSink(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+void VideoCapturerInterfaceImpl::setUncroppedVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
     VideoCapturerInterfaceImplHolder *implReference = _implReference;
     dispatch_async(dispatch_get_main_queue(), ^{
         if (implReference.reference != nil) {

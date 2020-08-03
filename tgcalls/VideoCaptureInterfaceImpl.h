@@ -24,13 +24,13 @@ public:
 
 public:
 	rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _videoSource;
-    std::shared_ptr<VideoCapturer> _platformCapturer;
 
 private:
-	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _currentSink;
+	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _currentUncroppedSink;
+	std::unique_ptr<VideoCapturerInterface> _videoCapturer;
 	std::function<void (bool)> _isActiveUpdated;
-	bool _useFrontCamera;
-	bool _isVideoEnabled;
+	bool _useFrontCamera = true;
+	bool _isVideoEnabled = true;
 };
 
 class VideoCaptureInterfaceImpl : public VideoCaptureInterface {
