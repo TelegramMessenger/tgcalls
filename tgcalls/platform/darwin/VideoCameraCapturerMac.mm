@@ -2,14 +2,23 @@
 
 #import <AVFoundation/AVFoundation.h>
 
+#include "rtc_base/logging.h"
 #import "base/RTCLogging.h"
 #import "base/RTCVideoFrameBuffer.h"
 #import "components/video_frame_buffer/RTCCVPixelBuffer.h"
 #import "sdk/objc/native/src/objc_video_track_source.h"
+#import "sdk/objc/native/src/objc_frame_buffer.h"
 #import "api/video_track_source_proxy.h"
+
+
 #import "helpers/AVCaptureSession+DevicePosition.h"
 #import "helpers/RTCDispatcher+Private.h"
 #import "base/RTCVideoFrame.h"
+
+#include "common_video/libyuv/include/webrtc_libyuv.h"
+#include "rtc_base/checks.h"
+#include "rtc_base/logging.h"
+#include "third_party/libyuv/include/libyuv.h"
 
 static const int64_t kNanosecondsPerSecond = 1000000000;
 
@@ -18,6 +27,130 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     static_cast<webrtc::VideoTrackSourceProxy *>(nativeSource.get());
     return static_cast<webrtc::ObjCVideoTrackSource *>(proxy_source->internal());
 }
+
+
+@interface RTCCVPixelBuffer (CustomCropping)
+
+@end
+
+@implementation RTCCVPixelBuffer (CustomCropping)
+
+- (BOOL)custom_cropAndScaleTo:(CVPixelBufferRef)outputPixelBuffer
+               withTempBuffer:(nullable uint8_t*)tmpBuffer {
+    const OSType srcPixelFormat = CVPixelBufferGetPixelFormatType(self.pixelBuffer);
+    const OSType dstPixelFormat = CVPixelBufferGetPixelFormatType(outputPixelBuffer);
+    
+    switch (srcPixelFormat) {
+        case kCVPixelFormatType_420YpCbCr8BiPlanarFullRange:
+        case kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange: {
+            size_t dstWidth = CVPixelBufferGetWidth(outputPixelBuffer);
+            size_t dstHeight = CVPixelBufferGetHeight(outputPixelBuffer);
+            if (dstWidth > 0 && dstHeight > 0) {
+                RTC_DCHECK(dstPixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange ||
+                           dstPixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange);
+                if ([self requiresScalingToWidth:(int)dstWidth height:(int)dstHeight]) {
+                    RTC_DCHECK(tmpBuffer);
+                }
+                [self custom_cropAndScaleNV12To:outputPixelBuffer withTempBuffer:tmpBuffer];
+            }
+            break;
+        }
+        case kCVPixelFormatType_32BGRA:
+        case kCVPixelFormatType_32ARGB: {
+            RTC_DCHECK(srcPixelFormat == dstPixelFormat);
+            [self custom_cropAndScaleARGBTo:outputPixelBuffer];
+            break;
+        }
+        default: { RTC_NOTREACHED() << "Unsupported pixel format."; }
+    }
+    
+    return YES;
+}
+
+- (void)custom_cropAndScaleNV12To:(CVPixelBufferRef)outputPixelBuffer withTempBuffer:(uint8_t*)tmpBuffer {
+    // Prepare output pointers.
+    CVReturn cvRet = CVPixelBufferLockBaseAddress(outputPixelBuffer, 0);
+    if (cvRet != kCVReturnSuccess) {
+        RTC_LOG(LS_ERROR) << "Failed to lock base address: " << cvRet;
+    }
+    const int dstWidth = (int)CVPixelBufferGetWidth(outputPixelBuffer);
+    const int dstHeight = (int)CVPixelBufferGetHeight(outputPixelBuffer);
+    uint8_t* dstY =
+    reinterpret_cast<uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(outputPixelBuffer, 0));
+    const int dstYStride = (int)CVPixelBufferGetBytesPerRowOfPlane(outputPixelBuffer, 0);
+    uint8_t* dstUV =
+    reinterpret_cast<uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(outputPixelBuffer, 1));
+    const int dstUVStride = (int)CVPixelBufferGetBytesPerRowOfPlane(outputPixelBuffer, 1);
+    
+    // Prepare source pointers.
+    CVPixelBufferLockBaseAddress(self.pixelBuffer, kCVPixelBufferLock_ReadOnly);
+    const uint8_t* srcY = static_cast<uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(self.pixelBuffer, 0));
+    const int srcYStride = (int)CVPixelBufferGetBytesPerRowOfPlane(self.pixelBuffer, 0);
+    const uint8_t* srcUV = static_cast<uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(self.pixelBuffer, 1));
+    const int srcUVStride = (int)CVPixelBufferGetBytesPerRowOfPlane(self.pixelBuffer, 1);
+    
+    // Crop just by modifying pointers.
+    srcY += srcYStride * self.cropY + self.cropX;
+    srcUV += srcUVStride * (self.cropY / 2) + self.cropX;
+    
+    webrtc::NV12Scale(tmpBuffer,
+                      srcY,
+                      srcYStride,
+                      srcUV,
+                      srcUVStride,
+                      self.cropWidth,
+                      self.cropHeight,
+                      dstY,
+                      dstYStride,
+                      dstUV,
+                      dstUVStride,
+                      dstWidth,
+                      dstHeight);
+    
+    CVPixelBufferUnlockBaseAddress(self.pixelBuffer, kCVPixelBufferLock_ReadOnly);
+    CVPixelBufferUnlockBaseAddress(outputPixelBuffer, 0);
+}
+
+- (void)custom_cropAndScaleARGBTo:(CVPixelBufferRef)outputPixelBuffer {
+    // Prepare output pointers.
+    CVReturn cvRet = CVPixelBufferLockBaseAddress(outputPixelBuffer, 0);
+    if (cvRet != kCVReturnSuccess) {
+        RTC_LOG(LS_ERROR) << "Failed to lock base address: " << cvRet;
+    }
+    const int dstWidth = (int)CVPixelBufferGetWidth(outputPixelBuffer);
+    const int dstHeight = (int)CVPixelBufferGetHeight(outputPixelBuffer);
+    
+    uint8_t* dst = reinterpret_cast<uint8_t*>(CVPixelBufferGetBaseAddress(outputPixelBuffer));
+    const int dstStride = (int)CVPixelBufferGetBytesPerRow(outputPixelBuffer);
+    
+    // Prepare source pointers.
+    CVPixelBufferLockBaseAddress(self.pixelBuffer, kCVPixelBufferLock_ReadOnly);
+    const uint8_t* src = static_cast<uint8_t*>(CVPixelBufferGetBaseAddress(self.pixelBuffer));
+    const int srcStride = (int)CVPixelBufferGetBytesPerRow(self.pixelBuffer);
+    
+    // Crop just by modifying pointers. Need to ensure that src pointer points to a byte corresponding
+    // to the start of a new pixel (byte with B for BGRA) so that libyuv scales correctly.
+    const int bytesPerPixel = 4;
+    src += srcStride * self.cropY + (self.cropX * bytesPerPixel);
+    
+    // kCVPixelFormatType_32BGRA corresponds to libyuv::FOURCC_ARGB
+    libyuv::ARGBScale(src,
+                      srcStride,
+                      self.cropWidth,
+                      self.cropHeight,
+                      dst,
+                      dstStride,
+                      dstWidth,
+                      dstHeight,
+                      libyuv::kFilterBox);
+    
+    CVPixelBufferUnlockBaseAddress(self.pixelBuffer, kCVPixelBufferLock_ReadOnly);
+    CVPixelBufferUnlockBaseAddress(outputPixelBuffer, 0);
+}
+
+@end
+
+
 
 @interface VideoCameraCapturer () <AVCaptureVideoDataOutputSampleBufferDelegate> {
     rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _source;
@@ -43,6 +176,11 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     bool _inForegroundValue;
     bool _isPaused;
     int _skippedFrame;
+    
+    float _aspectRatio;
+    std::vector<uint8_t> _croppingBuffer;
+    std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _uncroppedSink;
+
 }
 
 @end
@@ -122,6 +260,15 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     }
     
     [self updateIsActiveValue];
+}
+
+
+- (void)setUncroppedSink:(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)sink {
+    _uncroppedSink = sink;
+}
+
+- (void)setPreferredCaptureAspectRatio:(float)aspectRatio {
+    _aspectRatio = aspectRatio;
 }
 
 - (void)updateIsActiveValue {

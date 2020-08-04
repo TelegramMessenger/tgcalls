@@ -18,7 +18,9 @@
 - (void)startCaptureWithDevice:(AVCaptureDevice *)device format:(AVCaptureDeviceFormat *)format fps:(NSInteger)fps;
 - (void)stopCapture;
 - (void)setIsEnabled:(bool)isEnabled;
-    
+- (void)setPreferredCaptureAspectRatio:(float)aspectRatio;
+- (void)setUncroppedSink:(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)sink;
+
 
 @end
 #endif //WEBRTC_MAC
