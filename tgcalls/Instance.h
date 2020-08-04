@@ -97,6 +97,7 @@ struct Config {
 #endif
 	int maxApiLayer = 0;
     float preferredAspectRatio;
+    bool enableHighBitrateVideo = false;
 };
 
 struct EncryptionKey {

@@ -55,14 +55,16 @@ MediaManager::MediaManager(
 	std::shared_ptr<VideoCaptureInterface> videoCapture,
 	std::function<void(Message &&)> sendSignalingMessage,
 	std::function<void(Message &&)> sendTransportMessage,
-    float localPreferredVideoAspectRatio) :
+    float localPreferredVideoAspectRatio,
+    bool enableHighBitrateVideo) :
 _thread(thread),
 _eventLog(std::make_unique<webrtc::RtcEventLogNull>()),
 _taskQueueFactory(webrtc::CreateDefaultTaskQueueFactory()),
 _sendSignalingMessage(std::move(sendSignalingMessage)),
 _sendTransportMessage(std::move(sendTransportMessage)),
 _videoCapture(std::move(videoCapture)),
-_localPreferredVideoAspectRatio(localPreferredVideoAspectRatio) {
+_localPreferredVideoAspectRatio(localPreferredVideoAspectRatio),
+_enableHighBitrateVideo(enableHighBitrateVideo) {
 	_ssrcAudio.incoming = isOutgoing ? ssrcAudioIncoming : ssrcAudioOutgoing;
 	_ssrcAudio.outgoing = (!isOutgoing) ? ssrcAudioIncoming : ssrcAudioOutgoing;
 	_ssrcAudio.fecIncoming = isOutgoing ? ssrcAudioFecIncoming : ssrcAudioFecOutgoing;
@@ -281,8 +283,8 @@ void MediaManager::checkIsSendingVideoChanged(bool wasSending) {
 		auto codec = *_videoCodecOut;
 
 		codec.SetParam(cricket::kCodecParamMinBitrate, 64);
-		codec.SetParam(cricket::kCodecParamStartBitrate, 512);
-		codec.SetParam(cricket::kCodecParamMaxBitrate, 2500);
+		codec.SetParam(cricket::kCodecParamStartBitrate, 400);
+		codec.SetParam(cricket::kCodecParamMaxBitrate, _enableHighBitrateVideo ? 1600 : 800);
 
 		cricket::VideoSendParameters videoSendParameters;
 		videoSendParameters.codecs.push_back(codec);
@@ -297,9 +299,6 @@ void MediaManager::checkIsSendingVideoChanged(bool wasSending) {
 		}
 
 		videoSendParameters.extensions.emplace_back(webrtc::RtpExtension::kTransportSequenceNumberUri, 1);
-		//send_parameters.max_bandwidth_bps = 800000;
-		//send_parameters.rtcp.reduced_size = true;
-		//videoSendParameters.rtcp.remote_estimate = true;
 		_videoChannel->SetSendParameters(videoSendParameters);
 
 		if (_enableFlexfec) {

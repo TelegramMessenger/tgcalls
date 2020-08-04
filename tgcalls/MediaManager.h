@@ -41,7 +41,8 @@ public:
 		std::shared_ptr<VideoCaptureInterface> videoCapture,
 		std::function<void(Message &&)> sendSignalingMessage,
 		std::function<void(Message &&)> sendTransportMessage,
-        float localPreferredVideoAspectRatio);
+        float localPreferredVideoAspectRatio,
+        bool enableHighBitrateVideo);
 	~MediaManager();
 
 	void setIsConnected(bool isConnected);
@@ -116,6 +117,7 @@ private:
     
     float _localPreferredVideoAspectRatio = 0.0f;
     float _preferredAspectRatio = 0.0f;
+    bool _enableHighBitrateVideo = false;
 
 	std::unique_ptr<MediaManager::NetworkInterfaceImpl> _audioNetworkInterface;
 	std::unique_ptr<MediaManager::NetworkInterfaceImpl> _videoNetworkInterface;
