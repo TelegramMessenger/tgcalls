@@ -25,6 +25,10 @@ void DarwinInterface::configurePlatformAudio() {
 #endif
 }
 
+float DarwinInterface::getDisplayAspectRatio() {
+    return 0.0f;
+}
+
 std::unique_ptr<webrtc::VideoEncoderFactory> DarwinInterface::makeVideoEncoderFactory() {
     return webrtc::ObjCToNativeVideoEncoderFactory([[TGRTCDefaultVideoEncoderFactory alloc] init]);
 }

@@ -222,6 +222,19 @@ bool Deserialize(UnstructuredDataMessage &to, rtc::ByteBufferReader &from, bool 
     return Deserialize(to.data, from, singleMessagePacket);
 }
 
+void Serialize(rtc::ByteBufferWriter &to, const VideoParametersMessage &from, bool singleMessagePacket) {
+    to.WriteUInt32(from.aspectRatio);
+}
+
+bool Deserialize(VideoParametersMessage &to, rtc::ByteBufferReader &from, bool singleMessagePacket) {
+    uint32_t aspectRatio = 0;
+    if (!from.ReadUInt32(&aspectRatio)) {
+        return false;
+    }
+    to.aspectRatio = aspectRatio;
+    return true;
+}
+
 template <typename T>
 bool TryDeserialize(
 		absl::optional<Message> &to,

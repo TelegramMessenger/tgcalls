@@ -8,8 +8,6 @@
 namespace tgcalls {
 
 VideoCaptureInterfaceObject::VideoCaptureInterfaceObject() {
-	_useFrontCamera = true;
-	_isVideoEnabled = true;
 	_videoSource = PlatformInterface::SharedInstance()->makeVideoSource(Manager::getMediaThread(), MediaManager::getWorkerThread());
 	//this should outlive the capturer
 	_videoCapturer = PlatformInterface::SharedInstance()->makeVideoCapturer(_videoSource, _useFrontCamera, [this](bool isActive) {
@@ -20,19 +18,26 @@ VideoCaptureInterfaceObject::VideoCaptureInterfaceObject() {
 }
 
 VideoCaptureInterfaceObject::~VideoCaptureInterfaceObject() {
-	if (_currentSink != nullptr) {
-		_videoSource->RemoveSink(_currentSink.get());
+	if (_currentUncroppedSink != nullptr) {
+		//_videoSource->RemoveSink(_currentSink.get());
+		_videoCapturer->setUncroppedVideoOutput(nullptr);
 	}
 }
 
 void VideoCaptureInterfaceObject::switchCamera() {
 	_useFrontCamera = !_useFrontCamera;
+    if (_videoCapturer && _currentUncroppedSink) {
+		_videoCapturer->setUncroppedVideoOutput(nullptr);
+    }
 	_videoCapturer = PlatformInterface::SharedInstance()->makeVideoCapturer(_videoSource, _useFrontCamera, [this](bool isActive) {
 		if (this->_isActiveUpdated) {
 			this->_isActiveUpdated(isActive);
 		}
 	});
-    _videoCapturer->setIsEnabled(_isVideoEnabled);
+    if (_currentUncroppedSink) {
+		_videoCapturer->setUncroppedVideoOutput(_currentUncroppedSink);
+    }
+	_videoCapturer->setIsEnabled(_isVideoEnabled);
 }
 
 void VideoCaptureInterfaceObject::setIsVideoEnabled(bool isVideoEnabled) {
@@ -42,14 +47,13 @@ void VideoCaptureInterfaceObject::setIsVideoEnabled(bool isVideoEnabled) {
 	}
 }
 
+void VideoCaptureInterfaceObject::setPreferredAspectRatio(float aspectRatio) {
+	_videoCapturer->setPreferredCaptureAspectRatio(aspectRatio);
+}
+
 void VideoCaptureInterfaceObject::setVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
-	if (_currentSink != nullptr) {
-		_videoSource->RemoveSink(_currentSink.get());
-	}
-	_currentSink = sink;
-	if (_currentSink != nullptr) {
-		_videoSource->AddOrUpdateSink(_currentSink.get(), rtc::VideoSinkWants());
-	}
+	_videoCapturer->setUncroppedVideoOutput(sink);
+	_currentUncroppedSink = sink;
 }
 
 void VideoCaptureInterfaceObject::setIsActiveUpdated(std::function<void (bool)> isActiveUpdated) {
@@ -65,19 +69,25 @@ _impl(Manager::getMediaThread(), []() {
 VideoCaptureInterfaceImpl::~VideoCaptureInterfaceImpl() = default;
 
 void VideoCaptureInterfaceImpl::switchCamera() {
-	_impl.perform([](VideoCaptureInterfaceObject *impl) {
+	_impl.perform(RTC_FROM_HERE, [](VideoCaptureInterfaceObject *impl) {
 		impl->switchCamera();
 	});
 }
 
 void VideoCaptureInterfaceImpl::setIsVideoEnabled(bool isVideoEnabled) {
-	_impl.perform([isVideoEnabled](VideoCaptureInterfaceObject *impl) {
+	_impl.perform(RTC_FROM_HERE, [isVideoEnabled](VideoCaptureInterfaceObject *impl) {
 		impl->setIsVideoEnabled(isVideoEnabled);
 	});
 }
 
+void VideoCaptureInterfaceImpl::setPreferredAspectRatio(float aspectRatio) {
+    _impl.perform(RTC_FROM_HERE, [aspectRatio](VideoCaptureInterfaceObject *impl) {
+        impl->setPreferredAspectRatio(aspectRatio);
+    });
+}
+
 void VideoCaptureInterfaceImpl::setVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
-	_impl.perform([sink](VideoCaptureInterfaceObject *impl) {
+	_impl.perform(RTC_FROM_HERE, [sink](VideoCaptureInterfaceObject *impl) {
 		impl->setVideoOutput(sink);
 	});
 }

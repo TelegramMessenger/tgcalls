@@ -40,7 +40,8 @@ public:
 		bool isOutgoing,
 		std::shared_ptr<VideoCaptureInterface> videoCapture,
 		std::function<void(Message &&)> sendSignalingMessage,
-		std::function<void(Message &&)> sendTransportMessage);
+		std::function<void(Message &&)> sendTransportMessage,
+        float localPreferredVideoAspectRatio);
 	~MediaManager();
 
 	void setIsConnected(bool isConnected);
@@ -80,6 +81,9 @@ private:
 	bool computeIsSendingVideo() const;
 	void checkIsSendingVideoChanged(bool wasSending);
 	bool videoCodecsNegotiated() const;
+    
+    bool computeIsReceivingVideo() const;
+    void checkIsReceivingVideoChanged(bool wasReceiving);
 
 	rtc::Thread *_thread = nullptr;
 	std::unique_ptr<webrtc::RtcEventLogNull> _eventLog;
@@ -109,6 +113,9 @@ private:
 	std::unique_ptr<webrtc::VideoBitrateAllocatorFactory> _videoBitrateAllocatorFactory;
 	std::shared_ptr<VideoCaptureInterface> _videoCapture;
 	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _currentIncomingVideoSink;
+    
+    float _localPreferredVideoAspectRatio = 0.0f;
+    float _preferredAspectRatio = 0.0f;
 
 	std::unique_ptr<MediaManager::NetworkInterfaceImpl> _audioNetworkInterface;
 	std::unique_ptr<MediaManager::NetworkInterfaceImpl> _videoNetworkInterface;

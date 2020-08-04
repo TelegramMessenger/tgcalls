@@ -6,6 +6,7 @@
 
 namespace tgcalls {
 
+class LogSinkImpl;
 class InstanceImplReferenceInternal;
 
 class InstanceImplReference : public Instance {
@@ -36,6 +37,7 @@ public:
 	FinalState stop() override;
 
 private:
+    std::unique_ptr<LogSinkImpl> logSink_;
     std::unique_ptr<ThreadLocalObject<InstanceImplReferenceInternal>> internal_;
 
 };

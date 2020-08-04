@@ -17,6 +17,9 @@ public:
 
 	virtual void configurePlatformAudio() {
 	}
+    virtual float getDisplayAspectRatio() {
+        return 0.0f;
+    }
 	virtual std::unique_ptr<webrtc::VideoEncoderFactory> makeVideoEncoderFactory() = 0;
 	virtual std::unique_ptr<webrtc::VideoDecoderFactory> makeVideoDecoderFactory() = 0;
 	virtual bool supportsEncoding(const std::string &codecName) = 0;

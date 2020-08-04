@@ -8,6 +8,7 @@ namespace tgcalls {
 class DarwinInterface : public PlatformInterface {
 public:
 	void configurePlatformAudio() override;
+    float getDisplayAspectRatio() override;
 	std::unique_ptr<webrtc::VideoEncoderFactory> makeVideoEncoderFactory() override;
 	std::unique_ptr<webrtc::VideoDecoderFactory> makeVideoDecoderFactory() override;
 	bool supportsEncoding(const std::string &codecName) override;

@@ -54,13 +54,15 @@ MediaManager::MediaManager(
 	bool isOutgoing,
 	std::shared_ptr<VideoCaptureInterface> videoCapture,
 	std::function<void(Message &&)> sendSignalingMessage,
-	std::function<void(Message &&)> sendTransportMessage) :
+	std::function<void(Message &&)> sendTransportMessage,
+    float localPreferredVideoAspectRatio) :
 _thread(thread),
 _eventLog(std::make_unique<webrtc::RtcEventLogNull>()),
 _taskQueueFactory(webrtc::CreateDefaultTaskQueueFactory()),
 _sendSignalingMessage(std::move(sendSignalingMessage)),
 _sendTransportMessage(std::move(sendTransportMessage)),
-_videoCapture(std::move(videoCapture)) {
+_videoCapture(std::move(videoCapture)),
+_localPreferredVideoAspectRatio(localPreferredVideoAspectRatio) {
 	_ssrcAudio.incoming = isOutgoing ? ssrcAudioIncoming : ssrcAudioOutgoing;
 	_ssrcAudio.outgoing = (!isOutgoing) ? ssrcAudioIncoming : ssrcAudioOutgoing;
 	_ssrcAudio.fecIncoming = isOutgoing ? ssrcAudioFecIncoming : ssrcAudioFecOutgoing;
@@ -214,6 +216,8 @@ void MediaManager::setPeerVideoFormats(VideoFormatsMessage &&peerFormats) {
 	if (!_videoCodecs.empty()) {
 		return;
 	}
+    
+    bool wasReceivingVideo = computeIsReceivingVideo();
 
 	assert(!_videoCodecOut.has_value());
 	auto formats = ComputeCommonFormats(
@@ -228,6 +232,9 @@ void MediaManager::setPeerVideoFormats(VideoFormatsMessage &&peerFormats) {
 	if (_videoCodecOut.has_value()) {
 		checkIsSendingVideoChanged(false);
 	}
+    if (_videoCodecs.size() != 0) {
+        checkIsReceivingVideoChanged(wasReceivingVideo);
+    }
 }
 
 bool MediaManager::videoCodecsNegotiated() const {
@@ -238,21 +245,32 @@ bool MediaManager::computeIsSendingVideo() const {
 	return _videoCapture != nullptr && _videoCodecOut.has_value();
 }
 
+bool MediaManager::computeIsReceivingVideo() const {
+    return _videoCodecs.size() != 0;
+}
+
 void MediaManager::setSendVideo(std::shared_ptr<VideoCaptureInterface> videoCapture) {
     const auto wasSending = computeIsSendingVideo();
+    const auto wasReceiving = computeIsReceivingVideo();
 
     if (_videoCapture) {
 		GetVideoCaptureAssumingSameThread(_videoCapture.get())->setIsActiveUpdated(nullptr);
     }
     _videoCapture = videoCapture;
 	if (_videoCapture) {
+        _videoCapture->setPreferredAspectRatio(_preferredAspectRatio);
+        
 		const auto sendTransportMessage = _sendTransportMessage;
 		GetVideoCaptureAssumingSameThread(_videoCapture.get())->setIsActiveUpdated([=](bool isActive) {
 			sendTransportMessage({ RemoteVideoIsActiveMessage{ isActive } });
 		});
+        
+        uint32_t aspectRatioValue = (uint32_t)(_localPreferredVideoAspectRatio * 1000.0);
+        sendTransportMessage({ VideoParametersMessage{ aspectRatioValue } });
 	}
 
     checkIsSendingVideoChanged(wasSending);
+    checkIsReceivingVideoChanged(wasReceiving);
 }
 
 void MediaManager::checkIsSendingVideoChanged(bool wasSending) {
@@ -298,57 +316,60 @@ void MediaManager::checkIsSendingVideoChanged(bool wasSending) {
 			_videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, GetVideoCaptureAssumingSameThread(_videoCapture.get())->_videoSource);
 		}
 
-		cricket::VideoRecvParameters videoRecvParameters;
-
-		const auto codecs = {
-			cricket::kFlexfecCodecName,
-			cricket::kH264CodecName,
-			cricket::kH265CodecName,
-			cricket::kVp8CodecName,
-			cricket::kVp9CodecName,
-			cricket::kAv1CodecName,
-		};
-		for (const auto &c : _videoCodecs) {
-			for (const auto known : codecs) {
-				if (c.name == known) {
-					videoRecvParameters.codecs.push_back(c);
-					break;
-				}
-			}
-		}
-
-		videoRecvParameters.extensions.emplace_back(webrtc::RtpExtension::kTransportSequenceNumberUri, 1);
-		//recv_parameters.rtcp.reduced_size = true;
-		videoRecvParameters.rtcp.remote_estimate = true;
-
-		cricket::StreamParams videoRecvStreamParams;
-		cricket::SsrcGroup videoRecvSsrcGroup(cricket::kFecFrSsrcGroupSemantics, {_ssrcVideo.incoming, _ssrcVideo.fecIncoming});
-		videoRecvStreamParams.ssrcs = {_ssrcVideo.incoming};
-		videoRecvStreamParams.ssrc_groups.push_back(videoRecvSsrcGroup);
-		videoRecvStreamParams.cname = "cname";
-
-		_videoChannel->SetRecvParameters(videoRecvParameters);
-		_videoChannel->AddRecvStream(videoRecvStreamParams);
-		_readyToReceiveVideo = true;
-		if (_currentIncomingVideoSink) {
-			_videoChannel->SetSink(_ssrcVideo.incoming, _currentIncomingVideoSink.get());
-		}
-
 		_videoChannel->OnReadyToSend(_isConnected);
 		_videoChannel->SetSend(_isConnected);
 	} else {
 		_videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, nullptr);
 		_videoChannel->SetVideoSend(_ssrcVideo.fecOutgoing, NULL, nullptr);
 
-		_videoChannel->RemoveRecvStream(_ssrcVideo.incoming);
-		_videoChannel->RemoveRecvStream(_ssrcVideo.fecIncoming);
-		_readyToReceiveVideo = false;
-
 		_videoChannel->RemoveSendStream(_ssrcVideo.outgoing);
 		if (_enableFlexfec) {
 			_videoChannel->RemoveSendStream(_ssrcVideo.fecOutgoing);
 		}
 	}
+}
+
+void MediaManager::checkIsReceivingVideoChanged(bool wasReceiving) {
+    const auto receiving = computeIsReceivingVideo();
+    if (receiving == wasReceiving) {
+        return;
+    } else {
+        cricket::VideoRecvParameters videoRecvParameters;
+
+        const auto codecs = {
+            cricket::kFlexfecCodecName,
+            cricket::kH264CodecName,
+            cricket::kH265CodecName,
+            cricket::kVp8CodecName,
+            cricket::kVp9CodecName,
+            cricket::kAv1CodecName,
+        };
+        for (const auto &c : _videoCodecs) {
+            for (const auto known : codecs) {
+                if (c.name == known) {
+                    videoRecvParameters.codecs.push_back(c);
+                    break;
+                }
+            }
+        }
+
+        videoRecvParameters.extensions.emplace_back(webrtc::RtpExtension::kTransportSequenceNumberUri, 1);
+        //recv_parameters.rtcp.reduced_size = true;
+        videoRecvParameters.rtcp.remote_estimate = true;
+
+        cricket::StreamParams videoRecvStreamParams;
+        cricket::SsrcGroup videoRecvSsrcGroup(cricket::kFecFrSsrcGroupSemantics, {_ssrcVideo.incoming, _ssrcVideo.fecIncoming});
+        videoRecvStreamParams.ssrcs = {_ssrcVideo.incoming};
+        videoRecvStreamParams.ssrc_groups.push_back(videoRecvSsrcGroup);
+        videoRecvStreamParams.cname = "cname";
+
+        _videoChannel->SetRecvParameters(videoRecvParameters);
+        _videoChannel->AddRecvStream(videoRecvStreamParams);
+        _readyToReceiveVideo = true;
+        if (_currentIncomingVideoSink) {
+            _videoChannel->SetSink(_ssrcVideo.incoming, _currentIncomingVideoSink.get());
+        }
+    }
 }
 
 void MediaManager::setMuteOutgoingAudio(bool mute) {
@@ -378,7 +399,13 @@ void MediaManager::receiveMessage(DecryptedMessage &&message) {
 				// maybe we need to queue packets for some time?
 			}
 		}
-	}
+    } else if (const auto videoParameters = absl::get_if<VideoParametersMessage>(data)) {
+        float value = ((float)videoParameters->aspectRatio) / 1000.0;
+        _preferredAspectRatio = value;
+        if (_videoCapture) {
+            _videoCapture->setPreferredAspectRatio(value);
+        }
+    }
 }
 
 MediaManager::NetworkInterfaceImpl::NetworkInterfaceImpl(MediaManager *mediaManager, bool isVideo) :
