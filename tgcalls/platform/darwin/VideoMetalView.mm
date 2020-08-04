@@ -6,7 +6,7 @@
 #import "base/RTCLogging.h"
 #import "base/RTCVideoFrame.h"
 #import "base/RTCVideoFrameBuffer.h"
-#import "components/video_frame_buffer/RTCCVPixelBuffer.h"
+#import "TGRTCCVPixelBuffer.h"
 #include "sdk/objc/native/api/video_frame.h"
 #include "sdk/objc/native/src/objc_frame_buffer.h"
 
@@ -75,6 +75,11 @@ private:
     bool _firstFrameReceivedReported;
     
     void (^_onOrientationUpdated)(int);
+    
+    void (^_onIsMirroredUpdated)(bool);
+    
+    bool _didSetShouldBeMirrored;
+    bool _shouldBeMirrored;
 }
 
 @end
@@ -217,6 +222,27 @@ private:
     RTCMTLRenderer *renderer;
     if ([videoFrame.buffer isKindOfClass:[RTCCVPixelBuffer class]]) {
         RTCCVPixelBuffer *buffer = (RTCCVPixelBuffer*)videoFrame.buffer;
+        
+        if ([buffer isKindOfClass:[TGRTCCVPixelBuffer class]]) {
+            bool shouldBeMirrored = ((TGRTCCVPixelBuffer *)buffer).shouldBeMirrored;
+            if (shouldBeMirrored != _shouldBeMirrored) {
+                _shouldBeMirrored = shouldBeMirrored;
+                if (_shouldBeMirrored) {
+                    _metalView.transform = CGAffineTransformMakeScale(-1.0f, 1.0f);
+                } else {
+                    _metalView.transform = CGAffineTransformIdentity;
+                }
+                
+                if (_didSetShouldBeMirrored) {
+                    if (_onIsMirroredUpdated) {
+                        _onIsMirroredUpdated(_shouldBeMirrored);
+                    }
+                } else {
+                    _didSetShouldBeMirrored = true;
+                }
+            }
+        }
+        
         const OSType pixelFormat = CVPixelBufferGetPixelFormatType(buffer.pixelBuffer);
         if (pixelFormat == kCVPixelFormatType_32BGRA || pixelFormat == kCVPixelFormatType_32ARGB) {
             if (!_rendererRGB) {
@@ -354,6 +380,10 @@ private:
 
 - (void)internalSetOnOrientationUpdated:(void (^ _Nullable)(int))onOrientationUpdated {
     _onOrientationUpdated = [onOrientationUpdated copy];
+}
+
+- (void)internalSetOnIsMirroredUpdated:(void (^ _Nullable)(bool))onIsMirroredUpdated {
+    _onIsMirroredUpdated = [onIsMirroredUpdated copy];
 }
 
 @end

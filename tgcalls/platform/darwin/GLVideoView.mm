@@ -415,4 +415,7 @@ static CGSize scaleToFillSize(CGSize size, CGSize maxSize) {
     _onOrientationUpdated = [onOrientationUpdated copy];
 }
 
+- (void)internalSetOnIsMirroredUpdated:(void (^ _Nullable)(bool))onIsMirroredUpdated {
+}
+
 @end
