@@ -355,15 +355,70 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     }
 
     RTCCVPixelBuffer *rtcPixelBuffer = [[RTCCVPixelBuffer alloc] initWithPixelBuffer:pixelBuffer];
+    if (!_isPaused && _uncroppedSink) {
+        int64_t timeStampNs = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer)) *
+        kNanosecondsPerSecond;
+        RTCVideoFrame *frame = [[RTCVideoFrame alloc] initWithBuffer:rtcPixelBuffer
+                                                            rotation:_rotation
+                                                         timeStampNs:timeStampNs];
+        
+        const int64_t timestamp_us = frame.timeStampNs / rtc::kNumNanosecsPerMicrosec;
+        
+        rtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer;
+        buffer = new rtc::RefCountedObject<webrtc::ObjCFrameBuffer>(frame.buffer);
+        
+        webrtc::VideoRotation rotation = static_cast<webrtc::VideoRotation>(frame.rotation);
+        
+        _uncroppedSink->OnFrame(webrtc::VideoFrame::Builder()
+                                .set_video_frame_buffer(buffer)
+                                .set_rotation(rotation)
+                                .set_timestamp_us(timestamp_us)
+                                .build());
+    }
+    
+    if (_aspectRatio > FLT_EPSILON) {
+        float aspect = 1.0f / _aspectRatio;
+        
+        int width = rtcPixelBuffer.width;
+        int height = rtcPixelBuffer.height;
+        
+        float aspectWidth = width;
+        float aspectHeight = ((float)(width)) / aspect;
+        int cropX = (int)((width - aspectWidth) / 2.0f);
+        int cropY = (int)((height - aspectHeight) / 2.0f);
+        
+        width = (int)aspectWidth;
+        width &= ~1;
+        height = (int)aspectHeight;
+        height &= ~1;
+        
+        if (width < rtcPixelBuffer.width || height < rtcPixelBuffer.height) {
+            rtcPixelBuffer = [[RTCCVPixelBuffer alloc] initWithPixelBuffer:pixelBuffer adaptedWidth:width adaptedHeight:height cropWidth:width cropHeight:height cropX:cropX cropY:cropY];
+            
+            CVPixelBufferRef outputPixelBufferRef = NULL;
+            OSType pixelFormat = CVPixelBufferGetPixelFormatType(rtcPixelBuffer.pixelBuffer);
+            CVPixelBufferCreate(NULL, width, height, pixelFormat, NULL, &outputPixelBufferRef);
+            if (outputPixelBufferRef) {
+                int bufferSize = [rtcPixelBuffer bufferSizeForCroppingAndScalingToWidth:width height:width];
+                if (_croppingBuffer.size() < bufferSize) {
+                    _croppingBuffer.resize(bufferSize);
+                }
+                if ([rtcPixelBuffer cropAndScaleTo:outputPixelBufferRef withTempBuffer:_croppingBuffer.data()]) {
+                    rtcPixelBuffer = [[RTCCVPixelBuffer alloc] initWithPixelBuffer:outputPixelBufferRef];
+                }
+                CVPixelBufferRelease(outputPixelBufferRef);
+            }
+        }
+    }
+    
     int64_t timeStampNs = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer)) *
     kNanosecondsPerSecond;
     RTCVideoFrame *videoFrame = [[RTCVideoFrame alloc] initWithBuffer:rtcPixelBuffer
                                                              rotation:_rotation
                                                           timeStampNs:timeStampNs];
-    
- //   if (!_isPaused && _skippedFrame > 15) {
+    if (!_isPaused) {
         getObjCVideoSource(_source)->OnCapturedFrame(videoFrame);
-   // }
+    }
     _skippedFrame = MIN(_skippedFrame + 1, 16);
 }
 
@@ -564,3 +619,4 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 
 
 @end
+

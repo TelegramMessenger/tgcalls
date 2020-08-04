@@ -179,6 +179,7 @@ private:
     _metalView.layer.contentsGravity = kCAGravityResizeAspectFill;//UIViewContentModeScaleAspectFill;
     [self addSubview:_metalView];
     _videoFrameSize = CGSizeZero;
+//    _metalView.layer.affineTransform = CGAffineTransformMakeScale(-1.0, -1.0);
 }
 
 
