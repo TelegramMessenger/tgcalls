@@ -163,6 +163,9 @@ void Manager::start() {
 			},
             localPreferredVideoAspectRatio);
 	}));
+	_mediaManager->perform(RTC_FROM_HERE, [](MediaManager *mediaManager) {
+		mediaManager->start();
+	});
 }
 
 void Manager::receiveSignalingData(const std::vector<uint8_t> &data) {

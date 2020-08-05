@@ -43,6 +43,7 @@ public:
         float localPreferredVideoAspectRatio);
 	~MediaManager();
 
+	void start();
 	void setIsConnected(bool isConnected);
 	void notifyPacketSent(const rtc::SentPacket &sentPacket);
 	void setSendVideo(std::shared_ptr<VideoCaptureInterface> videoCapture);

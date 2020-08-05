@@ -55,7 +55,7 @@ MediaManager::MediaManager(
 	std::shared_ptr<VideoCaptureInterface> videoCapture,
 	std::function<void(Message &&)> sendSignalingMessage,
 	std::function<void(Message &&)> sendTransportMessage,
-    float localPreferredVideoAspectRatio) :
+	float localPreferredVideoAspectRatio) :
 _thread(thread),
 _eventLog(std::make_unique<webrtc::RtcEventLogNull>()),
 _taskQueueFactory(webrtc::CreateDefaultTaskQueueFactory()),
@@ -157,7 +157,9 @@ _localPreferredVideoAspectRatio(localPreferredVideoAspectRatio) {
 	_audioChannel->SetPlayout(true);
 
 	_videoChannel->SetInterface(_videoNetworkInterface.get(), webrtc::MediaTransportConfig());
+}
 
+void MediaManager::start() {
 	_sendSignalingMessage({ _myVideoFormats });
 
 	if (_videoCapture != nullptr) {
