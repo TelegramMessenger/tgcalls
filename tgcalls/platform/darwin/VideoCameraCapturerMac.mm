@@ -1,7 +1,7 @@
 #include "VideoCameraCapturerMac.h"
 
 #import <AVFoundation/AVFoundation.h>
-
+#import  "TGRTCCVPixelBuffer.h"
 #include "rtc_base/logging.h"
 #import "base/RTCLogging.h"
 #import "base/RTCVideoFrameBuffer.h"
@@ -354,7 +354,8 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
         return;
     }
 
-    RTCCVPixelBuffer *rtcPixelBuffer = [[RTCCVPixelBuffer alloc] initWithPixelBuffer:pixelBuffer];
+    TGRTCCVPixelBuffer *rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:pixelBuffer];
+    rtcPixelBuffer.shouldBeMirrored = YES;
     if (!_isPaused && _uncroppedSink) {
         int64_t timeStampNs = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer)) *
         kNanosecondsPerSecond;
@@ -393,7 +394,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
         height &= ~1;
         
         if (width < rtcPixelBuffer.width || height < rtcPixelBuffer.height) {
-            rtcPixelBuffer = [[RTCCVPixelBuffer alloc] initWithPixelBuffer:pixelBuffer adaptedWidth:width adaptedHeight:height cropWidth:width cropHeight:height cropX:cropX cropY:cropY];
+            rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:pixelBuffer adaptedWidth:width adaptedHeight:height cropWidth:width cropHeight:height cropX:cropX cropY:cropY];
             
             CVPixelBufferRef outputPixelBufferRef = NULL;
             OSType pixelFormat = CVPixelBufferGetPixelFormatType(rtcPixelBuffer.pixelBuffer);
@@ -404,7 +405,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
                     _croppingBuffer.resize(bufferSize);
                 }
                 if ([rtcPixelBuffer cropAndScaleTo:outputPixelBufferRef withTempBuffer:_croppingBuffer.data()]) {
-                    rtcPixelBuffer = [[RTCCVPixelBuffer alloc] initWithPixelBuffer:outputPixelBufferRef];
+                    rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:outputPixelBufferRef];
                 }
                 CVPixelBufferRelease(outputPixelBufferRef);
             }

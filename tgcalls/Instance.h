@@ -191,6 +191,7 @@ struct Descriptor {
 	std::function<void(State, VideoState)> stateUpdated;
 	std::function<void(int)> signalBarsUpdated;
 	std::function<void(bool)> remoteVideoIsActiveUpdated;
+    std::function<void(float)> remotePrefferedAspectRatioUpdated;
 	std::function<void(const std::vector<uint8_t> &)> signalingDataEmitted;
 };
 

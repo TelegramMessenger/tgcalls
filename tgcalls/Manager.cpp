@@ -43,6 +43,7 @@ _rtcServers(std::move(descriptor.rtcServers)),
 _videoCapture(std::move(descriptor.videoCapture)),
 _stateUpdated(std::move(descriptor.stateUpdated)),
 _remoteVideoIsActiveUpdated(std::move(descriptor.remoteVideoIsActiveUpdated)),
+_remotePrefferedAspectRatioUpdated(std::move(descriptor.remotePrefferedAspectRatioUpdated)),
 _signalingDataEmitted(std::move(descriptor.signalingDataEmitted)),
 _localPreferredVideoAspectRatio(descriptor.config.preferredAspectRatio),
 _enableHighBitrateVideo(descriptor.config.enableHighBitrateVideo) {
@@ -208,6 +209,10 @@ void Manager::receiveMessage(DecryptedMessage &&message) {
     } else if (const auto remoteVideoIsActive = absl::get_if<RemoteVideoIsActiveMessage>(data)) {
 		_remoteVideoIsActiveUpdated(remoteVideoIsActive->active);
 	} else {
+        if (const auto videoParameters = absl::get_if<VideoParametersMessage>(data)) {
+            float value = ((float)videoParameters->aspectRatio) / 1000.0;
+            _remotePrefferedAspectRatioUpdated(value);
+        }
 		_mediaManager->perform(RTC_FROM_HERE, [=, message = std::move(message)](MediaManager *mediaManager) mutable {
 			mediaManager->receiveMessage(std::move(message));
 		});

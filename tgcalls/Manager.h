@@ -34,6 +34,7 @@ private:
 	std::shared_ptr<VideoCaptureInterface> _videoCapture;
 	std::function<void(const State &, VideoState)> _stateUpdated;
 	std::function<void(bool)> _remoteVideoIsActiveUpdated;
+    std::function<void(float)> _remotePrefferedAspectRatioUpdated;
 	std::function<void(const std::vector<uint8_t> &)> _signalingDataEmitted;
 	std::function<uint32_t(const Message &)> _sendSignalingMessage;
 	std::function<void(Message&&)> _sendTransportMessage;

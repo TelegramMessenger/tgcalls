@@ -236,6 +236,7 @@ public:
     _signalBarsUpdated(descriptor.signalBarsUpdated),
     _signalingDataEmitted(descriptor.signalingDataEmitted),
     _remoteVideoIsActiveUpdated(descriptor.remoteVideoIsActiveUpdated),
+    _remotePrefferedAspectRatioUpdated(descriptor.remotePrefferedAspectRatioUpdated),
 	_videoCapture(descriptor.videoCapture),
 	_localPreferredVideoAspectRatio(descriptor.config.preferredAspectRatio),
 	_state(State::Reconnecting),
@@ -589,6 +590,7 @@ public:
                 VideoCaptureInterfaceObject *videoCaptureImpl = GetVideoCaptureAssumingSameThread(_videoCapture.get());
                 videoCaptureImpl->setPreferredAspectRatio(_preferredAspectRatio);
             }
+            _remotePrefferedAspectRatioUpdated(_preferredAspectRatio);
         }
     }
 
@@ -906,6 +908,7 @@ private:
     std::function<void(int)> _signalBarsUpdated;
     std::function<void(const std::vector<uint8_t> &)> _signalingDataEmitted;
     std::function<void(bool)> _remoteVideoIsActiveUpdated;
+    std::function<void(float)> _remotePrefferedAspectRatioUpdated;
     std::shared_ptr<VideoCaptureInterface> _videoCapture;
     std::unique_ptr<EncryptedConnection> _signalingConnection;
     float _localPreferredVideoAspectRatio = 0.0f;

@@ -1,7 +1,7 @@
 #import "VideoMetalViewMac.h"
 #import <Metal/Metal.h>
 #import <MetalKit/MetalKit.h>
-
+#import "TGRTCCVPixelBuffer.h"
 #import "base/RTCLogging.h"
 #import "base/RTCVideoFrame.h"
 #import "base/RTCVideoFrameBuffer.h"
@@ -76,9 +76,13 @@ private:
     CGSize _currentSize;
     std::shared_ptr<VideoRendererAdapterImpl> _sink;
     
-    void (^_onFirstFrameReceived)();
+    void (^_onFirstFrameReceived)(float);
     bool _firstFrameReceivedReported;
     void (^_onOrientationUpdated)(int);
+    void (^_onIsMirroredUpdated)(bool);
+    
+    bool _didSetShouldBeMirrored;
+    bool _shouldBeMirrored;
 
 }
 
@@ -209,16 +213,44 @@ private:
     if (CGRectIsEmpty(view.bounds)) {
         return;
     }
-    
+        
     RTCMTLRenderer *renderer;
-    if (!_rendererI420) {
-        _rendererI420 = [VideoMetalView createI420Renderer];
-        if (![_rendererI420 addRenderingDestination:_metalView]) {
-            _rendererI420 = nil;
-            RTCLogError(@"Failed to create I420 renderer");
-            return;
+    
+    if ([videoFrame.buffer isKindOfClass:[RTCCVPixelBuffer class]]) {
+        RTCCVPixelBuffer *buffer = (RTCCVPixelBuffer*)videoFrame.buffer;
+        
+        if ([buffer isKindOfClass:[TGRTCCVPixelBuffer class]]) {
+            bool shouldBeMirrored = ((TGRTCCVPixelBuffer *)buffer).shouldBeMirrored;
+            if (shouldBeMirrored != _shouldBeMirrored) {
+                _shouldBeMirrored = shouldBeMirrored;
+                if (_shouldBeMirrored) {
+                  //  _metalView.layer.transform = CATransform3DMakeScale(-1, 1, 1);
+                } else {
+                    //_metalView.layer.transform = CATransform3DIdentity;
+                }
+                
+                if (_didSetShouldBeMirrored) {
+                    if (_onIsMirroredUpdated) {
+                        _onIsMirroredUpdated(_shouldBeMirrored);
+                    }
+                } else {
+                    _didSetShouldBeMirrored = true;
+                }
+            }
         }
+        
+        if (!_rendererI420) {
+            _rendererI420 = [VideoMetalView createI420Renderer];
+            if (![_rendererI420 addRenderingDestination:_metalView]) {
+                _rendererI420 = nil;
+                RTCLogError(@"Failed to create I420 renderer");
+                return;
+            }
+        }
+        renderer = _rendererI420;
     }
+    
+    
     renderer = _rendererI420;
     
     renderer.rotationOverride = _rotationOverride;
@@ -288,7 +320,7 @@ private:
 
     if (!_firstFrameReceivedReported && _onFirstFrameReceived) {
         _firstFrameReceivedReported = true;
-        _onFirstFrameReceived();
+        _onFirstFrameReceived((float)frame.width / (float)frame.height);
     }
     
     if (!self.isEnabled) {
@@ -308,7 +340,7 @@ private:
     return _sink;
 }
 
-- (void)setOnFirstFrameReceived:(void (^ _Nullable)())onFirstFrameReceived {
+- (void)setOnFirstFrameReceived:(void (^ _Nullable)(float))onFirstFrameReceived {
     _onFirstFrameReceived = [onFirstFrameReceived copy];
     _firstFrameReceivedReported = false;
 }
@@ -323,6 +355,9 @@ private:
 }
 - (void)internalSetOnOrientationUpdated:(void (^ _Nullable)(int))onOrientationUpdated {
     _onOrientationUpdated = [onOrientationUpdated copy];
+}
+- (void)internalSetOnIsMirroredUpdated:(void (^ _Nullable)(bool))onIsMirroredUpdated {
+    _onIsMirroredUpdated = [onIsMirroredUpdated copy];
 }
 
 @end

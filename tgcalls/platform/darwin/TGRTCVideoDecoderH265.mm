@@ -111,10 +111,12 @@ static void tg_h265DecompressionOutputCallback(void* decoder,
           [requestKeyframeHolder.lock unlock];
       };
       NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
+#ifdef WEBRTC_IOS
       [center addObserver:self
       selector:@selector(handleApplicationDidBecomeActive:)
           name:UIApplicationWillEnterForegroundNotification
         object:[UIApplication sharedApplication]];
+#endif
   }
 
   return self;
