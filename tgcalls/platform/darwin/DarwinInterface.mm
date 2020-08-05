@@ -21,6 +21,7 @@ namespace tgcalls {
 void DarwinInterface::configurePlatformAudio() {
 #ifdef WEBRTC_IOS
     [RTCAudioSession sharedInstance].useManualAudio = true;
+    [[RTCAudioSession sharedInstance] audioSessionDidActivate:[AVAudioSession sharedInstance]];
     [RTCAudioSession sharedInstance].isAudioEnabled = true;
 #endif
 }

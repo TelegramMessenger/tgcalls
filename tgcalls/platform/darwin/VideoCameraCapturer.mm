@@ -5,7 +5,7 @@
 #include "rtc_base/logging.h"
 #import "base/RTCLogging.h"
 #import "base/RTCVideoFrameBuffer.h"
-#import "components/video_frame_buffer/RTCCVPixelBuffer.h"
+#import "TGRTCCVPixelBuffer.h"
 #import "sdk/objc/native/src/objc_video_track_source.h"
 #import "sdk/objc/native/src/objc_frame_buffer.h"
 #import "api/video_track_source_proxy.h"
@@ -29,7 +29,8 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     return static_cast<webrtc::ObjCVideoTrackSource *>(proxy_source->internal());
 }
 
-@interface RTCCVPixelBuffer (CustomCropping)
+//TODO: investigate the green edge after scaling, likely related to padding
+/*@interface RTCCVPixelBuffer (CustomCropping)
 
 @end
 
@@ -148,7 +149,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     CVPixelBufferUnlockBaseAddress(outputPixelBuffer, 0);
 }
 
-@end
+@end*/
 
 @interface VideoCameraCapturer () <AVCaptureVideoDataOutputSampleBufferDelegate> {
     rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _source;
@@ -168,7 +169,6 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     RTCVideoRotation _rotation;
     UIDeviceOrientation _orientation;
     bool _rotationLock;
-    bool _didAdjustMirroring;
     
     void (^_isActiveUpdated)(bool);
     bool _isActiveValue;
@@ -409,7 +409,9 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
         }
     }
     
-    RTCCVPixelBuffer *rtcPixelBuffer = [[RTCCVPixelBuffer alloc] initWithPixelBuffer:pixelBuffer];
+    TGRTCCVPixelBuffer *rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:pixelBuffer];
+    rtcPixelBuffer.shouldBeMirrored = usingFrontCamera;
+    
     if (!_isPaused && _uncroppedSink) {
         int64_t timeStampNs = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer)) *
         kNanosecondsPerSecond;
@@ -447,8 +449,11 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
         height = (int)aspectHeight;
         height &= ~1;
         
+        height = MIN(rtcPixelBuffer.height, height + 16);
+        
         if (width < rtcPixelBuffer.width || height < rtcPixelBuffer.height) {
-            rtcPixelBuffer = [[RTCCVPixelBuffer alloc] initWithPixelBuffer:pixelBuffer adaptedWidth:width adaptedHeight:height cropWidth:width cropHeight:height cropX:cropX cropY:cropY];
+            rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:pixelBuffer adaptedWidth:width adaptedHeight:height cropWidth:width cropHeight:height cropX:cropX cropY:cropY];
+            rtcPixelBuffer.shouldBeMirrored = usingFrontCamera;
             
             CVPixelBufferRef outputPixelBufferRef = NULL;
             OSType pixelFormat = CVPixelBufferGetPixelFormatType(rtcPixelBuffer.pixelBuffer);
@@ -459,7 +464,8 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
                     _croppingBuffer.resize(bufferSize);
                 }
                 if ([rtcPixelBuffer cropAndScaleTo:outputPixelBufferRef withTempBuffer:_croppingBuffer.data()]) {
-                    rtcPixelBuffer = [[RTCCVPixelBuffer alloc] initWithPixelBuffer:outputPixelBufferRef];
+                    rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:outputPixelBufferRef];
+                    rtcPixelBuffer.shouldBeMirrored = usingFrontCamera;
                 }
                 CVPixelBufferRelease(outputPixelBufferRef);
             }
@@ -626,7 +632,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     
     // `videoDataOutput.availableVideoCVPixelFormatTypes` returns the pixel formats supported by the
     // device with the most efficient output format first. Find the first format that we support.
-    NSSet<NSNumber *> *supportedPixelFormats = [RTCCVPixelBuffer supportedPixelFormats];
+    NSSet<NSNumber *> *supportedPixelFormats = [TGRTCCVPixelBuffer supportedPixelFormats];
     NSMutableOrderedSet *availablePixelFormats =
     [NSMutableOrderedSet orderedSetWithArray:videoDataOutput.availableVideoCVPixelFormatTypes];
     [availablePixelFormats intersectSet:supportedPixelFormats];
@@ -643,7 +649,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 
 - (void)updateVideoDataOutputPixelFormat:(AVCaptureDeviceFormat *)format {
     FourCharCode mediaSubType = CMFormatDescriptionGetMediaSubType(format.formatDescription);
-    if (![[RTCCVPixelBuffer supportedPixelFormats] containsObject:@(mediaSubType)]) {
+    if (![[TGRTCCVPixelBuffer supportedPixelFormats] containsObject:@(mediaSubType)]) {
         mediaSubType = _preferredOutputPixelFormat;
     }
     

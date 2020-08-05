@@ -26,6 +26,7 @@
 - (std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)getSink;
 - (void)setOnFirstFrameReceived:(void (^ _Nullable)())onFirstFrameReceived;
 - (void)internalSetOnOrientationUpdated:(void (^ _Nullable)(int))onOrientationUpdated;
+- (void)internalSetOnIsMirroredUpdated:(void (^ _Nullable)(bool))onIsMirroredUpdated;
 
 @end
 

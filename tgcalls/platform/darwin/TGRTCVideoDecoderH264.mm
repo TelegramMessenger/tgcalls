@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2018 The WebRTC project authors. All Rights Reserved.
+ *  Copyright (c) 2015 The WebRTC project authors. All Rights Reserved.
  *
  *  Use of this source code is governed by a BSD-style license
  *  that can be found in the LICENSE file in the root of the source
@@ -9,7 +9,7 @@
  *
  */
 
-#import "TGRTCVideoDecoderH265.h"
+#import "TGRTCVideoDecoderH264.h"
 
 #import <VideoToolbox/VideoToolbox.h>
 
@@ -29,122 +29,77 @@
 #include "rtc_base/time_utils.h"
 #include "sdk/objc/components/video_codec/nalu_rewriter.h"
 
-#include "Manager.h"
-
-typedef void (^TGRTCVideoDecoderRequestKeyframeCallback)();
-
 // Struct that we pass to the decoder per frame to decode. We receive it again
 // in the decoder callback.
-struct RTCH265FrameDecodeParams {
-  RTCH265FrameDecodeParams(RTCVideoDecoderCallback cb, int64_t ts, TGRTCVideoDecoderRequestKeyframeCallback requestFrame)
-      : callback(cb), timestamp(ts), requestFrame(requestFrame) {}
+struct RTCFrameDecodeParams {
+  RTCFrameDecodeParams(RTCVideoDecoderCallback cb, int64_t ts) : callback(cb), timestamp(ts) {}
   RTCVideoDecoderCallback callback;
   int64_t timestamp;
-  TGRTCVideoDecoderRequestKeyframeCallback requestFrame;
 };
+
+@interface TGRTCVideoDecoderH264 ()
+- (void)setError:(OSStatus)error;
+@end
 
 // This is the callback function that VideoToolbox calls when decode is
 // complete.
-static void tg_h265DecompressionOutputCallback(void* decoder,
-                                     void* params,
-                                     OSStatus status,
-                                     VTDecodeInfoFlags infoFlags,
-                                     CVImageBufferRef imageBuffer,
-                                     CMTime timestamp,
-                                     CMTime duration) {
-  std::unique_ptr<RTCH265FrameDecodeParams> decodeParams(
-      reinterpret_cast<RTCH265FrameDecodeParams*>(params));
+static void decompressionOutputCallback(void *decoderRef,
+                                 void *params,
+                                 OSStatus status,
+                                 VTDecodeInfoFlags infoFlags,
+                                 CVImageBufferRef imageBuffer,
+                                 CMTime timestamp,
+                                 CMTime duration) {
+  std::unique_ptr<RTCFrameDecodeParams> decodeParams(
+      reinterpret_cast<RTCFrameDecodeParams *>(params));
   if (status != noErr) {
+    TGRTCVideoDecoderH264 *decoder = (__bridge TGRTCVideoDecoderH264 *)decoderRef;
+    [decoder setError:status];
     RTC_LOG(LS_ERROR) << "Failed to decode frame. Status: " << status;
-    if (status == -12909) {
-      decodeParams->requestFrame();
-    }
     return;
   }
   // TODO(tkchin): Handle CVO properly.
-  RTCCVPixelBuffer* frameBuffer =
-      [[RTCCVPixelBuffer alloc] initWithPixelBuffer:imageBuffer];
-  RTCVideoFrame* decodedFrame = [[RTCVideoFrame alloc]
-      initWithBuffer:frameBuffer
-            rotation:RTCVideoRotation_0
-         timeStampNs:CMTimeGetSeconds(timestamp) * rtc::kNumNanosecsPerSec];
+  RTCCVPixelBuffer *frameBuffer = [[RTCCVPixelBuffer alloc] initWithPixelBuffer:imageBuffer];
+  RTCVideoFrame *decodedFrame =
+      [[RTCVideoFrame alloc] initWithBuffer:frameBuffer
+                                   rotation:RTCVideoRotation_0
+                                timeStampNs:CMTimeGetSeconds(timestamp) * rtc::kNumNanosecsPerSec];
   decodedFrame.timeStamp = (int32_t)decodeParams->timestamp;
   decodeParams->callback(decodedFrame);
 }
 
-@interface TGRTCVideoDecoderH265RequestKeyframeHolder : NSObject
-
-@property (nonatomic, strong) NSLock *lock;
-@property (nonatomic) bool shouldRequestKeyframe;
-
-@end
-
-@implementation TGRTCVideoDecoderH265RequestKeyframeHolder
-
-- (instancetype)init {
-    self = [super init];
-    if (self != nil) {
-        _lock = [[NSLock alloc] init];
-    }
-    return self;
-}
-
-@end
-
 // Decoder.
-@implementation TGRTCVideoDecoderH265 {
+@implementation TGRTCVideoDecoderH264 {
   CMVideoFormatDescriptionRef _videoFormat;
+  CMMemoryPoolRef _memoryPool;
   VTDecompressionSessionRef _decompressionSession;
   RTCVideoDecoderCallback _callback;
-  TGRTCVideoDecoderH265RequestKeyframeHolder *_requestKeyframeHolder;
-  TGRTCVideoDecoderRequestKeyframeCallback _requestFrame;
   OSStatus _error;
 }
 
 - (instancetype)init {
-  if (self = [super init]) {
-      _requestKeyframeHolder = [[TGRTCVideoDecoderH265RequestKeyframeHolder alloc] init];
-      TGRTCVideoDecoderH265RequestKeyframeHolder *requestKeyframeHolder = _requestKeyframeHolder;
-      _requestFrame = ^{
-          [requestKeyframeHolder.lock lock];
-          requestKeyframeHolder.shouldRequestKeyframe = true;
-          [requestKeyframeHolder.lock unlock];
-      };
-      NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
-      [center addObserver:self
-      selector:@selector(handleApplicationDidBecomeActive:)
-          name:UIApplicationWillEnterForegroundNotification
-        object:[UIApplication sharedApplication]];
+  self = [super init];
+  if (self) {
+    _memoryPool = CMMemoryPoolCreate(nil);
   }
-
   return self;
 }
 
 - (void)dealloc {
+  CMMemoryPoolInvalidate(_memoryPool);
+  CFRelease(_memoryPool);
   [self destroyDecompressionSession];
   [self setVideoFormat:nullptr];
-  [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 - (NSInteger)startDecodeWithNumberOfCores:(int)numberOfCores {
   return WEBRTC_VIDEO_CODEC_OK;
 }
 
-- (void)handleApplicationDidBecomeActive:(NSNotification *)notification {
-    __weak TGRTCVideoDecoderH265 *weakSelf = self;
-    tgcalls::Manager::getMediaThread()->PostTask(RTC_FROM_HERE, [weakSelf]() {
-        __strong TGRTCVideoDecoderH265 *strongSelf = weakSelf;
-        if (strongSelf == nil) {
-            return;
-        }
-        strongSelf->_videoFormat = nil;
-    });
-}
-
-- (NSInteger)decode:(RTCEncodedImage*)inputImage
-          missingFrames:(BOOL)missingFrames
-      codecSpecificInfo:(__nullable id<RTCCodecSpecificInfo>)info
-           renderTimeMs:(int64_t)renderTimeMs {
+- (NSInteger)decode:(RTCEncodedImage *)inputImage
+        missingFrames:(BOOL)missingFrames
+    codecSpecificInfo:(nullable id<RTCCodecSpecificInfo>)info
+         renderTimeMs:(int64_t)renderTimeMs {
   RTC_DCHECK(inputImage.buffer);
 
   if (_error != noErr) {
@@ -154,13 +109,9 @@ static void tg_h265DecompressionOutputCallback(void* decoder,
   }
 
   rtc::ScopedCFTypeRef<CMVideoFormatDescriptionRef> inputFormat =
-      rtc::ScopedCF(webrtc::CreateH265VideoFormatDescription(
-          (uint8_t*)inputImage.buffer.bytes, inputImage.buffer.length));
+      rtc::ScopedCF(webrtc::CreateVideoFormatDescription((uint8_t *)inputImage.buffer.bytes,
+                                                         inputImage.buffer.length));
   if (inputFormat) {
-    CMVideoDimensions dimensions =
-        CMVideoFormatDescriptionGetDimensions(inputFormat.get());
-    RTC_LOG(LS_INFO) << "Resolution: " << dimensions.width << " x "
-                     << dimensions.height;
     // Check if the video format has changed, and reinitialize decoder if
     // needed.
     if (!CMFormatDescriptionEqual(inputFormat.get(), _videoFormat)) {
@@ -181,30 +132,29 @@ static void tg_h265DecompressionOutputCallback(void* decoder,
     return WEBRTC_VIDEO_CODEC_ERROR;
   }
   CMSampleBufferRef sampleBuffer = nullptr;
-  if (!webrtc::H265AnnexBBufferToCMSampleBuffer(
-          (uint8_t*)inputImage.buffer.bytes, inputImage.buffer.length,
-          _videoFormat, &sampleBuffer)) {
+  if (!webrtc::H264AnnexBBufferToCMSampleBuffer((uint8_t *)inputImage.buffer.bytes,
+                                                inputImage.buffer.length,
+                                                _videoFormat,
+                                                &sampleBuffer,
+                                                _memoryPool)) {
     return WEBRTC_VIDEO_CODEC_ERROR;
   }
   RTC_DCHECK(sampleBuffer);
-  VTDecodeFrameFlags decodeFlags =
-      kVTDecodeFrame_EnableAsynchronousDecompression;
-  std::unique_ptr<RTCH265FrameDecodeParams> frameDecodeParams;
-  frameDecodeParams.reset(
-      new RTCH265FrameDecodeParams(_callback, inputImage.timeStamp, _requestFrame));
+  VTDecodeFrameFlags decodeFlags = kVTDecodeFrame_EnableAsynchronousDecompression;
+  std::unique_ptr<RTCFrameDecodeParams> frameDecodeParams;
+  frameDecodeParams.reset(new RTCFrameDecodeParams(_callback, inputImage.timeStamp));
   OSStatus status = VTDecompressionSessionDecodeFrame(
-      _decompressionSession, sampleBuffer, decodeFlags,
-      frameDecodeParams.release(), nullptr);
+      _decompressionSession, sampleBuffer, decodeFlags, frameDecodeParams.release(), nullptr);
 #if defined(WEBRTC_IOS)
   // Re-initialize the decoder if we have an invalid session while the app is
-  // active and retry the decode request.
-  if (status == kVTInvalidSessionErr &&
+  // active or decoder malfunctions and retry the decode request.
+  if ((status == kVTInvalidSessionErr || status == kVTVideoDecoderMalfunctionErr) &&
       [self resetDecompressionSession] == WEBRTC_VIDEO_CODEC_OK) {
-    frameDecodeParams.reset(
-        new RTCH265FrameDecodeParams(_callback, inputImage.timeStamp, _requestFrame));
+    RTC_LOG(LS_INFO) << "Failed to decode frame with code: " << status
+                     << " retrying decode after decompression session reset";
+    frameDecodeParams.reset(new RTCFrameDecodeParams(_callback, inputImage.timeStamp));
     status = VTDecompressionSessionDecodeFrame(
-        _decompressionSession, sampleBuffer, decodeFlags,
-        frameDecodeParams.release(), nullptr);
+        _decompressionSession, sampleBuffer, decodeFlags, frameDecodeParams.release(), nullptr);
   }
 #endif
   CFRelease(sampleBuffer);
@@ -212,26 +162,15 @@ static void tg_h265DecompressionOutputCallback(void* decoder,
     RTC_LOG(LS_ERROR) << "Failed to decode frame with code: " << status;
     return WEBRTC_VIDEO_CODEC_ERROR;
   }
-  
-  bool requestKeyframe = false;
-    
-  [_requestKeyframeHolder.lock lock];
-  if (_requestKeyframeHolder.shouldRequestKeyframe) {
-    _requestKeyframeHolder.shouldRequestKeyframe = false;
-    requestKeyframe = true;
-  }
-  [_requestKeyframeHolder.lock unlock];
-    
-  if (requestKeyframe) {
-    RTC_LOG(LS_ERROR) << "Decoder asynchronously asked to request keyframe";
-    return WEBRTC_VIDEO_CODEC_ERROR;
-  }
-    
   return WEBRTC_VIDEO_CODEC_OK;
 }
 
 - (void)setCallback:(RTCVideoDecoderCallback)callback {
   _callback = callback;
+}
+
+- (void)setError:(OSStatus)error {
+  _error = error;
 }
 
 - (NSInteger)releaseDecoder {
@@ -273,12 +212,9 @@ static void tg_h265DecompressionOutputCallback(void* decoder,
   };
   CFDictionaryRef ioSurfaceValue = CreateCFTypeDictionary(nullptr, nullptr, 0);
   int64_t nv12type = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
-  CFNumberRef pixelFormat =
-      CFNumberCreate(nullptr, kCFNumberLongType, &nv12type);
-  CFTypeRef values[attributesSize] = {kCFBooleanTrue, ioSurfaceValue,
-                                      pixelFormat};
-  CFDictionaryRef attributes =
-      CreateCFTypeDictionary(keys, values, attributesSize);
+  CFNumberRef pixelFormat = CFNumberCreate(nullptr, kCFNumberLongType, &nv12type);
+  CFTypeRef values[attributesSize] = {kCFBooleanTrue, ioSurfaceValue, pixelFormat};
+  CFDictionaryRef attributes = CreateCFTypeDictionary(keys, values, attributesSize);
   if (ioSurfaceValue) {
     CFRelease(ioSurfaceValue);
     ioSurfaceValue = nullptr;
@@ -288,14 +224,13 @@ static void tg_h265DecompressionOutputCallback(void* decoder,
     pixelFormat = nullptr;
   }
   VTDecompressionOutputCallbackRecord record = {
-      tg_h265DecompressionOutputCallback,
-      nullptr,
+      decompressionOutputCallback, (__bridge void *)self,
   };
-  OSStatus status =
-      VTDecompressionSessionCreate(nullptr, _videoFormat, nullptr, attributes,
-                                   &record, &_decompressionSession);
+  OSStatus status = VTDecompressionSessionCreate(
+      nullptr, _videoFormat, nullptr, attributes, &record, &_decompressionSession);
   CFRelease(attributes);
   if (status != noErr) {
+    RTC_LOG(LS_ERROR) << "Failed to create decompression session: " << status;
     [self destroyDecompressionSession];
     return WEBRTC_VIDEO_CODEC_ERROR;
   }
@@ -307,8 +242,7 @@ static void tg_h265DecompressionOutputCallback(void* decoder,
 - (void)configureDecompressionSession {
   RTC_DCHECK(_decompressionSession);
 #if defined(WEBRTC_IOS)
-  // VTSessionSetProperty(_decompressionSession,
-  // kVTDecompressionPropertyKey_RealTime, kCFBooleanTrue);
+  VTSessionSetProperty(_decompressionSession, kVTDecompressionPropertyKey_RealTime, kCFBooleanTrue);
 #endif
 }
 
@@ -338,7 +272,7 @@ static void tg_h265DecompressionOutputCallback(void* decoder,
   }
 }
 
-- (NSString*)implementationName {
+- (NSString *)implementationName {
   return @"VideoToolbox";
 }
 

@@ -11,7 +11,7 @@
 #import "TGRTCDefaultVideoDecoderFactory.h"
 
 #import "RTCH264ProfileLevelId.h"
-#import "RTCVideoDecoderH264.h"
+#import "TGRTCVideoDecoderH264.h"
 #import "api/video_codec/RTCVideoCodecConstants.h"
 #import "api/video_codec/RTCVideoDecoderVP8.h"
 #import "base/RTCVideoCodecInfo.h"
@@ -69,7 +69,7 @@
 
 - (id<RTCVideoDecoder>)createDecoder:(RTCVideoCodecInfo *)info {
   if ([info.name isEqualToString:kRTCVideoCodecH264Name]) {
-    return [[RTCVideoDecoderH264 alloc] init];
+    return [[TGRTCVideoDecoderH264 alloc] init];
   } else if ([info.name isEqualToString:kRTCVideoCodecVp8Name]) {
     return [RTCVideoDecoderVP8 vp8Decoder];
   }
