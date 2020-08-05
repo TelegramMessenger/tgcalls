@@ -12,6 +12,9 @@
 
 namespace tgcalls {
 
+enum class VideoState;
+enum class AudioState;
+
 struct CandidatesListMessage {
 	static constexpr uint8_t kId = 1;
 	static constexpr bool kRequiresAck = true;
@@ -32,11 +35,12 @@ struct RequestVideoMessage {
 	static constexpr bool kRequiresAck = true;
 };
 
-struct RemoteVideoIsActiveMessage {
+struct RemoteMediaStateMessage {
 	static constexpr uint8_t kId = 4;
 	static constexpr bool kRequiresAck = true;
 
-	bool active = false;
+	AudioState audio = AudioState();
+	VideoState video = VideoState();
 };
 
 struct AudioDataMessage {
@@ -77,7 +81,7 @@ struct Message {
 		CandidatesListMessage,
 		VideoFormatsMessage,
         RequestVideoMessage,
-        RemoteVideoIsActiveMessage,
+		RemoteMediaStateMessage,
 		AudioDataMessage,
 		VideoDataMessage,
         UnstructuredDataMessage,

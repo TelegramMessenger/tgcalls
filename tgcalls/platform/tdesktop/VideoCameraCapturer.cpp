@@ -60,12 +60,12 @@ bool VideoCameraCapturer::init(
 	return true;
 }
 
-void VideoCameraCapturer::setIsEnabled(bool enabled) {
-	if (_paused == !enabled) {
+void VideoCameraCapturer::setState(VideoState state) {
+	if (_state == state) {
 		return;
 	}
-	_paused = !enabled;
-	if (_paused) {
+	_state = state;
+	if (_state == VideoState::Inactive) {
 		_module->StopCapture();
 	} else {
 		_module->StartCapture(_capability);
@@ -100,7 +100,7 @@ void VideoCameraCapturer::destroy() {
 }
 
 void VideoCameraCapturer::OnFrame(const webrtc::VideoFrame &frame) {
-	if (_paused) {
+	if (_state != VideoState::Active) {
 		return;
 	}
 	int cropped_width = 0;

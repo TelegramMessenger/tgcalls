@@ -17,10 +17,10 @@ public:
 	~VideoCaptureInterfaceObject();
 
 	void switchCamera();
-	void setIsVideoEnabled(bool isVideoEnabled);
+	void setState(VideoState state);
     void setPreferredAspectRatio(float aspectRatio);
-	void setVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
-	void setIsActiveUpdated(std::function<void (bool)> isActiveUpdated);
+	void setOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
+	void setStateUpdated(std::function<void(VideoState)> stateUpdated);
 
 public:
 	rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _videoSource;
@@ -28,9 +28,9 @@ public:
 private:
 	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _currentUncroppedSink;
 	std::unique_ptr<VideoCapturerInterface> _videoCapturer;
-	std::function<void (bool)> _isActiveUpdated;
+	std::function<void(VideoState)> _stateUpdated;
 	bool _useFrontCamera = true;
-	bool _isVideoEnabled = true;
+	VideoState _state = VideoState::Active;
 };
 
 class VideoCaptureInterfaceImpl : public VideoCaptureInterface {
@@ -39,9 +39,9 @@ public:
 	virtual ~VideoCaptureInterfaceImpl();
 
 	void switchCamera() override;
-	void setIsVideoEnabled(bool isVideoEnabled) override;
+	void setState(VideoState state) override;
     void setPreferredAspectRatio(float aspectRatio) override;
-	void setVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) override;
+	void setOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) override;
 
 	ThreadLocalObject<VideoCaptureInterfaceObject> *object();
 

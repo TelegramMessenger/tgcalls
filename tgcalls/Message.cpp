@@ -97,17 +97,23 @@ bool Deserialize(RequestVideoMessage &to, rtc::ByteBufferReader &reader, bool si
 	return true;
 }
 
-void Serialize(rtc::ByteBufferWriter &to, const RemoteVideoIsActiveMessage &from, bool singleMessagePacket) {
-	to.WriteUInt8(from.active ? 1 : 0);
+void Serialize(rtc::ByteBufferWriter &to, const RemoteMediaStateMessage &from, bool singleMessagePacket) {
+	uint8_t state = (uint8_t(from.video) << 1) | uint8_t(from.audio);
+	to.WriteUInt8(state);
 }
 
-bool Deserialize(RemoteVideoIsActiveMessage &to, rtc::ByteBufferReader &reader, bool singleMessagePacket) {
-	uint8_t value = 0;
-	if (!reader.ReadUInt8(&value)) {
-		RTC_LOG(LS_ERROR) << "Could not read videoIsActive.";
+bool Deserialize(RemoteMediaStateMessage &to, rtc::ByteBufferReader &reader, bool singleMessagePacket) {
+	uint8_t state = 0;
+	if (!reader.ReadUInt8(&state)) {
+		RTC_LOG(LS_ERROR) << "Could not read remote media state.";
 		return false;
 	}
-	to.active = (value != 0);
+	to.audio = AudioState(state & 0x01);
+	to.video = VideoState((state >> 1) & 0x03);
+	if (to.video == VideoState(0x03)) {
+		RTC_LOG(LS_ERROR) << "Invalid value for remote video state.";
+		return false;
+	}
 	return true;
 }
 

@@ -9,6 +9,7 @@
 
 #include "Instance.h"
 #include "Message.h"
+#include "VideoCaptureInterface.h"
 
 #include <functional>
 #include <memory>
@@ -19,17 +20,15 @@ class RtcEventLogNull;
 class TaskQueueFactory;
 class VideoBitrateAllocatorFactory;
 class VideoTrackSourceInterface;
-}
+} // namespace webrtc
 
 namespace cricket {
 class MediaEngineInterface;
 class VoiceMediaChannel;
 class VideoMediaChannel;
-}
+} // namespace cricket
 
 namespace tgcalls {
-
-class VideoCapturerInterface;
 
 class MediaManager : public sigslot::has_slots<>, public std::enable_shared_from_this<MediaManager> {
 public:
@@ -81,9 +80,14 @@ private:
 	bool computeIsSendingVideo() const;
 	void checkIsSendingVideoChanged(bool wasSending);
 	bool videoCodecsNegotiated() const;
-    
+
     bool computeIsReceivingVideo() const;
     void checkIsReceivingVideoChanged(bool wasReceiving);
+
+	void setOutgoingVideoState(VideoState state);
+	void setOutgoingAudioState(AudioState state);
+	void sendVideoParametersMessage();
+	void sendOutgoingMediaStateMessage();
 
 	rtc::Thread *_thread = nullptr;
 	std::unique_ptr<webrtc::RtcEventLogNull> _eventLog;
@@ -97,8 +101,9 @@ private:
 	bool _enableFlexfec = true;
 
 	bool _isConnected = false;
-	bool _muteOutgoingAudio = false;
 	bool _readyToReceiveVideo = false;
+	AudioState _outgoingAudioState = AudioState::Active;
+	VideoState _outgoingVideoState = VideoState::Inactive;
 
 	VideoFormatsMessage _myVideoFormats;
 	std::vector<cricket::VideoCodec> _videoCodecs;
@@ -113,7 +118,7 @@ private:
 	std::unique_ptr<webrtc::VideoBitrateAllocatorFactory> _videoBitrateAllocatorFactory;
 	std::shared_ptr<VideoCaptureInterface> _videoCapture;
 	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _currentIncomingVideoSink;
-    
+
     float _localPreferredVideoAspectRatio = 0.0f;
     float _preferredAspectRatio = 0.0f;
 
