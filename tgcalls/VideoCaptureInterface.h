@@ -25,7 +25,7 @@ protected:
 	VideoCaptureInterface() = default;
 
 public:
-	static std::shared_ptr<VideoCaptureInterface> Create();
+	static std::unique_ptr<VideoCaptureInterface> Create();
 
 	virtual ~VideoCaptureInterface();
 
