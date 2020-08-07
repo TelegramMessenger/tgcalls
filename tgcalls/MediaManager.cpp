@@ -55,6 +55,7 @@ MediaManager::MediaManager(
 	std::shared_ptr<VideoCaptureInterface> videoCapture,
 	std::function<void(Message &&)> sendSignalingMessage,
 	std::function<void(Message &&)> sendTransportMessage,
+    std::function<void(int)> signalBarsUpdated,
     float localPreferredVideoAspectRatio,
     bool enableHighBitrateVideo) :
 _thread(thread),
@@ -62,6 +63,7 @@ _eventLog(std::make_unique<webrtc::RtcEventLogNull>()),
 _taskQueueFactory(webrtc::CreateDefaultTaskQueueFactory()),
 _sendSignalingMessage(std::move(sendSignalingMessage)),
 _sendTransportMessage(std::move(sendTransportMessage)),
+_signalBarsUpdated(std::move(signalBarsUpdated)),
 _outgoingVideoState(videoCapture ? VideoState::Active : VideoState::Inactive),
 _videoCapture(std::move(videoCapture)),
 _localPreferredVideoAspectRatio(localPreferredVideoAspectRatio),
@@ -110,7 +112,13 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
 	callConfig.trials = &_fieldTrials;
 	callConfig.audio_state = _mediaEngine->voice().GetAudioState();
 	_call.reset(webrtc::Call::Create(callConfig));
-	_audioChannel.reset(_mediaEngine->voice().CreateMediaChannel(_call.get(), cricket::MediaConfig(), cricket::AudioOptions(), webrtc::CryptoOptions::NoGcm()));
+    
+    cricket::AudioOptions audioOptions;
+    audioOptions.echo_cancellation = true;
+    audioOptions.noise_suppression = true;
+    audioOptions.audio_jitter_buffer_fast_accelerate = true;
+    
+	_audioChannel.reset(_mediaEngine->voice().CreateMediaChannel(_call.get(), cricket::MediaConfig(), audioOptions, webrtc::CryptoOptions::NoGcm()));
 	_videoChannel.reset(_mediaEngine->video().CreateMediaChannel(_call.get(), cricket::MediaConfig(), cricket::VideoOptions(), webrtc::CryptoOptions::NoGcm(), _videoBitrateAllocatorFactory.get()));
 
 	const uint32_t opusClockrate = 48000;
@@ -167,6 +175,8 @@ void MediaManager::start() {
 	if (_videoCapture != nullptr) {
         setSendVideo(_videoCapture);
     }
+    
+    beginStatsTimer(3000);
 }
 
 MediaManager::~MediaManager() {
@@ -222,6 +232,46 @@ void MediaManager::sendVideoParametersMessage() {
 
 void MediaManager::sendOutgoingMediaStateMessage() {
 	_sendTransportMessage({ RemoteMediaStateMessage{ _outgoingAudioState, _outgoingVideoState } });
+}
+
+void MediaManager::beginStatsTimer(int timeoutMs) {
+    const auto weak = std::weak_ptr<MediaManager>(shared_from_this());
+    _thread->PostDelayedTask(RTC_FROM_HERE, [weak]() {
+        auto strong = weak.lock();
+        if (!strong) {
+            return;
+        }
+        strong->collectStats();
+    }, timeoutMs);
+}
+
+void MediaManager::collectStats() {
+    auto stats = _call->GetStats();
+    float bitrateNorm = 16.0f;
+    switch (_outgoingVideoState) {
+        case VideoState::Active:
+            bitrateNorm = 600.0f;
+            break;
+        default:
+            break;
+    }
+    float sendBitrateKbps = ((float)stats.send_bandwidth_bps / 1000.0f);
+    
+    float signalBarsNorm = 4.0f;
+    float adjustedQuality = sendBitrateKbps / bitrateNorm;
+    adjustedQuality = fmaxf(0.0f, adjustedQuality);
+    adjustedQuality = fminf(1.0f, adjustedQuality);
+    _signalBarsUpdated((int)(adjustedQuality * signalBarsNorm));
+    
+    beginStatsTimer(2000);
+    
+    /*
+     int send_bandwidth_bps = 0;       // Estimated available send bandwidth.
+     int max_padding_bitrate_bps = 0;  // Cumulative configured max padding.
+     int recv_bandwidth_bps = 0;       // Estimated available receive bandwidth.
+     int64_t pacer_delay_ms = 0;
+     int64_t rtt_ms = -1;
+     */
 }
 
 void MediaManager::notifyPacketSent(const rtc::SentPacket &sentPacket) {
@@ -285,7 +335,10 @@ void MediaManager::setSendVideo(std::shared_ptr<VideoCaptureInterface> videoCapt
 				}
 			});
 		});
-	}
+        setOutgoingVideoState(VideoState::Active);
+    } else {
+        setOutgoingVideoState(VideoState::Inactive);
+    }
 
     checkIsSendingVideoChanged(wasSending);
     checkIsReceivingVideoChanged(wasReceiving);
@@ -370,7 +423,7 @@ void MediaManager::checkIsReceivingVideoChanged(bool wasReceiving) {
 
         videoRecvParameters.extensions.emplace_back(webrtc::RtpExtension::kTransportSequenceNumberUri, 1);
         //recv_parameters.rtcp.reduced_size = true;
-        videoRecvParameters.rtcp.remote_estimate = true;
+        //videoRecvParameters.rtcp.remote_estimate = true;
 
         cricket::StreamParams videoRecvStreamParams;
         cricket::SsrcGroup videoRecvSsrcGroup(cricket::kFecFrSsrcGroupSemantics, {_ssrcVideo.incoming, _ssrcVideo.fecIncoming});

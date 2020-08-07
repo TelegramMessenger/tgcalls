@@ -40,6 +40,7 @@ public:
 		std::shared_ptr<VideoCaptureInterface> videoCapture,
 		std::function<void(Message &&)> sendSignalingMessage,
 		std::function<void(Message &&)> sendTransportMessage,
+        std::function<void(int)> signalBarsUpdated,
         float localPreferredVideoAspectRatio,
         bool enableHighBitrateVideo);
 	~MediaManager();
@@ -90,6 +91,9 @@ private:
 	void setOutgoingAudioState(AudioState state);
 	void sendVideoParametersMessage();
 	void sendOutgoingMediaStateMessage();
+    
+    void beginStatsTimer(int timeoutMs);
+    void collectStats();
 
 	rtc::Thread *_thread = nullptr;
 	std::unique_ptr<webrtc::RtcEventLogNull> _eventLog;
@@ -97,6 +101,7 @@ private:
 
 	std::function<void(Message &&)> _sendSignalingMessage;
 	std::function<void(Message &&)> _sendTransportMessage;
+    std::function<void(int)> _signalBarsUpdated;
 
 	SSRC _ssrcAudio;
 	SSRC _ssrcVideo;

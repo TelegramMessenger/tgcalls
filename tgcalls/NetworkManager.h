@@ -74,6 +74,8 @@ private:
 	std::unique_ptr<webrtc::BasicAsyncResolverFactory> _asyncResolverFactory;
 	std::unique_ptr<cricket::P2PTransportChannel> _transportChannel;
 
+    PeerIceParameters _localIceParameters;
+    absl::optional<PeerIceParameters> _remoteIceParameters;
 };
 
 } // namespace tgcalls

@@ -30,6 +30,8 @@
 #endif
 #import <AVFoundation/AVFoundation.h>
 
+#import "VideoCaptureInterface.h"
+
 @interface VideoCapturerInterfaceImplReference : NSObject {
     VideoCameraCapturer *_videoCapturer;
 }
@@ -136,13 +138,13 @@
 
 namespace tgcalls {
 
-VideoCapturerInterfaceImpl::VideoCapturerInterfaceImpl(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, bool useFrontCamera, std::function<void(bool)> isActiveUpdated) :
+VideoCapturerInterfaceImpl::VideoCapturerInterfaceImpl(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, bool useFrontCamera, std::function<void(VideoState)> stateUpdated) :
     _source(source) {
     _implReference = [[VideoCapturerInterfaceImplHolder alloc] init];
     VideoCapturerInterfaceImplHolder *implReference = _implReference;
     dispatch_async(dispatch_get_main_queue(), ^{
         VideoCapturerInterfaceImplReference *value = [[VideoCapturerInterfaceImplReference alloc] initWithSource:source useFrontCamera:useFrontCamera isActiveUpdated:^(bool isActive) {
-            isActiveUpdated(isActive);
+            stateUpdated(isActive ? VideoState::Active : VideoState::Paused);
         }];
         if (value != nil) {
             implReference.reference = (void *)CFBridgingRetain(value);

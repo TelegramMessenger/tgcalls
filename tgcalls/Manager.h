@@ -36,6 +36,7 @@ private:
 	std::function<void(AudioState, VideoState)> _remoteMediaStateUpdated;
     std::function<void(float)> _remotePrefferedAspectRatioUpdated;
 	std::function<void(const std::vector<uint8_t> &)> _signalingDataEmitted;
+    std::function<void(int)> _signalBarsUpdated;
 	std::function<uint32_t(const Message &)> _sendSignalingMessage;
 	std::function<void(Message&&)> _sendTransportMessage;
 	std::unique_ptr<ThreadLocalObject<NetworkManager>> _networkManager;

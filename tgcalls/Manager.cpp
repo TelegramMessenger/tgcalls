@@ -45,6 +45,7 @@ _stateUpdated(std::move(descriptor.stateUpdated)),
 _remoteMediaStateUpdated(std::move(descriptor.remoteMediaStateUpdated)),
 _remotePrefferedAspectRatioUpdated(std::move(descriptor.remotePrefferedAspectRatioUpdated)),
 _signalingDataEmitted(std::move(descriptor.signalingDataEmitted)),
+_signalBarsUpdated(std::move(descriptor.signalBarsUpdated)),
 _localPreferredVideoAspectRatio(descriptor.config.preferredAspectRatio),
 _enableHighBitrateVideo(descriptor.config.enableHighBitrateVideo) {
 	assert(_thread->IsCurrent());
@@ -148,7 +149,7 @@ void Manager::start() {
 			});
 	}));
 	bool isOutgoing = _encryptionKey.isOutgoing;
-	_mediaManager.reset(new ThreadLocalObject<MediaManager>(getMediaThread(), [weak, isOutgoing, thread, sendSignalingMessage, videoCapture = _videoCapture, localPreferredVideoAspectRatio = _localPreferredVideoAspectRatio, enableHighBitrateVideo = _enableHighBitrateVideo]() {
+	_mediaManager.reset(new ThreadLocalObject<MediaManager>(getMediaThread(), [weak, isOutgoing, thread, sendSignalingMessage, videoCapture = _videoCapture, localPreferredVideoAspectRatio = _localPreferredVideoAspectRatio, enableHighBitrateVideo = _enableHighBitrateVideo, signalBarsUpdated = _signalBarsUpdated]() {
 		return new MediaManager(
 			getMediaThread(),
 			isOutgoing,
@@ -163,6 +164,7 @@ void Manager::start() {
 					strong->_sendTransportMessage(std::move(message));
 				});
 			},
+            signalBarsUpdated,
             localPreferredVideoAspectRatio,
             enableHighBitrateVideo);
 	}));
@@ -206,7 +208,6 @@ void Manager::receiveMessage(DecryptedMessage &&message) {
 }
 
 void Manager::setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture) {
-	assert(videoCapture != nullptr);
 	assert(_didConnectOnce);
 
 	if (_videoCapture == videoCapture) {

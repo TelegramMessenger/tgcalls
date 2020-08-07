@@ -15,11 +15,30 @@ namespace tgcalls {
 enum class VideoState;
 enum class AudioState;
 
+struct PeerIceParameters {
+    std::string ufrag;
+    std::string pwd;
+    
+    PeerIceParameters() {
+    }
+    
+    PeerIceParameters(std::string ufrag_, std::string pwd_) :
+    ufrag(ufrag_),
+    pwd(pwd_) {
+    }
+    
+    PeerIceParameters(const PeerIceParameters &other) :
+    ufrag(other.ufrag),
+    pwd(other.pwd) {
+    }
+};
+
 struct CandidatesListMessage {
 	static constexpr uint8_t kId = 1;
 	static constexpr bool kRequiresAck = true;
 
 	std::vector<cricket::Candidate> candidates;
+    PeerIceParameters iceParameters;
 };
 
 struct VideoFormatsMessage {

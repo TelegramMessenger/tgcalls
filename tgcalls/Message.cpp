@@ -124,6 +124,9 @@ void Serialize(rtc::ByteBufferWriter &to, const CandidatesListMessage &from, boo
 	for (const auto &candidate : from.candidates) {
 		Serialize(to, candidate);
 	}
+    
+    Serialize(to, from.iceParameters.ufrag);
+    Serialize(to, from.iceParameters.pwd);
 }
 
 bool Deserialize(CandidatesListMessage &to, rtc::ByteBufferReader &reader, bool singleMessagePacket) {
@@ -140,6 +143,12 @@ bool Deserialize(CandidatesListMessage &to, rtc::ByteBufferReader &reader, bool 
 		}
 		to.candidates.push_back(std::move(candidate));
 	}
+    if (!Deserialize(to.iceParameters.ufrag, reader)) {
+        return false;
+    }
+    if (!Deserialize(to.iceParameters.pwd, reader)) {
+        return false;
+    }
 	return true;
 }
 
