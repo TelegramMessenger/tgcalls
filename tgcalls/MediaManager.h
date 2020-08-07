@@ -81,6 +81,7 @@ private:
 	void setPeerVideoFormats(VideoFormatsMessage &&peerFormats);
 
 	bool computeIsSendingVideo() const;
+    void configureSendingVideoIfNeeded();
 	void checkIsSendingVideoChanged(bool wasSending);
 	bool videoCodecsNegotiated() const;
 
@@ -109,6 +110,7 @@ private:
 
 	bool _isConnected = false;
 	bool _readyToReceiveVideo = false;
+    bool _didConfigureVideo = false;
 	AudioState _outgoingAudioState = AudioState::Active;
 	VideoState _outgoingVideoState = VideoState::Inactive;
 

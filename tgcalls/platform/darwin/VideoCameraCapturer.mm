@@ -178,6 +178,8 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     float _aspectRatio;
     std::vector<uint8_t> _croppingBuffer;
     std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _uncroppedSink;
+    
+    int _warmupFrameCount;
 }
 
 @end
@@ -193,6 +195,8 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
         _inForegroundValue = true;
         _isPaused = false;
         _isActiveUpdated = [isActiveUpdated copy];
+        
+        _warmupFrameCount = 100;
         
 #if TARGET_OS_IPHONE
         _rotationLock = true;
@@ -221,6 +225,10 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
                    selector:@selector(handleApplicationDidBecomeActive:)
                        name:UIApplicationDidBecomeActiveNotification
                      object:[UIApplication sharedApplication]];
+        [center addObserver:self
+            selector:@selector(handleApplicationWillEnterForeground:)
+                name:UIApplicationWillEnterForegroundNotification
+              object:[UIApplication sharedApplication]];
         [center addObserver:self
                    selector:@selector(handleCaptureSessionRuntimeError:)
                        name:AVCaptureSessionRuntimeErrorNotification
@@ -363,6 +371,12 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
            fromConnection:(AVCaptureConnection *)connection {
     NSParameterAssert(captureOutput == _videoDataOutput);
+    
+    int minWarmupFrameCount = 12;
+    _warmupFrameCount++;
+    if (_warmupFrameCount < minWarmupFrameCount) {
+        return;
+    }
     
     if (CMSampleBufferGetNumSamples(sampleBuffer) != 1 || !CMSampleBufferIsValid(sampleBuffer) ||
         !CMSampleBufferDataIsReady(sampleBuffer)) {
@@ -592,8 +606,17 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
                                  block:^{
         if (_isRunning && !_captureSession.isRunning) {
             RTCLog(@"Restarting capture session on active.");
+            _warmupFrameCount = 0;
             [_captureSession startRunning];
         }
+    }];
+}
+
+- (void)handleApplicationWillEnterForeground:(NSNotification *)notification {
+    [RTCDispatcher dispatchAsyncOnType:RTCDispatcherTypeCaptureSession
+                                 block:^{
+        RTCLog(@"Resetting warmup due to backgrounding.");
+        _warmupFrameCount = 0;
     }];
 }
 

@@ -112,12 +112,12 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
 	callConfig.trials = &_fieldTrials;
 	callConfig.audio_state = _mediaEngine->voice().GetAudioState();
 	_call.reset(webrtc::Call::Create(callConfig));
-    
+
     cricket::AudioOptions audioOptions;
     audioOptions.echo_cancellation = true;
     audioOptions.noise_suppression = true;
     audioOptions.audio_jitter_buffer_fast_accelerate = true;
-    
+
 	_audioChannel.reset(_mediaEngine->voice().CreateMediaChannel(_call.get(), cricket::MediaConfig(), audioOptions, webrtc::CryptoOptions::NoGcm()));
 	_videoChannel.reset(_mediaEngine->video().CreateMediaChannel(_call.get(), cricket::MediaConfig(), cricket::VideoOptions(), webrtc::CryptoOptions::NoGcm(), _videoBitrateAllocatorFactory.get()));
 
@@ -175,7 +175,7 @@ void MediaManager::start() {
 	if (_videoCapture != nullptr) {
         setSendVideo(_videoCapture);
     }
-    
+
     beginStatsTimer(3000);
 }
 
@@ -256,15 +256,17 @@ void MediaManager::collectStats() {
             break;
     }
     float sendBitrateKbps = ((float)stats.send_bandwidth_bps / 1000.0f);
-    
+
     float signalBarsNorm = 4.0f;
     float adjustedQuality = sendBitrateKbps / bitrateNorm;
     adjustedQuality = fmaxf(0.0f, adjustedQuality);
     adjustedQuality = fminf(1.0f, adjustedQuality);
-    _signalBarsUpdated((int)(adjustedQuality * signalBarsNorm));
-    
+	if (_signalBarsUpdated) {
+		_signalBarsUpdated((int)(adjustedQuality * signalBarsNorm));
+	}
+
     beginStatsTimer(2000);
-    
+
     /*
      int send_bandwidth_bps = 0;       // Estimated available send bandwidth.
      int max_padding_bitrate_bps = 0;  // Cumulative configured max padding.
@@ -296,6 +298,7 @@ void MediaManager::setPeerVideoFormats(VideoFormatsMessage &&peerFormats) {
 	}
 	_videoCodecs = std::move(codecs.list);
 	if (_videoCodecOut.has_value()) {
+        configureSendingVideoIfNeeded();
 		checkIsSendingVideoChanged(false);
 	}
     if (_videoCodecs.size() != 0) {
@@ -344,56 +347,70 @@ void MediaManager::setSendVideo(std::shared_ptr<VideoCaptureInterface> videoCapt
     checkIsReceivingVideoChanged(wasReceiving);
 }
 
+void MediaManager::configureSendingVideoIfNeeded() {
+    if (_didConfigureVideo) {
+        return;
+    }
+    _didConfigureVideo = true;
+    
+    auto codec = *_videoCodecOut;
+
+    codec.SetParam(cricket::kCodecParamMinBitrate, 64);
+    codec.SetParam(cricket::kCodecParamStartBitrate, 400);
+    codec.SetParam(cricket::kCodecParamMaxBitrate, _enableHighBitrateVideo ? 1600 : 800);
+
+    cricket::VideoSendParameters videoSendParameters;
+    videoSendParameters.codecs.push_back(codec);
+
+    if (_enableFlexfec) {
+        for (auto &c : _videoCodecs) {
+            if (c.name == cricket::kFlexfecCodecName) {
+                videoSendParameters.codecs.push_back(c);
+                break;
+            }
+        }
+    }
+
+    videoSendParameters.extensions.emplace_back(webrtc::RtpExtension::kTransportSequenceNumberUri, 1);
+    _videoChannel->SetSendParameters(videoSendParameters);
+
+    if (_enableFlexfec) {
+        cricket::StreamParams videoSendStreamParams;
+        cricket::SsrcGroup videoSendSsrcGroup(cricket::kFecFrSsrcGroupSemantics, {_ssrcVideo.outgoing, _ssrcVideo.fecOutgoing});
+        videoSendStreamParams.ssrcs = {_ssrcVideo.outgoing};
+        videoSendStreamParams.ssrc_groups.push_back(videoSendSsrcGroup);
+        videoSendStreamParams.cname = "cname";
+        _videoChannel->AddSendStream(videoSendStreamParams);
+    } else {
+        _videoChannel->AddSendStream(cricket::StreamParams::CreateLegacy(_ssrcVideo.outgoing));
+    }
+}
+
 void MediaManager::checkIsSendingVideoChanged(bool wasSending) {
 	const auto sending = computeIsSendingVideo();
 	if (sending == wasSending) {
 		return;
 	} else if (sending) {
-		auto codec = *_videoCodecOut;
-
-		codec.SetParam(cricket::kCodecParamMinBitrate, 64);
-		codec.SetParam(cricket::kCodecParamStartBitrate, 400);
-		codec.SetParam(cricket::kCodecParamMaxBitrate, _enableHighBitrateVideo ? 1600 : 800);
-
-		cricket::VideoSendParameters videoSendParameters;
-		videoSendParameters.codecs.push_back(codec);
-
-		if (_enableFlexfec) {
-			for (auto &c : _videoCodecs) {
-				if (c.name == cricket::kFlexfecCodecName) {
-					videoSendParameters.codecs.push_back(c);
-					break;
-				}
-			}
-		}
-
-		videoSendParameters.extensions.emplace_back(webrtc::RtpExtension::kTransportSequenceNumberUri, 1);
-		_videoChannel->SetSendParameters(videoSendParameters);
-
-		if (_enableFlexfec) {
-			cricket::StreamParams videoSendStreamParams;
-			cricket::SsrcGroup videoSendSsrcGroup(cricket::kFecFrSsrcGroupSemantics, {_ssrcVideo.outgoing, _ssrcVideo.fecOutgoing});
-			videoSendStreamParams.ssrcs = {_ssrcVideo.outgoing};
-			videoSendStreamParams.ssrc_groups.push_back(videoSendSsrcGroup);
-			videoSendStreamParams.cname = "cname";
-			_videoChannel->AddSendStream(videoSendStreamParams);
-			_videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, GetVideoCaptureAssumingSameThread(_videoCapture.get())->_videoSource);
-			_videoChannel->SetVideoSend(_ssrcVideo.fecOutgoing, NULL, nullptr);
-		} else {
-			_videoChannel->AddSendStream(cricket::StreamParams::CreateLegacy(_ssrcVideo.outgoing));
-			_videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, GetVideoCaptureAssumingSameThread(_videoCapture.get())->_videoSource);
-		}
+        configureSendingVideoIfNeeded();
+        
+        if (_enableFlexfec) {
+            _videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, GetVideoCaptureAssumingSameThread(_videoCapture.get())->_videoSource);
+            _videoChannel->SetVideoSend(_ssrcVideo.fecOutgoing, NULL, nullptr);
+        } else {
+            _videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, GetVideoCaptureAssumingSameThread(_videoCapture.get())->_videoSource);
+        }
 
 		_videoChannel->OnReadyToSend(_isConnected);
 		_videoChannel->SetSend(_isConnected);
+        
+        webrtc::BitrateConstraints preferences;
+        preferences.min_bitrate_bps = 64000;
+        preferences.start_bitrate_bps = 302000;
+        preferences.max_bitrate_bps = _enableHighBitrateVideo ? 1600000 : 800000;
+        _call->GetTransportControllerSend()->SetSdpBitrateParameters(preferences);
 	} else {
 		_videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, nullptr);
 		_videoChannel->SetVideoSend(_ssrcVideo.fecOutgoing, NULL, nullptr);
-
-		_videoChannel->RemoveSendStream(_ssrcVideo.outgoing);
-		if (_enableFlexfec) {
-			_videoChannel->RemoveSendStream(_ssrcVideo.fecOutgoing);
-		}
 	}
 }
 

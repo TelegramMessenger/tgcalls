@@ -124,7 +124,7 @@ void Serialize(rtc::ByteBufferWriter &to, const CandidatesListMessage &from, boo
 	for (const auto &candidate : from.candidates) {
 		Serialize(to, candidate);
 	}
-    
+
     Serialize(to, from.iceParameters.ufrag);
     Serialize(to, from.iceParameters.pwd);
 }
@@ -264,8 +264,14 @@ bool Deserialize(RemoteBatteryLevelIsLowMessage &to, rtc::ByteBufferReader &read
     return true;
 }
 
+enum class TryResult : uint8_t {
+	Success,
+	TryNext,
+	Abort,
+};
+
 template <typename T>
-bool TryDeserialize(
+TryResult TryDeserialize(
 		absl::optional<Message> &to,
 		rtc::ByteBufferReader &reader,
 		bool singleMessagePacket) {
@@ -273,16 +279,16 @@ bool TryDeserialize(
 
 	constexpr auto id = T::kId;
 	if (uint8_t(*reader.Data()) != id) {
-		return false;
+		return TryResult::TryNext;
 	}
 	reader.Consume(1);
 	auto parsed = T();
 	if (!Deserialize(parsed, reader, singleMessagePacket)) {
 		RTC_LOG(LS_ERROR) << "Could not read message with kId: " << id;
-		return false;
+		return TryResult::Abort;
 	}
 	to = Message{ parsed };
-	return true;
+	return TryResult::Success;
 }
 
 template <typename ...Types>
@@ -304,8 +310,10 @@ struct TryDeserializeNext<T, Other...> {
 			absl::optional<Message> &to,
 			rtc::ByteBufferReader &reader,
 			bool singleMessagePacket) {
-		return TryDeserialize<T>(to, reader, singleMessagePacket)
-			|| TryDeserializeNext<Other...>::Call(to, reader, singleMessagePacket);
+		const auto result = TryDeserialize<T>(to, reader, singleMessagePacket);
+		return (result == TryResult::TryNext)
+			? TryDeserializeNext<Other...>::Call(to, reader, singleMessagePacket)
+			: (result == TryResult::Success);
 	}
 };
 

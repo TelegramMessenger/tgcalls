@@ -36,6 +36,7 @@ void VideoCapturerInterfaceImpl::setState(VideoState state) {
 }
 
 void VideoCapturerInterfaceImpl::setPreferredCaptureAspectRatio(float aspectRatio) {
+	GetCapturer(_source)->setPreferredCaptureAspectRatio(aspectRatio);
 }
 
 void VideoCapturerInterfaceImpl::setUncroppedOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {

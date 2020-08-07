@@ -50,6 +50,8 @@ _signalBarsUpdated(std::move(descriptor.signalBarsUpdated)),
 _localPreferredVideoAspectRatio(descriptor.config.preferredAspectRatio),
 _enableHighBitrateVideo(descriptor.config.enableHighBitrateVideo) {
 	assert(_thread->IsCurrent());
+	assert(_stateUpdated != nullptr);
+	assert(_signalingDataEmitted != nullptr);
 
 	_sendSignalingMessage = [=](const Message &message) {
 		if (const auto prepared = _signaling.prepareForSending(message)) {
@@ -194,15 +196,19 @@ void Manager::receiveMessage(DecryptedMessage &&message) {
 			mediaManager->receiveMessage(std::move(message));
 		});
     } else if (const auto remoteMediaState = absl::get_if<RemoteMediaStateMessage>(data)) {
-		_remoteMediaStateUpdated(
-			remoteMediaState->audio,
-			remoteMediaState->video);
+		if (_remoteMediaStateUpdated) {
+			_remoteMediaStateUpdated(
+				remoteMediaState->audio,
+				remoteMediaState->video);
+		}
 	} else if (const auto remoteBatteryLevelIsLow = absl::get_if<RemoteBatteryLevelIsLowMessage>(data)) {
         _remoteBatteryLevelIsLowUpdated(remoteBatteryLevelIsLow->batteryLow);
     } else {
         if (const auto videoParameters = absl::get_if<VideoParametersMessage>(data)) {
             float value = ((float)videoParameters->aspectRatio) / 1000.0;
-            _remotePrefferedAspectRatioUpdated(value);
+			if (_remotePrefferedAspectRatioUpdated) {
+				_remotePrefferedAspectRatioUpdated(value);
+			}
         }
 		_mediaManager->perform(RTC_FROM_HERE, [=, message = std::move(message)](MediaManager *mediaManager) mutable {
 			mediaManager->receiveMessage(std::move(message));
