@@ -72,6 +72,10 @@ void VideoCameraCapturer::setState(VideoState state) {
 	}
 }
 
+void VideoCameraCapturer::setPreferredCaptureAspectRatio(float aspectRatio) {
+	_aspectRatio = aspectRatio;
+}
+
 std::unique_ptr<VideoCameraCapturer> VideoCameraCapturer::Create(
 		size_t width,
 		size_t height,
@@ -103,43 +107,90 @@ void VideoCameraCapturer::OnFrame(const webrtc::VideoFrame &frame) {
 	if (_state != VideoState::Active) {
 		return;
 	}
-	int cropped_width = 0;
-	int cropped_height = 0;
-	int out_width = 0;
-	int out_height = 0;
+	//int cropped_width = 0;
+	//int cropped_height = 0;
+	//int out_width = 0;
+	//int out_height = 0;
 
-	if (!_videoAdapter.AdaptFrameResolution(
-		frame.width(), frame.height(), frame.timestamp_us() * 1000,
-		&cropped_width, &cropped_height, &out_width, &out_height)) {
-		// Drop frame in order to respect frame rate constraint.
+	//if (!_videoAdapter.AdaptFrameResolution(
+	//	frame.width(), frame.height(), frame.timestamp_us() * 1000,
+	//	&cropped_width, &cropped_height, &out_width, &out_height)) {
+	//	// Drop frame in order to respect frame rate constraint.
+	//	return;
+	//}
+	//if (out_height != frame.height() || out_width != frame.width()) {
+	//	// Video adapter has requested a down-scale. Allocate a new buffer and
+	//	// return scaled version.
+	//	// For simplicity, only scale here without cropping.
+	//	rtc::scoped_refptr<webrtc::I420Buffer> scaled_buffer =
+	//		webrtc::I420Buffer::Create(out_width, out_height);
+	//	scaled_buffer->ScaleFrom(*frame.video_frame_buffer()->ToI420());
+	//	webrtc::VideoFrame::Builder new_frame_builder =
+	//		webrtc::VideoFrame::Builder()
+	//		.set_video_frame_buffer(scaled_buffer)
+	//		.set_rotation(webrtc::kVideoRotation_0)
+	//		.set_timestamp_us(frame.timestamp_us())
+	//		.set_id(frame.id());
+	//	if (frame.has_update_rect()) {
+	//		webrtc::VideoFrame::UpdateRect new_rect = frame.update_rect().ScaleWithFrame(
+	//			frame.width(), frame.height(), 0, 0, frame.width(), frame.height(),
+	//			out_width, out_height);
+	//		new_frame_builder.set_update_rect(new_rect);
+	//	}
+	//	_broadcaster.OnFrame(new_frame_builder.build());
+
+	//} else {
+	//	// No adaptations needed, just return the frame as is.
+	//	_broadcaster.OnFrame(frame);
+	//}
+
+	if (_aspectRatio <= FLT_EPSILON) {
+		_broadcaster.OnFrame(frame);
+		return;
+	}
+	const auto originalWidth = frame.width();
+	const auto originalHeight = frame.height();
+	auto width = (originalWidth > _aspectRatio * originalHeight)
+		? int(std::round(_aspectRatio * originalHeight))
+		: originalWidth;
+	auto height = (originalWidth > _aspectRatio * originalHeight)
+		? originalHeight
+		: int(std::round(originalHeight / _aspectRatio));
+	if (width >= originalWidth && height >= originalHeight) {
+		_broadcaster.OnFrame(frame);
 		return;
 	}
 
-	if (out_height != frame.height() || out_width != frame.width()) {
-		// Video adapter has requested a down-scale. Allocate a new buffer and
-		// return scaled version.
-		// For simplicity, only scale here without cropping.
-		rtc::scoped_refptr<webrtc::I420Buffer> scaled_buffer =
-			webrtc::I420Buffer::Create(out_width, out_height);
-		scaled_buffer->ScaleFrom(*frame.video_frame_buffer()->ToI420());
-		webrtc::VideoFrame::Builder new_frame_builder =
-			webrtc::VideoFrame::Builder()
-			.set_video_frame_buffer(scaled_buffer)
-			.set_rotation(webrtc::kVideoRotation_0)
-			.set_timestamp_us(frame.timestamp_us())
-			.set_id(frame.id());
-		if (frame.has_update_rect()) {
-			webrtc::VideoFrame::UpdateRect new_rect = frame.update_rect().ScaleWithFrame(
-				frame.width(), frame.height(), 0, 0, frame.width(), frame.height(),
-				out_width, out_height);
-			new_frame_builder.set_update_rect(new_rect);
-		}
-		_broadcaster.OnFrame(new_frame_builder.build());
-
-	} else {
-		// No adaptations needed, just return the frame as is.
-		_broadcaster.OnFrame(frame);
+	width &= ~int(1);
+	height &= ~int(1);
+	const auto left = (originalWidth - width) / 2;
+	const auto top = (originalHeight - height) / 2;
+	rtc::scoped_refptr<webrtc::I420Buffer> croppedBuffer =
+		webrtc::I420Buffer::Create(width, height);
+	croppedBuffer->CropAndScaleFrom(
+		*frame.video_frame_buffer()->ToI420(),
+		left,
+		top,
+		width,
+		height);
+	webrtc::VideoFrame::Builder croppedBuilder =
+		webrtc::VideoFrame::Builder()
+		.set_video_frame_buffer(croppedBuffer)
+		.set_rotation(webrtc::kVideoRotation_0)
+		.set_timestamp_us(frame.timestamp_us())
+		.set_id(frame.id());
+	if (frame.has_update_rect()) {
+		croppedBuilder.set_update_rect(frame.update_rect().ScaleWithFrame(
+			frame.width(),
+			frame.height(),
+			left,
+			top,
+			width,
+			height,
+			width,
+			height));
 	}
+	_broadcaster.OnFrame(croppedBuilder.build());
 }
 
 void VideoCameraCapturer::AddOrUpdateSink(
@@ -155,7 +206,7 @@ void VideoCameraCapturer::RemoveSink(rtc::VideoSinkInterface<webrtc::VideoFrame>
 }
 
 void VideoCameraCapturer::updateVideoAdapter() {
-	_videoAdapter.OnSinkWants(_broadcaster.wants());
+	//_videoAdapter.OnSinkWants(_broadcaster.wants());
 }
 
 }  // namespace tgcalls
