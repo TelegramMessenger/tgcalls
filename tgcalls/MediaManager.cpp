@@ -411,6 +411,11 @@ void MediaManager::checkIsSendingVideoChanged(bool wasSending) {
 	} else {
 		_videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, nullptr);
 		_videoChannel->SetVideoSend(_ssrcVideo.fecOutgoing, NULL, nullptr);
+        
+        webrtc::BitrateConstraints preferences;
+        preferences.min_bitrate_bps = 6000;
+        preferences.start_bitrate_bps = 32000;
+        preferences.max_bitrate_bps = 32000;
 	}
 }
 
