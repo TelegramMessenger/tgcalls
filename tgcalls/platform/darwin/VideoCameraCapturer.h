@@ -7,6 +7,7 @@
 #include <memory>
 #include "api/scoped_refptr.h"
 #include "api/media_stream_interface.h"
+#include "Instance.h"
 
 @interface VideoCameraCapturer : NSObject
 

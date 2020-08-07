@@ -8,6 +8,8 @@
 #include "media/base/video_broadcaster.h"
 #include "modules/video_capture/video_capture.h"
 
+#include "VideoCaptureInterface.h"
+
 #include <memory>
 #include <vector>
 #include <stddef.h>
@@ -30,7 +32,8 @@ public:
 		size_t target_fps,
 		size_t capture_device_index);
 
-	void setIsEnabled(bool enabled);
+	void setState(VideoState state);
+	void setPreferredCaptureAspectRatio(float aspectRatio);
 
 	void AddOrUpdateSink(rtc::VideoSinkInterface<webrtc::VideoFrame>* sink,
 		const rtc::VideoSinkWants& wants) override;
@@ -47,12 +50,13 @@ private:
 	void updateVideoAdapter();
 
 	rtc::VideoBroadcaster _broadcaster;
-	cricket::VideoAdapter _videoAdapter;
+	//cricket::VideoAdapter _videoAdapter;
 
 	rtc::scoped_refptr<webrtc::VideoCaptureModule> _module;
 	webrtc::VideoCaptureCapability _capability;
 
-	bool _paused = false;
+	VideoState _state = VideoState::Active;
+	float _aspectRatio = 0.;
 
 };
 

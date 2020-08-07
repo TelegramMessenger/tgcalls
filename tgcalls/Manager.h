@@ -18,10 +18,11 @@ public:
 
 	void start();
 	void receiveSignalingData(const std::vector<uint8_t> &data);
-	void requestVideo(std::shared_ptr<VideoCaptureInterface> videoCapture);
+	void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture);
     void setMuteOutgoingAudio(bool mute);
 	void setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
-
+    void setIsLowBatteryLevel(bool isLowBatteryLevel);
+    
 private:
 	void sendSignalingAsync(int delayMs, int cause);
 	void receiveMessage(DecryptedMessage &&message);
@@ -32,16 +33,17 @@ private:
 	bool _enableP2P = false;
 	std::vector<RtcServer> _rtcServers;
 	std::shared_ptr<VideoCaptureInterface> _videoCapture;
-	std::function<void(const State &, VideoState)> _stateUpdated;
-	std::function<void(bool)> _remoteVideoIsActiveUpdated;
+	std::function<void(State)> _stateUpdated;
+	std::function<void(AudioState, VideoState)> _remoteMediaStateUpdated;
+    std::function<void(bool)> _remoteBatteryLevelIsLowUpdated;
     std::function<void(float)> _remotePrefferedAspectRatioUpdated;
 	std::function<void(const std::vector<uint8_t> &)> _signalingDataEmitted;
+    std::function<void(int)> _signalBarsUpdated;
 	std::function<uint32_t(const Message &)> _sendSignalingMessage;
 	std::function<void(Message&&)> _sendTransportMessage;
 	std::unique_ptr<ThreadLocalObject<NetworkManager>> _networkManager;
 	std::unique_ptr<ThreadLocalObject<MediaManager>> _mediaManager;
 	State _state = State::Reconnecting;
-    VideoState _videoState = VideoState::Possible;
     bool _didConnectOnce = false;
     float _localPreferredVideoAspectRatio = 0.0f;
     bool _enableHighBitrateVideo = false;

@@ -20,25 +20,26 @@ static VideoCameraCapturer *GetCapturer(
 VideoCapturerInterfaceImpl::VideoCapturerInterfaceImpl(
 	rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source,
 	bool useFrontCamera,
-	std::function<void(bool)> isActiveUpdated)
-	: _source(source)
-	, _isActiveUpdated(isActiveUpdated) {
+	std::function<void(VideoState)> stateUpdated)
+: _source(source)
+, _stateUpdated(stateUpdated) {
 }
 
 VideoCapturerInterfaceImpl::~VideoCapturerInterfaceImpl() {
 }
 
-void VideoCapturerInterfaceImpl::setIsEnabled(bool isEnabled) {
-	GetCapturer(_source)->setIsEnabled(isEnabled);
-	if (_isActiveUpdated) {
-		_isActiveUpdated(isEnabled);
+void VideoCapturerInterfaceImpl::setState(VideoState state) {
+	GetCapturer(_source)->setState(state);
+	if (_stateUpdated) {
+		_stateUpdated(state);
 	}
 }
 
 void VideoCapturerInterfaceImpl::setPreferredCaptureAspectRatio(float aspectRatio) {
+	GetCapturer(_source)->setPreferredCaptureAspectRatio(aspectRatio);
 }
 
-void VideoCapturerInterfaceImpl::setUncroppedVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+void VideoCapturerInterfaceImpl::setUncroppedOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
 	if (_uncroppedSink != nullptr) {
 		_source->RemoveSink(_uncroppedSink.get());
 	}

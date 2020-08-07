@@ -9,6 +9,7 @@
 
 #include "Instance.h"
 #include "Message.h"
+#include "VideoCaptureInterface.h"
 
 #include <functional>
 #include <memory>
@@ -19,17 +20,15 @@ class RtcEventLogNull;
 class TaskQueueFactory;
 class VideoBitrateAllocatorFactory;
 class VideoTrackSourceInterface;
-}
+} // namespace webrtc
 
 namespace cricket {
 class MediaEngineInterface;
 class VoiceMediaChannel;
 class VideoMediaChannel;
-}
+} // namespace cricket
 
 namespace tgcalls {
-
-class VideoCapturerInterface;
 
 class MediaManager : public sigslot::has_slots<>, public std::enable_shared_from_this<MediaManager> {
 public:
@@ -41,10 +40,12 @@ public:
 		std::shared_ptr<VideoCaptureInterface> videoCapture,
 		std::function<void(Message &&)> sendSignalingMessage,
 		std::function<void(Message &&)> sendTransportMessage,
+        std::function<void(int)> signalBarsUpdated,
         float localPreferredVideoAspectRatio,
         bool enableHighBitrateVideo);
 	~MediaManager();
 
+	void start();
 	void setIsConnected(bool isConnected);
 	void notifyPacketSent(const rtc::SentPacket &sentPacket);
 	void setSendVideo(std::shared_ptr<VideoCaptureInterface> videoCapture);
@@ -80,11 +81,20 @@ private:
 	void setPeerVideoFormats(VideoFormatsMessage &&peerFormats);
 
 	bool computeIsSendingVideo() const;
+    void configureSendingVideoIfNeeded();
 	void checkIsSendingVideoChanged(bool wasSending);
 	bool videoCodecsNegotiated() const;
-    
+
     bool computeIsReceivingVideo() const;
     void checkIsReceivingVideoChanged(bool wasReceiving);
+
+	void setOutgoingVideoState(VideoState state);
+	void setOutgoingAudioState(AudioState state);
+	void sendVideoParametersMessage();
+	void sendOutgoingMediaStateMessage();
+    
+    void beginStatsTimer(int timeoutMs);
+    void collectStats();
 
 	rtc::Thread *_thread = nullptr;
 	std::unique_ptr<webrtc::RtcEventLogNull> _eventLog;
@@ -92,14 +102,17 @@ private:
 
 	std::function<void(Message &&)> _sendSignalingMessage;
 	std::function<void(Message &&)> _sendTransportMessage;
+    std::function<void(int)> _signalBarsUpdated;
 
 	SSRC _ssrcAudio;
 	SSRC _ssrcVideo;
 	bool _enableFlexfec = true;
 
 	bool _isConnected = false;
-	bool _muteOutgoingAudio = false;
 	bool _readyToReceiveVideo = false;
+    bool _didConfigureVideo = false;
+	AudioState _outgoingAudioState = AudioState::Active;
+	VideoState _outgoingVideoState = VideoState::Inactive;
 
 	VideoFormatsMessage _myVideoFormats;
 	std::vector<cricket::VideoCodec> _videoCodecs;
@@ -114,7 +127,7 @@ private:
 	std::unique_ptr<webrtc::VideoBitrateAllocatorFactory> _videoBitrateAllocatorFactory;
 	std::shared_ptr<VideoCaptureInterface> _videoCapture;
 	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _currentIncomingVideoSink;
-    
+
     float _localPreferredVideoAspectRatio = 0.0f;
     float _preferredAspectRatio = 0.0f;
     bool _enableHighBitrateVideo = false;

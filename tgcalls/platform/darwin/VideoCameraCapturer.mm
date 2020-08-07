@@ -178,6 +178,8 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     float _aspectRatio;
     std::vector<uint8_t> _croppingBuffer;
     std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _uncroppedSink;
+    
+    int _warmupFrameCount;
 }
 
 @end
@@ -193,6 +195,8 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
         _inForegroundValue = true;
         _isPaused = false;
         _isActiveUpdated = [isActiveUpdated copy];
+        
+        _warmupFrameCount = 100;
         
 #if TARGET_OS_IPHONE
         _rotationLock = true;
@@ -221,6 +225,10 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
                    selector:@selector(handleApplicationDidBecomeActive:)
                        name:UIApplicationDidBecomeActiveNotification
                      object:[UIApplication sharedApplication]];
+        [center addObserver:self
+            selector:@selector(handleApplicationWillEnterForeground:)
+                name:UIApplicationWillEnterForegroundNotification
+              object:[UIApplication sharedApplication]];
         [center addObserver:self
                    selector:@selector(handleCaptureSessionRuntimeError:)
                        name:AVCaptureSessionRuntimeErrorNotification
@@ -364,6 +372,12 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
            fromConnection:(AVCaptureConnection *)connection {
     NSParameterAssert(captureOutput == _videoDataOutput);
     
+    int minWarmupFrameCount = 12;
+    _warmupFrameCount++;
+    if (_warmupFrameCount < minWarmupFrameCount) {
+        return;
+    }
+    
     if (CMSampleBufferGetNumSamples(sampleBuffer) != 1 || !CMSampleBufferIsValid(sampleBuffer) ||
         !CMSampleBufferDataIsReady(sampleBuffer)) {
         return;
@@ -412,26 +426,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     TGRTCCVPixelBuffer *rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:pixelBuffer];
     rtcPixelBuffer.shouldBeMirrored = usingFrontCamera;
     
-    if (!_isPaused && _uncroppedSink) {
-        int64_t timeStampNs = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer)) *
-        kNanosecondsPerSecond;
-        RTCVideoFrame *frame = [[RTCVideoFrame alloc] initWithBuffer:rtcPixelBuffer
-                                                                 rotation:_rotation
-                                                              timeStampNs:timeStampNs];
-        
-        const int64_t timestamp_us = frame.timeStampNs / rtc::kNumNanosecsPerMicrosec;
-
-        rtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer;
-        buffer = new rtc::RefCountedObject<webrtc::ObjCFrameBuffer>(frame.buffer);
-        
-        webrtc::VideoRotation rotation = static_cast<webrtc::VideoRotation>(frame.rotation);
-        
-        _uncroppedSink->OnFrame(webrtc::VideoFrame::Builder()
-                .set_video_frame_buffer(buffer)
-                .set_rotation(rotation)
-                .set_timestamp_us(timestamp_us)
-                .build());
-    }
+    TGRTCCVPixelBuffer *uncroppedRtcPixelBuffer = rtcPixelBuffer;
     
     if (_aspectRatio > FLT_EPSILON) {
         float aspect = 1.0f / _aspectRatio;
@@ -474,11 +469,29 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     
     int64_t timeStampNs = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer)) *
     kNanosecondsPerSecond;
-    RTCVideoFrame *videoFrame = [[RTCVideoFrame alloc] initWithBuffer:rtcPixelBuffer
-                                                             rotation:_rotation
-                                                          timeStampNs:timeStampNs];
+    RTCVideoFrame *videoFrame = [[RTCVideoFrame alloc] initWithBuffer:rtcPixelBuffer rotation:_rotation timeStampNs:timeStampNs];
+    
     if (!_isPaused) {
         getObjCVideoSource(_source)->OnCapturedFrame(videoFrame);
+        
+        if (_uncroppedSink && uncroppedRtcPixelBuffer) {
+            int64_t timeStampNs = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer)) *
+            kNanosecondsPerSecond;
+            RTCVideoFrame *frame = [[RTCVideoFrame alloc] initWithBuffer:uncroppedRtcPixelBuffer rotation:_rotation timeStampNs:timeStampNs];
+            
+            const int64_t timestamp_us = frame.timeStampNs / rtc::kNumNanosecsPerMicrosec;
+
+            rtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer;
+            buffer = new rtc::RefCountedObject<webrtc::ObjCFrameBuffer>(frame.buffer);
+            
+            webrtc::VideoRotation rotation = static_cast<webrtc::VideoRotation>(frame.rotation);
+            
+            _uncroppedSink->OnFrame(webrtc::VideoFrame::Builder()
+                    .set_video_frame_buffer(buffer)
+                    .set_rotation(rotation)
+                    .set_timestamp_us(timestamp_us)
+                    .build());
+        }
     }
 }
 
@@ -593,8 +606,17 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
                                  block:^{
         if (_isRunning && !_captureSession.isRunning) {
             RTCLog(@"Restarting capture session on active.");
+            _warmupFrameCount = 0;
             [_captureSession startRunning];
         }
+    }];
+}
+
+- (void)handleApplicationWillEnterForeground:(NSNotification *)notification {
+    [RTCDispatcher dispatchAsyncOnType:RTCDispatcherTypeCaptureSession
+                                 block:^{
+        RTCLog(@"Resetting warmup due to backgrounding.");
+        _warmupFrameCount = 0;
     }];
 }
 

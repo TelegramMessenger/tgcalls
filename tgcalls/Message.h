@@ -12,11 +12,33 @@
 
 namespace tgcalls {
 
+enum class VideoState;
+enum class AudioState;
+
+struct PeerIceParameters {
+    std::string ufrag;
+    std::string pwd;
+    
+    PeerIceParameters() {
+    }
+    
+    PeerIceParameters(std::string ufrag_, std::string pwd_) :
+    ufrag(ufrag_),
+    pwd(pwd_) {
+    }
+    
+    PeerIceParameters(const PeerIceParameters &other) :
+    ufrag(other.ufrag),
+    pwd(other.pwd) {
+    }
+};
+
 struct CandidatesListMessage {
 	static constexpr uint8_t kId = 1;
 	static constexpr bool kRequiresAck = true;
 
 	std::vector<cricket::Candidate> candidates;
+    PeerIceParameters iceParameters;
 };
 
 struct VideoFormatsMessage {
@@ -32,11 +54,12 @@ struct RequestVideoMessage {
 	static constexpr bool kRequiresAck = true;
 };
 
-struct RemoteVideoIsActiveMessage {
+struct RemoteMediaStateMessage {
 	static constexpr uint8_t kId = 4;
 	static constexpr bool kRequiresAck = true;
 
-	bool active = false;
+	AudioState audio = AudioState();
+	VideoState video = VideoState();
 };
 
 struct AudioDataMessage {
@@ -67,6 +90,13 @@ struct VideoParametersMessage {
     uint32_t aspectRatio;
 };
 
+struct RemoteBatteryLevelIsLowMessage {
+    static constexpr uint8_t kId = 9;
+    static constexpr bool kRequiresAck = true;
+
+    bool batteryLow = false;
+};
+
 // To add a new message you should:
 // 1. Add the message struct.
 // 2. Add the message to the variant in Message struct.
@@ -77,11 +107,12 @@ struct Message {
 		CandidatesListMessage,
 		VideoFormatsMessage,
         RequestVideoMessage,
-        RemoteVideoIsActiveMessage,
+		RemoteMediaStateMessage,
 		AudioDataMessage,
 		VideoDataMessage,
         UnstructuredDataMessage,
-        VideoParametersMessage> data;
+        VideoParametersMessage,
+        RemoteBatteryLevelIsLowMessage> data;
 };
 
 rtc::CopyOnWriteBuffer SerializeMessageWithSeq(

@@ -40,7 +40,8 @@ _transport(
 _isOutgoing(encryptionKey.isOutgoing),
 _stateUpdated(std::move(stateUpdated)),
 _transportMessageReceived(std::move(transportMessageReceived)),
-_sendSignalingMessage(std::move(sendSignalingMessage)) {
+_sendSignalingMessage(std::move(sendSignalingMessage)),
+_localIceParameters(rtc::CreateRandomString(cricket::ICE_UFRAG_LENGTH), rtc::CreateRandomString(cricket::ICE_PWD_LENGTH)) {
 	assert(_thread->IsCurrent());
 
 	_socketFactory.reset(new rtc::BasicPacketSocketFactory(_thread));
@@ -80,21 +81,17 @@ _sendSignalingMessage(std::move(sendSignalingMessage)) {
 
 	cricket::IceConfig iceConfig;
 	iceConfig.continual_gathering_policy = cricket::GATHER_CONTINUALLY;
+    iceConfig.prioritize_most_likely_candidate_pairs = true;
+    iceConfig.regather_on_failed_networks_interval = 8000;
 	_transportChannel->SetIceConfig(iceConfig);
 
-    // TODO: randomize
-	cricket::IceParameters localIceParameters(
-		"gcp3",
-		"zWDKozH8/3JWt8he3M/CMj5R",
-		false
-	);
-	cricket::IceParameters remoteIceParameters(
-		"acp3",
-		"aWDKozH8/3JWt8he3M/CMj5R",
-		false
-	);
+    cricket::IceParameters localIceParameters(
+        _localIceParameters.ufrag,
+        _localIceParameters.pwd,
+        false
+    );
 
-	_transportChannel->SetIceParameters(_isOutgoing ? localIceParameters : remoteIceParameters);
+	_transportChannel->SetIceParameters(localIceParameters);
 	_transportChannel->SetIceRole(_isOutgoing ? cricket::ICEROLE_CONTROLLING : cricket::ICEROLE_CONTROLLED);
 
 	_transportChannel->SignalCandidateGathered.connect(this, &NetworkManager::candidateGathered);
@@ -105,7 +102,6 @@ _sendSignalingMessage(std::move(sendSignalingMessage)) {
 	_transportChannel->MaybeStartGathering();
 
 	_transportChannel->SetRemoteIceMode(cricket::ICEMODE_FULL);
-	_transportChannel->SetRemoteIceParameters(_isOutgoing ? remoteIceParameters : localIceParameters);
 }
 
 NetworkManager::~NetworkManager() {
@@ -121,6 +117,19 @@ NetworkManager::~NetworkManager() {
 void NetworkManager::receiveSignalingMessage(DecryptedMessage &&message) {
 	const auto list = absl::get_if<CandidatesListMessage>(&message.message.data);
 	assert(list != nullptr);
+
+    if (!_remoteIceParameters.has_value()) {
+        PeerIceParameters parameters(list->iceParameters.ufrag, list->iceParameters.pwd);
+        _remoteIceParameters = parameters;
+
+        cricket::IceParameters remoteIceParameters(
+            parameters.ufrag,
+            parameters.pwd,
+            false
+        );
+
+        _transportChannel->SetRemoteIceParameters(remoteIceParameters);
+    }
 
 	for (const auto &candidate : list->candidates) {
 		_transportChannel->AddRemoteCandidate(candidate);
@@ -145,7 +154,7 @@ void NetworkManager::sendTransportService(int cause) {
 
 void NetworkManager::candidateGathered(cricket::IceTransportInternal *transport, const cricket::Candidate &candidate) {
 	assert(_thread->IsCurrent());
-	_sendSignalingMessage({ CandidatesListMessage{ std::vector<cricket::Candidate>(1, candidate) } });
+	_sendSignalingMessage({ CandidatesListMessage{ { 1, candidate }, _localIceParameters } });
 }
 
 void NetworkManager::candidateGatheringState(cricket::IceTransportInternal *transport) {
