@@ -202,7 +202,9 @@ void Manager::receiveMessage(DecryptedMessage &&message) {
 				remoteMediaState->video);
 		}
 	} else if (const auto remoteBatteryLevelIsLow = absl::get_if<RemoteBatteryLevelIsLowMessage>(data)) {
-        _remoteBatteryLevelIsLowUpdated(remoteBatteryLevelIsLow->batteryLow);
+        if (_remoteBatteryLevelIsLowUpdated) {
+			_remoteBatteryLevelIsLowUpdated(remoteBatteryLevelIsLow->batteryLow);
+        }
     } else {
         if (const auto videoParameters = absl::get_if<VideoParametersMessage>(data)) {
             float value = ((float)videoParameters->aspectRatio) / 1000.0;

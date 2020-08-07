@@ -356,7 +356,41 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 
     TGRTCCVPixelBuffer *rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:pixelBuffer];
     rtcPixelBuffer.shouldBeMirrored = YES;
-    if (!_isPaused && _uncroppedSink) {
+    if (_aspectRatio > 0.001) {
+		const auto originalWidth = rtcPixelBuffer.width;
+		const auto originalHeight = rtcPixelBuffer.height;
+		auto width = (originalWidth > _aspectRatio * originalHeight)
+			? int(std::round(_aspectRatio * originalHeight))
+			: originalWidth;
+		auto height = (originalWidth > _aspectRatio * originalHeight)
+			? originalHeight
+			: int(std::round(originalHeight / _aspectRatio));
+
+        if ((width < originalWidth || height < originalHeight) && width && height) {
+			width &= ~int(1);
+			height &= ~int(1);
+			const auto left = (originalWidth - width) / 2;
+			const auto top = (originalHeight - height) / 2;
+
+            rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:pixelBuffer adaptedWidth:width adaptedHeight:height cropWidth:width cropHeight:height cropX:left cropY:top];
+
+            CVPixelBufferRef outputPixelBufferRef = NULL;
+            OSType pixelFormat = CVPixelBufferGetPixelFormatType(rtcPixelBuffer.pixelBuffer);
+            CVPixelBufferCreate(NULL, width, height, pixelFormat, NULL, &outputPixelBufferRef);
+            if (outputPixelBufferRef) {
+                int bufferSize = [rtcPixelBuffer bufferSizeForCroppingAndScalingToWidth:width height:width];
+                if (_croppingBuffer.size() < bufferSize) {
+                    _croppingBuffer.resize(bufferSize);
+                }
+                if ([rtcPixelBuffer cropAndScaleTo:outputPixelBufferRef withTempBuffer:_croppingBuffer.data()]) {
+                    rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:outputPixelBufferRef];
+                }
+                CVPixelBufferRelease(outputPixelBufferRef);
+            }
+        }
+    }
+
+	if (!_isPaused && _uncroppedSink) {
         int64_t timeStampNs = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer)) *
         kNanosecondsPerSecond;
         RTCVideoFrame *frame = [[RTCVideoFrame alloc] initWithBuffer:rtcPixelBuffer
@@ -377,41 +411,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
                                 .build());
     }
     
-    if (_aspectRatio > FLT_EPSILON) {
-        float aspect = 1.0f / _aspectRatio;
-        
-        int width = rtcPixelBuffer.width;
-        int height = rtcPixelBuffer.height;
-        
-        float aspectWidth = width;
-        float aspectHeight = ((float)(width)) / aspect;
-        int cropX = (int)((width - aspectWidth) / 2.0f);
-        int cropY = (int)((height - aspectHeight) / 2.0f);
-        
-        width = (int)aspectWidth;
-        width &= ~1;
-        height = (int)aspectHeight;
-        height &= ~1;
-        
-        if (width < rtcPixelBuffer.width || height < rtcPixelBuffer.height) {
-            rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:pixelBuffer adaptedWidth:width adaptedHeight:height cropWidth:width cropHeight:height cropX:cropX cropY:cropY];
-            
-            CVPixelBufferRef outputPixelBufferRef = NULL;
-            OSType pixelFormat = CVPixelBufferGetPixelFormatType(rtcPixelBuffer.pixelBuffer);
-            CVPixelBufferCreate(NULL, width, height, pixelFormat, NULL, &outputPixelBufferRef);
-            if (outputPixelBufferRef) {
-                int bufferSize = [rtcPixelBuffer bufferSizeForCroppingAndScalingToWidth:width height:width];
-                if (_croppingBuffer.size() < bufferSize) {
-                    _croppingBuffer.resize(bufferSize);
-                }
-                if ([rtcPixelBuffer cropAndScaleTo:outputPixelBufferRef withTempBuffer:_croppingBuffer.data()]) {
-                    rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:outputPixelBufferRef];
-                }
-                CVPixelBufferRelease(outputPixelBufferRef);
-            }
-        }
-    }
-    
+
     int64_t timeStampNs = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer)) *
     kNanosecondsPerSecond;
     RTCVideoFrame *videoFrame = [[RTCVideoFrame alloc] initWithBuffer:rtcPixelBuffer

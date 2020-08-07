@@ -237,6 +237,9 @@ void InstanceImplLegacy::setAudioOutputDuckingEnabled(bool enabled) {
 #endif
 }
 
+void InstanceImplLegacy::setIsLowBatteryLevel(bool isLowBatteryLevel) {
+}
+
 std::string InstanceImplLegacy::getLastError() {
 	switch (controller_->GetLastError()) {
 		case tgvoip::ERROR_INCOMPATIBLE: return "ERROR_INCOMPATIBLE";

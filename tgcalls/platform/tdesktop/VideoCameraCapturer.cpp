@@ -144,7 +144,7 @@ void VideoCameraCapturer::OnFrame(const webrtc::VideoFrame &frame) {
 	//	_broadcaster.OnFrame(frame);
 	//}
 
-	if (_aspectRatio <= FLT_EPSILON) {
+	if (_aspectRatio <= 0.001) {
 		_broadcaster.OnFrame(frame);
 		return;
 	}
@@ -156,7 +156,7 @@ void VideoCameraCapturer::OnFrame(const webrtc::VideoFrame &frame) {
 	auto height = (originalWidth > _aspectRatio * originalHeight)
 		? originalHeight
 		: int(std::round(originalHeight / _aspectRatio));
-	if (width >= originalWidth && height >= originalHeight) {
+	if ((width >= originalWidth && height >= originalHeight) || !width || !height) {
 		_broadcaster.OnFrame(frame);
 		return;
 	}
