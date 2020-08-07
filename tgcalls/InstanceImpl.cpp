@@ -48,9 +48,9 @@ void InstanceImpl::receiveSignalingData(const std::vector<uint8_t> &data) {
 	});
 };
 
-void InstanceImpl::requestVideo(std::shared_ptr<VideoCaptureInterface> videoCapture) {
+void InstanceImpl::setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture) {
     _manager->perform(RTC_FROM_HERE, [videoCapture](Manager *manager) {
-        manager->requestVideo(videoCapture);
+        manager->setVideoCapture(videoCapture);
     });
 }
 

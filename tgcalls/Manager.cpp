@@ -42,10 +42,11 @@ _enableP2P(descriptor.config.enableP2P),
 _rtcServers(std::move(descriptor.rtcServers)),
 _videoCapture(std::move(descriptor.videoCapture)),
 _stateUpdated(std::move(descriptor.stateUpdated)),
-_remoteVideoIsActiveUpdated(std::move(descriptor.remoteVideoIsActiveUpdated)),
+_remoteMediaStateUpdated(std::move(descriptor.remoteMediaStateUpdated)),
 _remoteBatteryLevelIsLowUpdated(std::move(descriptor.remoteBatteryLevelIsLowUpdated)),
 _remotePrefferedAspectRatioUpdated(std::move(descriptor.remotePrefferedAspectRatioUpdated)),
 _signalingDataEmitted(std::move(descriptor.signalingDataEmitted)),
+_signalBarsUpdated(std::move(descriptor.signalBarsUpdated)),
 _localPreferredVideoAspectRatio(descriptor.config.preferredAspectRatio),
 _enableHighBitrateVideo(descriptor.config.enableHighBitrateVideo) {
 	assert(_thread->IsCurrent());
@@ -62,10 +63,6 @@ _enableHighBitrateVideo(descriptor.config.enableHighBitrateVideo) {
 			networkManager->sendMessage(message);
 		});
 	};
-
-	if (_videoCapture) {
-		_videoState = VideoState::OutgoingRequested;
-    }
 }
 
 Manager::~Manager() {
@@ -119,18 +116,15 @@ void Manager::start() {
 					if (state.isReadyToSendData) {
 						if (!strong->_didConnectOnce) {
 							strong->_didConnectOnce = true;
-							if (strong->_videoState == VideoState::OutgoingRequested) {
-								strong->_videoState = VideoState::Active;
-							}
 						}
 					}
 					strong->_state = mappedState;
-					strong->_stateUpdated(mappedState, strong->_videoState);
+					strong->_stateUpdated(mappedState);
 
 					strong->_mediaManager->perform(RTC_FROM_HERE, [=](MediaManager *mediaManager) {
 						mediaManager->setIsConnected(state.isReadyToSendData);
-						});
 					});
+				});
 			},
 			[=](DecryptedMessage &&message) {
 				thread->PostTask(RTC_FROM_HERE, [=, message = std::move(message)]() mutable {
@@ -156,7 +150,7 @@ void Manager::start() {
 			});
 	}));
 	bool isOutgoing = _encryptionKey.isOutgoing;
-	_mediaManager.reset(new ThreadLocalObject<MediaManager>(getMediaThread(), [weak, isOutgoing, thread, sendSignalingMessage, videoCapture = _videoCapture, localPreferredVideoAspectRatio = _localPreferredVideoAspectRatio, enableHighBitrateVideo = _enableHighBitrateVideo]() {
+	_mediaManager.reset(new ThreadLocalObject<MediaManager>(getMediaThread(), [weak, isOutgoing, thread, sendSignalingMessage, videoCapture = _videoCapture, localPreferredVideoAspectRatio = _localPreferredVideoAspectRatio, enableHighBitrateVideo = _enableHighBitrateVideo, signalBarsUpdated = _signalBarsUpdated]() {
 		return new MediaManager(
 			getMediaThread(),
 			isOutgoing,
@@ -171,9 +165,13 @@ void Manager::start() {
 					strong->_sendTransportMessage(std::move(message));
 				});
 			},
+            signalBarsUpdated,
             localPreferredVideoAspectRatio,
             enableHighBitrateVideo);
 	}));
+	_mediaManager->perform(RTC_FROM_HERE, [](MediaManager *mediaManager) {
+		mediaManager->start();
+	});
 }
 
 void Manager::receiveSignalingData(const std::vector<uint8_t> &data) {
@@ -195,20 +193,10 @@ void Manager::receiveMessage(DecryptedMessage &&message) {
 		_mediaManager->perform(RTC_FROM_HERE, [message = std::move(message)](MediaManager *mediaManager) mutable {
 			mediaManager->receiveMessage(std::move(message));
 		});
-	} else if (absl::get_if<RequestVideoMessage>(data)) {
-		if (_videoState == VideoState::Possible) {
-            _videoState = VideoState::IncomingRequestedAndActive;
-            _stateUpdated(_state, _videoState);
-		} else if (_videoState == VideoState::OutgoingRequested) {
-            _videoState = VideoState::Active;
-            _stateUpdated(_state, _videoState);
-
-            _mediaManager->perform(RTC_FROM_HERE, [videoCapture = _videoCapture](MediaManager *mediaManager) {
-                mediaManager->setSendVideo(videoCapture);
-            });
-        }
-    } else if (const auto remoteVideoIsActive = absl::get_if<RemoteVideoIsActiveMessage>(data)) {
-		_remoteVideoIsActiveUpdated(remoteVideoIsActive->active);
+    } else if (const auto remoteMediaState = absl::get_if<RemoteMediaStateMessage>(data)) {
+		_remoteMediaStateUpdated(
+			remoteMediaState->audio,
+			remoteMediaState->video);
 	} else if (const auto remoteBatteryLevelIsLow = absl::get_if<RemoteBatteryLevelIsLowMessage>(data)) {
         _remoteBatteryLevelIsLowUpdated(remoteBatteryLevelIsLow->batteryLow);
     } else {
@@ -222,36 +210,16 @@ void Manager::receiveMessage(DecryptedMessage &&message) {
 	}
 }
 
-void Manager::requestVideo(std::shared_ptr<VideoCaptureInterface> videoCapture) {
-	assert(videoCapture != nullptr);
+void Manager::setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture) {
+	assert(_didConnectOnce);
 
-	if (_videoCapture == videoCapture || !_didConnectOnce) {
+	if (_videoCapture == videoCapture) {
 		return;
 	}
     _videoCapture = videoCapture;
-    if (_videoState == VideoState::Possible) {
-        _videoState = VideoState::OutgoingRequested;
-
-		_sendTransportMessage({ RequestVideoMessage() });
-        _stateUpdated(_state, _videoState);
-        
-        _mediaManager->perform(RTC_FROM_HERE, [videoCapture](MediaManager *mediaManager) {
-            mediaManager->setSendVideo(videoCapture);
-        });
-    } else if (_videoState == VideoState::IncomingRequested || _videoState == VideoState::IncomingRequestedAndActive) {
-        _videoState = VideoState::Active;
-
-		_sendTransportMessage({ RequestVideoMessage() });
-        _stateUpdated(_state, _videoState);
-
-        _mediaManager->perform(RTC_FROM_HERE, [videoCapture](MediaManager *mediaManager) {
-            mediaManager->setSendVideo(videoCapture);
-        });
-	} else if (_videoState == VideoState::Active) {
-        _mediaManager->perform(RTC_FROM_HERE, [videoCapture](MediaManager *mediaManager) {
-            mediaManager->setSendVideo(videoCapture);
-        });
-	}
+    _mediaManager->perform(RTC_FROM_HERE, [videoCapture](MediaManager *mediaManager) {
+        mediaManager->setSendVideo(videoCapture);
+    });
 }
 
 void Manager::setMuteOutgoingAudio(bool mute) {

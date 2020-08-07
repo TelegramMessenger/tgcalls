@@ -14,19 +14,25 @@ class VideoFrame;
 
 namespace tgcalls {
 
+enum class VideoState {
+	Inactive,
+	Paused,
+	Active,
+};
+
 class VideoCaptureInterface {
 protected:
 	VideoCaptureInterface() = default;
 
 public:
-	static std::shared_ptr<VideoCaptureInterface> Create();
+	static std::unique_ptr<VideoCaptureInterface> Create();
 
 	virtual ~VideoCaptureInterface();
 
 	virtual void switchCamera() = 0;
-	virtual void setIsVideoEnabled(bool isVideoEnabled) = 0;
+	virtual void setState(VideoState state) = 0;
     virtual void setPreferredAspectRatio(float aspectRatio) = 0;
-	virtual void setVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) = 0;
+	virtual void setOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) = 0;
 
 };
 

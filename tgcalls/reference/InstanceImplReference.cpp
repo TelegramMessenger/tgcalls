@@ -235,13 +235,13 @@ public:
     _stateUpdated(descriptor.stateUpdated),
     _signalBarsUpdated(descriptor.signalBarsUpdated),
     _signalingDataEmitted(descriptor.signalingDataEmitted),
-    _remoteVideoIsActiveUpdated(descriptor.remoteVideoIsActiveUpdated),
     _remoteBatteryLevelIsLowUpdated(descriptor.remoteBatteryLevelIsLowUpdated),
+    _remoteMediaStateUpdated(descriptor.remoteMediaStateUpdated),
     _remotePrefferedAspectRatioUpdated(descriptor.remotePrefferedAspectRatioUpdated),
 	_videoCapture(descriptor.videoCapture),
 	_localPreferredVideoAspectRatio(descriptor.config.preferredAspectRatio),
 	_state(State::Reconnecting),
-    _videoState(VideoState::Possible){
+	_videoState(_videoCapture ? VideoState::Active : VideoState::Inactive) {
         assert(getMediaThread()->IsCurrent());
 
         rtc::LogMessage::LogToDebug(rtc::LS_INFO);
@@ -293,10 +293,6 @@ public:
                 }
             }
         ));
-
-        if (_videoCapture) {
-            _videoState = VideoState::OutgoingRequested;
-        }
 
         webrtc::PeerConnectionFactoryDependencies dependencies;
         dependencies.network_thread = getNetworkThread();
@@ -417,6 +413,7 @@ public:
 
     void setMuteMicrophone(bool muteMicrophone) {
         _localAudioTrack->set_enabled(!muteMicrophone);
+        changeAudioState(muteMicrophone ? AudioState::Muted : AudioState::Active);
     }
 
     void setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
@@ -429,29 +426,16 @@ public:
         }
     }
 
-    void requestVideo(std::shared_ptr<VideoCaptureInterface> videoCapture) {
+    void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture) {
+        assert(videoCapture != nullptr);
+
         _videoCapture = videoCapture;
 
         if (_preferredAspectRatio > 0.01f) {
             VideoCaptureInterfaceObject *videoCaptureImpl = GetVideoCaptureAssumingSameThread(_videoCapture.get());
             videoCaptureImpl->setPreferredAspectRatio(_preferredAspectRatio);
         }
-
-        if (_videoState == VideoState::Possible) {
-            _videoState = VideoState::OutgoingRequested;
-
-            emitRequestVideo();
-
-            _stateUpdated(_state, _videoState);
-        } else if (_videoState == VideoState::IncomingRequested) {
-            _videoState = VideoState::Active;
-
-            emitRequestVideo();
-
-            _stateUpdated(_state, _videoState);
-
-            beginSendingVideo();
-        }
+		beginSendingVideo();
     }
 
     void receiveSignalingData(const std::vector<uint8_t> &data) {
@@ -570,17 +554,12 @@ public:
             if (!reader.ReadUInt8(&value)) {
                 return;
             }
-            _remoteVideoIsActiveUpdated(value != 0);
-        } else if (command == 5) {
-            if (_videoState == VideoState::Possible) {
-                _videoState = VideoState::IncomingRequested;
-                _stateUpdated(_state, _videoState);
-            } else if (_videoState == VideoState::OutgoingRequested) {
-                _videoState = VideoState::Active;
-                _stateUpdated(_state, _videoState);
-
-                beginSendingVideo();
+            const auto audio = AudioState(value & 0x01);
+            const auto video = VideoState((value >> 1) & 0x03);
+            if (video == VideoState(0x03)) {
+                return;
             }
+            _remoteMediaStateUpdated(audio, video);
         } else if (command == 6) {
             uint32_t value = 0;
             if (!reader.ReadUInt32(&value)) {
@@ -787,10 +766,24 @@ private:
 
     }
 
-    void emitVideoIsActive(bool isActive) {
+    void changeVideoState(VideoState state) {
+        if (_videoState != state) {
+            _videoState = state;
+            emitMediaState();
+        }
+    }
+
+    void changeAudioState(AudioState state) {
+        if (_audioState != state) {
+            _audioState = state;
+            emitMediaState();
+        }
+    }
+
+    void emitMediaState() {
         rtc::ByteBufferWriter writer;
         writer.WriteUInt8(4);
-        writer.WriteUInt8(isActive ? 1 : 0);
+        writer.WriteUInt8((uint8_t(_videoState) << 1) | uint8_t(_audioState));
 
         emitSignaling(writer);
     }
@@ -834,14 +827,11 @@ private:
             _state = State::Established;
             if (!_didConnectOnce) {
                 _didConnectOnce = true;
-                if (_videoState == VideoState::OutgoingRequested) {
-                    _videoState = VideoState::Active;
-                }
             }
         } else {
             _state = State::Reconnecting;
         }
-        _stateUpdated(_state, _videoState);
+        _stateUpdated(_state);
     }
 
     void onTrack(rtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver) {
@@ -864,11 +854,11 @@ private:
 
         const auto weak = std::weak_ptr<InstanceImplReferenceInternal>(shared_from_this());
 
-        videoCaptureImpl->setIsActiveUpdated([weak](bool isActive) {
-            getMediaThread()->PostTask(RTC_FROM_HERE, [weak, isActive](){
+        videoCaptureImpl->setStateUpdated([weak](VideoState state) {
+            getMediaThread()->PostTask(RTC_FROM_HERE, [weak, state](){
                 auto strong = weak.lock();
                 if (strong) {
-                    strong->emitVideoIsActive(isActive);
+                    strong->changeVideoState(state);
                 }
             });
         });
@@ -905,10 +895,10 @@ private:
     EncryptionKey _encryptionKey;
     std::vector<RtcServer> _rtcServers;
     bool _enableP2P;
-    std::function<void(State, VideoState)> _stateUpdated;
+    std::function<void(State)> _stateUpdated;
     std::function<void(int)> _signalBarsUpdated;
     std::function<void(const std::vector<uint8_t> &)> _signalingDataEmitted;
-    std::function<void(bool)> _remoteVideoIsActiveUpdated;
+    std::function<void(AudioState, VideoState)> _remoteMediaStateUpdated;
     std::function<void(bool)> _remoteBatteryLevelIsLowUpdated;
     std::function<void(float)> _remotePrefferedAspectRatioUpdated;
     std::shared_ptr<VideoCaptureInterface> _videoCapture;
@@ -916,8 +906,9 @@ private:
     float _localPreferredVideoAspectRatio = 0.0f;
     float _preferredAspectRatio = 0.0f;
 
-    State _state;
-    VideoState _videoState;
+    State _state = State::WaitInit;
+    AudioState _audioState = AudioState::Active;
+    VideoState _videoState = VideoState::Inactive;
     bool _didConnectOnce = false;
 
     std::vector<std::string> _streamIds;
@@ -971,9 +962,9 @@ void InstanceImplReference::receiveSignalingData(const std::vector<uint8_t> &dat
     });
 }
 
-void InstanceImplReference::requestVideo(std::shared_ptr<VideoCaptureInterface> videoCapture) {
+void InstanceImplReference::setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture) {
     internal_->perform(RTC_FROM_HERE, [videoCapture](InstanceImplReferenceInternal *internal) {
-        internal->requestVideo(videoCapture);
+        internal->setVideoCapture(videoCapture);
     });
 }
 

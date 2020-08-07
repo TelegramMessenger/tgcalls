@@ -412,26 +412,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     TGRTCCVPixelBuffer *rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:pixelBuffer];
     rtcPixelBuffer.shouldBeMirrored = usingFrontCamera;
     
-    if (!_isPaused && _uncroppedSink) {
-        int64_t timeStampNs = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer)) *
-        kNanosecondsPerSecond;
-        RTCVideoFrame *frame = [[RTCVideoFrame alloc] initWithBuffer:rtcPixelBuffer
-                                                                 rotation:_rotation
-                                                              timeStampNs:timeStampNs];
-        
-        const int64_t timestamp_us = frame.timeStampNs / rtc::kNumNanosecsPerMicrosec;
-
-        rtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer;
-        buffer = new rtc::RefCountedObject<webrtc::ObjCFrameBuffer>(frame.buffer);
-        
-        webrtc::VideoRotation rotation = static_cast<webrtc::VideoRotation>(frame.rotation);
-        
-        _uncroppedSink->OnFrame(webrtc::VideoFrame::Builder()
-                .set_video_frame_buffer(buffer)
-                .set_rotation(rotation)
-                .set_timestamp_us(timestamp_us)
-                .build());
-    }
+    TGRTCCVPixelBuffer *uncroppedRtcPixelBuffer = rtcPixelBuffer;
     
     if (_aspectRatio > FLT_EPSILON) {
         float aspect = 1.0f / _aspectRatio;
@@ -474,11 +455,29 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     
     int64_t timeStampNs = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer)) *
     kNanosecondsPerSecond;
-    RTCVideoFrame *videoFrame = [[RTCVideoFrame alloc] initWithBuffer:rtcPixelBuffer
-                                                             rotation:_rotation
-                                                          timeStampNs:timeStampNs];
+    RTCVideoFrame *videoFrame = [[RTCVideoFrame alloc] initWithBuffer:rtcPixelBuffer rotation:_rotation timeStampNs:timeStampNs];
+    
     if (!_isPaused) {
         getObjCVideoSource(_source)->OnCapturedFrame(videoFrame);
+        
+        if (_uncroppedSink && uncroppedRtcPixelBuffer) {
+            int64_t timeStampNs = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer)) *
+            kNanosecondsPerSecond;
+            RTCVideoFrame *frame = [[RTCVideoFrame alloc] initWithBuffer:uncroppedRtcPixelBuffer rotation:_rotation timeStampNs:timeStampNs];
+            
+            const int64_t timestamp_us = frame.timeStampNs / rtc::kNumNanosecsPerMicrosec;
+
+            rtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer;
+            buffer = new rtc::RefCountedObject<webrtc::ObjCFrameBuffer>(frame.buffer);
+            
+            webrtc::VideoRotation rotation = static_cast<webrtc::VideoRotation>(frame.rotation);
+            
+            _uncroppedSink->OnFrame(webrtc::VideoFrame::Builder()
+                    .set_video_frame_buffer(buffer)
+                    .set_rotation(rotation)
+                    .set_timestamp_us(timestamp_us)
+                    .build());
+        }
     }
 }
 

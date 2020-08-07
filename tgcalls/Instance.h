@@ -121,12 +121,12 @@ enum class State {
 	Reconnecting
 };
 
-enum class VideoState {
-    Possible,
-    OutgoingRequested,
-    IncomingRequested,
-    IncomingRequestedAndActive,
-    Active
+// Defined in VideoCaptureInterface.h
+enum class VideoState;
+
+enum class AudioState {
+	Muted,
+	Active,
 };
 
 struct TrafficStats {
@@ -172,7 +172,7 @@ public:
 	virtual PersistentState getPersistentState() = 0;
 
 	virtual void receiveSignalingData(const std::vector<uint8_t> &data) = 0;
-	virtual void requestVideo(std::shared_ptr<VideoCaptureInterface> videoCapture) = 0;
+	virtual void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture) = 0;
 
 	virtual FinalState stop() = 0;
 
@@ -190,10 +190,10 @@ struct Descriptor {
 	NetworkType initialNetworkType = NetworkType();
 	EncryptionKey encryptionKey;
 	std::shared_ptr<VideoCaptureInterface> videoCapture;
-	std::function<void(State, VideoState)> stateUpdated;
+	std::function<void(State)> stateUpdated;
 	std::function<void(int)> signalBarsUpdated;
-	std::function<void(bool)> remoteVideoIsActiveUpdated;
     std::function<void(bool)> remoteBatteryLevelIsLowUpdated;
+	std::function<void(AudioState, VideoState)> remoteMediaStateUpdated;
     std::function<void(float)> remotePrefferedAspectRatioUpdated;
 	std::function<void(const std::vector<uint8_t> &)> signalingDataEmitted;
 };
