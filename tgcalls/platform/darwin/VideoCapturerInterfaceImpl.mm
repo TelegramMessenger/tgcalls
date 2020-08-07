@@ -159,12 +159,12 @@ VideoCapturerInterfaceImpl::~VideoCapturerInterfaceImpl() {
     });
 }
 
-void VideoCapturerInterfaceImpl::setIsEnabled(bool isEnabled) {
+void VideoCapturerInterfaceImpl::setState(VideoState state) {
     VideoCapturerInterfaceImplHolder *implReference = _implReference;
     dispatch_async(dispatch_get_main_queue(), ^{
         if (implReference.reference != nil) {
             VideoCapturerInterfaceImplReference *reference = (__bridge VideoCapturerInterfaceImplReference *)implReference.reference;
-            [reference setIsEnabled:isEnabled];
+            [reference setIsEnabled:(state == VideoState::Active)];
         }
     });
 }
@@ -179,7 +179,7 @@ void VideoCapturerInterfaceImpl::setPreferredCaptureAspectRatio(float aspectRati
     });
 }
 
-void VideoCapturerInterfaceImpl::setUncroppedVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+void VideoCapturerInterfaceImpl::setUncroppedOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
     VideoCapturerInterfaceImplHolder *implReference = _implReference;
     dispatch_async(dispatch_get_main_queue(), ^{
         if (implReference.reference != nil) {

@@ -62,6 +62,7 @@ _eventLog(std::make_unique<webrtc::RtcEventLogNull>()),
 _taskQueueFactory(webrtc::CreateDefaultTaskQueueFactory()),
 _sendSignalingMessage(std::move(sendSignalingMessage)),
 _sendTransportMessage(std::move(sendTransportMessage)),
+_outgoingVideoState(videoCapture ? VideoState::Active : VideoState::Inactive),
 _videoCapture(std::move(videoCapture)),
 _localPreferredVideoAspectRatio(localPreferredVideoAspectRatio),
 _enableHighBitrateVideo(enableHighBitrateVideo) {
@@ -158,7 +159,9 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
 	_audioChannel->SetPlayout(true);
 
 	_videoChannel->SetInterface(_videoNetworkInterface.get(), webrtc::MediaTransportConfig());
+}
 
+void MediaManager::start() {
 	_sendSignalingMessage({ _myVideoFormats });
 
 	if (_videoCapture != nullptr) {
@@ -202,12 +205,23 @@ void MediaManager::setIsConnected(bool isConnected) {
 	if (_audioChannel) {
 		_audioChannel->OnReadyToSend(_isConnected);
 		_audioChannel->SetSend(_isConnected);
-		_audioChannel->SetAudioSend(_ssrcAudio.outgoing, _isConnected && !_muteOutgoingAudio, nullptr, &_audioSource);
+		_audioChannel->SetAudioSend(_ssrcAudio.outgoing, _isConnected && (_outgoingAudioState == AudioState::Active), nullptr, &_audioSource);
 	}
 	if (computeIsSendingVideo() && _videoChannel) {
 		_videoChannel->OnReadyToSend(_isConnected);
 		_videoChannel->SetSend(_isConnected);
 	}
+	sendVideoParametersMessage();
+	sendOutgoingMediaStateMessage();
+}
+
+void MediaManager::sendVideoParametersMessage() {
+	const auto aspectRatioValue = uint32_t(_localPreferredVideoAspectRatio * 1000.0);
+	_sendTransportMessage({ VideoParametersMessage{ aspectRatioValue } });
+}
+
+void MediaManager::sendOutgoingMediaStateMessage() {
+	_sendTransportMessage({ RemoteMediaStateMessage{ _outgoingAudioState, _outgoingVideoState } });
 }
 
 void MediaManager::notifyPacketSent(const rtc::SentPacket &sentPacket) {
@@ -218,7 +232,7 @@ void MediaManager::setPeerVideoFormats(VideoFormatsMessage &&peerFormats) {
 	if (!_videoCodecs.empty()) {
 		return;
 	}
-    
+
     bool wasReceivingVideo = computeIsReceivingVideo();
 
 	assert(!_videoCodecOut.has_value());
@@ -256,19 +270,21 @@ void MediaManager::setSendVideo(std::shared_ptr<VideoCaptureInterface> videoCapt
     const auto wasReceiving = computeIsReceivingVideo();
 
     if (_videoCapture) {
-		GetVideoCaptureAssumingSameThread(_videoCapture.get())->setIsActiveUpdated(nullptr);
+		GetVideoCaptureAssumingSameThread(_videoCapture.get())->setStateUpdated(nullptr);
     }
     _videoCapture = videoCapture;
 	if (_videoCapture) {
         _videoCapture->setPreferredAspectRatio(_preferredAspectRatio);
-        
-		const auto sendTransportMessage = _sendTransportMessage;
-		GetVideoCaptureAssumingSameThread(_videoCapture.get())->setIsActiveUpdated([=](bool isActive) {
-			sendTransportMessage({ RemoteVideoIsActiveMessage{ isActive } });
+
+		const auto thread = _thread;
+		const auto weak = std::weak_ptr<MediaManager>(shared_from_this());
+		GetVideoCaptureAssumingSameThread(_videoCapture.get())->setStateUpdated([=](VideoState state) {
+			thread->PostTask(RTC_FROM_HERE, [=] {
+				if (const auto strong = weak.lock()) {
+					strong->setOutgoingVideoState(state);
+				}
+			});
 		});
-        
-        uint32_t aspectRatioValue = (uint32_t)(_localPreferredVideoAspectRatio * 1000.0);
-        sendTransportMessage({ VideoParametersMessage{ aspectRatioValue } });
 	}
 
     checkIsSendingVideoChanged(wasSending);
@@ -372,9 +388,24 @@ void MediaManager::checkIsReceivingVideoChanged(bool wasReceiving) {
 }
 
 void MediaManager::setMuteOutgoingAudio(bool mute) {
-	_muteOutgoingAudio = mute;
+	setOutgoingAudioState(mute ? AudioState::Muted : AudioState::Active);
+	_audioChannel->SetAudioSend(_ssrcAudio.outgoing, _isConnected && (_outgoingAudioState == AudioState::Active), nullptr, &_audioSource);
+}
 
-	_audioChannel->SetAudioSend(_ssrcAudio.outgoing, _isConnected && !_muteOutgoingAudio, nullptr, &_audioSource);
+void MediaManager::setOutgoingAudioState(AudioState state) {
+	if (_outgoingAudioState == state) {
+		return;
+	}
+	_outgoingAudioState = state;
+	sendOutgoingMediaStateMessage();
+}
+
+void MediaManager::setOutgoingVideoState(VideoState state) {
+	if (_outgoingVideoState == state) {
+		return;
+	}
+	_outgoingVideoState = state;
+	sendOutgoingMediaStateMessage();
 }
 
 void MediaManager::setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
