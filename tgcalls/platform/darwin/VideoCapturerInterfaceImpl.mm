@@ -81,11 +81,26 @@
         }];
 
         AVCaptureDeviceFormat *bestFormat = sortedFormats.firstObject;
+        
+        bool didSelectPreferredFormat = false;
         for (AVCaptureDeviceFormat *format in sortedFormats) {
             CMVideoDimensions dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription);
-            if (dimensions.width >= 1000 || dimensions.height >= 1000) {
-                bestFormat = format;
-                break;
+            if (dimensions.width == 1280 && dimensions.height == 720) {
+                if (format.videoFieldOfView > 60.0f && format.videoSupportedFrameRateRanges.lastObject.maxFrameRate == 30) {
+                    didSelectPreferredFormat = true;
+                    bestFormat = format;
+                    break;
+                }
+            }
+        }
+        
+        if (!didSelectPreferredFormat) {
+            for (AVCaptureDeviceFormat *format in sortedFormats) {
+                CMVideoDimensions dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription);
+                if (dimensions.width >= 1000 || dimensions.height >= 1000) {
+                    bestFormat = format;
+                    break;
+                }
             }
         }
 

@@ -65,13 +65,21 @@
 #endif
   ]];
     
-    #if !defined(DISABLE_H265)
-    if (@available(iOS 11.0, *)) {
-        if ([[AVAssetExportSession allExportPresets] containsObject:AVAssetExportPresetHEVCHighestQuality]) {
-            [result addObject:h265Info];
-        }
+#if !defined(DISABLE_H265)
+#ifdef WEBRTC_IOS
+  if (@available(iOS 11.0, *)) {
+    if ([[AVAssetExportSession allExportPresets] containsObject:AVAssetExportPresetHEVCHighestQuality]) {
+      [result addObject:h265Info];
     }
-    #endif
+  }
+#else // WEBRTC_IOS
+  if (@available(macOS 10.13, *)) {
+    if ([[AVAssetExportSession allExportPresets] containsObject:AVAssetExportPresetHEVCHighestQuality]) {
+      [result addObject:h265Info];
+    }
+  }
+#endif // WEBRTC_IOS
+#endif
     
     return result;
 }
