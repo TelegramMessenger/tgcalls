@@ -372,6 +372,7 @@ void MediaManager::configureSendingVideoIfNeeded() {
     }
 
     videoSendParameters.extensions.emplace_back(webrtc::RtpExtension::kTransportSequenceNumberUri, 1);
+    videoSendParameters.rtcp.remote_estimate = true;
     _videoChannel->SetSendParameters(videoSendParameters);
 
     if (_enableFlexfec) {
@@ -445,7 +446,7 @@ void MediaManager::checkIsReceivingVideoChanged(bool wasReceiving) {
 
         videoRecvParameters.extensions.emplace_back(webrtc::RtpExtension::kTransportSequenceNumberUri, 1);
         //recv_parameters.rtcp.reduced_size = true;
-        //videoRecvParameters.rtcp.remote_estimate = true;
+        videoRecvParameters.rtcp.remote_estimate = true;
 
         cricket::StreamParams videoRecvStreamParams;
         cricket::SsrcGroup videoRecvSsrcGroup(cricket::kFecFrSsrcGroupSemantics, {_ssrcVideo.incoming, _ssrcVideo.fecIncoming});
