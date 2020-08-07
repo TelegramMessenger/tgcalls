@@ -162,6 +162,8 @@ public:
 	virtual void setInputVolume(float level) = 0;
 	virtual void setOutputVolume(float level) = 0;
 	virtual void setAudioOutputDuckingEnabled(bool enabled) = 0;
+    
+    virtual void setIsLowBatteryLevel(bool isLowBatteryLevel) = 0;
 
 	virtual std::string getLastError() = 0;
 	virtual std::string getDebugInfo() = 0;
@@ -191,6 +193,7 @@ struct Descriptor {
 	std::function<void(State, VideoState)> stateUpdated;
 	std::function<void(int)> signalBarsUpdated;
 	std::function<void(bool)> remoteVideoIsActiveUpdated;
+    std::function<void(bool)> remoteBatteryLevelIsLowUpdated;
     std::function<void(float)> remotePrefferedAspectRatioUpdated;
 	std::function<void(const std::vector<uint8_t> &)> signalingDataEmitted;
 };

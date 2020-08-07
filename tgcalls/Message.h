@@ -67,6 +67,13 @@ struct VideoParametersMessage {
     uint32_t aspectRatio;
 };
 
+struct RemoteBatteryLevelIsLowMessage {
+    static constexpr uint8_t kId = 10;
+    static constexpr bool kRequiresAck = true;
+
+    bool batteryLow = false;
+};
+
 // To add a new message you should:
 // 1. Add the message struct.
 // 2. Add the message to the variant in Message struct.
@@ -81,7 +88,8 @@ struct Message {
 		AudioDataMessage,
 		VideoDataMessage,
         UnstructuredDataMessage,
-        VideoParametersMessage> data;
+        VideoParametersMessage,
+        RemoteBatteryLevelIsLowMessage> data;
 };
 
 rtc::CopyOnWriteBuffer SerializeMessageWithSeq(

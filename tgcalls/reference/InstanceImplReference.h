@@ -26,7 +26,7 @@ public:
 	void setInputVolume(float level) override;
 	void setOutputVolume(float level) override;
 	void setAudioOutputDuckingEnabled(bool enabled) override;
-
+    void setIsLowBatteryLevel(bool isLowBatteryLevel) override;
     static int GetConnectionMaxLayer();
     static std::string GetVersion();
 	std::string getLastError() override;

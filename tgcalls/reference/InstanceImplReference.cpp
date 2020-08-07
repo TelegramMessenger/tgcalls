@@ -236,6 +236,7 @@ public:
     _signalBarsUpdated(descriptor.signalBarsUpdated),
     _signalingDataEmitted(descriptor.signalingDataEmitted),
     _remoteVideoIsActiveUpdated(descriptor.remoteVideoIsActiveUpdated),
+    _remoteBatteryLevelIsLowUpdated(descriptor.remoteBatteryLevelIsLowUpdated),
     _remotePrefferedAspectRatioUpdated(descriptor.remotePrefferedAspectRatioUpdated),
 	_videoCapture(descriptor.videoCapture),
 	_localPreferredVideoAspectRatio(descriptor.config.preferredAspectRatio),
@@ -908,6 +909,7 @@ private:
     std::function<void(int)> _signalBarsUpdated;
     std::function<void(const std::vector<uint8_t> &)> _signalingDataEmitted;
     std::function<void(bool)> _remoteVideoIsActiveUpdated;
+    std::function<void(bool)> _remoteBatteryLevelIsLowUpdated;
     std::function<void(float)> _remotePrefferedAspectRatioUpdated;
     std::shared_ptr<VideoCaptureInterface> _videoCapture;
     std::unique_ptr<EncryptedConnection> _signalingConnection;
@@ -1000,6 +1002,9 @@ void InstanceImplReference::setOutputVolume(float level) {
 }
 
 void InstanceImplReference::setAudioOutputDuckingEnabled(bool enabled) {
+}
+
+void InstanceImplReference::setIsLowBatteryLevel(bool isLowBatteryLevel) {
 }
 
 int InstanceImplReference::GetConnectionMaxLayer() {

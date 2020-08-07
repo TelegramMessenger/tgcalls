@@ -235,6 +235,20 @@ bool Deserialize(VideoParametersMessage &to, rtc::ByteBufferReader &from, bool s
     return true;
 }
 
+void Serialize(rtc::ByteBufferWriter &to, const RemoteBatteryLevelIsLowMessage &from, bool singleMessagePacket) {
+    to.WriteUInt8(from.batteryLow ? 1 : 0);
+}
+
+bool Deserialize(RemoteBatteryLevelIsLowMessage &to, rtc::ByteBufferReader &reader, bool singleMessagePacket) {
+    uint8_t value = 0;
+    if (!reader.ReadUInt8(&value)) {
+        RTC_LOG(LS_ERROR) << "Could not read batteryLevelIsLow.";
+        return false;
+    }
+    to.batteryLow = (value != 0);
+    return true;
+}
+
 template <typename T>
 bool TryDeserialize(
 		absl::optional<Message> &to,

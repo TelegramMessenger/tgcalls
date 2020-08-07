@@ -21,7 +21,8 @@ public:
 	void requestVideo(std::shared_ptr<VideoCaptureInterface> videoCapture);
     void setMuteOutgoingAudio(bool mute);
 	void setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
-
+    void setIsLowBatteryLevel(bool isLowBatteryLevel);
+    
 private:
 	void sendSignalingAsync(int delayMs, int cause);
 	void receiveMessage(DecryptedMessage &&message);
@@ -34,6 +35,7 @@ private:
 	std::shared_ptr<VideoCaptureInterface> _videoCapture;
 	std::function<void(const State &, VideoState)> _stateUpdated;
 	std::function<void(bool)> _remoteVideoIsActiveUpdated;
+    std::function<void(bool)> _remoteBatteryLevelIsLowUpdated;
     std::function<void(float)> _remotePrefferedAspectRatioUpdated;
 	std::function<void(const std::vector<uint8_t> &)> _signalingDataEmitted;
 	std::function<uint32_t(const Message &)> _sendSignalingMessage;

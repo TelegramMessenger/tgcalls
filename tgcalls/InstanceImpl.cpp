@@ -140,6 +140,12 @@ void InstanceImpl::setAudioOutputDuckingEnabled(bool enabled) {
 	// TODO: not implemented
 }
 
+void InstanceImpl::setIsLowBatteryLevel(bool isLowBatteryLevel) {
+    _manager->perform(RTC_FROM_HERE, [isLowBatteryLevel](Manager *manager) {
+        manager->setIsLowBatteryLevel(isLowBatteryLevel);
+    });
+}
+
 std::string InstanceImpl::getLastError() {
 	return "";  // TODO: not implemented
 }
