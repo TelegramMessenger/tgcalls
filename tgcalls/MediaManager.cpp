@@ -112,12 +112,12 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
 	callConfig.trials = &_fieldTrials;
 	callConfig.audio_state = _mediaEngine->voice().GetAudioState();
 	_call.reset(webrtc::Call::Create(callConfig));
-    
+
     cricket::AudioOptions audioOptions;
     audioOptions.echo_cancellation = true;
     audioOptions.noise_suppression = true;
     audioOptions.audio_jitter_buffer_fast_accelerate = true;
-    
+
 	_audioChannel.reset(_mediaEngine->voice().CreateMediaChannel(_call.get(), cricket::MediaConfig(), audioOptions, webrtc::CryptoOptions::NoGcm()));
 	_videoChannel.reset(_mediaEngine->video().CreateMediaChannel(_call.get(), cricket::MediaConfig(), cricket::VideoOptions(), webrtc::CryptoOptions::NoGcm(), _videoBitrateAllocatorFactory.get()));
 
@@ -175,7 +175,7 @@ void MediaManager::start() {
 	if (_videoCapture != nullptr) {
         setSendVideo(_videoCapture);
     }
-    
+
     beginStatsTimer(3000);
 }
 
@@ -256,15 +256,17 @@ void MediaManager::collectStats() {
             break;
     }
     float sendBitrateKbps = ((float)stats.send_bandwidth_bps / 1000.0f);
-    
+
     float signalBarsNorm = 4.0f;
     float adjustedQuality = sendBitrateKbps / bitrateNorm;
     adjustedQuality = fmaxf(0.0f, adjustedQuality);
     adjustedQuality = fminf(1.0f, adjustedQuality);
-    _signalBarsUpdated((int)(adjustedQuality * signalBarsNorm));
-    
+	if (_signalBarsUpdated) {
+		_signalBarsUpdated((int)(adjustedQuality * signalBarsNorm));
+	}
+
     beginStatsTimer(2000);
-    
+
     /*
      int send_bandwidth_bps = 0;       // Estimated available send bandwidth.
      int max_padding_bitrate_bps = 0;  // Cumulative configured max padding.
