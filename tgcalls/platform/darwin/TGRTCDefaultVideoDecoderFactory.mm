@@ -26,45 +26,56 @@
 @implementation TGRTCDefaultVideoDecoderFactory
 
 - (NSArray<RTCVideoCodecInfo *> *)supportedCodecs {
-  NSDictionary<NSString *, NSString *> *constrainedHighParams = @{
-    @"profile-level-id" : kRTCMaxSupportedH264ProfileLevelConstrainedHigh,
-    @"level-asymmetry-allowed" : @"1",
-    @"packetization-mode" : @"1",
-  };
-  RTCVideoCodecInfo *constrainedHighInfo =
-      [[RTCVideoCodecInfo alloc] initWithName:kRTCVideoCodecH264Name
-                                   parameters:constrainedHighParams];
-
-  NSDictionary<NSString *, NSString *> *constrainedBaselineParams = @{
-    @"profile-level-id" : kRTCMaxSupportedH264ProfileLevelConstrainedBaseline,
-    @"level-asymmetry-allowed" : @"1",
-    @"packetization-mode" : @"1",
-  };
-  RTCVideoCodecInfo *constrainedBaselineInfo =
-      [[RTCVideoCodecInfo alloc] initWithName:kRTCVideoCodecH264Name
-                                   parameters:constrainedBaselineParams];
-
-  RTCVideoCodecInfo *vp8Info = [[RTCVideoCodecInfo alloc] initWithName:kRTCVideoCodecVp8Name];
-
+    NSDictionary<NSString *, NSString *> *constrainedHighParams = @{
+        @"profile-level-id" : kRTCMaxSupportedH264ProfileLevelConstrainedHigh,
+        @"level-asymmetry-allowed" : @"1",
+        @"packetization-mode" : @"1",
+    };
+    RTCVideoCodecInfo *constrainedHighInfo =
+    [[RTCVideoCodecInfo alloc] initWithName:kRTCVideoCodecH264Name
+                                 parameters:constrainedHighParams];
+    
+    NSDictionary<NSString *, NSString *> *constrainedBaselineParams = @{
+        @"profile-level-id" : kRTCMaxSupportedH264ProfileLevelConstrainedBaseline,
+        @"level-asymmetry-allowed" : @"1",
+        @"packetization-mode" : @"1",
+    };
+    RTCVideoCodecInfo *constrainedBaselineInfo =
+    [[RTCVideoCodecInfo alloc] initWithName:kRTCVideoCodecH264Name
+                                 parameters:constrainedBaselineParams];
+    
+    RTCVideoCodecInfo *vp8Info = [[RTCVideoCodecInfo alloc] initWithName:kRTCVideoCodecVp8Name];
+    
 #if defined(RTC_ENABLE_VP9)
-  RTCVideoCodecInfo *vp9Info = [[RTCVideoCodecInfo alloc] initWithName:kRTCVideoCodecVp9Name];
+    RTCVideoCodecInfo *vp9Info = [[RTCVideoCodecInfo alloc] initWithName:kRTCVideoCodecVp9Name];
 #endif
-
+    
 #if !defined(DISABLE_H265)
-  RTCVideoCodecInfo *h265Info = [[RTCVideoCodecInfo alloc] initWithName:kRTCVideoCodecH265Name];
+    RTCVideoCodecInfo *h265Info = [[RTCVideoCodecInfo alloc] initWithName:kRTCVideoCodecH265Name];
 #endif
-
-  return @[
-    constrainedHighInfo,
-    constrainedBaselineInfo,
-    vp8Info,
+    
+    NSMutableArray<RTCVideoCodecInfo *> *result = [[NSMutableArray alloc] initWithArray:@[
+        constrainedHighInfo,
+        constrainedBaselineInfo,
+        vp8Info,
 #if defined(RTC_ENABLE_VP9)
-    vp9Info,
+        vp9Info,
 #endif
+    ]];
+    
 #if !defined(DISABLE_H265)
-    h265Info,
+#ifdef WEBRTC_IOS
+    if (@available(iOS 11.0, *)) {
+        [result addObject:h265Info];
+    }
+#else // WEBRTC_IOS
+    if (@available(macOS 10.13, *)) {
+        [result addObject:h265Info];
+    }
+#endif // WEBRTC_IOS
 #endif
-  ];
+    
+    return result;
 }
 
 - (id<RTCVideoDecoder>)createDecoder:(RTCVideoCodecInfo *)info {
