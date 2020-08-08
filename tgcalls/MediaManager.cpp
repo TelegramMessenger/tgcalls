@@ -143,11 +143,11 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
 	cricket::AudioSendParameters audioSendPrameters;
 	audioSendPrameters.codecs.push_back(opusCodec);
 	audioSendPrameters.extensions.emplace_back(webrtc::RtpExtension::kTransportSequenceNumberUri, 1);
-	audioSendPrameters.options.echo_cancellation = false;
+	audioSendPrameters.options.echo_cancellation = true;
 	//audioSendPrameters.options.experimental_ns = false;
-	audioSendPrameters.options.noise_suppression = false;
-	audioSendPrameters.options.auto_gain_control = false;
-	audioSendPrameters.options.highpass_filter = false;
+	audioSendPrameters.options.noise_suppression = true;
+	audioSendPrameters.options.auto_gain_control = true;
+	//audioSendPrameters.options.highpass_filter = false;
 	audioSendPrameters.options.typing_detection = false;
 	//audioSendPrameters.max_bandwidth_bps = 16000;
 	audioSendPrameters.rtcp.reduced_size = true;
@@ -167,6 +167,8 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
 	_audioChannel->SetPlayout(true);
 
 	_videoChannel->SetInterface(_videoNetworkInterface.get(), webrtc::MediaTransportConfig());
+    
+    adjustBitratePreferences();
 }
 
 void MediaManager::start() {
@@ -279,6 +281,8 @@ void MediaManager::collectStats() {
             break;
     }
     float sendBitrateKbps = ((float)stats.send_bandwidth_bps / 1000.0f);
+    
+    RTC_LOG(LS_INFO) << "MediaManager sendBitrateKbps=" << (stats.send_bandwidth_bps / 1000);
 
     float signalBarsNorm = 4.0f;
     float adjustedQuality = sendBitrateKbps / bitrateNorm;
@@ -386,7 +390,7 @@ void MediaManager::configureSendingVideoIfNeeded() {
         }
     }
 
-    videoSendParameters.extensions.emplace_back(webrtc::RtpExtension::kTransportSequenceNumberUri, 1);
+    videoSendParameters.extensions.emplace_back(webrtc::RtpExtension::kTransportSequenceNumberUri, 2);
     videoSendParameters.rtcp.remote_estimate = true;
     _videoChannel->SetSendParameters(videoSendParameters);
 
@@ -400,6 +404,8 @@ void MediaManager::configureSendingVideoIfNeeded() {
     } else {
         _videoChannel->AddSendStream(cricket::StreamParams::CreateLegacy(_ssrcVideo.outgoing));
     }
+    
+    adjustBitratePreferences();
 }
 
 void MediaManager::checkIsSendingVideoChanged(bool wasSending) {
@@ -418,22 +424,44 @@ void MediaManager::checkIsSendingVideoChanged(bool wasSending) {
 
 		_videoChannel->OnReadyToSend(_isConnected);
 		_videoChannel->SetSend(_isConnected);
-        
+	} else {
+		_videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, nullptr);
+		_videoChannel->SetVideoSend(_ssrcVideo.fecOutgoing, NULL, nullptr);
+	}
+    
+    adjustBitratePreferences();
+}
+
+void MediaManager::adjustBitratePreferences() {
+    if (computeIsSendingVideo()) {
         webrtc::BitrateConstraints preferences;
         preferences.min_bitrate_bps = 64000;
         preferences.start_bitrate_bps = 400000;
         preferences.max_bitrate_bps = _enableHighBitrateVideo ? 1600000 : 800000;
-        _call->GetTransportControllerSend()->SetSdpBitrateParameters(preferences);
-	} else {
-		_videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, nullptr);
-		_videoChannel->SetVideoSend(_ssrcVideo.fecOutgoing, NULL, nullptr);
         
+        _call->GetTransportControllerSend()->SetSdpBitrateParameters(preferences);
+        
+        webrtc::BitrateSettings settings;
+        settings.min_bitrate_bps = 64000;
+        settings.start_bitrate_bps = 400000;
+        settings.max_bitrate_bps = _enableHighBitrateVideo ? 1600000 : 800000;
+        
+        _call->GetTransportControllerSend()->SetClientBitratePreferences(settings);
+    } else {
         webrtc::BitrateConstraints preferences;
-        preferences.min_bitrate_bps = 6000;
-        preferences.start_bitrate_bps = 12000;
+        preferences.min_bitrate_bps = 16000;
+        preferences.start_bitrate_bps = 16000;
         preferences.max_bitrate_bps = 32000;
-        //_call->GetTransportControllerSend()->SetSdpBitrateParameters(preferences);
-	}
+        
+        _call->GetTransportControllerSend()->SetSdpBitrateParameters(preferences);
+        
+        webrtc::BitrateSettings settings;
+        settings.min_bitrate_bps = preferences.min_bitrate_bps;
+        settings.start_bitrate_bps = preferences.start_bitrate_bps;
+        settings.max_bitrate_bps = preferences.max_bitrate_bps;
+        
+        _call->GetTransportControllerSend()->SetClientBitratePreferences(settings);
+    }
 }
 
 void MediaManager::checkIsReceivingVideoChanged(bool wasReceiving) {
@@ -460,7 +488,7 @@ void MediaManager::checkIsReceivingVideoChanged(bool wasReceiving) {
             }
         }
 
-        videoRecvParameters.extensions.emplace_back(webrtc::RtpExtension::kTransportSequenceNumberUri, 1);
+        videoRecvParameters.extensions.emplace_back(webrtc::RtpExtension::kTransportSequenceNumberUri, 2);
         //recv_parameters.rtcp.reduced_size = true;
         videoRecvParameters.rtcp.remote_estimate = true;
 

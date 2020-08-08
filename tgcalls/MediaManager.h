@@ -85,6 +85,7 @@ private:
 	void checkIsSendingVideoChanged(bool wasSending);
 	bool videoCodecsNegotiated() const;
 
+    void adjustBitratePreferences();
     bool computeIsReceivingVideo() const;
     void checkIsReceivingVideoChanged(bool wasReceiving);
 
