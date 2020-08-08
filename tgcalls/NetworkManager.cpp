@@ -106,6 +106,8 @@ _localIceParameters(rtc::CreateRandomString(cricket::ICE_UFRAG_LENGTH), rtc::Cre
 
 NetworkManager::~NetworkManager() {
 	assert(_thread->IsCurrent());
+    
+    RTC_LOG(LS_INFO) << "NetworkManager::~NetworkManager()";
 
 	_transportChannel.reset();
 	_asyncResolverFactory.reset();

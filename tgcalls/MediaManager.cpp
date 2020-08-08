@@ -181,6 +181,8 @@ void MediaManager::start() {
 
 MediaManager::~MediaManager() {
 	assert(_thread->IsCurrent());
+    
+    RTC_LOG(LS_INFO) << "MediaManager::~MediaManager()";
 
 	_call->SignalChannelNetworkState(webrtc::MediaType::AUDIO, webrtc::kNetworkDown);
 	_call->SignalChannelNetworkState(webrtc::MediaType::VIDEO, webrtc::kNetworkDown);
@@ -385,6 +387,7 @@ void MediaManager::configureSendingVideoIfNeeded() {
     }
 
     videoSendParameters.extensions.emplace_back(webrtc::RtpExtension::kTransportSequenceNumberUri, 1);
+    videoSendParameters.extensions.emplace_back(webrtc::RtpExtension::kVideoRotationUri, 1);
     videoSendParameters.rtcp.remote_estimate = true;
     _videoChannel->SetSendParameters(videoSendParameters);
 
@@ -419,7 +422,7 @@ void MediaManager::checkIsSendingVideoChanged(bool wasSending) {
         
         webrtc::BitrateConstraints preferences;
         preferences.min_bitrate_bps = 64000;
-        preferences.start_bitrate_bps = 302000;
+        preferences.start_bitrate_bps = 400000;
         preferences.max_bitrate_bps = _enableHighBitrateVideo ? 1600000 : 800000;
         _call->GetTransportControllerSend()->SetSdpBitrateParameters(preferences);
 	} else {
@@ -428,8 +431,9 @@ void MediaManager::checkIsSendingVideoChanged(bool wasSending) {
         
         webrtc::BitrateConstraints preferences;
         preferences.min_bitrate_bps = 6000;
-        preferences.start_bitrate_bps = 32000;
+        preferences.start_bitrate_bps = 12000;
         preferences.max_bitrate_bps = 32000;
+        _call->GetTransportControllerSend()->SetSdpBitrateParameters(preferences);
 	}
 }
 
@@ -458,6 +462,7 @@ void MediaManager::checkIsReceivingVideoChanged(bool wasReceiving) {
         }
 
         videoRecvParameters.extensions.emplace_back(webrtc::RtpExtension::kTransportSequenceNumberUri, 1);
+        videoRecvParameters.extensions.emplace_back(webrtc::RtpExtension::kVideoRotationUri, 1);
         //recv_parameters.rtcp.reduced_size = true;
         videoRecvParameters.rtcp.remote_estimate = true;
 
