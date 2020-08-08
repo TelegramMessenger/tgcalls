@@ -433,7 +433,7 @@ void MediaManager::checkIsSendingVideoChanged(bool wasSending) {
         preferences.min_bitrate_bps = 6000;
         preferences.start_bitrate_bps = 12000;
         preferences.max_bitrate_bps = 32000;
-        _call->GetTransportControllerSend()->SetSdpBitrateParameters(preferences);
+        //_call->GetTransportControllerSend()->SetSdpBitrateParameters(preferences);
 	}
 }
 
