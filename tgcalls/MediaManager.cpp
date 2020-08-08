@@ -197,6 +197,27 @@ MediaManager::~MediaManager() {
 	_audioChannel->SetInterface(nullptr, webrtc::MediaTransportConfig());
 
 	setSendVideo(nullptr);
+    
+    if (computeIsReceivingVideo()) {
+        _videoChannel->RemoveRecvStream(_ssrcVideo.incoming);
+        if (_enableFlexfec) {
+            _videoChannel->RemoveRecvStream(_ssrcVideo.fecIncoming);
+        }
+    }
+    
+    if (_didConfigureVideo) {
+        _videoChannel->OnReadyToSend(false);
+        _videoChannel->SetSend(false);
+        
+        if (_enableFlexfec) {
+            _videoChannel->RemoveSendStream(_ssrcVideo.outgoing);
+            _videoChannel->RemoveSendStream(_ssrcVideo.fecOutgoing);
+        } else {
+            _videoChannel->RemoveSendStream(_ssrcVideo.outgoing);
+        }
+    }
+    
+    _videoChannel->SetInterface(nullptr, webrtc::MediaTransportConfig());
 }
 
 void MediaManager::setIsConnected(bool isConnected) {
@@ -266,14 +287,6 @@ void MediaManager::collectStats() {
 	}
 
     beginStatsTimer(2000);
-
-    /*
-     int send_bandwidth_bps = 0;       // Estimated available send bandwidth.
-     int max_padding_bitrate_bps = 0;  // Cumulative configured max padding.
-     int recv_bandwidth_bps = 0;       // Estimated available receive bandwidth.
-     int64_t pacer_delay_ms = 0;
-     int64_t rtt_ms = -1;
-     */
 }
 
 void MediaManager::notifyPacketSent(const rtc::SentPacket &sentPacket) {
