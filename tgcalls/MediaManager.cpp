@@ -16,6 +16,7 @@
 #include "system_wrappers/include/field_trial.h"
 #include "api/video/builtin_video_bitrate_allocator_factory.h"
 #include "call/call.h"
+#include "modules/rtp_rtcp/source/rtp_utility.h"
 
 namespace tgcalls {
 namespace {
@@ -317,7 +318,6 @@ void MediaManager::setPeerVideoFormats(VideoFormatsMessage &&peerFormats) {
 	}
 	_videoCodecs = std::move(codecs.list);
 	if (_videoCodecOut.has_value()) {
-        configureSendingVideoIfNeeded();
 		checkIsSendingVideoChanged(false);
 	}
     if (_videoCodecs.size() != 0) {
@@ -368,6 +368,9 @@ void MediaManager::setSendVideo(std::shared_ptr<VideoCaptureInterface> videoCapt
 
 void MediaManager::configureSendingVideoIfNeeded() {
     if (_didConfigureVideo) {
+        return;
+    }
+    if (!_videoCodecOut.has_value()) {
         return;
     }
     _didConfigureVideo = true;
@@ -449,9 +452,17 @@ void MediaManager::adjustBitratePreferences() {
         _call->GetTransportControllerSend()->SetClientBitratePreferences(settings);
     } else {
         webrtc::BitrateConstraints preferences;
-        preferences.min_bitrate_bps = 16000;
-        preferences.start_bitrate_bps = 16000;
-        preferences.max_bitrate_bps = 32000;
+        if (_didConfigureVideo) {
+            // After we have configured outgoing video, RTCP stops working for outgoing audio
+            // TODO: investigate
+            preferences.min_bitrate_bps = 16000;
+            preferences.start_bitrate_bps = 16000;
+            preferences.max_bitrate_bps = 32000;
+        } else {
+            preferences.min_bitrate_bps = 8000;
+            preferences.start_bitrate_bps = 16000;
+            preferences.max_bitrate_bps = 32000;
+        }
         
         _call->GetTransportControllerSend()->SetSdpBitrateParameters(preferences);
         
@@ -533,18 +544,24 @@ void MediaManager::setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterfac
 	_videoChannel->SetSink(_ssrcVideo.incoming, _currentIncomingVideoSink.get());
 }
 
+static bool IsRtcp(const uint8_t* packet, size_t length) {
+    webrtc::RtpUtility::RtpHeaderParser rtp_parser(packet, length);
+    return rtp_parser.RTCP();
+}
+
 void MediaManager::receiveMessage(DecryptedMessage &&message) {
 	const auto data = &message.message.data;
 	if (const auto formats = absl::get_if<VideoFormatsMessage>(data)) {
 		setPeerVideoFormats(std::move(*formats));
 	} else if (const auto audio = absl::get_if<AudioDataMessage>(data)) {
-		if (_audioChannel) {
-			_audioChannel->OnPacketReceived(audio->data, -1);
-		}
+        if (IsRtcp(audio->data.data(), audio->data.size())) {
+            RTC_LOG(LS_VERBOSE) << "Deliver audio RTCP";
+        }
+        _call->Receiver()->DeliverPacket(webrtc::MediaType::AUDIO, audio->data, -1);
 	} else if (const auto video = absl::get_if<VideoDataMessage>(data)) {
 		if (_videoChannel) {
 			if (_readyToReceiveVideo) {
-				_videoChannel->OnPacketReceived(video->data, -1);
+                _call->Receiver()->DeliverPacket(webrtc::MediaType::VIDEO, video->data, -1);
 			} else {
 				// maybe we need to queue packets for some time?
 			}
@@ -555,6 +572,17 @@ void MediaManager::receiveMessage(DecryptedMessage &&message) {
         if (_videoCapture) {
             _videoCapture->setPreferredAspectRatio(value);
         }
+    }
+}
+
+void MediaManager::remoteVideoStateUpdated(VideoState videoState) {
+    switch (videoState) {
+        case VideoState::Active:
+        case VideoState::Paused:
+            configureSendingVideoIfNeeded();
+            break;
+        default:
+            break;
     }
 }
 
@@ -572,6 +600,9 @@ bool MediaManager::NetworkInterfaceImpl::SendRtcp(rtc::CopyOnWriteBuffer *packet
 }
 
 bool MediaManager::NetworkInterfaceImpl::sendTransportMessage(rtc::CopyOnWriteBuffer *packet, const rtc::PacketOptions& options) {
+    if (_isVideo) {
+        RTC_LOG(LS_VERBOSE) << "Send video packet";
+    }
 	_mediaManager->_sendTransportMessage(_isVideo
 		? Message{ VideoDataMessage{ *packet } }
 		: Message{ AudioDataMessage{ *packet } });

@@ -52,6 +52,7 @@ public:
 	void setMuteOutgoingAudio(bool mute);
 	void setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
 	void receiveMessage(DecryptedMessage &&message);
+    void remoteVideoStateUpdated(VideoState videoState);
 
 private:
 	struct SSRC {

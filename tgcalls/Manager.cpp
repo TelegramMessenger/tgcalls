@@ -201,6 +201,9 @@ void Manager::receiveMessage(DecryptedMessage &&message) {
 				remoteMediaState->audio,
 				remoteMediaState->video);
 		}
+        _mediaManager->perform(RTC_FROM_HERE, [video = remoteMediaState->video](MediaManager *mediaManager) {
+            mediaManager->remoteVideoStateUpdated(video);
+        });
 	} else if (const auto remoteBatteryLevelIsLow = absl::get_if<RemoteBatteryLevelIsLowMessage>(data)) {
         if (_remoteBatteryLevelIsLowUpdated) {
 			_remoteBatteryLevelIsLowUpdated(remoteBatteryLevelIsLow->batteryLow);
