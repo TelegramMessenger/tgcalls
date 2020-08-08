@@ -17,6 +17,7 @@ namespace rtc {
 class BasicPacketSocketFactory;
 class BasicNetworkManager;
 class PacketTransportInternal;
+class NetworkRoute;
 } // namespace rtc
 
 namespace cricket {
@@ -60,6 +61,7 @@ private:
 	void transportStateChanged(cricket::IceTransportInternal *transport);
 	void transportReadyToSend(cricket::IceTransportInternal *transport);
 	void transportPacketReceived(rtc::PacketTransportInternal *transport, const char *bytes, size_t size, const int64_t &timestamp, int unused);
+    void transportRouteChanged(absl::optional<rtc::NetworkRoute> route);
 
 	rtc::Thread *_thread = nullptr;
 	EncryptedConnection _transport;

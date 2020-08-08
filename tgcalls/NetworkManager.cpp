@@ -98,6 +98,7 @@ _localIceParameters(rtc::CreateRandomString(cricket::ICE_UFRAG_LENGTH), rtc::Cre
 	_transportChannel->SignalGatheringState.connect(this, &NetworkManager::candidateGatheringState);
 	_transportChannel->SignalIceTransportStateChanged.connect(this, &NetworkManager::transportStateChanged);
 	_transportChannel->SignalReadPacket.connect(this, &NetworkManager::transportPacketReceived);
+    _transportChannel->SignalNetworkRouteChanged.connect(this, &NetworkManager::transportRouteChanged);
 
 	_transportChannel->MaybeStartGathering();
 
@@ -196,6 +197,19 @@ void NetworkManager::transportPacketReceived(rtc::PacketTransportInternal *trans
 			}
 		}
 	}
+}
+
+void NetworkManager::transportRouteChanged(absl::optional<rtc::NetworkRoute> route) {
+    assert(_thread->IsCurrent());
+    
+    if (route.has_value()) {
+        RTC_LOG(LS_INFO) << "NetworkManager route changed: " << route->DebugString();
+        
+        bool localIsWifi = route->local.adapter_type() == rtc::AdapterType::ADAPTER_TYPE_WIFI;
+        bool remoteIsWifi = route->remote.adapter_type() == rtc::AdapterType::ADAPTER_TYPE_WIFI;
+        
+        RTC_LOG(LS_INFO) << "NetworkManager is wifi: local=" << localIsWifi << ", remote=" << remoteIsWifi;
+    }
 }
 
 } // namespace tgcalls
