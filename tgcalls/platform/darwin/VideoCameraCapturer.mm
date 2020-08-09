@@ -251,11 +251,18 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 }
 
 + (NSArray<AVCaptureDevice *> *)captureDevices {
-    AVCaptureDeviceDiscoverySession *session = [AVCaptureDeviceDiscoverySession
-                                                discoverySessionWithDeviceTypes:@[ AVCaptureDeviceTypeBuiltInWideAngleCamera ]
-                                                mediaType:AVMediaTypeVideo
-                                                position:AVCaptureDevicePositionUnspecified];
-    return session.devices;
+    if (@available(iOS 10.0, *)) {
+        AVCaptureDeviceDiscoverySession *session = [AVCaptureDeviceDiscoverySession discoverySessionWithDeviceTypes:@[AVCaptureDeviceTypeBuiltInWideAngleCamera] mediaType:AVMediaTypeVideo position:AVCaptureDevicePositionUnspecified];
+        return session.devices;
+    } else {
+        NSMutableArray<AVCaptureDevice *> *result = [[NSMutableArray alloc] init];
+        for (AVCaptureDevice *device in [AVCaptureDevice devicesWithMediaType:AVMediaTypeVideo]) {
+            if (device.position == AVCaptureDevicePositionFront || device.position == AVCaptureDevicePositionBack) {
+                [result addObject:device];
+            }
+        }
+        return result;
+    }
 }
 
 + (NSArray<AVCaptureDeviceFormat *> *)supportedFormatsForDevice:(AVCaptureDevice *)device {
