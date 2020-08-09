@@ -13,7 +13,7 @@ class VideoCapturerInterface;
 
 class VideoCaptureInterfaceObject {
 public:
-	VideoCaptureInterfaceObject();
+	VideoCaptureInterfaceObject(std::shared_ptr<PlatformContext> platformContext);
 	~VideoCaptureInterfaceObject();
 
 	void switchCamera();
@@ -27,6 +27,7 @@ public:
 
 private:
 	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _currentUncroppedSink;
+	std::shared_ptr<PlatformContext> _platformContext;
 	std::unique_ptr<VideoCapturerInterface> _videoCapturer;
 	std::function<void(VideoState)> _stateUpdated;
 	bool _useFrontCamera = true;
@@ -35,7 +36,7 @@ private:
 
 class VideoCaptureInterfaceImpl : public VideoCaptureInterface {
 public:
-	VideoCaptureInterfaceImpl();
+	VideoCaptureInterfaceImpl(std::shared_ptr<PlatformContext> platformContext);
 	virtual ~VideoCaptureInterfaceImpl();
 
 	void switchCamera() override;

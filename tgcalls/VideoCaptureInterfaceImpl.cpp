@@ -7,14 +7,15 @@
 
 namespace tgcalls {
 
-VideoCaptureInterfaceObject::VideoCaptureInterfaceObject() {
+VideoCaptureInterfaceObject::VideoCaptureInterfaceObject(std::shared_ptr<PlatformContext> platformContext) {
 	_videoSource = PlatformInterface::SharedInstance()->makeVideoSource(Manager::getMediaThread(), MediaManager::getWorkerThread());
+	_platformContext = platformContext;
 	//this should outlive the capturer
 	_videoCapturer = PlatformInterface::SharedInstance()->makeVideoCapturer(_videoSource, _useFrontCamera, [this](VideoState state) {
 		if (this->_stateUpdated) {
 			this->_stateUpdated(state);
 		}
-	});
+	}, platformContext);
 }
 
 VideoCaptureInterfaceObject::~VideoCaptureInterfaceObject() {
@@ -33,7 +34,7 @@ void VideoCaptureInterfaceObject::switchCamera() {
 		if (this->_stateUpdated) {
 			this->_stateUpdated(state);
 		}
-	});
+	}, _platformContext);
     if (_currentUncroppedSink) {
 		_videoCapturer->setUncroppedOutput(_currentUncroppedSink);
     }
@@ -60,9 +61,9 @@ void VideoCaptureInterfaceObject::setStateUpdated(std::function<void(VideoState)
 	_stateUpdated = stateUpdated;
 }
 
-VideoCaptureInterfaceImpl::VideoCaptureInterfaceImpl() :
-_impl(Manager::getMediaThread(), []() {
-	return new VideoCaptureInterfaceObject();
+VideoCaptureInterfaceImpl::VideoCaptureInterfaceImpl(std::shared_ptr<PlatformContext> platformContext) :
+_impl(Manager::getMediaThread(), [platformContext]() {
+	return new VideoCaptureInterfaceObject(platformContext);
 }) {
 }
 

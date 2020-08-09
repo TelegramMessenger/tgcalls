@@ -11,6 +11,7 @@ namespace tgcalls {
 enum class VideoState;
 
 class VideoCapturerInterface;
+class PlatformContext;
 
 class PlatformInterface {
 public:
@@ -26,7 +27,7 @@ public:
 	virtual std::unique_ptr<webrtc::VideoDecoderFactory> makeVideoDecoderFactory() = 0;
 	virtual bool supportsEncoding(const std::string &codecName) = 0;
 	virtual rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> makeVideoSource(rtc::Thread *signalingThread, rtc::Thread *workerThread) = 0;
-	virtual std::unique_ptr<VideoCapturerInterface> makeVideoCapturer(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, bool useFrontCamera, std::function<void(VideoState)> stateUpdated) = 0;
+	virtual std::unique_ptr<VideoCapturerInterface> makeVideoCapturer(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, bool useFrontCamera, std::function<void(VideoState)> stateUpdated, std::shared_ptr<PlatformContext> platformContext) = 0;
 
 };
 

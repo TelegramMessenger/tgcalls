@@ -14,6 +14,8 @@ class VideoFrame;
 
 namespace tgcalls {
 
+class PlatformContext;
+
 enum class VideoState {
 	Inactive,
 	Paused,
@@ -25,7 +27,7 @@ protected:
 	VideoCaptureInterface() = default;
 
 public:
-	static std::unique_ptr<VideoCaptureInterface> Create();
+	static std::unique_ptr<VideoCaptureInterface> Create(std::shared_ptr<PlatformContext> platformContext = nullptr);
 
 	virtual ~VideoCaptureInterface();
 
