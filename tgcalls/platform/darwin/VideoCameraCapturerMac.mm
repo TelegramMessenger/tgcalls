@@ -374,6 +374,8 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 
             rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:pixelBuffer adaptedWidth:width adaptedHeight:height cropWidth:width cropHeight:height cropX:left cropY:top];
 
+            rtcPixelBuffer.shouldBeMirrored = YES;
+            
             CVPixelBufferRef outputPixelBufferRef = NULL;
             OSType pixelFormat = CVPixelBufferGetPixelFormatType(rtcPixelBuffer.pixelBuffer);
             CVPixelBufferCreate(NULL, width, height, pixelFormat, NULL, &outputPixelBufferRef);
@@ -384,6 +386,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
                 }
                 if ([rtcPixelBuffer cropAndScaleTo:outputPixelBufferRef withTempBuffer:_croppingBuffer.data()]) {
                     rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:outputPixelBufferRef];
+                    rtcPixelBuffer.shouldBeMirrored = YES;
                 }
                 CVPixelBufferRelease(outputPixelBufferRef);
             }
