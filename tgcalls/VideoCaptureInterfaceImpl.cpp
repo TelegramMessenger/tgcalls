@@ -11,15 +11,17 @@ VideoCaptureInterfaceObject::VideoCaptureInterfaceObject(std::shared_ptr<Platfor
 	_videoSource = PlatformInterface::SharedInstance()->makeVideoSource(Manager::getMediaThread(), MediaManager::getWorkerThread());
 	_platformContext = platformContext;
 	//this should outlive the capturer
-	_videoCapturer = PlatformInterface::SharedInstance()->makeVideoCapturer(_videoSource, _useFrontCamera, [this](VideoState state) {
-		if (this->_stateUpdated) {
-			this->_stateUpdated(state);
-		}
-	}, platformContext);
+	if (_videoSource) {
+		_videoCapturer = PlatformInterface::SharedInstance()->makeVideoCapturer(_videoSource, _useFrontCamera, [this](VideoState state) {
+			if (this->_stateUpdated) {
+				this->_stateUpdated(state);
+			}
+		}, platformContext);
+	}
 }
 
 VideoCaptureInterfaceObject::~VideoCaptureInterfaceObject() {
-	if (_currentUncroppedSink != nullptr) {
+	if (_videoCapturer && _currentUncroppedSink != nullptr) {
 		//_videoSource->RemoveSink(_currentSink.get());
 		_videoCapturer->setUncroppedOutput(nullptr);
 	}
@@ -30,30 +32,40 @@ void VideoCaptureInterfaceObject::switchCamera() {
     if (_videoCapturer && _currentUncroppedSink) {
 		_videoCapturer->setUncroppedOutput(nullptr);
     }
-	_videoCapturer = PlatformInterface::SharedInstance()->makeVideoCapturer(_videoSource, _useFrontCamera, [this](VideoState state) {
-		if (this->_stateUpdated) {
-			this->_stateUpdated(state);
+	if (_videoSource) {
+		_videoCapturer = PlatformInterface::SharedInstance()->makeVideoCapturer(_videoSource, _useFrontCamera, [this](VideoState state) {
+			if (this->_stateUpdated) {
+				this->_stateUpdated(state);
+			}
+		}, _platformContext);
+	}
+	if (_videoCapturer) {
+		if (_currentUncroppedSink) {
+			_videoCapturer->setUncroppedOutput(_currentUncroppedSink);
 		}
-	}, _platformContext);
-    if (_currentUncroppedSink) {
-		_videoCapturer->setUncroppedOutput(_currentUncroppedSink);
-    }
-	_videoCapturer->setState(_state);
+		_videoCapturer->setState(_state);
+	}
 }
 
 void VideoCaptureInterfaceObject::setState(VideoState state) {
 	if (_state != state) {
 		_state = state;
-		_videoCapturer->setState(state);
+		if (_videoCapturer) {
+			_videoCapturer->setState(state);
+		}
 	}
 }
 
 void VideoCaptureInterfaceObject::setPreferredAspectRatio(float aspectRatio) {
-	_videoCapturer->setPreferredCaptureAspectRatio(aspectRatio);
+	if (_videoCapturer) {
+		_videoCapturer->setPreferredCaptureAspectRatio(aspectRatio);
+	}
 }
 
 void VideoCaptureInterfaceObject::setOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
-	_videoCapturer->setUncroppedOutput(sink);
+	if (_videoCapturer) {
+		_videoCapturer->setUncroppedOutput(sink);
+	}
 	_currentUncroppedSink = sink;
 }
 

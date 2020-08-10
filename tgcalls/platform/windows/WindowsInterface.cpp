@@ -19,7 +19,9 @@ std::unique_ptr<webrtc::VideoDecoderFactory> WindowsInterface::makeVideoDecoderF
 
 rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> WindowsInterface::makeVideoSource(rtc::Thread *signalingThread, rtc::Thread *workerThread) {
 	const auto videoTrackSource = VideoCapturerTrackSource::Create();
-	return webrtc::VideoTrackSourceProxy::Create(signalingThread, workerThread, videoTrackSource);
+	return videoTrackSource
+		? webrtc::VideoTrackSourceProxy::Create(signalingThread, workerThread, videoTrackSource)
+		: nullptr;
 }
 
 bool WindowsInterface::supportsEncoding(const std::string &codecName) {
