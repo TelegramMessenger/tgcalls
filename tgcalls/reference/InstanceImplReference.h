@@ -28,7 +28,7 @@ public:
 	void setAudioOutputDuckingEnabled(bool enabled) override;
     void setIsLowBatteryLevel(bool isLowBatteryLevel) override;
     static int GetConnectionMaxLayer();
-    static std::string GetVersion();
+    static std::vector<std::string> GetVersions();
 	std::string getLastError() override;
 	std::string getDebugInfo() override;
 	int64_t getPreferredRelayId() override;

@@ -1002,8 +1002,10 @@ int InstanceImplReference::GetConnectionMaxLayer() {
     return 92;
 }
 
-std::string InstanceImplReference::GetVersion() {
-    return "2.8.8";
+std::vector<std::string> InstanceImplReference::GetVersions() {
+    std::vector<std::string> result;
+    result.push_back("2.8.8");
+    return result;
 }
 
 std::string InstanceImplReference::getLastError() {

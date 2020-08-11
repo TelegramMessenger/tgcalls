@@ -29,6 +29,8 @@ InstanceImpl::InstanceImpl(Descriptor &&descriptor)
     rtc::LogMessage::LogToDebug(rtc::LS_INFO);
     rtc::LogMessage::SetLogToStderr(false);
 	rtc::LogMessage::AddLogToStream(_logSink.get(), rtc::LS_INFO);
+    
+    auto networkType = descriptor.initialNetworkType;
 
 	_manager.reset(new ThreadLocalObject<Manager>(getManagerThread(), [descriptor = std::move(descriptor)]() mutable {
 		return new Manager(getManagerThread(), std::move(descriptor));
@@ -36,6 +38,8 @@ InstanceImpl::InstanceImpl(Descriptor &&descriptor)
 	_manager->perform(RTC_FROM_HERE, [](Manager *manager) {
 		manager->start();
 	});
+    
+    setNetworkType(networkType);
 }
 
 InstanceImpl::~InstanceImpl() {
@@ -55,51 +59,19 @@ void InstanceImpl::setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoC
 }
 
 void InstanceImpl::setNetworkType(NetworkType networkType) {
-	/*message::NetworkType mappedType;
-
-	switch (networkType) {
-		case NetworkType::Unknown:
-			mappedType = message::NetworkType::nUnknown;
-			break;
-		case NetworkType::Gprs:
-			mappedType = message::NetworkType::nGprs;
-			break;
-		case NetworkType::Edge:
-			mappedType = message::NetworkType::nEdge;
-			break;
-		case NetworkType::ThirdGeneration:
-			mappedType = message::NetworkType::n3gOrAbove;
-			break;
-		case NetworkType::Hspa:
-			mappedType = message::NetworkType::n3gOrAbove;
-			break;
-		case NetworkType::Lte:
-			mappedType = message::NetworkType::n3gOrAbove;
-			break;
-		case NetworkType::WiFi:
-			mappedType = message::NetworkType::nHighSpeed;
-			break;
-		case NetworkType::Ethernet:
-			mappedType = message::NetworkType::nHighSpeed;
-			break;
-		case NetworkType::OtherHighSpeed:
-			mappedType = message::NetworkType::nHighSpeed;
-			break;
-		case NetworkType::OtherLowSpeed:
-			mappedType = message::NetworkType::nEdge;
-			break;
-		case NetworkType::OtherMobile:
-			mappedType = message::NetworkType::n3gOrAbove;
-			break;
-		case NetworkType::Dialup:
-			mappedType = message::NetworkType::nGprs;
-			break;
-		default:
-			mappedType = message::NetworkType::nUnknown;
-			break;
-	}
-
-	controller_->SetNetworkType(mappedType);*/
+    bool isLowCostNetwork = false;
+    switch (networkType) {
+        case NetworkType::WiFi:
+        case NetworkType::Ethernet:
+            isLowCostNetwork = true;
+            break;
+        default:
+            break;
+    }
+    
+    _manager->perform(RTC_FROM_HERE, [isLowCostNetwork](Manager *manager) {
+        manager->setIsLocalNetworkLowCost(isLowCostNetwork);
+    });
 }
 
 void InstanceImpl::setMuteMicrophone(bool muteMicrophone) {
@@ -201,8 +173,11 @@ int InstanceImpl::GetConnectionMaxLayer() {
 	return 92;  // TODO: retrieve from LayerBase
 }
 
-std::string InstanceImpl::GetVersion() {
-	return "2.7.7"; // TODO: version not known while not released
+std::vector<std::string> InstanceImpl::GetVersions() {
+    std::vector<std::string> result;
+    result.push_back("2.7.7");
+    result.push_back("3.0.0");
+    return result;
 }
 
 template <>

@@ -17,7 +17,7 @@ public:
 	~InstanceImpl() override;
 
 	static int GetConnectionMaxLayer();
-	static std::string GetVersion();
+	static std::vector<std::string> GetVersions();
 
 	void receiveSignalingData(const std::vector<uint8_t> &data) override;
 	void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture) override;

@@ -16,7 +16,7 @@ VideoCaptureInterfaceObject::VideoCaptureInterfaceObject(std::shared_ptr<Platfor
 			if (this->_stateUpdated) {
 				this->_stateUpdated(state);
 			}
-		}, platformContext);
+		}, platformContext, _videoCapturerResolution);
 	}
 }
 
@@ -37,7 +37,7 @@ void VideoCaptureInterfaceObject::switchCamera() {
 			if (this->_stateUpdated) {
 				this->_stateUpdated(state);
 			}
-		}, _platformContext);
+		}, _platformContext, _videoCapturerResolution);
 	}
 	if (_videoCapturer) {
 		if (_currentUncroppedSink) {
@@ -58,7 +58,19 @@ void VideoCaptureInterfaceObject::setState(VideoState state) {
 
 void VideoCaptureInterfaceObject::setPreferredAspectRatio(float aspectRatio) {
 	if (_videoCapturer) {
-		_videoCapturer->setPreferredCaptureAspectRatio(aspectRatio);
+        if (aspectRatio > 0.01 && _videoCapturerResolution.first != 0 && _videoCapturerResolution.second != 0) {
+            float originalWidth = (float)_videoCapturerResolution.first;
+            float originalHeight = (float)_videoCapturerResolution.second;
+            
+            float width = (originalWidth > aspectRatio * originalHeight)
+                ? int(std::round(aspectRatio * originalHeight))
+                : originalWidth;
+            float height = (originalWidth > aspectRatio * originalHeight)
+                ? originalHeight
+                : int(std::round(originalHeight / aspectRatio));
+            
+            PlatformInterface::SharedInstance()->adaptVideoSource(_videoSource, (int)width, (int)height, 30);
+        }
 	}
 }
 
