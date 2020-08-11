@@ -1,7 +1,5 @@
 #include "Instance.h"
 
-#include "VideoCaptureInterfaceImpl.h"
-
 #include <algorithm>
 #include <stdarg.h>
 
