@@ -19,13 +19,9 @@
 #import "api/media_stream_interface.h"
 
 #import "RTCMTLI420Renderer.h"
-#import "RTCMTLNV12Renderer.h"
-#import "RTCMTLRGBRenderer.h"
 
 #define MTKViewClass NSClassFromString(@"MTKView")
-#define RTCMTLNV12RendererClass NSClassFromString(@"RTCMTLNV12Renderer")
 #define RTCMTLI420RendererClass NSClassFromString(@"RTCMTLI420Renderer")
-#define RTCMTLRGBRendererClass NSClassFromString(@"RTCMTLRGBRenderer")
 
 namespace {
     
@@ -166,16 +162,8 @@ private:
     return [[MTKViewClass alloc] initWithFrame:frame];
 }
 
-+ (RTCMTLNV12Renderer *)createNV12Renderer {
-    return [[RTCMTLNV12RendererClass alloc] init];
-}
-
 + (RTCMTLI420Renderer *)createI420Renderer {
     return [[RTCMTLI420RendererClass alloc] init];
-}
-
-+ (RTCMTLRGBRenderer *)createRGBRenderer {
-    return [[RTCMTLRGBRenderer alloc] init];
 }
 
 
