@@ -68,6 +68,8 @@ private:
 @interface VideoMetalView () <MTKViewDelegate> {
     RTCMTLI420Renderer *_rendererI420;
     RTCMTLNV12Renderer *_rendererNV12;
+    RTCMTLRGBRenderer *_rendererRGB;
+
     MTKView *_metalView;
     RTCVideoFrame *_videoFrame;
     CGSize _videoFrameSize;
@@ -172,6 +174,10 @@ private:
     return [[RTCMTLI420RendererClass alloc] init];
 }
 
++ (RTCMTLRGBRenderer *)createRGBRenderer {
+    return [[RTCMTLRGBRenderer alloc] init];
+}
+
 
 - (void)configure {
     NSAssert([VideoMetalView isMetalAvailable], @"Metal not availiable on this device");
@@ -232,20 +238,19 @@ private:
         
         if ([buffer isKindOfClass:[TGRTCCVPixelBuffer class]]) {
             bool shouldBeMirrored = ((TGRTCCVPixelBuffer *)buffer).shouldBeMirrored;
-            
-            if (shouldBeMirrored) {
-                _metalView.layer.anchorPoint = NSMakePoint(1, 0);
-                _metalView.layer.affineTransform = CGAffineTransformMakeScale(-1, 1);
-                //  _metalView.layer.transform = CATransform3DMakeScale(-1, 1, 1);
-            } else {
-                _metalView.layer.anchorPoint = NSMakePoint(0, 0);
-                _metalView.layer.affineTransform = CGAffineTransformIdentity;
-                //_metalView.layer.transform = CATransform3DIdentity;
-            }
-            
             if (shouldBeMirrored != _shouldBeMirrored) {
                 _shouldBeMirrored = shouldBeMirrored;
+                bool shouldBeMirrored = ((TGRTCCVPixelBuffer *)buffer).shouldBeMirrored;
                 
+                if (shouldBeMirrored) {
+                    _metalView.layer.anchorPoint = NSMakePoint(1, 0);
+                    _metalView.layer.affineTransform = CGAffineTransformMakeScale(-1, 1);
+                    //  _metalView.layer.transform = CATransform3DMakeScale(-1, 1, 1);
+                } else {
+                    _metalView.layer.anchorPoint = NSMakePoint(0, 0);
+                    _metalView.layer.affineTransform = CGAffineTransformIdentity;
+                    //_metalView.layer.transform = CATransform3DIdentity;
+                }
                 
                 if (_didSetShouldBeMirrored) {
                     if (_onIsMirroredUpdated) {
@@ -256,17 +261,17 @@ private:
                 }
             }
         }
-        
-        if (!_rendererI420) {
-            _rendererI420 = [VideoMetalView createI420Renderer];
-            if (![_rendererI420 addRenderingDestination:_metalView]) {
-                _rendererI420 = nil;
-                RTCLogError(@"Failed to create I420 renderer");
-                return;
-            }
-        }
-        renderer = _rendererI420;
     }
+    if (!_rendererI420) {
+        _rendererI420 = [VideoMetalView createI420Renderer];
+        if (![_rendererI420 addRenderingDestination:_metalView]) {
+            _rendererI420 = nil;
+            RTCLogError(@"Failed to create I420 renderer");
+            return;
+        }
+    }
+    renderer = _rendererI420;
+    
     
     if (!_firstFrameReceivedReported && _onFirstFrameReceived) {
         _firstFrameReceivedReported = true;
