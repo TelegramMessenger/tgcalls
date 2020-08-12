@@ -63,8 +63,6 @@ private:
 
 @interface VideoMetalView () <MTKViewDelegate> {
     RTCMTLI420Renderer *_rendererI420;
-    RTCMTLNV12Renderer *_rendererNV12;
-    RTCMTLRGBRenderer *_rendererRGB;
 
     MTKView *_metalView;
     RTCVideoFrame *_videoFrame;
