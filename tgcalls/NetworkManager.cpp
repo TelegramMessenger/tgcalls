@@ -33,6 +33,8 @@ NetworkManager::NetworkManager(
 	std::function<void(Message &&)> sendSignalingMessage,
 	std::function<void(int delayMs, int cause)> sendTransportServiceAsync) :
 _thread(thread),
+_enableP2P(enableP2P),
+_rtcServers(rtcServers),
 _transport(
 	EncryptedConnection::Type::Transport,
 	encryptionKey,
@@ -43,24 +45,38 @@ _transportMessageReceived(std::move(transportMessageReceived)),
 _sendSignalingMessage(std::move(sendSignalingMessage)),
 _localIceParameters(rtc::CreateRandomString(cricket::ICE_UFRAG_LENGTH), rtc::CreateRandomString(cricket::ICE_PWD_LENGTH)) {
 	assert(_thread->IsCurrent());
+}
 
-	_socketFactory.reset(new rtc::BasicPacketSocketFactory(_thread));
+NetworkManager::~NetworkManager() {
+	assert(_thread->IsCurrent());
+    
+    RTC_LOG(LS_INFO) << "NetworkManager::~NetworkManager()";
 
-	_networkManager = std::make_unique<rtc::BasicNetworkManager>();
-	_portAllocator.reset(new cricket::BasicPortAllocator(_networkManager.get(), _socketFactory.get(), nullptr, nullptr));
+	_transportChannel.reset();
+	_asyncResolverFactory.reset();
+	_portAllocator.reset();
+	_networkManager.reset();
+	_socketFactory.reset();
+}
 
-	uint32_t flags = cricket::PORTALLOCATOR_DISABLE_TCP;
-	if (!enableP2P) {
-		flags |= cricket::PORTALLOCATOR_DISABLE_UDP;
-		flags |= cricket::PORTALLOCATOR_DISABLE_STUN;
-	}
-	_portAllocator->set_flags(_portAllocator->flags() | flags);
-	_portAllocator->Initialize();
+void NetworkManager::start() {
+    _socketFactory.reset(new rtc::BasicPacketSocketFactory(_thread));
 
-	cricket::ServerAddresses stunServers;
-	std::vector<cricket::RelayServerConfig> turnServers;
+    _networkManager = std::make_unique<rtc::BasicNetworkManager>();
+    _portAllocator.reset(new cricket::BasicPortAllocator(_networkManager.get(), _socketFactory.get(), nullptr, nullptr));
 
-    for (auto &server : rtcServers) {
+    uint32_t flags = cricket::PORTALLOCATOR_DISABLE_TCP;
+    if (!_enableP2P) {
+        flags |= cricket::PORTALLOCATOR_DISABLE_UDP;
+        flags |= cricket::PORTALLOCATOR_DISABLE_STUN;
+    }
+    _portAllocator->set_flags(_portAllocator->flags() | flags);
+    _portAllocator->Initialize();
+
+    cricket::ServerAddresses stunServers;
+    std::vector<cricket::RelayServerConfig> turnServers;
+
+    for (auto &server : _rtcServers) {
         if (server.isTurn) {
             turnServers.push_back(cricket::RelayServerConfig(
                 rtc::SocketAddress(server.host, server.port),
@@ -74,16 +90,16 @@ _localIceParameters(rtc::CreateRandomString(cricket::ICE_UFRAG_LENGTH), rtc::Cre
         }
     }
 
-	_portAllocator->SetConfiguration(stunServers, turnServers, 2, webrtc::NO_PRUNE);
+    _portAllocator->SetConfiguration(stunServers, turnServers, 2, webrtc::NO_PRUNE);
 
-	_asyncResolverFactory = std::make_unique<webrtc::BasicAsyncResolverFactory>();
-	_transportChannel.reset(new cricket::P2PTransportChannel("transport", 0, _portAllocator.get(), _asyncResolverFactory.get(), nullptr));
+    _asyncResolverFactory = std::make_unique<webrtc::BasicAsyncResolverFactory>();
+    _transportChannel.reset(new cricket::P2PTransportChannel("transport", 0, _portAllocator.get(), _asyncResolverFactory.get(), nullptr));
 
-	cricket::IceConfig iceConfig;
-	iceConfig.continual_gathering_policy = cricket::GATHER_CONTINUALLY;
+    cricket::IceConfig iceConfig;
+    iceConfig.continual_gathering_policy = cricket::GATHER_CONTINUALLY;
     iceConfig.prioritize_most_likely_candidate_pairs = true;
     iceConfig.regather_on_failed_networks_interval = 8000;
-	_transportChannel->SetIceConfig(iceConfig);
+    _transportChannel->SetIceConfig(iceConfig);
 
     cricket::IceParameters localIceParameters(
         _localIceParameters.ufrag,
@@ -91,30 +107,22 @@ _localIceParameters(rtc::CreateRandomString(cricket::ICE_UFRAG_LENGTH), rtc::Cre
         false
     );
 
-	_transportChannel->SetIceParameters(localIceParameters);
-	_transportChannel->SetIceRole(_isOutgoing ? cricket::ICEROLE_CONTROLLING : cricket::ICEROLE_CONTROLLED);
+    _transportChannel->SetIceParameters(localIceParameters);
+    _transportChannel->SetIceRole(_isOutgoing ? cricket::ICEROLE_CONTROLLING : cricket::ICEROLE_CONTROLLED);
 
-	_transportChannel->SignalCandidateGathered.connect(this, &NetworkManager::candidateGathered);
-	_transportChannel->SignalGatheringState.connect(this, &NetworkManager::candidateGatheringState);
-	_transportChannel->SignalIceTransportStateChanged.connect(this, &NetworkManager::transportStateChanged);
-	_transportChannel->SignalReadPacket.connect(this, &NetworkManager::transportPacketReceived);
+    _transportChannel->SignalCandidateGathered.connect(this, &NetworkManager::candidateGathered);
+    _transportChannel->SignalGatheringState.connect(this, &NetworkManager::candidateGatheringState);
+    _transportChannel->SignalIceTransportStateChanged.connect(this, &NetworkManager::transportStateChanged);
+    _transportChannel->SignalReadPacket.connect(this, &NetworkManager::transportPacketReceived);
     _transportChannel->SignalNetworkRouteChanged.connect(this, &NetworkManager::transportRouteChanged);
 
-	_transportChannel->MaybeStartGathering();
+    _transportChannel->MaybeStartGathering();
 
-	_transportChannel->SetRemoteIceMode(cricket::ICEMODE_FULL);
-}
-
-NetworkManager::~NetworkManager() {
-	assert(_thread->IsCurrent());
+    _transportChannel->SetRemoteIceMode(cricket::ICEMODE_FULL);
     
-    RTC_LOG(LS_INFO) << "NetworkManager::~NetworkManager()";
-
-	_transportChannel.reset();
-	_asyncResolverFactory.reset();
-	_portAllocator.reset();
-	_networkManager.reset();
-	_socketFactory.reset();
+    _lastNetworkActivityMs = rtc::TimeMillis();
+    
+    checkConnectionTimeout();
 }
 
 void NetworkManager::receiveSignalingMessage(DecryptedMessage &&message) {
@@ -155,6 +163,28 @@ void NetworkManager::sendTransportService(int cause) {
 	}
 }
 
+void NetworkManager::checkConnectionTimeout() {
+    const auto weak = std::weak_ptr<NetworkManager>(shared_from_this());
+    _thread->PostDelayedTask(RTC_FROM_HERE, [weak]() {
+        auto strong = weak.lock();
+        if (!strong) {
+            return;
+        }
+        
+        int64_t currentTimestamp = rtc::TimeMillis();
+        const int64_t maxTimeout = 30;
+        
+        if (strong->_lastNetworkActivityMs + maxTimeout < currentTimestamp) {
+            NetworkManager::State emitState;
+            emitState.isReadyToSendData = false;
+            emitState.isFailed = true;
+            strong->_stateUpdated(emitState);
+        }
+        
+        strong->checkConnectionTimeout();
+    }, 1000);
+}
+
 void NetworkManager::candidateGathered(cricket::IceTransportInternal *transport, const cricket::Candidate &candidate) {
 	assert(_thread->IsCurrent());
 	_sendSignalingMessage({ CandidatesListMessage{ { 1, candidate }, _localIceParameters } });
@@ -188,6 +218,8 @@ void NetworkManager::transportReadyToSend(cricket::IceTransportInternal *transpo
 
 void NetworkManager::transportPacketReceived(rtc::PacketTransportInternal *transport, const char *bytes, size_t size, const int64_t &timestamp, int unused) {
 	assert(_thread->IsCurrent());
+    
+    _lastNetworkActivityMs = rtc::TimeMillis();
 
 	if (auto decrypted = _transport.handleIncomingPacket(bytes, size)) {
 		if (_transportMessageReceived) {

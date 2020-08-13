@@ -115,9 +115,14 @@ void Manager::start() {
 					if (!strong) {
 						return;
 					}
-					const auto mappedState = state.isReadyToSendData
-						? State::Established
-						: State::Reconnecting;
+                    State mappedState;
+                    if (state.isFailed) {
+                        mappedState = State::Failed;
+                    } else {
+                        mappedState = state.isReadyToSendData
+                            ? State::Established
+                            : State::Reconnecting;
+                    }
                     bool isFirstConnection = false;
 					if (state.isReadyToSendData) {
 						if (!strong->_didConnectOnce) {
@@ -181,6 +186,9 @@ void Manager::start() {
             enableHighBitrateVideo,
             preferredCodecs);
 	}));
+    _networkManager->perform(RTC_FROM_HERE, [](NetworkManager *networkManager) {
+        networkManager->start();
+    });
 	_mediaManager->perform(RTC_FROM_HERE, [](MediaManager *mediaManager) {
 		mediaManager->start();
 	});
