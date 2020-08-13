@@ -188,6 +188,8 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     float _aspectRatio;
     std::vector<uint8_t> _croppingBuffer;
     std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _uncroppedSink;
+    
+    int _warmupFrameCount;
 
 }
 
@@ -205,6 +207,8 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
         _isPaused = false;
         _skippedFrame = 0;
         _rotation = RTCVideoRotation_0;
+        
+        _warmupFrameCount = 100;
 
         if (![self setupCaptureSession:[[AVCaptureSession alloc] init]]) {
             return nil;
@@ -368,6 +372,12 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
            fromConnection:(AVCaptureConnection *)connection {
     NSParameterAssert(captureOutput == _videoDataOutput);
 
+    int minWarmupFrameCount = 12;
+    _warmupFrameCount++;
+    if (_warmupFrameCount < minWarmupFrameCount) {
+        return;
+    }
+    
     if (CMSampleBufferGetNumSamples(sampleBuffer) != 1 || !CMSampleBufferIsValid(sampleBuffer) ||
         !CMSampleBufferDataIsReady(sampleBuffer)) {
         return;
@@ -507,6 +517,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
         if (!self->_hasRetriedOnFatalError) {
             RTCLogWarning(@"Attempting to recover from fatal capture error.");
             [self handleNonFatalError];
+            self->_warmupFrameCount = 0;
             self->_hasRetriedOnFatalError = YES;
         } else {
             RTCLogError(@"Previous fatal error recovery failed.");
@@ -519,6 +530,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
                                  block:^{
         RTCLog(@"Restarting capture session after error.");
         if (self->_isRunning) {
+            self->_warmupFrameCount = 0;
             [self->_captureSession startRunning];
         }
     }];
@@ -531,6 +543,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
                                  block:^{
         if (self->_isRunning && !self->_captureSession.isRunning) {
             RTCLog(@"Restarting capture session on active.");
+            self->_warmupFrameCount = 0;
             [self->_captureSession startRunning];
         }
     }];

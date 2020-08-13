@@ -259,19 +259,16 @@ private:
     renderer = _rendererI420;
     
     
-    if (!_firstFrameReceivedReported && _onFirstFrameReceived) {
-        _firstFrameReceivedReported = true;
-        _onFirstFrameReceived((float)videoFrame.width / (float)videoFrame.height);
-    }
-    
-    
     renderer = _rendererI420;
     
     renderer.rotationOverride = _rotationOverride;
     [renderer drawFrame:videoFrame];
     _lastFrameTimeNs = videoFrame.timeStampNs;
     
-
+    if (!_firstFrameReceivedReported && _onFirstFrameReceived) {
+        _firstFrameReceivedReported = true;
+        _onFirstFrameReceived((float)videoFrame.width / (float)videoFrame.height);
+    }
 }
 
 - (void)mtkView:(MTKView *)view drawableSizeWillChange:(CGSize)size {
@@ -337,11 +334,15 @@ private:
         return;
     }
     
+    
+    
     if (frame == nil) {
         RTCLogInfo(@"Incoming frame is nil. Exiting render callback.");
         return;
     }
     _videoFrame = frame;
+    
+
 }
 
 - (std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)getSink {

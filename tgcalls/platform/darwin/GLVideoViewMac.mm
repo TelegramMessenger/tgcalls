@@ -136,6 +136,8 @@ static CVReturn OnDisplayLinkFired(CVDisplayLinkRef displayLink,
     id<RTCVideoViewShading> _shader;
     
     int64_t _lastDrawnFrameTimeStampNs;
+    void (^_onFirstFrameReceived)(float);
+    bool _firstFrameReceivedReported;
 }
 
 @synthesize videoFrame = _videoFrame;
@@ -219,6 +221,11 @@ static CVReturn OnDisplayLinkFired(CVDisplayLinkRef displayLink,
     }
     CGLUnlockContext([context CGLContextObj]);
     
+    if (!_firstFrameReceivedReported && _onFirstFrameReceived) {
+        _firstFrameReceivedReported = true;
+        _onFirstFrameReceived((float)frame.width / (float)frame.height);
+    }
+    
 }
 
 
@@ -263,6 +270,11 @@ static CVReturn OnDisplayLinkFired(CVDisplayLinkRef displayLink,
     [self teardownDisplayLink];
 }
 
+- (void)setOnFirstFrameReceived:(void (^ _Nullable)(float))onFirstFrameReceived {
+    _onFirstFrameReceived = [onFirstFrameReceived copy];
+    _firstFrameReceivedReported = false;
+}
+
 
 @end
 
@@ -279,8 +291,6 @@ static CVReturn OnDisplayLinkFired(CVDisplayLinkRef displayLink,
     
     std::shared_ptr<VideoRendererAdapterImpl> _sink;
     
-    void (^_onFirstFrameReceived)(float);
-    bool _firstFrameReceivedReported;
     void (^_onOrientationUpdated)(int);
     void (^_onIsMirroredUpdated)(bool);
     
@@ -315,6 +325,9 @@ static CVReturn OnDisplayLinkFired(CVDisplayLinkRef displayLink,
         
         _glView = [[OpenGLVideoView alloc] initWithFrame:frame pixelFormat:format];
 
+      //  assert(false);
+
+        
         [self addSubview:_glView];
         
         __weak GLVideoView *weakSelf = self;
@@ -390,10 +403,6 @@ static CVReturn OnDisplayLinkFired(CVDisplayLinkRef displayLink,
 - (void)renderFrame:(RTCVideoFrame *)frame {
     self.glView.videoFrame = frame;
     
-    if (!_firstFrameReceivedReported && _onFirstFrameReceived) {
-        _firstFrameReceivedReported = true;
-        _onFirstFrameReceived((float)frame.width / (float)frame.height);
-    }
 }
 
 #pragma mark - Private
@@ -407,8 +416,7 @@ static CVReturn OnDisplayLinkFired(CVDisplayLinkRef displayLink,
 }
 
 - (void)setOnFirstFrameReceived:(void (^ _Nullable)(float))onFirstFrameReceived {
-    _onFirstFrameReceived = [onFirstFrameReceived copy];
-    _firstFrameReceivedReported = false;
+    [self.glView setOnFirstFrameReceived:onFirstFrameReceived];
 }
 
 - (void)setInternalOrientation:(int)internalOrientation {
