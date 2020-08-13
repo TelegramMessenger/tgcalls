@@ -67,7 +67,13 @@
             selectedCamera = backCamera;
         }
 #else
-        selectedCamera = [VideoCameraCapturer captureDevices].firstObject;
+        NSArray<AVCaptureDevice *> *devices = [VideoCameraCapturer captureDevices];
+        for (int i = 0; i < devices.count; i++) {
+            if ([_videoCapturer deviceIsCaptureCompitable:devices[i]]) {
+                selectedCamera = devices[i];
+                break;
+            }
+        }
 #endif
         //        NSLog(@"%@", selectedCamera);
         if (selectedCamera == nil) {

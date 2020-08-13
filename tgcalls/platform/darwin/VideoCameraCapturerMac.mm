@@ -220,18 +220,18 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 
 + (NSArray<AVCaptureDevice *> *)captureDevices {
     AVCaptureDevice * defaultDevice = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
-    NSArray<AVCaptureDevice *> * devices = [AVCaptureDevice devicesWithMediaType:AVMediaTypeVideo];
+    NSMutableArray<AVCaptureDevice *> * devices = [[AVCaptureDevice devicesWithMediaType:AVMediaTypeVideo] mutableCopy];
 
-    if ([defaultDevice isConnected]) {
-        return @[defaultDevice];
-    } else {
-        for (int i = 0; i < devices.count; i++) {
-            if ([devices[i] isConnected]) {
-                return @[devices[i]];
-            }
-        }
-    }
-    return @[];
+    [devices insertObject:defaultDevice atIndex:0];
+    
+    return devices;
+}
+
+- (BOOL)deviceIsCaptureCompitable:(AVCaptureDevice *)device {
+    AVCaptureDeviceInput *input =
+    [AVCaptureDeviceInput deviceInputWithDevice:device error:nil];
+    
+    return [_captureSession canAddInput:input];
 }
 
 + (NSArray<AVCaptureDeviceFormat *> *)supportedFormatsForDevice:(AVCaptureDevice *)device {

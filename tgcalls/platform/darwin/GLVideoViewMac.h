@@ -9,46 +9,41 @@
  */
 
 #import <Foundation/Foundation.h>
-#import <AppKit/AppKit.h>
 
-#import "RTCMacros.h"
+#if !TARGET_OS_IPHONE
+
+#import <AppKit/NSOpenGLView.h>
+#import "api/media_stream_interface.h"
 #import "RTCVideoRenderer.h"
 #import "RTCVideoViewShading.h"
-
-#import "api/media_stream_interface.h"
-
-#include <memory>
 
 NS_ASSUME_NONNULL_BEGIN
 
 @class GLVideoView;
 
-/**
- * GLVideoView is an RTCVideoRenderer which renders video frames in its
- * bounds using OpenGLES 2.0 or OpenGLES 3.0.
- */
-RTC_OBJC_EXPORT
+@protocol GLVideoViewDelegate<RTCVideoViewDelegate> @end
+
 @interface GLVideoView : NSView <RTCVideoRenderer>
 
-@property(nonatomic, weak) id<RTCVideoViewDelegate> delegate;
+@property(nonatomic, weak) id<GLVideoViewDelegate> delegate;
 
-- (instancetype)initWithFrame:(CGRect)frame
-                       shader:(id<RTCVideoViewShading>)shader NS_DESIGNATED_INITIALIZER;
+- (instancetype)initWithFrame:(NSRect)frameRect
+pixelFormat:(NSOpenGLPixelFormat *)format
+shader:(id<RTCVideoViewShading>)shader
+NS_DESIGNATED_INITIALIZER;
 
-- (instancetype)initWithCoder:(NSCoder *)aDecoder
-                       shader:(id<RTCVideoViewShading>)shader NS_DESIGNATED_INITIALIZER;
 
-/** @abstract Wrapped RTCVideoRotation, or nil.
- */
 @property(nonatomic, nullable) NSValue *rotationOverride;
 
 @property (nonatomic, readwrite) int internalOrientation;
 
 - (std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)getSink;
-- (void)setOnFirstFrameReceived:(void (^ _Nullable)())onFirstFrameReceived;
+- (void)setOnFirstFrameReceived:(void (^ _Nullable)(float))onFirstFrameReceived;
 - (void)internalSetOnOrientationUpdated:(void (^ _Nullable)(int))onOrientationUpdated;
 - (void)internalSetOnIsMirroredUpdated:(void (^ _Nullable)(bool))onIsMirroredUpdated;
-
+- (void)setVideoContentMode:(CALayerContentsGravity)mode;
 @end
 
 NS_ASSUME_NONNULL_END
+
+#endif
