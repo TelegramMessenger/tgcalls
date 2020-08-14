@@ -138,12 +138,19 @@ PersistentState InstanceImpl::getPersistentState() {
 	return PersistentState{};  // we dont't have such information
 }
 
-FinalState InstanceImpl::stop() {
-	FinalState finalState;
-	finalState.debugLog = _logSink->result();
-	finalState.isRatingSuggested = false;
-
-	return finalState;
+void InstanceImpl::stop(std::function<void(FinalState)> completion) {
+    std::string debugLog = _logSink->result();
+    
+    _manager->perform(RTC_FROM_HERE, [completion, debugLog = std::move(debugLog)](Manager *manager) {
+        manager->getNetworkStats([completion, debugLog = std::move(debugLog)](TrafficStats stats) {
+            FinalState finalState;
+            finalState.debugLog = debugLog;
+            finalState.isRatingSuggested = false;
+            finalState.trafficStats = stats;
+            
+            completion(finalState);
+        });
+    });
 }
 
 /*void InstanceImpl::controllerStateCallback(Controller::State state) {

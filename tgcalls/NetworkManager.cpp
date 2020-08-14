@@ -151,6 +151,7 @@ uint32_t NetworkManager::sendMessage(const Message &message) {
 	if (const auto prepared = _transport.prepareForSending(message)) {
 		rtc::PacketOptions packetOptions;
 		_transportChannel->SendPacket((const char *)prepared->bytes.data(), prepared->bytes.size(), packetOptions, 0);
+        addTrafficStats(prepared->bytes.size(), false);
 		return prepared->counter;
 	}
 	return 0;
@@ -160,7 +161,21 @@ void NetworkManager::sendTransportService(int cause) {
 	if (const auto prepared = _transport.prepareForSendingService(cause)) {
 		rtc::PacketOptions packetOptions;
 		_transportChannel->SendPacket((const char *)prepared->bytes.data(), prepared->bytes.size(), packetOptions, 0);
+        addTrafficStats(prepared->bytes.size(), false);
 	}
+}
+
+void NetworkManager::setIsLocalNetworkLowCost(bool isLocalNetworkLowCost) {
+    _isLocalNetworkLowCost = isLocalNetworkLowCost;
+}
+
+TrafficStats NetworkManager::getNetworkStats() {
+    TrafficStats stats;
+    stats.bytesSentWifi = _trafficStatsWifi.outgoing;
+    stats.bytesReceivedWifi = _trafficStatsWifi.incoming;
+    stats.bytesSentMobile = _trafficStatsCellular.outgoing;
+    stats.bytesReceivedMobile = _trafficStatsCellular.incoming;
+    return stats;
 }
 
 void NetworkManager::checkConnectionTimeout() {
@@ -220,6 +235,8 @@ void NetworkManager::transportPacketReceived(rtc::PacketTransportInternal *trans
 	assert(_thread->IsCurrent());
     
     _lastNetworkActivityMs = rtc::TimeMillis();
+    
+    addTrafficStats(size, true);
 
 	if (auto decrypted = _transport.handleIncomingPacket(bytes, size)) {
 		if (_transportMessageReceived) {
@@ -241,6 +258,22 @@ void NetworkManager::transportRouteChanged(absl::optional<rtc::NetworkRoute> rou
         bool remoteIsWifi = route->remote.adapter_type() == rtc::AdapterType::ADAPTER_TYPE_WIFI;
         
         RTC_LOG(LS_INFO) << "NetworkManager is wifi: local=" << localIsWifi << ", remote=" << remoteIsWifi;
+    }
+}
+
+void NetworkManager::addTrafficStats(int64_t byteCount, bool isIncoming) {
+    if (_isLocalNetworkLowCost) {
+        if (isIncoming) {
+            _trafficStatsWifi.incoming += byteCount;
+        } else {
+            _trafficStatsWifi.outgoing += byteCount;
+        }
+    } else {
+        if (isIncoming) {
+            _trafficStatsCellular.incoming += byteCount;
+        } else {
+            _trafficStatsCellular.outgoing += byteCount;
+        }
     }
 }
 

@@ -40,6 +40,11 @@ public:
 		bool isReadyToSendData = false;
         bool isFailed = false;
 	};
+    
+    struct InterfaceTrafficStats {
+        int64_t incoming = 0;
+        int64_t outgoing = 0;
+    };
 
 	NetworkManager(
 		rtc::Thread *thread,
@@ -56,6 +61,8 @@ public:
 	void receiveSignalingMessage(DecryptedMessage &&message);
 	uint32_t sendMessage(const Message &message);
 	void sendTransportService(int cause);
+    void setIsLocalNetworkLowCost(bool isLocalNetworkLowCost);
+    TrafficStats getNetworkStats();
 
 private:
     void checkConnectionTimeout();
@@ -65,6 +72,7 @@ private:
 	void transportReadyToSend(cricket::IceTransportInternal *transport);
 	void transportPacketReceived(rtc::PacketTransportInternal *transport, const char *bytes, size_t size, const int64_t &timestamp, int unused);
     void transportRouteChanged(absl::optional<rtc::NetworkRoute> route);
+    void addTrafficStats(int64_t byteCount, bool isIncoming);
 
 	rtc::Thread *_thread = nullptr;
     bool _enableP2P = false;
@@ -84,7 +92,10 @@ private:
     PeerIceParameters _localIceParameters;
     absl::optional<PeerIceParameters> _remoteIceParameters;
     
+    bool _isLocalNetworkLowCost = false;
     int64_t _lastNetworkActivityMs = 0;
+    InterfaceTrafficStats _trafficStatsWifi;
+    InterfaceTrafficStats _trafficStatsCellular;
 };
 
 } // namespace tgcalls

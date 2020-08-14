@@ -23,6 +23,7 @@ public:
 	void setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
     void setIsLowBatteryLevel(bool isLowBatteryLevel);
     void setIsLocalNetworkLowCost(bool isLocalNetworkLowCost);
+    void getNetworkStats(std::function<void(TrafficStats)> completion);
     
 private:
 	void sendSignalingAsync(int delayMs, int cause);

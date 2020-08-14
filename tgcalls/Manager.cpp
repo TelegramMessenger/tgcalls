@@ -273,6 +273,10 @@ void Manager::setIsLowBatteryLevel(bool isLowBatteryLevel) {
 
 void Manager::setIsLocalNetworkLowCost(bool isLocalNetworkLowCost) {
     if (isLocalNetworkLowCost != _localNetworkIsLowCost) {
+        _networkManager->perform(RTC_FROM_HERE, [isLocalNetworkLowCost](NetworkManager *networkManager) {
+            networkManager->setIsLocalNetworkLowCost(isLocalNetworkLowCost);
+        });
+        
         bool wasCurrentNetworkLowCost = calculateIsCurrentNetworkLowCost();
         _localNetworkIsLowCost = isLocalNetworkLowCost;
         updateIsCurrentNetworkLowCost(wasCurrentNetworkLowCost);
@@ -287,6 +291,12 @@ void Manager::setIsLocalNetworkLowCost(bool isLocalNetworkLowCost) {
                 break;
         }
     }
+}
+
+void Manager::getNetworkStats(std::function<void (TrafficStats)> completion) {
+    _networkManager->perform(RTC_FROM_HERE, [completion = std::move(completion)](NetworkManager *networkManager) {
+        completion(networkManager->getNetworkStats());
+    });
 }
 
 bool Manager::calculateIsCurrentNetworkLowCost() const {

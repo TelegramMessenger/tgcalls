@@ -1029,15 +1029,15 @@ PersistentState InstanceImplReference::getPersistentState() {
 	return PersistentState();
 }
 
-FinalState InstanceImplReference::stop() {
-	auto result = FinalState();
-
-	result.persistentState = getPersistentState();
-	result.debugLog = logSink_->result();
-	result.trafficStats = getTrafficStats();
-	result.isRatingSuggested = false;
-
-	return result;
+void InstanceImplReference::stop(std::function<void(FinalState)> completion) {
+    auto result = FinalState();
+    
+    result.persistentState = getPersistentState();
+    result.debugLog = logSink_->result();
+    result.trafficStats = getTrafficStats();
+    result.isRatingSuggested = false;
+    
+    completion(result);
 }
 
 template <>

@@ -34,7 +34,7 @@ public:
 	int64_t getPreferredRelayId() override;
 	TrafficStats getTrafficStats() override;
 	PersistentState getPersistentState() override;
-	FinalState stop() override;
+	void stop(std::function<void(FinalState)> completion) override;
 
 private:
     std::unique_ptr<LogSinkImpl> logSink_;
