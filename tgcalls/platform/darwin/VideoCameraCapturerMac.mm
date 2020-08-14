@@ -232,8 +232,10 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 }
 
 - (BOOL)deviceIsCaptureCompitable:(AVCaptureDevice *)device {
-    AVCaptureDeviceInput *input =
-    [AVCaptureDeviceInput deviceInputWithDevice:device error:nil];
+    if (![device isConnected] || [device isSuspended]) {
+        return NO;
+    }
+    AVCaptureDeviceInput *input = [AVCaptureDeviceInput deviceInputWithDevice:device error:nil];
     
     return [_captureSession canAddInput:input];
 }
