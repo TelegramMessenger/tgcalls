@@ -79,7 +79,7 @@ private:
     
     bool _didSetShouldBeMirrored;
     bool _shouldBeMirrored;
-
+    bool _forceMirrored;
 }
 
 @end
@@ -184,7 +184,7 @@ private:
 - (void)layout {
     [super layout];
     
-    if (_shouldBeMirrored) {
+    if (_shouldBeMirrored || _forceMirrored) {
         _metalView.layer.anchorPoint = NSMakePoint(1, 0);
         _metalView.layer.affineTransform = CGAffineTransformMakeScale(-1, 1);
         //  _metalView.layer.transform = CATransform3DMakeScale(-1, 1, 1);
@@ -228,7 +228,7 @@ private:
                 _shouldBeMirrored = shouldBeMirrored;
                 bool shouldBeMirrored = ((TGRTCCVPixelBuffer *)buffer).shouldBeMirrored;
                 
-                if (shouldBeMirrored) {
+                if (shouldBeMirrored || _forceMirrored) {
                     _metalView.layer.anchorPoint = NSMakePoint(1, 0);
                     _metalView.layer.affineTransform = CGAffineTransformMakeScale(-1, 1);
                     //  _metalView.layer.transform = CATransform3DMakeScale(-1, 1, 1);
@@ -256,9 +256,6 @@ private:
             return;
         }
     }
-    renderer = _rendererI420;
-    
-    
     renderer = _rendererI420;
     
     renderer.rotationOverride = _rotationOverride;
@@ -370,5 +367,11 @@ private:
 - (void)internalSetOnIsMirroredUpdated:(void (^ _Nullable)(bool))onIsMirroredUpdated {
     _onIsMirroredUpdated = [onIsMirroredUpdated copy];
 }
+
+- (void)setIsForceMirrored:(BOOL)forceMirrored {
+    _forceMirrored = forceMirrored;
+    [self setNeedsLayout:YES];
+}
+
 
 @end

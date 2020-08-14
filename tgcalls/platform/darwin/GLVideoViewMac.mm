@@ -115,6 +115,9 @@ static CGSize aspectFitted(CGSize from, CGSize to) {
 @property(atomic, strong) RTCI420TextureCache *i420TextureCache;
 
 - (void)drawFrame;
+- (instancetype)initWithFrame:(NSRect)frame
+                  pixelFormat:(NSOpenGLPixelFormat *)format
+                       shader:(id<RTCVideoViewShading>)shader;
 @end
 
 static CVReturn OnDisplayLinkFired(CVDisplayLinkRef displayLink,
@@ -143,9 +146,11 @@ static CVReturn OnDisplayLinkFired(CVDisplayLinkRef displayLink,
 @synthesize videoFrame = _videoFrame;
 @synthesize i420TextureCache = _i420TextureCache;
 
--(instancetype)initWithFrame:(NSRect)frameRect pixelFormat:(NSOpenGLPixelFormat *)format {
-    if (self = [super initWithFrame:frameRect pixelFormat:format]) {
-        self->_shader = [[RTCDefaultShader alloc] init];
+- (instancetype)initWithFrame:(NSRect)frame
+                  pixelFormat:(NSOpenGLPixelFormat *)format
+                       shader:(id<RTCVideoViewShading>)shader {
+    if (self = [super initWithFrame:frame pixelFormat:format]) {
+        self->_shader = shader;
     }
     return self;
 }
@@ -223,7 +228,10 @@ static CVReturn OnDisplayLinkFired(CVDisplayLinkRef displayLink,
     
     if (!_firstFrameReceivedReported && _onFirstFrameReceived) {
         _firstFrameReceivedReported = true;
-        _onFirstFrameReceived((float)frame.width / (float)frame.height);
+        float aspectRatio = (float)frame.width / (float)frame.height;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self->_onFirstFrameReceived(aspectRatio);
+        });
     }
     
 }
@@ -248,6 +256,10 @@ static CVReturn OnDisplayLinkFired(CVDisplayLinkRef displayLink,
     CVDisplayLinkSetCurrentCGDisplayFromOpenGLContext(
                                                       _displayLink, cglContext, cglPixelFormat);
     CVDisplayLinkStart(_displayLink);
+}
+
+-(void)setFrameOrigin:(NSPoint)newOrigin {
+    [super setFrameOrigin:newOrigin];
 }
 
 - (void)teardownDisplayLink {
@@ -296,6 +308,7 @@ static CVReturn OnDisplayLinkFired(CVDisplayLinkRef displayLink,
     
     bool _didSetShouldBeMirrored;
     bool _shouldBeMirrored;
+    bool _forceMirrored;
 
 }
 
@@ -323,11 +336,11 @@ static CVReturn OnDisplayLinkFired(CVDisplayLinkRef displayLink,
                        shader:(id<RTCVideoViewShading>)shader {
     if (self = [super initWithFrame:frame]) {
         
-        _glView = [[OpenGLVideoView alloc] initWithFrame:frame pixelFormat:format];
+        _glView = [[OpenGLVideoView alloc] initWithFrame:frame pixelFormat:format shader:shader];
+        _glView.wantsLayer = YES;
+        self.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
+        _glView.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
 
-      //  assert(false);
-
-        
         [self addSubview:_glView];
         
         __weak GLVideoView *weakSelf = self;
@@ -382,7 +395,8 @@ static CVReturn OnDisplayLinkFired(CVDisplayLinkRef displayLink,
 
 -(void)layout {
     [super layout];
-    if (self.bounds.size.width > 0.0f) {
+    
+    if (self.bounds.size.width > 0.0f && _currentSize.width > 0) {
         
         NSSize size = _currentSize;
         NSSize frameSize = self.frame.size;
@@ -393,16 +407,50 @@ static CVReturn OnDisplayLinkFired(CVDisplayLinkRef displayLink,
         }
         _glView.frame = CGRectMake(floor((self.bounds.size.width - size.width) / 2.0), floor((self.bounds.size.height - size.height) / 2.0), size.width, size.height);
     }
+    
+    if (_shouldBeMirrored || _forceMirrored) {
+        self.glView.layer.anchorPoint = NSMakePoint(1, 0);
+        self.glView.layer.affineTransform = CGAffineTransformMakeScale(-1, 1);
+    } else {
+        self.glView.layer.anchorPoint = NSMakePoint(0, 0);
+        self.glView.layer.affineTransform = CGAffineTransformIdentity;
+    }
 }
 
 - (void)setSize:(CGSize)size {
     [self.delegate videoView:self didChangeVideoSize:size];
-    [self layout];
+    [self setNeedsLayout:YES];
 }
 
-- (void)renderFrame:(RTCVideoFrame *)frame {
-    self.glView.videoFrame = frame;
+- (void)renderFrame:(RTCVideoFrame *)videoFrame {
+    self.glView.videoFrame = videoFrame;
     
+    if ([videoFrame.buffer isKindOfClass:[RTCCVPixelBuffer class]]) {
+        RTCCVPixelBuffer *buffer = (RTCCVPixelBuffer*)videoFrame.buffer;
+        if ([buffer isKindOfClass:[TGRTCCVPixelBuffer class]]) {
+            bool shouldBeMirrored = ((TGRTCCVPixelBuffer *)buffer).shouldBeMirrored;
+            if (shouldBeMirrored != _shouldBeMirrored) {
+                _shouldBeMirrored = shouldBeMirrored;
+                if (shouldBeMirrored || _forceMirrored) {
+                    self.glView.layer.anchorPoint = NSMakePoint(1, 0);
+                    self.glView.layer.affineTransform = CGAffineTransformMakeScale(-1, 1);
+                } else {
+                    self.glView.layer.anchorPoint = NSMakePoint(0, 0);
+                    self.glView.layer.affineTransform = CGAffineTransformIdentity;
+                }
+            }
+            
+            if (shouldBeMirrored != _shouldBeMirrored) {
+                if (_didSetShouldBeMirrored) {
+                    if (_onIsMirroredUpdated) {
+                        _onIsMirroredUpdated(_shouldBeMirrored);
+                    }
+                } else {
+                    _didSetShouldBeMirrored = true;
+                }
+            }
+        }
+    }
 }
 
 #pragma mark - Private
@@ -433,6 +481,10 @@ static CVReturn OnDisplayLinkFired(CVDisplayLinkRef displayLink,
 - (void)internalSetOnIsMirroredUpdated:(void (^ _Nullable)(bool))onIsMirroredUpdated {
 }
 
+- (void)setIsForceMirrored:(BOOL)forceMirrored {
+    _forceMirrored = forceMirrored;
+    [self setNeedsLayout:YES];
+}
 
 @end
 

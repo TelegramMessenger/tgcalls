@@ -42,6 +42,7 @@ NS_DESIGNATED_INITIALIZER;
 - (void)internalSetOnOrientationUpdated:(void (^ _Nullable)(int))onOrientationUpdated;
 - (void)internalSetOnIsMirroredUpdated:(void (^ _Nullable)(bool))onIsMirroredUpdated;
 - (void)setVideoContentMode:(CALayerContentsGravity)mode;
+- (void)setIsForceMirrored:(BOOL)forceMirrored;
 @end
 
 NS_ASSUME_NONNULL_END
