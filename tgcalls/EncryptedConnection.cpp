@@ -374,10 +374,16 @@ auto EncryptedConnection::processPacket(
 		}
 
 		if (type == kEmptyId) {
+			if (additionalMessage) {
+				return LogError("Empty message should be only the first one in the packet.");
+			}
 			RTC_LOG(LS_INFO) << logHeader()
 				<< "Got RECV:empty" << "#" << currentCounter;
 			reader.Consume(1);
 		} else if (type == kAckId) {
+			if (!additionalMessage) {
+				return LogError("Ack message must not be the first one in the packet.");
+			}
 			ackMyMessage(currentSeq);
 			reader.Consume(1);
 		} else if (auto message = DeserializeMessage(reader, singleMessagePacket)) {
