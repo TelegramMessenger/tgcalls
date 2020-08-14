@@ -45,7 +45,7 @@ bool DarwinInterface::supportsEncoding(const std::string &codecName) {
 			return [[AVAssetExportSession allExportPresets] containsObject:AVAssetExportPresetHEVCHighestQuality];
 		}
 #elif defined WEBRTC_MAC // WEBRTC_IOS
-		if (@available(macOS 10.13, *)) {
+		if (@available(macOS 10.14, *)) {
 			return [[AVAssetExportSession allExportPresets] containsObject:AVAssetExportPresetHEVCHighestQuality];
 		}
 #endif // WEBRTC_IOS || WEBRTC_MAC
