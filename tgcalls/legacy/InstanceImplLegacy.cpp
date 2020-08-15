@@ -155,8 +155,8 @@ onSignalBarsUpdated_(std::move(descriptor.signalBarsUpdated)) {
 
 InstanceImplLegacy::~InstanceImplLegacy() {
 	if (controller_) {
-		stop([](){});
-	}
+        stop([](FinalState state){});
+    }
 }
 
 void InstanceImplLegacy::setNetworkType(NetworkType networkType) {
@@ -274,7 +274,9 @@ PersistentState InstanceImplLegacy::getPersistentState() {
 }
 
 void InstanceImplLegacy::stop(std::function<void(FinalState)> completion) {
-    auto result = FinalState();
+	controller_->Stop();
+
+	auto result = FinalState();
 	result.persistentState = getPersistentState();
 	result.debugLog = controller_->GetDebugLog();
 	result.trafficStats = getTrafficStats();
@@ -282,7 +284,7 @@ void InstanceImplLegacy::stop(std::function<void(FinalState)> completion) {
 
 	delete controller_;
 	controller_ = nullptr;
-    
+
     completion(result);
 }
 
@@ -321,8 +323,10 @@ int InstanceImplLegacy::GetConnectionMaxLayer() {
 	return tgvoip::VoIPController::GetConnectionMaxLayer();
 }
 
-std::string InstanceImplLegacy::GetVersion() {
-	return tgvoip::VoIPController::GetVersion();
+std::vector<std::string> InstanceImplLegacy::GetVersions() {
+	std::vector<std::string> result;
+	result.push_back("2.4.4");
+	return result;
 }
 
 template <>

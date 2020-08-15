@@ -14,7 +14,7 @@ public:
 	~InstanceImplLegacy();
 
 	static int GetConnectionMaxLayer();
-	static std::string GetVersion();
+    static std::vector<std::string> GetVersions();
 
 	void receiveSignalingData(const std::vector<uint8_t> &data) override;
 	void setNetworkType(NetworkType networkType) override;
