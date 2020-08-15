@@ -155,7 +155,7 @@ onSignalBarsUpdated_(std::move(descriptor.signalBarsUpdated)) {
 
 InstanceImplLegacy::~InstanceImplLegacy() {
 	if (controller_) {
-		stop();
+		stop([](){});
 	}
 }
 
@@ -273,10 +273,8 @@ PersistentState InstanceImplLegacy::getPersistentState() {
 	return {controller_->GetPersistentState()};
 }
 
-FinalState InstanceImplLegacy::stop() {
-	controller_->Stop();
-
-	auto result = FinalState();
+void InstanceImplLegacy::stop(std::function<void(FinalState)> completion) {
+    auto result = FinalState();
 	result.persistentState = getPersistentState();
 	result.debugLog = controller_->GetDebugLog();
 	result.trafficStats = getTrafficStats();
@@ -284,8 +282,8 @@ FinalState InstanceImplLegacy::stop() {
 
 	delete controller_;
 	controller_ = nullptr;
-
-	return result;
+    
+    completion(result);
 }
 
 void InstanceImplLegacy::ControllerStateCallback(tgvoip::VoIPController *controller, int state) {
