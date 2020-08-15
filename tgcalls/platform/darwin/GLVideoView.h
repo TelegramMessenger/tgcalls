@@ -9,7 +9,11 @@
  */
 
 #import <Foundation/Foundation.h>
+#ifdef WEBRTC_IOS
+#import <UIKit/UIKit.h>
+#else
 #import <AppKit/AppKit.h>
+#endif
 
 #import "RTCMacros.h"
 #import "RTCVideoRenderer.h"
@@ -28,7 +32,13 @@ NS_ASSUME_NONNULL_BEGIN
  * bounds using OpenGLES 2.0 or OpenGLES 3.0.
  */
 RTC_OBJC_EXPORT
-@interface GLVideoView : NSView <RTCVideoRenderer>
+@interface GLVideoView :
+#ifdef WEBRTC_IOS
+UIView
+#else
+NSView
+#endif
+<RTCVideoRenderer>
 
 @property(nonatomic, weak) id<RTCVideoViewDelegate> delegate;
 
