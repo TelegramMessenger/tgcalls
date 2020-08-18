@@ -162,6 +162,7 @@ public:
 	virtual void setAudioOutputGainControlEnabled(bool enabled) = 0;
 	virtual void setEchoCancellationStrength(int strength) = 0;
 
+	virtual bool supportsVideo() = 0;
 	virtual void setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) = 0;
 
 	virtual void setAudioInputDevice(std::string id) = 0;

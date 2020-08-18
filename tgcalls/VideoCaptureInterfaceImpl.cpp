@@ -7,12 +7,12 @@
 
 namespace tgcalls {
 
-VideoCaptureInterfaceObject::VideoCaptureInterfaceObject(std::shared_ptr<PlatformContext> platformContext) {
-	_videoSource = PlatformInterface::SharedInstance()->makeVideoSource(Manager::getMediaThread(), MediaManager::getWorkerThread());
+VideoCaptureInterfaceObject::VideoCaptureInterfaceObject(std::string deviceId, std::shared_ptr<PlatformContext> platformContext)
+: _videoSource(PlatformInterface::SharedInstance()->makeVideoSource(Manager::getMediaThread(), MediaManager::getWorkerThread())) {
 	_platformContext = platformContext;
 	//this should outlive the capturer
 	if (_videoSource) {
-		_videoCapturer = PlatformInterface::SharedInstance()->makeVideoCapturer(_videoSource, _useFrontCamera, [this](VideoState state) {
+		_videoCapturer = PlatformInterface::SharedInstance()->makeVideoCapturer(_videoSource, deviceId, [this](VideoState state) {
 			if (this->_stateUpdated) {
 				this->_stateUpdated(state);
 			}
@@ -27,13 +27,16 @@ VideoCaptureInterfaceObject::~VideoCaptureInterfaceObject() {
 	}
 }
 
-void VideoCaptureInterfaceObject::switchCamera() {
-	_useFrontCamera = !_useFrontCamera;
+webrtc::VideoTrackSourceInterface *VideoCaptureInterfaceObject::source() {
+	return _videoSource;
+}
+
+void VideoCaptureInterfaceObject::switchToDevice(std::string deviceId) {
     if (_videoCapturer && _currentUncroppedSink) {
 		_videoCapturer->setUncroppedOutput(nullptr);
     }
 	if (_videoSource) {
-		_videoCapturer = PlatformInterface::SharedInstance()->makeVideoCapturer(_videoSource, _useFrontCamera, [this](VideoState state) {
+		_videoCapturer = PlatformInterface::SharedInstance()->makeVideoCapturer(_videoSource, deviceId, [this](VideoState state) {
 			if (this->_stateUpdated) {
 				this->_stateUpdated(state);
 			}
@@ -73,17 +76,17 @@ void VideoCaptureInterfaceObject::setStateUpdated(std::function<void(VideoState)
 	_stateUpdated = stateUpdated;
 }
 
-VideoCaptureInterfaceImpl::VideoCaptureInterfaceImpl(std::shared_ptr<PlatformContext> platformContext) :
-_impl(Manager::getMediaThread(), [platformContext]() {
-	return new VideoCaptureInterfaceObject(platformContext);
+VideoCaptureInterfaceImpl::VideoCaptureInterfaceImpl(std::string deviceId, std::shared_ptr<PlatformContext> platformContext) :
+_impl(Manager::getMediaThread(), [deviceId, platformContext]() {
+	return new VideoCaptureInterfaceObject(deviceId, platformContext);
 }) {
 }
 
 VideoCaptureInterfaceImpl::~VideoCaptureInterfaceImpl() = default;
 
-void VideoCaptureInterfaceImpl::switchCamera() {
-	_impl.perform(RTC_FROM_HERE, [](VideoCaptureInterfaceObject *impl) {
-		impl->switchCamera();
+void VideoCaptureInterfaceImpl::switchToDevice(std::string deviceId) {
+	_impl.perform(RTC_FROM_HERE, [deviceId](VideoCaptureInterfaceObject *impl) {
+		impl->switchToDevice(deviceId);
 	});
 }
 

@@ -430,10 +430,10 @@ void MediaManager::checkIsSendingVideoChanged(bool wasSending) {
         configureSendingVideoIfNeeded();
 
         if (_enableFlexfec) {
-            _videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, GetVideoCaptureAssumingSameThread(_videoCapture.get())->_videoSource);
+            _videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, GetVideoCaptureAssumingSameThread(_videoCapture.get())->source());
             _videoChannel->SetVideoSend(_ssrcVideo.fecOutgoing, NULL, nullptr);
         } else {
-            _videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, GetVideoCaptureAssumingSameThread(_videoCapture.get())->_videoSource);
+            _videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, GetVideoCaptureAssumingSameThread(_videoCapture.get())->source());
         }
 
 		_videoChannel->OnReadyToSend(_isConnected);

@@ -39,7 +39,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
                withTempBuffer:(nullable uint8_t*)tmpBuffer {
     const OSType srcPixelFormat = CVPixelBufferGetPixelFormatType(self.pixelBuffer);
     const OSType dstPixelFormat = CVPixelBufferGetPixelFormatType(outputPixelBuffer);
-    
+
     switch (srcPixelFormat) {
         case kCVPixelFormatType_420YpCbCr8BiPlanarFullRange:
         case kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange: {
@@ -63,7 +63,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
         }
         default: { RTC_NOTREACHED() << "Unsupported pixel format."; }
     }
-    
+
     return YES;
 }
 
@@ -81,18 +81,18 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     uint8_t* dstUV =
     reinterpret_cast<uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(outputPixelBuffer, 1));
     const int dstUVStride = (int)CVPixelBufferGetBytesPerRowOfPlane(outputPixelBuffer, 1);
-    
+
     // Prepare source pointers.
     CVPixelBufferLockBaseAddress(self.pixelBuffer, kCVPixelBufferLock_ReadOnly);
     const uint8_t* srcY = static_cast<uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(self.pixelBuffer, 0));
     const int srcYStride = (int)CVPixelBufferGetBytesPerRowOfPlane(self.pixelBuffer, 0);
     const uint8_t* srcUV = static_cast<uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(self.pixelBuffer, 1));
     const int srcUVStride = (int)CVPixelBufferGetBytesPerRowOfPlane(self.pixelBuffer, 1);
-    
+
     // Crop just by modifying pointers.
     srcY += srcYStride * self.cropY + self.cropX;
     srcUV += srcUVStride * (self.cropY / 2) + self.cropX;
-    
+
     webrtc::NV12Scale(tmpBuffer,
                       srcY,
                       srcYStride,
@@ -106,7 +106,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
                       dstUVStride,
                       dstWidth,
                       dstHeight);
-    
+
     CVPixelBufferUnlockBaseAddress(self.pixelBuffer, kCVPixelBufferLock_ReadOnly);
     CVPixelBufferUnlockBaseAddress(outputPixelBuffer, 0);
 }
@@ -119,20 +119,20 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     }
     const int dstWidth = (int)CVPixelBufferGetWidth(outputPixelBuffer);
     const int dstHeight = (int)CVPixelBufferGetHeight(outputPixelBuffer);
-    
+
     uint8_t* dst = reinterpret_cast<uint8_t*>(CVPixelBufferGetBaseAddress(outputPixelBuffer));
     const int dstStride = (int)CVPixelBufferGetBytesPerRow(outputPixelBuffer);
-    
+
     // Prepare source pointers.
     CVPixelBufferLockBaseAddress(self.pixelBuffer, kCVPixelBufferLock_ReadOnly);
     const uint8_t* src = static_cast<uint8_t*>(CVPixelBufferGetBaseAddress(self.pixelBuffer));
     const int srcStride = (int)CVPixelBufferGetBytesPerRow(self.pixelBuffer);
-    
+
     // Crop just by modifying pointers. Need to ensure that src pointer points to a byte corresponding
     // to the start of a new pixel (byte with B for BGRA) so that libyuv scales correctly.
     const int bytesPerPixel = 4;
     src += srcStride * self.cropY + (self.cropX * bytesPerPixel);
-    
+
     // kCVPixelFormatType_32BGRA corresponds to libyuv::FOURCC_ARGB
     libyuv::ARGBScale(src,
                       srcStride,
@@ -143,7 +143,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
                       dstWidth,
                       dstHeight,
                       libyuv::kFilterBox);
-    
+
     CVPixelBufferUnlockBaseAddress(self.pixelBuffer, kCVPixelBufferLock_ReadOnly);
     CVPixelBufferUnlockBaseAddress(outputPixelBuffer, 0);
 }
@@ -154,7 +154,8 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 
 @interface VideoCameraCapturer () <AVCaptureVideoDataOutputSampleBufferDelegate> {
     rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _source;
-    
+    std::string _deviceId; // TODO
+
     dispatch_queue_t _frameQueue;
     AVCaptureDevice *_currentDevice;
 
@@ -164,17 +165,17 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 
     // Live on RTCDispatcherTypeCaptureSession and main thread.
     std::atomic<bool> _willBeRunning;
-    
+
     AVCaptureVideoDataOutput *_videoDataOutput;
     AVCaptureSession *_captureSession;
-    
+
     AVCaptureConnection *_videoConnection;
     AVCaptureDevice *_videoDevice;
     AVCaptureDeviceInput *_videoInputDevice;
     FourCharCode _preferredOutputPixelFormat;
     FourCharCode _outputPixelFormat;
     RTCVideoRotation _rotation;
-    
+
     // Live on mainThread.
     void (^_isActiveUpdated)(bool);
     bool _isActiveValue;
@@ -183,12 +184,12 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     // Live on frameQueue and main thread.
     std::atomic<bool> _isPaused;
     std::atomic<int> _skippedFrame;
-    
+
     // Live on frameQueue;
     float _aspectRatio;
     std::vector<uint8_t> _croppingBuffer;
     std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _uncroppedSink;
-    
+
     int _warmupFrameCount;
 
 }
@@ -197,17 +198,18 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 
 @implementation VideoCameraCapturer
 
-- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source isActiveUpdated:(void (^)(bool))isActiveUpdated {
+- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source deviceId:(std::string)deviceId isActiveUpdated:(void (^)(bool))isActiveUpdated {
     self = [super init];
     if (self != nil) {
         _source = source;
+        _deviceId = deviceId;
         _isActiveUpdated = [isActiveUpdated copy];
         _isActiveValue = true;
         _inForegroundValue = true;
         _isPaused = false;
         _skippedFrame = 0;
         _rotation = RTCVideoRotation_0;
-        
+
         _warmupFrameCount = 100;
 
         if (![self setupCaptureSession:[[AVCaptureSession alloc] init]]) {
@@ -227,7 +229,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     NSMutableArray<AVCaptureDevice *> * devices = [[AVCaptureDevice devicesWithMediaType:AVMediaTypeVideo] mutableCopy];
 
     [devices insertObject:defaultDevice atIndex:0];
-    
+
     return devices;
 }
 
@@ -236,7 +238,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
         return NO;
     }
     AVCaptureDeviceInput *input = [AVCaptureDeviceInput deviceInputWithDevice:device error:nil];
-    
+
     return [_captureSession canAddInput:input];
 }
 
@@ -260,9 +262,9 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
   _isActiveUpdated = nil;
   [self stopCaptureWithCompletionHandler:nil];
 }
-    
-    
-    
+
+
+
 - (void)setIsEnabled:(bool)isEnabled {
     BOOL updated = _isPaused != !isEnabled;
     _isPaused = !isEnabled;
@@ -284,7 +286,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
              }];
         }
     }
-    
+
     [self updateIsActiveValue];
 }
 
@@ -358,7 +360,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
           [self->_captureSession removeInput:oldInput];
       }
       [self->_captureSession stopRunning];
-      
+
       self->_isRunning = NO;
       if (completionHandler) {
           completionHandler();
@@ -379,7 +381,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     if (_warmupFrameCount < minWarmupFrameCount) {
         return;
     }
-    
+
     if (CMSampleBufferGetNumSamples(sampleBuffer) != 1 || !CMSampleBufferIsValid(sampleBuffer) ||
         !CMSampleBufferDataIsReady(sampleBuffer)) {
         return;
@@ -411,7 +413,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
             rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:pixelBuffer adaptedWidth:width adaptedHeight:height cropWidth:width cropHeight:height cropX:left cropY:top];
 
             rtcPixelBuffer.shouldBeMirrored = YES;
-            
+
             CVPixelBufferRef outputPixelBufferRef = NULL;
             OSType pixelFormat = CVPixelBufferGetPixelFormatType(rtcPixelBuffer.pixelBuffer);
             CVPixelBufferCreate(NULL, width, height, pixelFormat, NULL, &outputPixelBufferRef);
@@ -435,21 +437,21 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
         RTCVideoFrame *frame = [[RTCVideoFrame alloc] initWithBuffer:rtcPixelBuffer
                                                             rotation:_rotation
                                                          timeStampNs:timeStampNs];
-        
+
         const int64_t timestamp_us = frame.timeStampNs / rtc::kNumNanosecsPerMicrosec;
-        
+
         rtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer;
         buffer = new rtc::RefCountedObject<webrtc::ObjCFrameBuffer>(frame.buffer);
-        
+
         webrtc::VideoRotation rotation = static_cast<webrtc::VideoRotation>(frame.rotation);
-        
+
         _uncroppedSink->OnFrame(webrtc::VideoFrame::Builder()
                                 .set_video_frame_buffer(buffer)
                                 .set_rotation(rotation)
                                 .set_timestamp_us(timestamp_us)
                                 .build());
     }
-    
+
 
     int64_t timeStampNs = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer)) *
     kNanosecondsPerSecond;
@@ -473,7 +475,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 #pragma mark - AVCaptureSession notifications
 
 - (void)handleCaptureSessionInterruption:(NSNotification *)notification {
-   
+
 }
 
 - (void)handleCaptureSessionInterruptionEnded:(NSNotification *)notification {
@@ -492,15 +494,15 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 
 - (void)handleCaptureSessionDidStartRunning:(NSNotification *)notification {
     RTCLog(@"Capture session started.");
-    
+
     [RTCDispatcher dispatchAsyncOnType:RTCDispatcherTypeCaptureSession
                                  block:^{
         // If we successfully restarted after an unknown error,
         // allow future retries on fatal errors.
         self->_hasRetriedOnFatalError = NO;
     }];
-    
-    
+
+
     _inForegroundValue = true;
     [self updateIsActiveValue];
 }
@@ -566,7 +568,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 - (BOOL)setupCaptureSession:(AVCaptureSession *)captureSession {
     NSAssert(_captureSession == nil, @"Setup capture session called twice.");
     _captureSession = captureSession;
-    
+
     [self setupVideoDataOutput];
     // Add the output.
     if (![_captureSession canAddOutput:_videoDataOutput]) {
@@ -575,7 +577,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     }
     [_captureSession addOutput:_videoDataOutput];
 
-    
+
     return YES;
 }
 
@@ -584,7 +586,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 - (void)setupVideoDataOutput {
     NSAssert(_videoDataOutput == nil, @"Setup video data output called twice.");
     AVCaptureVideoDataOutput *videoDataOutput = [[AVCaptureVideoDataOutput alloc] init];
-    
+
     // `videoDataOutput.availableVideoCVPixelFormatTypes` returns the pixel formats supported by the
     // device with the most efficient output format first. Find the first format that we support.
     NSSet<NSNumber *> *supportedPixelFormats = [RTCCVPixelBuffer supportedPixelFormats];
@@ -593,16 +595,16 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     [availablePixelFormats intersectSet:supportedPixelFormats];
     NSNumber *pixelFormat = availablePixelFormats.firstObject;
     NSAssert(pixelFormat, @"Output device has no supported formats.");
-    
+
     _preferredOutputPixelFormat = [pixelFormat unsignedIntValue];
     _outputPixelFormat = _preferredOutputPixelFormat;
     videoDataOutput.videoSettings = @{(NSString *)kCVPixelBufferPixelFormatTypeKey : pixelFormat};
     videoDataOutput.alwaysDiscardsLateVideoFrames = NO;
     [videoDataOutput setSampleBufferDelegate:self queue:self.frameQueue];
     _videoDataOutput = videoDataOutput;
-    
- 
-    
+
+
+
 }
 
 - (void)updateVideoDataOutputPixelFormat:(AVCaptureDeviceFormat *)format {
@@ -610,15 +612,15 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     if (![[RTCCVPixelBuffer supportedPixelFormats] containsObject:@(mediaSubType)]) {
         mediaSubType = _preferredOutputPixelFormat;
     }
-    
+
     if (mediaSubType != _outputPixelFormat) {
         _outputPixelFormat = mediaSubType;
         _videoDataOutput.videoSettings =
         @{ (NSString *)kCVPixelBufferPixelFormatTypeKey : @(mediaSubType) };
     }
     AVCaptureConnection *connection = [_videoDataOutput connectionWithMediaType:AVMediaTypeVideo];
-    
-    
+
+
     if ([connection isVideoMirroringSupported]) {
         [connection setVideoMirrored:YES];
     }

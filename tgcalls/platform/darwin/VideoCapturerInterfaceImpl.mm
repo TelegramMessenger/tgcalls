@@ -40,14 +40,15 @@
 
 @implementation VideoCapturerInterfaceImplReference
 
-- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source useFrontCamera:(bool)useFrontCamera isActiveUpdated:(void (^)(bool))isActiveUpdated {
+- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source deviceId:(std::string)deviceId isActiveUpdated:(void (^)(bool))isActiveUpdated {
     self = [super init];
     if (self != nil) {
         assert([NSThread isMainThread]);
     #ifdef WEBRTC_IOS
+        const auto useFrontCamera = deviceId.empty() || (deviceId == "default") || (deviceId == "front");
         _videoCapturer = [[VideoCameraCapturer alloc] initWithSource:source useFrontCamera:useFrontCamera isActiveUpdated:isActiveUpdated];
     #else
-        _videoCapturer = [[VideoCameraCapturer alloc] initWithSource:source isActiveUpdated:isActiveUpdated];
+        _videoCapturer = [[VideoCameraCapturer alloc] initWithSource:source deviceId:deviceId isActiveUpdated:isActiveUpdated];
     #endif
         AVCaptureDevice *selectedCamera = nil;
 
@@ -87,7 +88,7 @@
         }];
 
         AVCaptureDeviceFormat *bestFormat = sortedFormats.firstObject;
-        
+
         bool didSelectPreferredFormat = false;
         #ifdef WEBRTC_IOS
         for (AVCaptureDeviceFormat *format in sortedFormats) {
@@ -160,12 +161,12 @@
 
 namespace tgcalls {
 
-VideoCapturerInterfaceImpl::VideoCapturerInterfaceImpl(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, bool useFrontCamera, std::function<void(VideoState)> stateUpdated) :
+VideoCapturerInterfaceImpl::VideoCapturerInterfaceImpl(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, std::string deviceId, std::function<void(VideoState)> stateUpdated) :
     _source(source) {
     _implReference = [[VideoCapturerInterfaceImplHolder alloc] init];
     VideoCapturerInterfaceImplHolder *implReference = _implReference;
     dispatch_async(dispatch_get_main_queue(), ^{
-        VideoCapturerInterfaceImplReference *value = [[VideoCapturerInterfaceImplReference alloc] initWithSource:source useFrontCamera:useFrontCamera isActiveUpdated:^(bool isActive) {
+        VideoCapturerInterfaceImplReference *value = [[VideoCapturerInterfaceImplReference alloc] initWithSource:source deviceId:deviceId isActiveUpdated:^(bool isActive) {
             stateUpdated(isActive ? VideoState::Active : VideoState::Paused);
         }];
         if (value != nil) {

@@ -23,6 +23,9 @@ public:
 	void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture) override;
 	void setNetworkType(NetworkType networkType) override;
 	void setMuteMicrophone(bool muteMicrophone) override;
+	bool supportsVideo() override {
+		return true;
+	}
 	void setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) override;
 	void setAudioOutputGainControlEnabled(bool enabled) override;
 	void setEchoCancellationStrength(int strength) override;
