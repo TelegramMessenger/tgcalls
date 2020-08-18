@@ -83,7 +83,7 @@
 #else
         NSArray<AVCaptureDevice *> *devices = [VideoCameraCapturer captureDevices];
         for (int i = 0; i < devices.count; i++) {
-            if ([_videoCapturer deviceIsCaptureCompitable:devices[i]]) {
+            if (devices[i].isConnected && !devices[i].isSuspended) {
                 selectedCamera = devices[i];
                 break;
             }
