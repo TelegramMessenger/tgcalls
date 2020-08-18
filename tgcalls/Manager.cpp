@@ -40,6 +40,7 @@ _signaling(
 	[=](int delayMs, int cause) { sendSignalingAsync(delayMs, cause); }),
 _enableP2P(descriptor.config.enableP2P),
 _rtcServers(std::move(descriptor.rtcServers)),
+_mediaDevicesConfig(std::move(descriptor.mediaDevicesConfig)),
 _videoCapture(std::move(descriptor.videoCapture)),
 _stateUpdated(std::move(descriptor.stateUpdated)),
 _remoteMediaStateUpdated(std::move(descriptor.remoteMediaStateUpdated)),
@@ -152,10 +153,11 @@ void Manager::start() {
 			});
 	}));
 	bool isOutgoing = _encryptionKey.isOutgoing;
-	_mediaManager.reset(new ThreadLocalObject<MediaManager>(getMediaThread(), [weak, isOutgoing, thread, sendSignalingMessage, videoCapture = _videoCapture, localPreferredVideoAspectRatio = _localPreferredVideoAspectRatio, enableHighBitrateVideo = _enableHighBitrateVideo, signalBarsUpdated = _signalBarsUpdated]() {
+	_mediaManager.reset(new ThreadLocalObject<MediaManager>(getMediaThread(), [weak, isOutgoing, thread, sendSignalingMessage, videoCapture = _videoCapture, mediaDevicesConfig = _mediaDevicesConfig, localPreferredVideoAspectRatio = _localPreferredVideoAspectRatio, enableHighBitrateVideo = _enableHighBitrateVideo, signalBarsUpdated = _signalBarsUpdated]() {
 		return new MediaManager(
 			getMediaThread(),
 			isOutgoing,
+			mediaDevicesConfig,
 			videoCapture,
 			sendSignalingMessage,
 			[=](Message &&message) {
@@ -247,6 +249,30 @@ void Manager::setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<web
 
 void Manager::setIsLowBatteryLevel(bool isLowBatteryLevel) {
     _sendTransportMessage({ RemoteBatteryLevelIsLowMessage{ isLowBatteryLevel } });
+}
+
+void Manager::setAudioInputDevice(std::string id) {
+	_mediaManager->perform(RTC_FROM_HERE, [id](MediaManager *mediaManager) {
+		mediaManager->setAudioInputDevice(id);
+	});
+}
+
+void Manager::setAudioOutputDevice(std::string id) {
+	_mediaManager->perform(RTC_FROM_HERE, [id](MediaManager *mediaManager) {
+		mediaManager->setAudioOutputDevice(id);
+	});
+}
+
+void Manager::setInputVolume(float level) {
+	_mediaManager->perform(RTC_FROM_HERE, [level](MediaManager *mediaManager) {
+		mediaManager->setInputVolume(level);
+	});
+}
+
+void Manager::setOutputVolume(float level) {
+	_mediaManager->perform(RTC_FROM_HERE, [level](MediaManager *mediaManager) {
+		mediaManager->setOutputVolume(level);
+	});
 }
 
 } // namespace tgcalls

@@ -143,6 +143,13 @@ struct FinalState {
 	bool isRatingSuggested = false;
 };
 
+struct MediaDevicesConfig {
+	std::string audioInputId;
+	std::string audioOutputId;
+	float inputVolume = 1.f;
+	float outputVolume = 1.f;
+};
+
 class Instance {
 protected:
 	Instance() = default;
@@ -162,7 +169,7 @@ public:
 	virtual void setInputVolume(float level) = 0;
 	virtual void setOutputVolume(float level) = 0;
 	virtual void setAudioOutputDuckingEnabled(bool enabled) = 0;
-    
+
     virtual void setIsLowBatteryLevel(bool isLowBatteryLevel) = 0;
 
 	virtual std::string getLastError() = 0;
@@ -189,6 +196,7 @@ struct Descriptor {
 	std::vector<RtcServer> rtcServers;
 	NetworkType initialNetworkType = NetworkType();
 	EncryptionKey encryptionKey;
+	MediaDevicesConfig mediaDevicesConfig;
 	std::shared_ptr<VideoCaptureInterface> videoCapture;
 	std::function<void(State)> stateUpdated;
 	std::function<void(int)> signalBarsUpdated;

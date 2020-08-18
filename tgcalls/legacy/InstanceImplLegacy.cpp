@@ -151,6 +151,11 @@ onSignalBarsUpdated_(std::move(descriptor.signalBarsUpdated)) {
 	controller_->Start();
 
 	controller_->Connect();
+
+	controller_->SetCurrentAudioInput(descriptor.mediaDevicesConfig.audioInputId);
+	controller_->SetCurrentAudioOutput(descriptor.mediaDevicesConfig.audioOutputId);
+	controller_->SetInputVolume(descriptor.mediaDevicesConfig.inputVolume);
+	controller_->SetOutputVolume(descriptor.mediaDevicesConfig.outputVolume);
 }
 
 InstanceImplLegacy::~InstanceImplLegacy() {

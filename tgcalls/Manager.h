@@ -22,7 +22,12 @@ public:
     void setMuteOutgoingAudio(bool mute);
 	void setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
     void setIsLowBatteryLevel(bool isLowBatteryLevel);
-    
+
+	void setAudioInputDevice(std::string id);
+	void setAudioOutputDevice(std::string id);
+	void setInputVolume(float level);
+	void setOutputVolume(float level);
+
 private:
 	void sendSignalingAsync(int delayMs, int cause);
 	void receiveMessage(DecryptedMessage &&message);
@@ -32,6 +37,7 @@ private:
 	EncryptedConnection _signaling;
 	bool _enableP2P = false;
 	std::vector<RtcServer> _rtcServers;
+	MediaDevicesConfig _mediaDevicesConfig;
 	std::shared_ptr<VideoCaptureInterface> _videoCapture;
 	std::function<void(State)> _stateUpdated;
 	std::function<void(AudioState, VideoState)> _remoteMediaStateUpdated;
