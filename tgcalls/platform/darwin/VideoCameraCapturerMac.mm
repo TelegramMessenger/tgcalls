@@ -297,9 +297,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 
 - (void)setPreferredCaptureAspectRatio:(float)aspectRatio {
 	dispatch_async(self.frameQueue, ^{
-        if (_aspectRatio > 0) {
-            _aspectRatio = aspectRatio;
-        }
+        _aspectRatio = aspectRatio;
     });
 }
 
