@@ -69,12 +69,24 @@
         }
 #else
         NSArray<AVCaptureDevice *> *devices = [VideoCameraCapturer captureDevices];
-        for (int i = 0; i < devices.count; i++) {
-            if ([_videoCapturer deviceIsCaptureCompitable:devices[i]]) {
-                selectedCamera = devices[i];
-                break;
-            }
-        }
+        if (!deviceId.empty() && deviceId != "default") {
+			for (int i = 0; i < devices.count; ++i) {
+				if (deviceId == [[devices[i] uniqueID] cStringUsingEncoding:NSUTF8StringEncoding]) {
+					if ([_videoCapturer deviceIsCaptureCompitable:devices[i]]) {
+						selectedCamera = devices[i];
+						break;
+					}
+				}
+			}
+		}
+		if (!selectedCamera) {
+			for (int i = 0; i < devices.count; ++i) {
+				if ([_videoCapturer deviceIsCaptureCompitable:devices[i]]) {
+					selectedCamera = devices[i];
+					break;
+				}
+			}
+		}
 #endif
         //        NSLog(@"%@", selectedCamera);
         if (selectedCamera == nil) {
