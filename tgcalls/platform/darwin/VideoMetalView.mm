@@ -102,7 +102,7 @@ private:
         [self configure];
         
         _currentSize = CGSizeZero;
-        //_rotationOverride = @(RTCVideoRotation_90);
+        _rotationOverride = @(RTCVideoRotation_90);
         
         __weak VideoMetalView *weakSelf = self;
         _sink.reset(new VideoRendererAdapterImpl(^(CGSize size, RTCVideoFrame *videoFrame, RTCVideoRotation rotation) {
@@ -128,7 +128,7 @@ private:
                         mappedValue = 2;
                         break;
                     default:
-                        mappedValue = 0;
+                        mappedValue = 3;
                         break;
                 }
                 [strongSelf setInternalOrientation:mappedValue];

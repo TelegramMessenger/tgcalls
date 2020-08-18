@@ -209,7 +209,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
         _warmupFrameCount = 100;
         
 #if TARGET_OS_IPHONE
-        _rotationLock = true;
+        //_rotationLock = true;
 #endif
         
         if (![self setupCaptureSession:[[AVCaptureSession alloc] init]]) {
