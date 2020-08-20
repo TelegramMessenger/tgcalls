@@ -686,39 +686,41 @@ void MediaManager::setAudioOutputDevice(std::string id) {
 }
 
 void MediaManager::setInputVolume(float level) {
-	auto min = uint32_t();
-	auto max = uint32_t();
-	if (const auto result = _audioDeviceModule->MinMicrophoneVolume(&min)) {
-		RTC_LOG(LS_ERROR) << "setInputVolume(" << level << "): MinMicrophoneVolume failed: " << result << ".";
-		return;
-	} else if (const auto result = _audioDeviceModule->MaxMicrophoneVolume(&max)) {
-		RTC_LOG(LS_ERROR) << "setInputVolume(" << level << "): MaxMicrophoneVolume failed: " << result << ".";
-		return;
-	}
-	const auto volume = min + uint32_t(std::round((max - min) * std::min(std::max(level, 0.f), 1.f)));
-	if (const auto result = _audioDeviceModule->SetMicrophoneVolume(volume)) {
-		RTC_LOG(LS_ERROR) << "setInputVolume(" << level << "): SetMicrophoneVolume(" << volume << ") failed: " << result << ".";
-	} else {
-		RTC_LOG(LS_INFO) << "setInputVolume(" << level << ") volume " << volume << " success.";
-	}
+	// This is not what we want, it changes OS volume on macOS.
+//	auto min = uint32_t();
+//	auto max = uint32_t();
+//	if (const auto result = _audioDeviceModule->MinMicrophoneVolume(&min)) {
+//		RTC_LOG(LS_ERROR) << "setInputVolume(" << level << "): MinMicrophoneVolume failed: " << result << ".";
+//		return;
+//	} else if (const auto result = _audioDeviceModule->MaxMicrophoneVolume(&max)) {
+//		RTC_LOG(LS_ERROR) << "setInputVolume(" << level << "): MaxMicrophoneVolume failed: " << result << ".";
+//		return;
+//	}
+//	const auto volume = min + uint32_t(std::round((max - min) * std::min(std::max(level, 0.f), 1.f)));
+//	if (const auto result = _audioDeviceModule->SetMicrophoneVolume(volume)) {
+//		RTC_LOG(LS_ERROR) << "setInputVolume(" << level << "): SetMicrophoneVolume(" << volume << ") failed: " << result << ".";
+//	} else {
+//		RTC_LOG(LS_INFO) << "setInputVolume(" << level << ") volume " << volume << " success.";
+//	}
 }
 
 void MediaManager::setOutputVolume(float level) {
-	auto min = uint32_t();
-	auto max = uint32_t();
-	if (const auto result = _audioDeviceModule->MinSpeakerVolume(&min)) {
-		RTC_LOG(LS_ERROR) << "setOutputVolume(" << level << "): MinSpeakerVolume failed: " << result << ".";
-		return;
-	} else if (const auto result = _audioDeviceModule->MaxSpeakerVolume(&max)) {
-		RTC_LOG(LS_ERROR) << "setOutputVolume(" << level << "): MaxSpeakerVolume failed: " << result << ".";
-		return;
-	}
-	const auto volume = min + uint32_t(std::round((max - min) * std::min(std::max(level, 0.f), 1.f)));
-	if (const auto result = _audioDeviceModule->SetSpeakerVolume(volume)) {
-		RTC_LOG(LS_ERROR) << "setOutputVolume(" << level << "): SetSpeakerVolume(" << volume << ") failed: " << result << ".";
-	} else {
-		RTC_LOG(LS_INFO) << "setOutputVolume(" << level << ") volume " << volume << " success.";
-	}
+	// This is not what we want, it changes OS volume on macOS.
+//	auto min = uint32_t();
+//	auto max = uint32_t();
+//	if (const auto result = _audioDeviceModule->MinSpeakerVolume(&min)) {
+//		RTC_LOG(LS_ERROR) << "setOutputVolume(" << level << "): MinSpeakerVolume failed: " << result << ".";
+//		return;
+//	} else if (const auto result = _audioDeviceModule->MaxSpeakerVolume(&max)) {
+//		RTC_LOG(LS_ERROR) << "setOutputVolume(" << level << "): MaxSpeakerVolume failed: " << result << ".";
+//		return;
+//	}
+//	const auto volume = min + uint32_t(std::round((max - min) * std::min(std::max(level, 0.f), 1.f)));
+//	if (const auto result = _audioDeviceModule->SetSpeakerVolume(volume)) {
+//		RTC_LOG(LS_ERROR) << "setOutputVolume(" << level << "): SetSpeakerVolume(" << volume << ") failed: " << result << ".";
+//	} else {
+//		RTC_LOG(LS_INFO) << "setOutputVolume(" << level << ") volume " << volume << " success.";
+//	}
 }
 
 MediaManager::NetworkInterfaceImpl::NetworkInterfaceImpl(MediaManager *mediaManager, bool isVideo) :
