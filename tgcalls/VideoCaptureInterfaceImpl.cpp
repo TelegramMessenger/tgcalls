@@ -11,13 +11,7 @@ VideoCaptureInterfaceObject::VideoCaptureInterfaceObject(std::string deviceId, s
 : _videoSource(PlatformInterface::SharedInstance()->makeVideoSource(Manager::getMediaThread(), MediaManager::getWorkerThread())) {
 	_platformContext = platformContext;
 	//this should outlive the capturer
-	if (_videoSource) {
-		_videoCapturer = PlatformInterface::SharedInstance()->makeVideoCapturer(_videoSource, deviceId, [this](VideoState state) {
-			if (this->_stateUpdated) {
-				this->_stateUpdated(state);
-			}
-		}, platformContext);
-	}
+	switchToDevice(deviceId);
 }
 
 VideoCaptureInterfaceObject::~VideoCaptureInterfaceObject() {
@@ -43,6 +37,9 @@ void VideoCaptureInterfaceObject::switchToDevice(std::string deviceId) {
 		}, _platformContext);
 	}
 	if (_videoCapturer) {
+		if (_preferredAspectRatio > 0) {
+			_videoCapturer->setPreferredCaptureAspectRatio(_preferredAspectRatio);
+		}
 		if (_currentUncroppedSink) {
 			_videoCapturer->setUncroppedOutput(_currentUncroppedSink);
 		}
@@ -60,6 +57,7 @@ void VideoCaptureInterfaceObject::setState(VideoState state) {
 }
 
 void VideoCaptureInterfaceObject::setPreferredAspectRatio(float aspectRatio) {
+	_preferredAspectRatio = aspectRatio;
 	if (_videoCapturer) {
 		_videoCapturer->setPreferredCaptureAspectRatio(aspectRatio);
 	}

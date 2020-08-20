@@ -30,6 +30,7 @@ private:
 	std::unique_ptr<VideoCapturerInterface> _videoCapturer;
 	std::function<void(VideoState)> _stateUpdated;
 	VideoState _state = VideoState::Active;
+	float _preferredAspectRatio = 0.;
 };
 
 class VideoCaptureInterfaceImpl : public VideoCaptureInterface {
