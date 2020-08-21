@@ -36,6 +36,7 @@ private:
 	EncryptionKey _encryptionKey;
 	EncryptedConnection _signaling;
 	bool _enableP2P = false;
+    bool _enableStunMarking = false;
     ProtocolVersion _protocolVersion = ProtocolVersion::V0;
 	std::vector<RtcServer> _rtcServers;
 	std::shared_ptr<VideoCaptureInterface> _videoCapture;

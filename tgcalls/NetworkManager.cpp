@@ -23,10 +23,29 @@ extern "C" {
 
 namespace tgcalls {
 
+class TurnCustomizerImpl : public webrtc::TurnCustomizer {
+public:
+    TurnCustomizerImpl() {
+    }
+    
+    virtual ~TurnCustomizerImpl() {
+    }
+    
+    void MaybeModifyOutgoingStunMessage(cricket::PortInterface* port,
+                                        cricket::StunMessage* message) override {
+        message->AddAttribute(std::make_unique<cricket::StunByteStringAttribute>(cricket::STUN_ATTR_SOFTWARE, "Telegram "));
+    }
+    
+    bool AllowChannelData(cricket::PortInterface* port, const void *data, size_t size, bool payload) override {
+        return true;
+    }
+};
+
 NetworkManager::NetworkManager(
 	rtc::Thread *thread,
 	EncryptionKey encryptionKey,
 	bool enableP2P,
+    bool enableStunMarking,
 	std::vector<RtcServer> const &rtcServers,
 	std::function<void(const NetworkManager::State &)> stateUpdated,
 	std::function<void(DecryptedMessage &&)> transportMessageReceived,
@@ -34,6 +53,7 @@ NetworkManager::NetworkManager(
 	std::function<void(int delayMs, int cause)> sendTransportServiceAsync) :
 _thread(thread),
 _enableP2P(enableP2P),
+_enableStunMarking(enableStunMarking),
 _rtcServers(rtcServers),
 _transport(
 	EncryptedConnection::Type::Transport,
@@ -63,7 +83,12 @@ void NetworkManager::start() {
     _socketFactory.reset(new rtc::BasicPacketSocketFactory(_thread));
 
     _networkManager = std::make_unique<rtc::BasicNetworkManager>();
-    _portAllocator.reset(new cricket::BasicPortAllocator(_networkManager.get(), _socketFactory.get(), nullptr, nullptr));
+    
+    if (_enableStunMarking) {
+        _turnCustomizer.reset(new TurnCustomizerImpl());
+    }
+    
+    _portAllocator.reset(new cricket::BasicPortAllocator(_networkManager.get(), _socketFactory.get(), _turnCustomizer.get(), nullptr));
 
     uint32_t flags = cricket::PORTALLOCATOR_DISABLE_TCP;
     if (!_enableP2P) {
@@ -90,7 +115,7 @@ void NetworkManager::start() {
         }
     }
 
-    _portAllocator->SetConfiguration(stunServers, turnServers, 2, webrtc::NO_PRUNE);
+    _portAllocator->SetConfiguration(stunServers, turnServers, 2, webrtc::NO_PRUNE, _turnCustomizer.get());
 
     _asyncResolverFactory = std::make_unique<webrtc::BasicAsyncResolverFactory>();
     _transportChannel.reset(new cricket::P2PTransportChannel("transport", 0, _portAllocator.get(), _asyncResolverFactory.get(), nullptr));

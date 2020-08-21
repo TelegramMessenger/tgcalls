@@ -30,6 +30,8 @@ class VideoMediaChannel;
 
 namespace tgcalls {
 
+class VideoSinkInterfaceProxyImpl;
+
 class MediaManager : public sigslot::has_slots<>, public std::enable_shared_from_this<MediaManager> {
 public:
 	static rtc::Thread *getWorkerThread();
@@ -37,6 +39,7 @@ public:
 	MediaManager(
 		rtc::Thread *thread,
 		bool isOutgoing,
+        ProtocolVersion protocolVersion,
 		std::shared_ptr<VideoCaptureInterface> videoCapture,
 		std::function<void(Message &&)> sendSignalingMessage,
 		std::function<void(Message &&)> sendTransportMessage,
@@ -112,6 +115,8 @@ private:
 	SSRC _ssrcAudio;
 	SSRC _ssrcVideo;
 	bool _enableFlexfec = true;
+    
+    ProtocolVersion _protocolVersion;
 
 	bool _isConnected = false;
 	bool _readyToReceiveVideo = false;
@@ -131,7 +136,7 @@ private:
 	std::unique_ptr<cricket::VideoMediaChannel> _videoChannel;
 	std::unique_ptr<webrtc::VideoBitrateAllocatorFactory> _videoBitrateAllocatorFactory;
 	std::shared_ptr<VideoCaptureInterface> _videoCapture;
-	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _currentIncomingVideoSink;
+    std::shared_ptr<VideoSinkInterfaceProxyImpl> _incomingVideoSinkProxy;
 
     float _localPreferredVideoAspectRatio = 0.0f;
     float _preferredAspectRatio = 0.0f;

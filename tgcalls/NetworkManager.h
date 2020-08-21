@@ -28,6 +28,7 @@ class IceTransportInternal;
 
 namespace webrtc {
 class BasicAsyncResolverFactory;
+class TurnCustomizer;
 } // namespace webrtc
 
 namespace tgcalls {
@@ -50,6 +51,7 @@ public:
 		rtc::Thread *thread,
 		EncryptionKey encryptionKey,
 		bool enableP2P,
+        bool enableStunMarking,
 		std::vector<RtcServer> const &rtcServers,
 		std::function<void(const State &)> stateUpdated,
 		std::function<void(DecryptedMessage &&)> transportMessageReceived,
@@ -76,6 +78,7 @@ private:
 
 	rtc::Thread *_thread = nullptr;
     bool _enableP2P = false;
+    bool _enableStunMarking = false;
     std::vector<RtcServer> _rtcServers;
 	EncryptedConnection _transport;
 	bool _isOutgoing = false;
@@ -85,6 +88,7 @@ private:
 
 	std::unique_ptr<rtc::BasicPacketSocketFactory> _socketFactory;
 	std::unique_ptr<rtc::BasicNetworkManager> _networkManager;
+    std::unique_ptr<webrtc::TurnCustomizer> _turnCustomizer;
 	std::unique_ptr<cricket::BasicPortAllocator> _portAllocator;
 	std::unique_ptr<webrtc::BasicAsyncResolverFactory> _asyncResolverFactory;
 	std::unique_ptr<cricket::P2PTransportChannel> _transportChannel;

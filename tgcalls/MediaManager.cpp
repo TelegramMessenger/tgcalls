@@ -45,6 +45,43 @@ VideoCaptureInterfaceObject *GetVideoCaptureAssumingSameThread(VideoCaptureInter
 
 } // namespace
 
+class VideoSinkInterfaceProxyImpl : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
+public:
+    VideoSinkInterfaceProxyImpl(bool rewriteRotation) :
+    _rewriteRotation(rewriteRotation) {
+    }
+    
+    virtual ~VideoSinkInterfaceProxyImpl() {
+    }
+    
+    virtual void OnFrame(const webrtc::VideoFrame& frame) override {
+        if (_impl) {
+            if (_rewriteRotation) {
+                webrtc::VideoFrame updatedFrame = frame;
+                //updatedFrame.set_rotation(webrtc::VideoRotation::kVideoRotation_90);
+                _impl->OnFrame(updatedFrame);
+            } else {
+                _impl->OnFrame(frame);
+            }
+        }
+    }
+    
+    virtual void OnDiscardedFrame() override {
+        if (_impl) {
+            _impl->OnDiscardedFrame();
+        }
+    }
+    
+    void setSink(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> impl) {
+        _impl = impl;
+    }
+    
+private:
+    bool _rewriteRotation = false;
+    std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _impl;
+    
+};
+
 rtc::Thread *MediaManager::getWorkerThread() {
 	static rtc::Thread *value = makeWorkerThread();
 	return value;
@@ -53,6 +90,7 @@ rtc::Thread *MediaManager::getWorkerThread() {
 MediaManager::MediaManager(
 	rtc::Thread *thread,
 	bool isOutgoing,
+    ProtocolVersion protocolVersion,
 	std::shared_ptr<VideoCaptureInterface> videoCapture,
 	std::function<void(Message &&)> sendSignalingMessage,
 	std::function<void(Message &&)> sendTransportMessage,
@@ -66,10 +104,24 @@ _taskQueueFactory(webrtc::CreateDefaultTaskQueueFactory()),
 _sendSignalingMessage(std::move(sendSignalingMessage)),
 _sendTransportMessage(std::move(sendTransportMessage)),
 _signalBarsUpdated(std::move(signalBarsUpdated)),
+_protocolVersion(protocolVersion),
 _outgoingVideoState(videoCapture ? VideoState::Active : VideoState::Inactive),
 _videoCapture(std::move(videoCapture)),
 _localPreferredVideoAspectRatio(localPreferredVideoAspectRatio),
 _enableHighBitrateVideo(enableHighBitrateVideo) {
+    bool rewriteFrameRotation = false;
+    switch (_protocolVersion) {
+        case ProtocolVersion::V0:
+            rewriteFrameRotation = true;
+            break;
+        case ProtocolVersion::V1:
+            rewriteFrameRotation = false;
+            break;
+        default:
+            break;
+    }
+    _incomingVideoSinkProxy.reset(new VideoSinkInterfaceProxyImpl(rewriteFrameRotation));
+    
 	_ssrcAudio.incoming = isOutgoing ? ssrcAudioIncoming : ssrcAudioOutgoing;
 	_ssrcAudio.outgoing = (!isOutgoing) ? ssrcAudioIncoming : ssrcAudioOutgoing;
 	_ssrcAudio.fecIncoming = isOutgoing ? ssrcAudioFecIncoming : ssrcAudioFecOutgoing;
@@ -401,9 +453,15 @@ void MediaManager::configureSendingVideoIfNeeded() {
     }
 
     videoSendParameters.extensions.emplace_back(webrtc::RtpExtension::kTransportSequenceNumberUri, 2);
-    videoSendParameters.extensions.emplace_back(webrtc::RtpExtension::kVideoRotationUri, 3);
-    videoSendParameters.extensions.emplace_back(
-        webrtc::RtpExtension::kTimestampOffsetUri, 4);
+    switch (_protocolVersion) {
+        case ProtocolVersion::V1:
+            videoSendParameters.extensions.emplace_back(webrtc::RtpExtension::kVideoRotationUri, 3);
+            videoSendParameters.extensions.emplace_back(
+                webrtc::RtpExtension::kTimestampOffsetUri, 4);
+            break;
+        default:
+            break;
+    }
     videoSendParameters.rtcp.remote_estimate = true;
     _videoChannel->SetSendParameters(videoSendParameters);
 
@@ -506,9 +564,15 @@ void MediaManager::checkIsReceivingVideoChanged(bool wasReceiving) {
         }
 
         videoRecvParameters.extensions.emplace_back(webrtc::RtpExtension::kTransportSequenceNumberUri, 2);
-        videoRecvParameters.extensions.emplace_back(webrtc::RtpExtension::kVideoRotationUri, 3);
-        videoRecvParameters.extensions.emplace_back(
-            webrtc::RtpExtension::kTimestampOffsetUri, 4);
+        switch (_protocolVersion) {
+            case ProtocolVersion::V1:
+                videoRecvParameters.extensions.emplace_back(webrtc::RtpExtension::kVideoRotationUri, 3);
+                videoRecvParameters.extensions.emplace_back(
+                    webrtc::RtpExtension::kTimestampOffsetUri, 4);
+                break;
+            default:
+                break;
+        }
         videoRecvParameters.rtcp.reduced_size = true;
         videoRecvParameters.rtcp.remote_estimate = true;
 
@@ -524,9 +588,7 @@ void MediaManager::checkIsReceivingVideoChanged(bool wasReceiving) {
         _videoChannel->SetRecvParameters(videoRecvParameters);
         _videoChannel->AddRecvStream(videoRecvStreamParams);
         _readyToReceiveVideo = true;
-        if (_currentIncomingVideoSink) {
-            _videoChannel->SetSink(_ssrcVideo.incoming, _currentIncomingVideoSink.get());
-        }
+        _videoChannel->SetSink(_ssrcVideo.incoming, _incomingVideoSinkProxy.get());
     }
 }
 
@@ -552,8 +614,7 @@ void MediaManager::setOutgoingVideoState(VideoState state) {
 }
 
 void MediaManager::setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
-	_currentIncomingVideoSink = sink;
-	_videoChannel->SetSink(_ssrcVideo.incoming, _currentIncomingVideoSink.get());
+    _incomingVideoSinkProxy->setSink(sink);
 }
 
 static bool IsRtcp(const uint8_t* packet, size_t length) {

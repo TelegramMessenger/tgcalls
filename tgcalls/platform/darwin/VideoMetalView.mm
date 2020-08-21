@@ -312,6 +312,7 @@ private:
 - (CGSize)drawableSize {
     // Flip width/height if the rotations are not the same.
     CGSize videoFrameSize = _videoFrameSize;
+    
     RTCVideoRotation frameRotation = [self frameRotation];
     
     BOOL useLandscape =

@@ -39,6 +39,7 @@ _signaling(
 	_encryptionKey,
 	[=](int delayMs, int cause) { sendSignalingAsync(delayMs, cause); }),
 _enableP2P(descriptor.config.enableP2P),
+_enableStunMarking(descriptor.config.enableStunMarking),
 _protocolVersion(descriptor.config.protocolVersion),
 _rtcServers(std::move(descriptor.rtcServers)),
 _videoCapture(std::move(descriptor.videoCapture)),
@@ -103,11 +104,12 @@ void Manager::start() {
 			strong->_sendSignalingMessage(std::move(message));
 		});
 	};
-	_networkManager.reset(new ThreadLocalObject<NetworkManager>(getNetworkThread(), [weak, thread, sendSignalingMessage, encryptionKey = _encryptionKey, enableP2P = _enableP2P, rtcServers = _rtcServers] {
+	_networkManager.reset(new ThreadLocalObject<NetworkManager>(getNetworkThread(), [weak, thread, sendSignalingMessage, encryptionKey = _encryptionKey, enableP2P = _enableP2P, enableStunMarking = _enableStunMarking, rtcServers = _rtcServers] {
 		return new NetworkManager(
 			getNetworkThread(),
 			encryptionKey,
 			enableP2P,
+            enableStunMarking,
 			rtcServers,
 			[=](const NetworkManager::State &state) {
 				thread->PostTask(RTC_FROM_HERE, [=] {
@@ -166,10 +168,11 @@ void Manager::start() {
 			});
 	}));
 	bool isOutgoing = _encryptionKey.isOutgoing;
-	_mediaManager.reset(new ThreadLocalObject<MediaManager>(getMediaThread(), [weak, isOutgoing, thread, sendSignalingMessage, videoCapture = _videoCapture, localPreferredVideoAspectRatio = _localPreferredVideoAspectRatio, enableHighBitrateVideo = _enableHighBitrateVideo, signalBarsUpdated = _signalBarsUpdated, preferredCodecs = _preferredCodecs]() {
+	_mediaManager.reset(new ThreadLocalObject<MediaManager>(getMediaThread(), [weak, isOutgoing, protocolVersion = _protocolVersion, thread, sendSignalingMessage, videoCapture = _videoCapture, localPreferredVideoAspectRatio = _localPreferredVideoAspectRatio, enableHighBitrateVideo = _enableHighBitrateVideo, signalBarsUpdated = _signalBarsUpdated, preferredCodecs = _preferredCodecs]() {
 		return new MediaManager(
 			getMediaThread(),
 			isOutgoing,
+            protocolVersion,
 			videoCapture,
 			sendSignalingMessage,
 			[=](Message &&message) {

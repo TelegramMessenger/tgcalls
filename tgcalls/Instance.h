@@ -90,6 +90,7 @@ struct Config {
 	double receiveTimeout = 0.;
 	DataSaving dataSaving = DataSaving::Never;
 	bool enableP2P = false;
+    bool enableStunMarking = false;
 	bool enableAEC = false;
 	bool enableNS = false;
 	bool enableAGC = false;
