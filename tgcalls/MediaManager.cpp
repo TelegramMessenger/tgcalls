@@ -129,6 +129,9 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
     audioOptions.echo_cancellation = true;
     audioOptions.noise_suppression = true;
     audioOptions.audio_jitter_buffer_fast_accelerate = true;
+    
+    std::vector<std::string> streamIds;
+    streamIds.push_back("1");
 
 	_audioChannel.reset(_mediaEngine->voice().CreateMediaChannel(_call.get(), cricket::MediaConfig(), audioOptions, webrtc::CryptoOptions::NoGcm()));
 	_videoChannel.reset(_mediaEngine->video().CreateMediaChannel(_call.get(), cricket::MediaConfig(), cricket::VideoOptions(), webrtc::CryptoOptions::NoGcm(), _videoBitrateAllocatorFactory.get()));
@@ -175,7 +178,9 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
 	audioRecvParameters.rtcp.remote_estimate = true;
 
 	_audioChannel->SetRecvParameters(audioRecvParameters);
-	_audioChannel->AddRecvStream(cricket::StreamParams::CreateLegacy(_ssrcAudio.incoming));
+    cricket::StreamParams audioRecvStreamParams = cricket::StreamParams::CreateLegacy(_ssrcAudio.incoming);
+    audioRecvStreamParams.set_stream_ids(streamIds);
+    _audioChannel->AddRecvStream(audioRecvStreamParams);
 	_audioChannel->SetPlayout(true);
 
 	_videoChannel->SetInterface(_videoNetworkInterface.get(), webrtc::MediaTransportConfig());
@@ -519,6 +524,9 @@ void MediaManager::checkIsReceivingVideoChanged(bool wasReceiving) {
         videoRecvStreamParams.ssrcs = {_ssrcVideo.incoming};
         videoRecvStreamParams.ssrc_groups.push_back(videoRecvSsrcGroup);
         videoRecvStreamParams.cname = "cname";
+        std::vector<std::string> streamIds;
+        streamIds.push_back("1");
+        videoRecvStreamParams.set_stream_ids(streamIds);
 
         _videoChannel->SetRecvParameters(videoRecvParameters);
         _videoChannel->AddRecvStream(videoRecvStreamParams);
