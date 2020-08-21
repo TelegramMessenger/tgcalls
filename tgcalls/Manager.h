@@ -6,6 +6,7 @@
 #include "NetworkManager.h"
 #include "MediaManager.h"
 #include "Instance.h"
+#include "Stats.h"
 
 namespace tgcalls {
 
@@ -19,11 +20,12 @@ public:
 	void start();
 	void receiveSignalingData(const std::vector<uint8_t> &data);
 	void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture);
+    void setRequestedVideoAspect(float aspect);
     void setMuteOutgoingAudio(bool mute);
 	void setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
     void setIsLowBatteryLevel(bool isLowBatteryLevel);
     void setIsLocalNetworkLowCost(bool isLocalNetworkLowCost);
-    void getNetworkStats(std::function<void(TrafficStats)> completion);
+    void getNetworkStats(std::function<void(TrafficStats, CallStats)> completion);
     
 private:
 	void sendSignalingAsync(int delayMs, int cause);
@@ -36,7 +38,9 @@ private:
 	EncryptionKey _encryptionKey;
 	EncryptedConnection _signaling;
 	bool _enableP2P = false;
+    bool _enableStunMarking = false;
     ProtocolVersion _protocolVersion = ProtocolVersion::V0;
+    std::string _statsLogPath;
 	std::vector<RtcServer> _rtcServers;
 	std::shared_ptr<VideoCaptureInterface> _videoCapture;
 	std::function<void(State)> _stateUpdated;
@@ -51,7 +55,6 @@ private:
 	std::unique_ptr<ThreadLocalObject<MediaManager>> _mediaManager;
 	State _state = State::Reconnecting;
     bool _didConnectOnce = false;
-    float _localPreferredVideoAspectRatio = 0.0f;
     bool _enableHighBitrateVideo = false;
     std::vector<std::string> _preferredCodecs;
     bool _localNetworkIsLowCost = false;

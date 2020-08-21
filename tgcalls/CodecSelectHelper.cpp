@@ -27,9 +27,9 @@ int FormatPriority(const VideoFormat &format, const std::vector<std::string> &pr
 	static const auto kCodecs = {
 		std::string(cricket::kAv1CodecName),
 		std::string(cricket::kH265CodecName),
-		std::string(cricket::kVp9CodecName),
 		std::string(cricket::kH264CodecName),
 		std::string(cricket::kVp8CodecName),
+        std::string(cricket::kVp9CodecName),
 	};
 	static const auto kSupported = [] {
 		const auto platform = PlatformInterface::SharedInstance();

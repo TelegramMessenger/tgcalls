@@ -26,6 +26,8 @@ public:
 	rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _videoSource;
 
 private:
+    void updateAspectRateAdaptation();
+    
 	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _currentUncroppedSink;
 	std::shared_ptr<PlatformContext> _platformContext;
     std::pair<int, int> _videoCapturerResolution;
@@ -33,6 +35,8 @@ private:
 	std::function<void(VideoState)> _stateUpdated;
 	bool _useFrontCamera = true;
 	VideoState _state = VideoState::Active;
+    float _preferredAspectRatio = 0.0f;
+    bool _shouldBeAdaptedToReceiverAspectRate = true;
 };
 
 class VideoCaptureInterfaceImpl : public VideoCaptureInterface {

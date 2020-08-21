@@ -6,6 +6,7 @@
 #include "EncryptedConnection.h"
 #include "Instance.h"
 #include "Message.h"
+#include "Stats.h"
 
 #include "rtc_base/copy_on_write_buffer.h"
 #include "api/candidate.h"
@@ -28,6 +29,7 @@ class IceTransportInternal;
 
 namespace webrtc {
 class BasicAsyncResolverFactory;
+class TurnCustomizer;
 } // namespace webrtc
 
 namespace tgcalls {
@@ -50,6 +52,7 @@ public:
 		rtc::Thread *thread,
 		EncryptionKey encryptionKey,
 		bool enableP2P,
+        bool enableStunMarking,
 		std::vector<RtcServer> const &rtcServers,
 		std::function<void(const State &)> stateUpdated,
 		std::function<void(DecryptedMessage &&)> transportMessageReceived,
@@ -63,6 +66,8 @@ public:
 	void sendTransportService(int cause);
     void setIsLocalNetworkLowCost(bool isLocalNetworkLowCost);
     TrafficStats getNetworkStats();
+    void fillCallStats(CallStats &callStats);
+    void logCurrentNetworkState();
 
 private:
     void checkConnectionTimeout();
@@ -76,6 +81,7 @@ private:
 
 	rtc::Thread *_thread = nullptr;
     bool _enableP2P = false;
+    bool _enableStunMarking = false;
     std::vector<RtcServer> _rtcServers;
 	EncryptedConnection _transport;
 	bool _isOutgoing = false;
@@ -85,6 +91,7 @@ private:
 
 	std::unique_ptr<rtc::BasicPacketSocketFactory> _socketFactory;
 	std::unique_ptr<rtc::BasicNetworkManager> _networkManager;
+    std::unique_ptr<webrtc::TurnCustomizer> _turnCustomizer;
 	std::unique_ptr<cricket::BasicPortAllocator> _portAllocator;
 	std::unique_ptr<webrtc::BasicAsyncResolverFactory> _asyncResolverFactory;
 	std::unique_ptr<cricket::P2PTransportChannel> _transportChannel;
@@ -96,6 +103,9 @@ private:
     int64_t _lastNetworkActivityMs = 0;
     InterfaceTrafficStats _trafficStatsWifi;
     InterfaceTrafficStats _trafficStatsCellular;
+    
+    absl::optional<CallStatsConnectionEndpointType> _currentEndpointType;
+    std::vector<CallStatsNetworkRecord> _networkRecords;
 };
 
 } // namespace tgcalls

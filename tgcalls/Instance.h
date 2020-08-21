@@ -7,6 +7,8 @@
 #include <memory>
 #include <map>
 
+#include "Stats.h"
+
 namespace rtc {
 template <typename VideoFrameT>
 class VideoSinkInterface;
@@ -90,6 +92,7 @@ struct Config {
 	double receiveTimeout = 0.;
 	DataSaving dataSaving = DataSaving::Never;
 	bool enableP2P = false;
+    bool enableStunMarking = false;
 	bool enableAEC = false;
 	bool enableNS = false;
 	bool enableAGC = false;
@@ -97,11 +100,12 @@ struct Config {
 	bool enableVolumeControl = false;
 #ifndef _WIN32
 	std::string logPath;
+    std::string statsLogPath;
 #else
 	std::wstring logPath;
+    std::wstring statsLogPath;
 #endif
 	int maxApiLayer = 0;
-    float preferredAspectRatio;
     bool enableHighBitrateVideo = false;
     std::vector<std::string> preferredVideoCodecs;
     ProtocolVersion protocolVersion = ProtocolVersion::V0;
@@ -147,6 +151,7 @@ struct FinalState {
 	PersistentState persistentState;
 	std::string debugLog;
 	TrafficStats trafficStats;
+    CallStats callStats;
 	bool isRatingSuggested = false;
 };
 
@@ -180,6 +185,7 @@ public:
 
 	virtual void receiveSignalingData(const std::vector<uint8_t> &data) = 0;
 	virtual void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture) = 0;
+    virtual void setRequestedVideoAspect(float aspect) = 0;
 
 	virtual void stop(std::function<void(FinalState)> completion) = 0;
 

@@ -31,6 +31,7 @@
 #import <AVFoundation/AVFoundation.h>
 
 #import "VideoCaptureInterface.h"
+#import "platform/PlatformInterface.h"
 
 @interface VideoCapturerInterfaceImplSourceDescription : NSObject
 
@@ -162,13 +163,13 @@
     return [[VideoCapturerInterfaceImplSourceDescription alloc] initWithIsFrontCamera:useFrontCamera device:selectedCamera format:bestFormat];
 }
 
-- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source sourceDescription:(VideoCapturerInterfaceImplSourceDescription *)sourceDescription isActiveUpdated:(void (^)(bool))isActiveUpdated {
+- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source sourceDescription:(VideoCapturerInterfaceImplSourceDescription *)sourceDescription isActiveUpdated:(void (^)(bool))isActiveUpdated orientationUpdated:(void (^)(bool))orientationUpdated {
     self = [super init];
     if (self != nil) {
         assert([NSThread isMainThread]);
         
     #ifdef WEBRTC_IOS
-        _videoCapturer = [[VideoCameraCapturer alloc] initWithSource:source useFrontCamera:sourceDescription.isFrontCamera isActiveUpdated:isActiveUpdated];
+        _videoCapturer = [[VideoCameraCapturer alloc] initWithSource:source useFrontCamera:sourceDescription.isFrontCamera isActiveUpdated:isActiveUpdated orientationUpdated:orientationUpdated];
     #else
         _videoCapturer = [[VideoCameraCapturer alloc] initWithSource:source isActiveUpdated:isActiveUpdated];
     #endif
@@ -204,7 +205,7 @@
 
 namespace tgcalls {
 
-VideoCapturerInterfaceImpl::VideoCapturerInterfaceImpl(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, bool useFrontCamera, std::function<void(VideoState)> stateUpdated, std::pair<int, int> &outResolution) :
+VideoCapturerInterfaceImpl::VideoCapturerInterfaceImpl(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, bool useFrontCamera, std::function<void(VideoState)> stateUpdated, std::function<void(PlatformCaptureInfo)> captureInfoUpdated, std::pair<int, int> &outResolution) :
     _source(source) {
     VideoCapturerInterfaceImplSourceDescription *sourceDescription = [VideoCapturerInterfaceImplReference selectCapturerDescription:useFrontCamera];
         
@@ -222,6 +223,10 @@ VideoCapturerInterfaceImpl::VideoCapturerInterfaceImpl(rtc::scoped_refptr<webrtc
     dispatch_async(dispatch_get_main_queue(), ^{
         VideoCapturerInterfaceImplReference *value = [[VideoCapturerInterfaceImplReference alloc] initWithSource:source sourceDescription:sourceDescription isActiveUpdated:^(bool isActive) {
             stateUpdated(isActive ? VideoState::Active : VideoState::Paused);
+        } orientationUpdated:^(bool isLandscape) {
+            PlatformCaptureInfo info;
+            info.shouldBeAdaptedToReceiverAspectRate = !isLandscape;
+            captureInfoUpdated(info);
         }];
         if (value != nil) {
             implReference.reference = (void *)CFBridgingRetain(value);

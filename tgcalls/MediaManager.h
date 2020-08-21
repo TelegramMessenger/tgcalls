@@ -10,6 +10,7 @@
 #include "Instance.h"
 #include "Message.h"
 #include "VideoCaptureInterface.h"
+#include "Stats.h"
 
 #include <functional>
 #include <memory>
@@ -30,6 +31,8 @@ class VideoMediaChannel;
 
 namespace tgcalls {
 
+class VideoSinkInterfaceProxyImpl;
+
 class MediaManager : public sigslot::has_slots<>, public std::enable_shared_from_this<MediaManager> {
 public:
 	static rtc::Thread *getWorkerThread();
@@ -37,11 +40,11 @@ public:
 	MediaManager(
 		rtc::Thread *thread,
 		bool isOutgoing,
+        ProtocolVersion protocolVersion,
 		std::shared_ptr<VideoCaptureInterface> videoCapture,
 		std::function<void(Message &&)> sendSignalingMessage,
 		std::function<void(Message &&)> sendTransportMessage,
         std::function<void(int)> signalBarsUpdated,
-        float localPreferredVideoAspectRatio,
         bool enableHighBitrateVideo,
         std::vector<std::string> preferredCodecs);
 	~MediaManager();
@@ -50,11 +53,13 @@ public:
 	void setIsConnected(bool isConnected);
 	void notifyPacketSent(const rtc::SentPacket &sentPacket);
 	void setSendVideo(std::shared_ptr<VideoCaptureInterface> videoCapture);
+    void setRequestedVideoAspect(float aspect);
 	void setMuteOutgoingAudio(bool mute);
 	void setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
 	void receiveMessage(DecryptedMessage &&message);
     void remoteVideoStateUpdated(VideoState videoState);
     void setIsCurrentNetworkLowCost(bool isCurrentNetworkLowCost);
+    void fillCallStats(CallStats &callStats);
 
 private:
 	struct SSRC {
@@ -112,8 +117,11 @@ private:
 	SSRC _ssrcAudio;
 	SSRC _ssrcVideo;
 	bool _enableFlexfec = true;
+    
+    ProtocolVersion _protocolVersion;
 
 	bool _isConnected = false;
+    bool _didConnectOnce = false;
 	bool _readyToReceiveVideo = false;
     bool _didConfigureVideo = false;
 	AudioState _outgoingAudioState = AudioState::Active;
@@ -131,7 +139,7 @@ private:
 	std::unique_ptr<cricket::VideoMediaChannel> _videoChannel;
 	std::unique_ptr<webrtc::VideoBitrateAllocatorFactory> _videoBitrateAllocatorFactory;
 	std::shared_ptr<VideoCaptureInterface> _videoCapture;
-	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _currentIncomingVideoSink;
+    std::shared_ptr<VideoSinkInterfaceProxyImpl> _incomingVideoSinkProxy;
 
     float _localPreferredVideoAspectRatio = 0.0f;
     float _preferredAspectRatio = 0.0f;
@@ -140,6 +148,8 @@ private:
 
 	std::unique_ptr<MediaManager::NetworkInterfaceImpl> _audioNetworkInterface;
 	std::unique_ptr<MediaManager::NetworkInterfaceImpl> _videoNetworkInterface;
+    
+    std::vector<CallStatsBitrateRecord> _bitrateRecords;
 };
 
 } // namespace tgcalls

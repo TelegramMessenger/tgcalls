@@ -58,6 +58,12 @@ void InstanceImpl::setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoC
     });
 }
 
+void InstanceImpl::setRequestedVideoAspect(float aspect) {
+    _manager->perform(RTC_FROM_HERE, [aspect](Manager *manager) {
+        manager->setRequestedVideoAspect(aspect);
+    });
+}
+
 void InstanceImpl::setNetworkType(NetworkType networkType) {
     bool isLowCostNetwork = false;
     switch (networkType) {
@@ -142,11 +148,12 @@ void InstanceImpl::stop(std::function<void(FinalState)> completion) {
     std::string debugLog = _logSink->result();
     
     _manager->perform(RTC_FROM_HERE, [completion, debugLog = std::move(debugLog)](Manager *manager) {
-        manager->getNetworkStats([completion, debugLog = std::move(debugLog)](TrafficStats stats) {
+        manager->getNetworkStats([completion, debugLog = std::move(debugLog)](TrafficStats stats, CallStats callStats) {
             FinalState finalState;
             finalState.debugLog = debugLog;
             finalState.isRatingSuggested = false;
             finalState.trafficStats = stats;
+            finalState.callStats = callStats;
             
             completion(finalState);
         });

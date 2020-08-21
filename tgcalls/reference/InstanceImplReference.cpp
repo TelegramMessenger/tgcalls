@@ -239,7 +239,6 @@ public:
     _remoteBatteryLevelIsLowUpdated(descriptor.remoteBatteryLevelIsLowUpdated),
     _remotePrefferedAspectRatioUpdated(descriptor.remotePrefferedAspectRatioUpdated),
 	_videoCapture(descriptor.videoCapture),
-	_localPreferredVideoAspectRatio(descriptor.config.preferredAspectRatio),
 	_state(State::Reconnecting),
 	_videoState(_videoCapture ? VideoState::Active : VideoState::Inactive) {
         assert(getMediaThread()->IsCurrent());
@@ -436,6 +435,9 @@ public:
             videoCaptureImpl->setPreferredAspectRatio(_preferredAspectRatio);
         }
 		beginSendingVideo();
+    }
+    
+    void setRequestedVideoAspect(float aspect) {
     }
 
     void receiveSignalingData(const std::vector<uint8_t> &data) {
@@ -965,6 +967,12 @@ void InstanceImplReference::receiveSignalingData(const std::vector<uint8_t> &dat
 void InstanceImplReference::setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture) {
     internal_->perform(RTC_FROM_HERE, [videoCapture](InstanceImplReferenceInternal *internal) {
         internal->setVideoCapture(videoCapture);
+    });
+}
+
+void InstanceImplReference::setRequestedVideoAspect(float aspect) {
+    internal_->perform(RTC_FROM_HERE, [aspect](InstanceImplReferenceInternal *internal) {
+        internal->setRequestedVideoAspect(aspect);
     });
 }
 
