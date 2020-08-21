@@ -22,6 +22,8 @@
 - (void)setUncroppedSink:(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)sink;
 - (BOOL)deviceIsCaptureCompitable:(AVCaptureDevice *)device;
 
+- (void)enableScreenCast;
+- (void)disableScreenCast;
 @end
 #endif //WEBRTC_MAC
 #endif

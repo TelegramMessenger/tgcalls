@@ -47,6 +47,12 @@ void VideoCaptureInterfaceObject::switchCamera() {
 	}
 }
 
+void VideoCaptureInterfaceObject::enableScreenCast() {
+    _videoCapturer->enableScreenCast();
+}
+void VideoCaptureInterfaceObject::disableScreenCast() {
+    _videoCapturer->disableScreenCast();
+}
 void VideoCaptureInterfaceObject::setState(VideoState state) {
 	if (_state != state) {
 		_state = state;
@@ -85,6 +91,16 @@ void VideoCaptureInterfaceImpl::switchCamera() {
 	_impl.perform(RTC_FROM_HERE, [](VideoCaptureInterfaceObject *impl) {
 		impl->switchCamera();
 	});
+}
+void VideoCaptureInterfaceImpl::enableScreenCast() {
+    _impl.perform(RTC_FROM_HERE, [](VideoCaptureInterfaceObject *impl) {
+        impl->enableScreenCast();
+    });
+}
+void VideoCaptureInterfaceImpl::disableScreenCast() {
+    _impl.perform(RTC_FROM_HERE, [](VideoCaptureInterfaceObject *impl) {
+        impl->disableScreenCast();
+    });
 }
 
 void VideoCaptureInterfaceImpl::setState(VideoState state) {

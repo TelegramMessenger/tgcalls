@@ -167,6 +167,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     
     AVCaptureVideoDataOutput *_videoDataOutput;
     AVCaptureSession *_captureSession;
+    AVCaptureInput *_currentInput;
     
     AVCaptureConnection *_videoConnection;
     AVCaptureDevice *_videoDevice;
@@ -288,16 +289,38 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     [self updateIsActiveValue];
 }
 
+-(void)enableScreenCast {
+    [RTCDispatcher
+     dispatchAsyncOnType:RTCDispatcherTypeCaptureSession
+     block:^{
+         [self->_captureSession removeInput:self->_currentInput];
+         
+         AVCaptureScreenInput *input = [[AVCaptureScreenInput alloc] initWithDisplayID:CGMainDisplayID()];
+         input.minFrameDuration = CMTimeMake(1, (int32_t)30);
+         self->_currentInput = input;
+         
+         [self reconfigureCaptureSessionInput];
+     }];
+}
+-(void)disableScreenCast {
+    [RTCDispatcher
+     dispatchAsyncOnType:RTCDispatcherTypeCaptureSession
+     block:^{
+         [self->_captureSession removeInput:self->_currentInput];
+         self->_currentInput = [AVCaptureDeviceInput deviceInputWithDevice:self->_currentDevice error:nil];
+         [self reconfigureCaptureSessionInput];
+     }];
+}
 
 - (void)setUncroppedSink:(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)sink {
 	dispatch_async(self.frameQueue, ^{
-        _uncroppedSink = sink;
+        self->_uncroppedSink = sink;
     });
 }
 
 - (void)setPreferredCaptureAspectRatio:(float)aspectRatio {
 	dispatch_async(self.frameQueue, ^{
-        _aspectRatio = aspectRatio;
+        self->_aspectRatio = aspectRatio;
     });
 }
 
@@ -320,12 +343,10 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
   [RTCDispatcher
       dispatchAsyncOnType:RTCDispatcherTypeCaptureSession
    block:^{
-      RTCLogInfo("startCaptureWithDevice %@ @ %ld fps", format, (long)fps);
-
-      self->_currentDevice = device;
-
-      NSError *error = nil;
-      if (![self->_currentDevice lockForConfiguration:&error]) {
+       RTCLogInfo("startCaptureWithDevice %@ @ %ld fps", format, (long)fps);
+       NSError *error = nil;
+       self->_currentDevice = device;
+       if (![self->_currentDevice lockForConfiguration:&error]) {
           RTCLogError(@"Failed to lock device %@. Error: %@",
                       self->_currentDevice,
                       error.userInfo);
@@ -334,16 +355,18 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
           }
           self->_willBeRunning = false;
           return;
-      }
-      [self reconfigureCaptureSessionInput];
-      [self updateDeviceCaptureFormat:format fps:fps];
-      [self updateVideoDataOutputPixelFormat:format];
-      [self->_captureSession startRunning];
-      [self->_currentDevice unlockForConfiguration];
-      self->_isRunning = YES;
-      if (completionHandler) {
-          completionHandler(nil);
-      }
+       }
+       [self->_captureSession removeInput:self->_currentInput];
+       self->_currentInput = [AVCaptureDeviceInput deviceInputWithDevice:self->_currentDevice error:&error];
+       [self reconfigureCaptureSessionInput];
+       [self updateDeviceCaptureFormat:format fps:fps];
+       [self updateVideoDataOutputPixelFormat:format];
+       [self->_captureSession startRunning];
+       [self->_currentDevice unlockForConfiguration];
+       self->_isRunning = YES;
+       if (completionHandler) {
+           completionHandler(nil);
+       }
   }];
 }
 
@@ -642,13 +665,19 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     NSAssert([RTCDispatcher isOnQueueForType:RTCDispatcherTypeCaptureSession],
              @"reconfigureCaptureSessionInput must be called on the capture queue.");
     NSError *error = nil;
-    AVCaptureDeviceInput *input =
-    [AVCaptureDeviceInput deviceInputWithDevice:_currentDevice error:&error];
+    
+    //AVCaptureScreenInput *input = [[AVCaptureScreenInput alloc] initWithDisplayID:CGMainDisplayID()];
+    
+
+
+    AVCaptureInput *input = _currentInput;
     if (!input) {
         RTCLogError(@"Failed to create front camera input: %@", error.localizedDescription);
         return;
     }
     [_captureSession beginConfiguration];
+    
+    
     for (AVCaptureDeviceInput *oldInput in [_captureSession.inputs copy]) {
         [_captureSession removeInput:oldInput];
     }

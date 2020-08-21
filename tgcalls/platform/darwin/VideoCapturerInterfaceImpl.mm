@@ -25,6 +25,7 @@
 
 #ifndef WEBRTC_IOS
 #import "VideoCameraCapturerMac.h"
+#import "ScreenCapturer.h"
 #else
 #import "VideoCameraCapturer.h"
 #endif
@@ -34,6 +35,7 @@
 
 @interface VideoCapturerInterfaceImplReference : NSObject {
     VideoCameraCapturer *_videoCapturer;
+    AppScreenCapturer *_screenCapturer;
 }
 
 @end
@@ -47,6 +49,7 @@
     #ifdef WEBRTC_IOS
         _videoCapturer = [[VideoCameraCapturer alloc] initWithSource:source useFrontCamera:useFrontCamera isActiveUpdated:isActiveUpdated];
     #else
+       //_screenCapturer = [[AppScreenCapturer alloc] initWithSource:source];
         _videoCapturer = [[VideoCameraCapturer alloc] initWithSource:source isActiveUpdated:isActiveUpdated];
     #endif
         AVCaptureDevice *selectedCamera = nil;
@@ -74,6 +77,7 @@
                 break;
             }
         }
+
 #endif
         //        NSLog(@"%@", selectedCamera);
         if (selectedCamera == nil) {
@@ -87,7 +91,7 @@
         }];
 
         AVCaptureDeviceFormat *bestFormat = sortedFormats.firstObject;
-        
+
         bool didSelectPreferredFormat = false;
         #ifdef WEBRTC_IOS
         for (AVCaptureDeviceFormat *format in sortedFormats) {
@@ -144,8 +148,15 @@
     [_videoCapturer setIsEnabled:isEnabled];
 }
 
+- (void)enableScreenCast {
+    [_videoCapturer enableScreenCast];
+}
+- (void)disableScreenCast {
+    [_videoCapturer disableScreenCast];
+}
 - (void)setUncroppedSink:(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)sink {
     [_videoCapturer setUncroppedSink:sink];
+    [_screenCapturer setSink:sink];
 }
 
 - (void)setPreferredCaptureAspectRatio:(float)aspectRatio {
@@ -199,6 +210,24 @@ void VideoCapturerInterfaceImpl::setPreferredCaptureAspectRatio(float aspectRati
         if (implReference.reference != nil) {
             VideoCapturerInterfaceImplReference *reference = (__bridge VideoCapturerInterfaceImplReference *)implReference.reference;
             [reference setPreferredCaptureAspectRatio:aspectRatio];
+        }
+    });
+}
+void VideoCapturerInterfaceImpl::enableScreenCast() {
+    VideoCapturerInterfaceImplHolder *implReference = _implReference;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (implReference.reference != nil) {
+            VideoCapturerInterfaceImplReference *reference = (__bridge VideoCapturerInterfaceImplReference *)implReference.reference;
+            [reference enableScreenCast];
+        }
+    });
+}
+void VideoCapturerInterfaceImpl::disableScreenCast() {
+    VideoCapturerInterfaceImplHolder *implReference = _implReference;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (implReference.reference != nil) {
+            VideoCapturerInterfaceImplReference *reference = (__bridge VideoCapturerInterfaceImplReference *)implReference.reference;
+            [reference disableScreenCast];
         }
     });
 }

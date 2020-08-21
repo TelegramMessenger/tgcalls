@@ -21,7 +21,8 @@ public:
     void setPreferredAspectRatio(float aspectRatio);
 	void setOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
 	void setStateUpdated(std::function<void(VideoState)> stateUpdated);
-
+    void enableScreenCast();
+    void disableScreenCast();
 public:
 	rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _videoSource;
 
@@ -43,7 +44,8 @@ public:
 	void setState(VideoState state) override;
     void setPreferredAspectRatio(float aspectRatio) override;
 	void setOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) override;
-
+    void enableScreenCast() override;
+    void disableScreenCast() override;
 	ThreadLocalObject<VideoCaptureInterfaceObject> *object();
 
 private:
