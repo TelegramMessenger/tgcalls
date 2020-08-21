@@ -45,6 +45,7 @@ NetworkManager::NetworkManager(
 	rtc::Thread *thread,
 	EncryptionKey encryptionKey,
 	bool enableP2P,
+    bool enableTCP,
     bool enableStunMarking,
 	std::vector<RtcServer> const &rtcServers,
 	std::function<void(const NetworkManager::State &)> stateUpdated,
@@ -53,6 +54,7 @@ NetworkManager::NetworkManager(
 	std::function<void(int delayMs, int cause)> sendTransportServiceAsync) :
 _thread(thread),
 _enableP2P(enableP2P),
+_enableTCP(enableTCP),
 _enableStunMarking(enableStunMarking),
 _rtcServers(rtcServers),
 _transport(
@@ -90,7 +92,10 @@ void NetworkManager::start() {
     
     _portAllocator.reset(new cricket::BasicPortAllocator(_networkManager.get(), _socketFactory.get(), _turnCustomizer.get(), nullptr));
 
-    uint32_t flags = cricket::PORTALLOCATOR_DISABLE_TCP;
+    uint32_t flags = 0;
+    if (!_enableTCP) {
+        flags |= cricket::PORTALLOCATOR_DISABLE_TCP;
+    }
     if (!_enableP2P) {
         flags |= cricket::PORTALLOCATOR_DISABLE_UDP;
         flags |= cricket::PORTALLOCATOR_DISABLE_STUN;

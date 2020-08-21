@@ -31,6 +31,9 @@ void dumpStatsLog(const std::string path, const CallStats &stats) {
     file.open(path);
     
     file << "{";
+    file << "\"v\":\"" << 1 << "\"";
+    file << ",";
+    
     file << "\"codec\":\"" << stats.outgoingCodec << "\"";
     file << ",";
     
@@ -66,7 +69,6 @@ void dumpStatsLog(const std::string path, const CallStats &stats) {
         addComma = true;
     }
     file << "]";
-    file << ",";
     
     file << "}";
     
@@ -88,6 +90,7 @@ _signaling(
 	_encryptionKey,
 	[=](int delayMs, int cause) { sendSignalingAsync(delayMs, cause); }),
 _enableP2P(descriptor.config.enableP2P),
+_enableTCP(descriptor.config.allowTCP),
 _enableStunMarking(descriptor.config.enableStunMarking),
 _protocolVersion(descriptor.config.protocolVersion),
 _statsLogPath(descriptor.config.statsLogPath),
@@ -153,11 +156,12 @@ void Manager::start() {
 			strong->_sendSignalingMessage(std::move(message));
 		});
 	};
-	_networkManager.reset(new ThreadLocalObject<NetworkManager>(getNetworkThread(), [weak, thread, sendSignalingMessage, encryptionKey = _encryptionKey, enableP2P = _enableP2P, enableStunMarking = _enableStunMarking, rtcServers = _rtcServers] {
+	_networkManager.reset(new ThreadLocalObject<NetworkManager>(getNetworkThread(), [weak, thread, sendSignalingMessage, encryptionKey = _encryptionKey, enableP2P = _enableP2P, enableTCP = _enableTCP, enableStunMarking = _enableStunMarking, rtcServers = _rtcServers] {
 		return new NetworkManager(
 			getNetworkThread(),
 			encryptionKey,
 			enableP2P,
+            enableTCP,
             enableStunMarking,
 			rtcServers,
 			[=](const NetworkManager::State &state) {

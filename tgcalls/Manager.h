@@ -38,6 +38,7 @@ private:
 	EncryptionKey _encryptionKey;
 	EncryptedConnection _signaling;
 	bool _enableP2P = false;
+    bool _enableTCP = false;
     bool _enableStunMarking = false;
     ProtocolVersion _protocolVersion = ProtocolVersion::V0;
     std::string _statsLogPath;

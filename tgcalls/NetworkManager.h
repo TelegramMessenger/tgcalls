@@ -52,6 +52,7 @@ public:
 		rtc::Thread *thread,
 		EncryptionKey encryptionKey,
 		bool enableP2P,
+        bool enableTCP,
         bool enableStunMarking,
 		std::vector<RtcServer> const &rtcServers,
 		std::function<void(const State &)> stateUpdated,
@@ -81,6 +82,7 @@ private:
 
 	rtc::Thread *_thread = nullptr;
     bool _enableP2P = false;
+    bool _enableTCP = false;
     bool _enableStunMarking = false;
     std::vector<RtcServer> _rtcServers;
 	EncryptedConnection _transport;
