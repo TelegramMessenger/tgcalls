@@ -115,7 +115,7 @@ static CGSize scaleToFillSize(CGSize size, CGSize maxSize) {
     void (^_onFirstFrameReceived)();
     bool _firstFrameReceivedReported;
     
-    void (^_onOrientationUpdated)(int);
+    void (^_onOrientationUpdated)(int, CGFloat);
     
     std::shared_ptr<VideoRendererAdapterImpl> _sink;
 }
@@ -407,11 +407,11 @@ static CGSize scaleToFillSize(CGSize size, CGSize maxSize) {
 - (void)setInternalOrientation:(int)internalOrientation {
     _internalOrientation = internalOrientation;
     if (_onOrientationUpdated) {
-        _onOrientationUpdated(internalOrientation);
+        _onOrientationUpdated(internalOrientation, 1.0f);
     }
 }
 
-- (void)internalSetOnOrientationUpdated:(void (^ _Nullable)(int))onOrientationUpdated {
+- (void)internalSetOnOrientationUpdated:(void (^ _Nullable)(int, CGFloat))onOrientationUpdated {
     _onOrientationUpdated = [onOrientationUpdated copy];
 }
 

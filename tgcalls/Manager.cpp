@@ -2,6 +2,8 @@
 
 #include "rtc_base/byte_buffer.h"
 
+#include <fstream>
+
 namespace tgcalls {
 namespace {
 
@@ -24,6 +26,53 @@ rtc::Thread *makeMediaThread() {
 	return value.get();
 }
 
+void dumpStatsLog(const std::string path, const CallStats &stats) {
+    std::ofstream file;
+    file.open(path);
+    
+    file << "{";
+    file << "\"codec\":\"" << stats.outgoingCodec << "\"";
+    file << ",";
+    
+    file << "\"bitrate\":[";
+    bool addComma = false;
+    for (auto &it : stats.bitrateRecords) {
+        if (addComma) {
+            file << ",";
+        }
+        file << "{";
+        file << "\"t\":\"" << it.timestamp << "\"";
+        file << ",";
+        file << "\"b\":\"" << it.bitrate << "\"";
+        file << "}";
+        addComma = true;
+    }
+    file << "]";
+    file << ",";
+    
+    file << "\"network\":[";
+    addComma = false;
+    for (auto &it : stats.networkRecords) {
+        if (addComma) {
+            file << ",";
+        }
+        file << "{";
+        file << "\"t\":\"" << it.timestamp << "\"";
+        file << ",";
+        file << "\"e\":\"" << (int)(it.endpointType) << "\"";
+        file << ",";
+        file << "\"w\":\"" << (it.isLowCost ? 1 : 0) << "\"";
+        file << "}";
+        addComma = true;
+    }
+    file << "]";
+    file << ",";
+    
+    file << "}";
+    
+    file.close();
+}
+
 } // namespace
 
 rtc::Thread *Manager::getMediaThread() {
@@ -41,6 +90,7 @@ _signaling(
 _enableP2P(descriptor.config.enableP2P),
 _enableStunMarking(descriptor.config.enableStunMarking),
 _protocolVersion(descriptor.config.protocolVersion),
+_statsLogPath(descriptor.config.statsLogPath),
 _rtcServers(std::move(descriptor.rtcServers)),
 _videoCapture(std::move(descriptor.videoCapture)),
 _stateUpdated(std::move(descriptor.stateUpdated)),
@@ -49,7 +99,6 @@ _remoteBatteryLevelIsLowUpdated(std::move(descriptor.remoteBatteryLevelIsLowUpda
 _remotePrefferedAspectRatioUpdated(std::move(descriptor.remotePrefferedAspectRatioUpdated)),
 _signalingDataEmitted(std::move(descriptor.signalingDataEmitted)),
 _signalBarsUpdated(std::move(descriptor.signalBarsUpdated)),
-_localPreferredVideoAspectRatio(descriptor.config.preferredAspectRatio),
 _enableHighBitrateVideo(descriptor.config.enableHighBitrateVideo) {
 	assert(_thread->IsCurrent());
 	assert(_stateUpdated != nullptr);
@@ -168,7 +217,7 @@ void Manager::start() {
 			});
 	}));
 	bool isOutgoing = _encryptionKey.isOutgoing;
-	_mediaManager.reset(new ThreadLocalObject<MediaManager>(getMediaThread(), [weak, isOutgoing, protocolVersion = _protocolVersion, thread, sendSignalingMessage, videoCapture = _videoCapture, localPreferredVideoAspectRatio = _localPreferredVideoAspectRatio, enableHighBitrateVideo = _enableHighBitrateVideo, signalBarsUpdated = _signalBarsUpdated, preferredCodecs = _preferredCodecs]() {
+	_mediaManager.reset(new ThreadLocalObject<MediaManager>(getMediaThread(), [weak, isOutgoing, protocolVersion = _protocolVersion, thread, sendSignalingMessage, videoCapture = _videoCapture, enableHighBitrateVideo = _enableHighBitrateVideo, signalBarsUpdated = _signalBarsUpdated, preferredCodecs = _preferredCodecs]() {
 		return new MediaManager(
 			getMediaThread(),
 			isOutgoing,
@@ -185,7 +234,6 @@ void Manager::start() {
 				});
 			},
             signalBarsUpdated,
-            localPreferredVideoAspectRatio,
             enableHighBitrateVideo,
             preferredCodecs);
 	}));
@@ -258,6 +306,12 @@ void Manager::setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCaptur
     });
 }
 
+void Manager::setRequestedVideoAspect(float aspect) {
+    _mediaManager->perform(RTC_FROM_HERE, [aspect](MediaManager *mediaManager) {
+        mediaManager->setRequestedVideoAspect(aspect);
+    });
+}
+
 void Manager::setMuteOutgoingAudio(bool mute) {
 	_mediaManager->perform(RTC_FROM_HERE, [mute](MediaManager *mediaManager) {
 		mediaManager->setMuteOutgoingAudio(mute);
@@ -296,9 +350,26 @@ void Manager::setIsLocalNetworkLowCost(bool isLocalNetworkLowCost) {
     }
 }
 
-void Manager::getNetworkStats(std::function<void (TrafficStats)> completion) {
-    _networkManager->perform(RTC_FROM_HERE, [completion = std::move(completion)](NetworkManager *networkManager) {
-        completion(networkManager->getNetworkStats());
+void Manager::getNetworkStats(std::function<void (TrafficStats, CallStats)> completion) {
+    _networkManager->perform(RTC_FROM_HERE, [thread = _thread, weak = std::weak_ptr<Manager>(shared_from_this()), completion = std::move(completion), statsLogPath = _statsLogPath](NetworkManager *networkManager) {
+        auto networkStats = networkManager->getNetworkStats();
+        
+        CallStats callStats;
+        networkManager->fillCallStats(callStats);
+        
+        thread->PostTask(RTC_FROM_HERE, [weak, networkStats, completion = std::move(completion), callStats = std::move(callStats), statsLogPath = statsLogPath] {
+            const auto strong = weak.lock();
+            if (!strong) {
+                return;
+            }
+            
+            strong->_mediaManager->perform(RTC_FROM_HERE, [networkStats, completion = std::move(completion), callStatsValue = std::move(callStats), statsLogPath = statsLogPath](MediaManager *mediaManager) {
+                CallStats callStats = std::move(callStatsValue);
+                mediaManager->fillCallStats(callStats);
+                dumpStatsLog(statsLogPath, callStats);
+                completion(networkStats, callStats);
+            });
+        });
     });
 }
 

@@ -95,7 +95,6 @@ MediaManager::MediaManager(
 	std::function<void(Message &&)> sendSignalingMessage,
 	std::function<void(Message &&)> sendTransportMessage,
     std::function<void(int)> signalBarsUpdated,
-    float localPreferredVideoAspectRatio,
     bool enableHighBitrateVideo,
     std::vector<std::string> preferredCodecs) :
 _thread(thread),
@@ -107,7 +106,6 @@ _signalBarsUpdated(std::move(signalBarsUpdated)),
 _protocolVersion(protocolVersion),
 _outgoingVideoState(videoCapture ? VideoState::Active : VideoState::Inactive),
 _videoCapture(std::move(videoCapture)),
-_localPreferredVideoAspectRatio(localPreferredVideoAspectRatio),
 _enableHighBitrateVideo(enableHighBitrateVideo) {
     bool rewriteFrameRotation = false;
     switch (_protocolVersion) {
@@ -288,6 +286,11 @@ void MediaManager::setIsConnected(bool isConnected) {
 	if (_isConnected == isConnected) {
 		return;
 	}
+    bool isFirstConnection = false;
+    if (!_isConnected && isConnected) {
+        _didConnectOnce = true;
+        isFirstConnection = true;
+    }
 	_isConnected = isConnected;
 
 	if (_isConnected) {
@@ -306,8 +309,10 @@ void MediaManager::setIsConnected(bool isConnected) {
 		_videoChannel->OnReadyToSend(_isConnected);
 		_videoChannel->SetSend(_isConnected);
 	}
-	sendVideoParametersMessage();
-	sendOutgoingMediaStateMessage();
+    if (isFirstConnection) {
+        sendVideoParametersMessage();
+        sendOutgoingMediaStateMessage();
+    }
 }
 
 void MediaManager::sendVideoParametersMessage() {
@@ -351,6 +356,8 @@ void MediaManager::collectStats() {
 	if (_signalBarsUpdated) {
 		_signalBarsUpdated((int)(adjustedQuality * signalBarsNorm));
 	}
+    
+    _bitrateRecords.push_back(CallStatsBitrateRecord { (int32_t)(rtc::TimeMillis() / 1000), stats.send_bandwidth_bps / 1000 });
 
     beginStatsTimer(2000);
 }
@@ -423,6 +430,15 @@ void MediaManager::setSendVideo(std::shared_ptr<VideoCaptureInterface> videoCapt
 
     checkIsSendingVideoChanged(wasSending);
     checkIsReceivingVideoChanged(wasReceiving);
+}
+
+void MediaManager::setRequestedVideoAspect(float aspect) {
+    if (_localPreferredVideoAspectRatio != aspect) {
+        _localPreferredVideoAspectRatio = aspect;
+        if (_didConnectOnce) {
+            sendVideoParametersMessage();
+        }
+    }
 }
 
 void MediaManager::configureSendingVideoIfNeeded() {
@@ -665,6 +681,13 @@ void MediaManager::setIsCurrentNetworkLowCost(bool isCurrentNetworkLowCost) {
         RTC_LOG(LS_INFO) << "MediaManager isLowCostNetwork updated: " << isCurrentNetworkLowCost ? 1 : 0;
         adjustBitratePreferences(false);
     }
+}
+
+void MediaManager::fillCallStats(CallStats &callStats) {
+    if (_videoCodecOut.has_value()) {
+        callStats.outgoingCodec = _videoCodecOut->name;
+    }
+    callStats.bitrateRecords = std::move(_bitrateRecords);
 }
 
 MediaManager::NetworkInterfaceImpl::NetworkInterfaceImpl(MediaManager *mediaManager, bool isVideo) :

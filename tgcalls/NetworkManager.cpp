@@ -192,6 +192,8 @@ void NetworkManager::sendTransportService(int cause) {
 
 void NetworkManager::setIsLocalNetworkLowCost(bool isLocalNetworkLowCost) {
     _isLocalNetworkLowCost = isLocalNetworkLowCost;
+    
+    logCurrentNetworkState();
 }
 
 TrafficStats NetworkManager::getNetworkStats() {
@@ -201,6 +203,22 @@ TrafficStats NetworkManager::getNetworkStats() {
     stats.bytesSentMobile = _trafficStatsCellular.outgoing;
     stats.bytesReceivedMobile = _trafficStatsCellular.incoming;
     return stats;
+}
+
+void NetworkManager::fillCallStats(CallStats &callStats) {
+    callStats.networkRecords = std::move(_networkRecords);
+}
+
+void NetworkManager::logCurrentNetworkState() {
+    if (!_currentEndpointType.has_value()) {
+        return;
+    }
+    
+    CallStatsNetworkRecord record;
+    record.timestamp = (int32_t)(rtc::TimeMillis() / 1000);
+    record.endpointType = *_currentEndpointType;
+    record.isLowCost = _isLocalNetworkLowCost;
+    _networkRecords.push_back(std::move(record));
 }
 
 void NetworkManager::checkConnectionTimeout() {
@@ -283,6 +301,17 @@ void NetworkManager::transportRouteChanged(absl::optional<rtc::NetworkRoute> rou
         bool remoteIsWifi = route->remote.adapter_type() == rtc::AdapterType::ADAPTER_TYPE_WIFI;
         
         RTC_LOG(LS_INFO) << "NetworkManager is wifi: local=" << localIsWifi << ", remote=" << remoteIsWifi;
+        
+        CallStatsConnectionEndpointType endpointType;
+        if (route->local.uses_turn()) {
+            endpointType = CallStatsConnectionEndpointType::ConnectionEndpointTURN;
+        } else {
+            endpointType = CallStatsConnectionEndpointType::ConnectionEndpointP2P;
+        }
+        if (!_currentEndpointType.has_value() || _currentEndpointType != endpointType) {
+            _currentEndpointType = endpointType;
+            logCurrentNetworkState();
+        }
     }
 }
 

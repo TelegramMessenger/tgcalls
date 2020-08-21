@@ -10,6 +10,7 @@
 #include "Instance.h"
 #include "Message.h"
 #include "VideoCaptureInterface.h"
+#include "Stats.h"
 
 #include <functional>
 #include <memory>
@@ -44,7 +45,6 @@ public:
 		std::function<void(Message &&)> sendSignalingMessage,
 		std::function<void(Message &&)> sendTransportMessage,
         std::function<void(int)> signalBarsUpdated,
-        float localPreferredVideoAspectRatio,
         bool enableHighBitrateVideo,
         std::vector<std::string> preferredCodecs);
 	~MediaManager();
@@ -53,11 +53,13 @@ public:
 	void setIsConnected(bool isConnected);
 	void notifyPacketSent(const rtc::SentPacket &sentPacket);
 	void setSendVideo(std::shared_ptr<VideoCaptureInterface> videoCapture);
+    void setRequestedVideoAspect(float aspect);
 	void setMuteOutgoingAudio(bool mute);
 	void setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
 	void receiveMessage(DecryptedMessage &&message);
     void remoteVideoStateUpdated(VideoState videoState);
     void setIsCurrentNetworkLowCost(bool isCurrentNetworkLowCost);
+    void fillCallStats(CallStats &callStats);
 
 private:
 	struct SSRC {
@@ -119,6 +121,7 @@ private:
     ProtocolVersion _protocolVersion;
 
 	bool _isConnected = false;
+    bool _didConnectOnce = false;
 	bool _readyToReceiveVideo = false;
     bool _didConfigureVideo = false;
 	AudioState _outgoingAudioState = AudioState::Active;
@@ -145,6 +148,8 @@ private:
 
 	std::unique_ptr<MediaManager::NetworkInterfaceImpl> _audioNetworkInterface;
 	std::unique_ptr<MediaManager::NetworkInterfaceImpl> _videoNetworkInterface;
+    
+    std::vector<CallStatsBitrateRecord> _bitrateRecords;
 };
 
 } // namespace tgcalls

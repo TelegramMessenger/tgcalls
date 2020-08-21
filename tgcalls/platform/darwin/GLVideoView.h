@@ -53,10 +53,11 @@ NSView
 @property(nonatomic, nullable) NSValue *rotationOverride;
 
 @property (nonatomic, readwrite) int internalOrientation;
+@property (nonatomic, readwrite) CGFloat internalAspect;
 
 - (std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)getSink;
 - (void)setOnFirstFrameReceived:(void (^ _Nullable)())onFirstFrameReceived;
-- (void)internalSetOnOrientationUpdated:(void (^ _Nullable)(int))onOrientationUpdated;
+- (void)internalSetOnOrientationUpdated:(void (^ _Nullable)(int, CGFloat))onOrientationUpdated;
 - (void)internalSetOnIsMirroredUpdated:(void (^ _Nullable)(bool))onIsMirroredUpdated;
 
 @end

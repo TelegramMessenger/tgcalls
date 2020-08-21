@@ -6,6 +6,7 @@
 #include "EncryptedConnection.h"
 #include "Instance.h"
 #include "Message.h"
+#include "Stats.h"
 
 #include "rtc_base/copy_on_write_buffer.h"
 #include "api/candidate.h"
@@ -65,6 +66,8 @@ public:
 	void sendTransportService(int cause);
     void setIsLocalNetworkLowCost(bool isLocalNetworkLowCost);
     TrafficStats getNetworkStats();
+    void fillCallStats(CallStats &callStats);
+    void logCurrentNetworkState();
 
 private:
     void checkConnectionTimeout();
@@ -100,6 +103,9 @@ private:
     int64_t _lastNetworkActivityMs = 0;
     InterfaceTrafficStats _trafficStatsWifi;
     InterfaceTrafficStats _trafficStatsCellular;
+    
+    absl::optional<CallStatsConnectionEndpointType> _currentEndpointType;
+    std::vector<CallStatsNetworkRecord> _networkRecords;
 };
 
 } // namespace tgcalls

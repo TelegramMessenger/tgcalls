@@ -46,7 +46,8 @@ class VideoRendererAdapterImpl : public rtc::VideoSinkInterface<webrtc::VideoFra
         RTCVideoRotation rotation = RTCVideoRotation_90;
         RTCVideoFrame* videoFrame = customToObjCVideoFrame(nativeVideoFrame, rotation);
         
-        CGSize currentSize = (videoFrame.rotation % 180 == 0) ? CGSizeMake(videoFrame.width, videoFrame.height) : CGSizeMake(videoFrame.height, videoFrame.width);
+        //CGSize currentSize = (videoFrame.rotation % 180 == 0) ? CGSizeMake(videoFrame.width, videoFrame.height) : CGSizeMake(videoFrame.height, videoFrame.width);
+        CGSize currentSize = CGSizeMake(videoFrame.width, videoFrame.height);
         
         if (_frameReceived) {
             _frameReceived(currentSize, videoFrame, rotation);
@@ -74,7 +75,7 @@ private:
     void (^_onFirstFrameReceived)();
     bool _firstFrameReceivedReported;
     
-    void (^_onOrientationUpdated)(int);
+    void (^_onOrientationUpdated)(int, CGFloat);
     
     void (^_onIsMirroredUpdated)(bool);
     
@@ -102,7 +103,7 @@ private:
         [self configure];
         
         _currentSize = CGSizeZero;
-        _rotationOverride = @(RTCVideoRotation_90);
+        _rotationOverride = @(RTCVideoRotation_0);
         
         __weak VideoMetalView *weakSelf = self;
         _sink.reset(new VideoRendererAdapterImpl(^(CGSize size, RTCVideoFrame *videoFrame, RTCVideoRotation rotation) {
@@ -119,19 +120,19 @@ private:
                 int mappedValue = 0;
                 switch (rotation) {
                     case RTCVideoRotation_90:
-                        mappedValue = 0;
-                        break;
-                    case RTCVideoRotation_180:
                         mappedValue = 1;
                         break;
-                    case RTCVideoRotation_270:
+                    case RTCVideoRotation_180:
                         mappedValue = 2;
                         break;
-                    default:
+                    case RTCVideoRotation_270:
                         mappedValue = 3;
                         break;
+                    default:
+                        mappedValue = 0;
+                        break;
                 }
-                [strongSelf setInternalOrientation:mappedValue];
+                [strongSelf setInternalOrientationAndSize:mappedValue size:size];
                 
                 [strongSelf renderFrame:videoFrame];
             });
@@ -228,7 +229,7 @@ private:
             if (shouldBeMirrored != _shouldBeMirrored) {
                 _shouldBeMirrored = shouldBeMirrored;
                 if (_shouldBeMirrored) {
-                    _metalView.transform = CGAffineTransformMakeScale(-1.0f, 1.0f);
+                    _metalView.transform = CGAffineTransformMakeScale(1.0f, -1.0f);
                 } else {
                     _metalView.transform = CGAffineTransformIdentity;
                 }
@@ -312,8 +313,9 @@ private:
 - (CGSize)drawableSize {
     // Flip width/height if the rotations are not the same.
     CGSize videoFrameSize = _videoFrameSize;
+    return videoFrameSize;
     
-    RTCVideoRotation frameRotation = [self frameRotation];
+    /*RTCVideoRotation frameRotation = [self frameRotation];
     
     BOOL useLandscape =
     (frameRotation == RTCVideoRotation_0) || (frameRotation == RTCVideoRotation_180);
@@ -324,7 +326,7 @@ private:
         return videoFrameSize;
     } else {
         return CGSizeMake(videoFrameSize.height, videoFrameSize.width);
-    }
+    }*/
 }
 
 #pragma mark - RTCVideoRenderer
@@ -370,16 +372,23 @@ private:
     _firstFrameReceivedReported = false;
 }
 
-- (void)setInternalOrientation:(int)internalOrientation {
-    if (_internalOrientation != internalOrientation) {
+- (void)setInternalOrientationAndSize:(int)internalOrientation size:(CGSize)size {
+    CGFloat aspect = 1.0f;
+    if (size.width > 1.0f && size.height > 1.0f) {
+        aspect = size.width / size.height;
+    }
+    if (_internalOrientation != internalOrientation || ABS(_internalAspect - aspect) > 0.001) {
+        RTCLogInfo(@"VideoMetalView@%lx orientation: %d, aspect: %f", (intptr_t)self, internalOrientation, (float)aspect);
+        
         _internalOrientation = internalOrientation;
+        _internalAspect = aspect;
         if (_onOrientationUpdated) {
-            _onOrientationUpdated(internalOrientation);
+            _onOrientationUpdated(internalOrientation, aspect);
         }
     }
 }
 
-- (void)internalSetOnOrientationUpdated:(void (^ _Nullable)(int))onOrientationUpdated {
+- (void)internalSetOnOrientationUpdated:(void (^ _Nullable)(int, CGFloat))onOrientationUpdated {
     _onOrientationUpdated = [onOrientationUpdated copy];
 }
 
