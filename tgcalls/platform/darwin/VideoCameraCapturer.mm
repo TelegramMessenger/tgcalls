@@ -216,10 +216,40 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
         }
         
         NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
-        _orientation = UIDeviceOrientationPortrait;
+        _orientation = [[UIDevice currentDevice] orientation];
         _rotation = RTCVideoRotation_90;
+        
+        switch (_orientation) {
+            case UIDeviceOrientationPortrait:
+                _rotation = RTCVideoRotation_90;
+                break;
+            case UIDeviceOrientationPortraitUpsideDown:
+                _rotation = RTCVideoRotation_270;
+                break;
+            case UIDeviceOrientationLandscapeLeft:
+                _rotation = useFrontCamera ? RTCVideoRotation_180 : RTCVideoRotation_0;
+                break;
+            case UIDeviceOrientationLandscapeRight:
+                _rotation = useFrontCamera ? RTCVideoRotation_0 : RTCVideoRotation_180;
+                break;
+            case UIDeviceOrientationFaceUp:
+            case UIDeviceOrientationFaceDown:
+            case UIDeviceOrientationUnknown:
+                // Ignore.
+                break;
+        }
+        
         if (_orientationUpdated) {
-            _orientationUpdated(false);
+            bool isLandscape = false;
+            switch (_rotation) {
+                case RTCVideoRotation_0:
+                case RTCVideoRotation_180:
+                    isLandscape = true;
+                    break;
+                default:
+                    break;
+            }
+            _orientationUpdated(isLandscape);
         }
         [center addObserver:self
                    selector:@selector(deviceOrientationDidChange:)
