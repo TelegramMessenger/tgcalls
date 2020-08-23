@@ -523,6 +523,14 @@ int MediaManager::getMaxVideoBitrate() const {
     return (_enableHighBitrateVideo && _isLowCostNetwork) ? 2000000 : 800000;
 }
 
+int MediaManager::getMaxAudioBitrate() const {
+    if (_isDataSavingActive) {
+        return 16000;
+    } else {
+        return 32000;
+    }
+}
+
 void MediaManager::adjustBitratePreferences(bool resetStartBitrate) {
     if (computeIsSendingVideo()) {
         webrtc::BitrateConstraints preferences;
@@ -548,7 +556,7 @@ void MediaManager::adjustBitratePreferences(bool resetStartBitrate) {
             if (resetStartBitrate) {
                 preferences.start_bitrate_bps = 16000;
             }
-            preferences.max_bitrate_bps = 32000;
+            preferences.max_bitrate_bps = getMaxAudioBitrate();
         }
         
         _call->GetTransportControllerSend()->SetSdpBitrateParameters(preferences);
@@ -675,10 +683,11 @@ void MediaManager::remoteVideoStateUpdated(VideoState videoState) {
     }
 }
 
-void MediaManager::setIsCurrentNetworkLowCost(bool isCurrentNetworkLowCost) {
-    if (_isLowCostNetwork != isCurrentNetworkLowCost) {
-        _isLowCostNetwork = isCurrentNetworkLowCost;
-        RTC_LOG(LS_INFO) << "MediaManager isLowCostNetwork updated: " << isCurrentNetworkLowCost ? 1 : 0;
+void MediaManager::setNetworkParameters(bool isLowCost, bool isDataSavingActive) {
+    if (_isLowCostNetwork != isLowCost || _isDataSavingActive != isDataSavingActive) {
+        _isLowCostNetwork = isLowCost;
+        _isDataSavingActive = isDataSavingActive;
+        RTC_LOG(LS_INFO) << "MediaManager isLowCostNetwork: " << (isLowCost ? 1 : 0) << ", isDataSavingActive: " << (isDataSavingActive ? 1 : 0);
         adjustBitratePreferences(false);
     }
 }

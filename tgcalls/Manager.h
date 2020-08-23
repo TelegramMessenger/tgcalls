@@ -11,6 +11,15 @@
 namespace tgcalls {
 
 class Manager final : public std::enable_shared_from_this<Manager> {
+private:
+    struct ResolvedNetworkStatus {
+        bool isLowCost = false;
+        bool isLowDataRequested = false;
+        
+        bool operator==(const ResolvedNetworkStatus &rhs);
+        bool operator!=(const ResolvedNetworkStatus &rhs);
+    };
+    
 public:
 	static rtc::Thread *getMediaThread();
 
@@ -30,8 +39,7 @@ public:
 private:
 	void sendSignalingAsync(int delayMs, int cause);
 	void receiveMessage(DecryptedMessage &&message);
-    bool calculateIsCurrentNetworkLowCost() const;
-    void updateIsCurrentNetworkLowCost(bool wasLowCost);
+    void updateCurrentResolvedNetworkStatus();
     void sendInitialSignalingMessages();
 
 	rtc::Thread *_thread;
@@ -57,9 +65,13 @@ private:
 	State _state = State::Reconnecting;
     bool _didConnectOnce = false;
     bool _enableHighBitrateVideo = false;
+    DataSaving _dataSaving = DataSaving::Never;
     std::vector<std::string> _preferredCodecs;
     bool _localNetworkIsLowCost = false;
     bool _remoteNetworkIsLowCost = false;
+    bool _remoteIsLowDataRequested = false;
+    absl::optional<ResolvedNetworkStatus> _currentResolvedLocalNetworkStatus;
+    absl::optional<ResolvedNetworkStatus> _currentResolvedNetworkStatus;
 
 };
 

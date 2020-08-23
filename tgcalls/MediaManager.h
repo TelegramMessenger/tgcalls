@@ -58,7 +58,7 @@ public:
 	void setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
 	void receiveMessage(DecryptedMessage &&message);
     void remoteVideoStateUpdated(VideoState videoState);
-    void setIsCurrentNetworkLowCost(bool isCurrentNetworkLowCost);
+    void setNetworkParameters(bool isLowCost, bool isDataSavingActive);
     void fillCallStats(CallStats &callStats);
 
 private:
@@ -94,6 +94,7 @@ private:
 	bool videoCodecsNegotiated() const;
     
     int getMaxVideoBitrate() const;
+    int getMaxAudioBitrate() const;
     void adjustBitratePreferences(bool resetStartBitrate);
     bool computeIsReceivingVideo() const;
     void checkIsReceivingVideoChanged(bool wasReceiving);
@@ -145,6 +146,7 @@ private:
     float _preferredAspectRatio = 0.0f;
     bool _enableHighBitrateVideo = false;
     bool _isLowCostNetwork = false;
+    bool _isDataSavingActive = false;
 
 	std::unique_ptr<MediaManager::NetworkInterfaceImpl> _audioNetworkInterface;
 	std::unique_ptr<MediaManager::NetworkInterfaceImpl> _videoNetworkInterface;
