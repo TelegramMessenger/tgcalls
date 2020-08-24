@@ -66,6 +66,9 @@ private:
     RTCMTLRGBRenderer *_rendererRGB;
     MTKView *_metalView;
     RTCVideoFrame *_videoFrame;
+    RTCVideoFrame *_stashedVideoFrame;
+    int _isWaitingForLayoutFrameCount;
+    bool _didStartWaitingForLayout;
     CGSize _videoFrameSize;
     int64_t _lastFrameTimeNs;
     
@@ -204,6 +207,15 @@ private:
     } else {
         _metalView.drawableSize = bounds.size;
     }
+    
+    if (_didStartWaitingForLayout) {
+        _didStartWaitingForLayout = false;
+        _isWaitingForLayoutFrameCount = 0;
+        if (_stashedVideoFrame != nil) {
+            _videoFrame = _stashedVideoFrame;
+            _stashedVideoFrame = nil;
+        }
+    }
 }
 
 #pragma mark - MTKViewDelegate methods
@@ -335,10 +347,10 @@ private:
     assert([NSThread isMainThread]);
            
    _videoFrameSize = size;
-   CGSize drawableSize = [self drawableSize];
+   //CGSize drawableSize = [self drawableSize];
    
-   _metalView.drawableSize = drawableSize;
-   [self setNeedsLayout];
+   //_metalView.drawableSize = drawableSize;
+   //[self setNeedsLayout];
    //[strongSelf.delegate videoView:self didChangeVideoSize:size];
 }
 
@@ -357,6 +369,23 @@ private:
     if (frame == nil) {
         RTCLogInfo(@"Incoming frame is nil. Exiting render callback.");
         return;
+    }
+    if (_isWaitingForLayoutFrameCount > 0) {
+        _stashedVideoFrame = frame;
+        _isWaitingForLayoutFrameCount--;
+        return;
+    }
+    if (!_didStartWaitingForLayout) {
+        if (_videoFrame != nil && _videoFrame.width > 0 && _videoFrame.height > 0 && frame.width > 0 && frame.height > 0) {
+            float previousAspect = ((float)_videoFrame.width) / ((float)_videoFrame.height);
+            float updatedAspect = ((float)frame.width) / ((float)frame.height);
+            if ((previousAspect < 1.0f) != (updatedAspect < 1.0f)) {
+                _stashedVideoFrame = frame;
+                _didStartWaitingForLayout = true;
+                _isWaitingForLayoutFrameCount = 5;
+                return;
+            }
+        }
     }
     _videoFrame = frame;
 }
