@@ -430,7 +430,13 @@ void Manager::updateCurrentResolvedNetworkStatus() {
 
 void Manager::sendInitialSignalingMessages() {
     if (_currentResolvedLocalNetworkStatus.has_value()) {
-        _sendTransportMessage({ RemoteNetworkStatusMessage{ _currentResolvedLocalNetworkStatus->isLowCost, _currentResolvedLocalNetworkStatus->isLowDataRequested } });
+        switch (_protocolVersion) {
+        case ProtocolVersion::V1:
+            _sendTransportMessage({ RemoteNetworkStatusMessage{ _currentResolvedLocalNetworkStatus->isLowCost, _currentResolvedLocalNetworkStatus->isLowDataRequested } });
+                break;
+            default:
+                break;
+        }
     }
 }
 
