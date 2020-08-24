@@ -36,6 +36,12 @@ public:
     void setIsLocalNetworkLowCost(bool isLocalNetworkLowCost);
     void getNetworkStats(std::function<void(TrafficStats, CallStats)> completion);
     
+
+	void setAudioInputDevice(std::string id);
+	void setAudioOutputDevice(std::string id);
+	void setInputVolume(float level);
+	void setOutputVolume(float level);
+
 private:
 	void sendSignalingAsync(int delayMs, int cause);
 	void receiveMessage(DecryptedMessage &&message);
@@ -51,6 +57,7 @@ private:
     ProtocolVersion _protocolVersion = ProtocolVersion::V0;
     std::string _statsLogPath;
 	std::vector<RtcServer> _rtcServers;
+	MediaDevicesConfig _mediaDevicesConfig;
 	std::shared_ptr<VideoCaptureInterface> _videoCapture;
 	std::function<void(State)> _stateUpdated;
 	std::function<void(AudioState, VideoState)> _remoteMediaStateUpdated;

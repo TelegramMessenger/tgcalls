@@ -63,10 +63,11 @@
 
 @implementation VideoCapturerInterfaceImplReference
 
-+ (AVCaptureDevice *)selectCaptureDevice:(bool)useFrontCamera {
++ (AVCaptureDevice *)selectCapturerDescriptionWithDeviceId:(NSString *)deviceId {
     AVCaptureDevice *selectedCamera = nil;
 
 #ifdef WEBRTC_IOS
+    bool useFrontCamera = ![deviceId isEqualToString:@"back"];
     AVCaptureDevice *frontCamera = nil;
     AVCaptureDevice *backCamera = nil;
     for (AVCaptureDevice *device in [VideoCameraCapturer captureDevices]) {
@@ -205,9 +206,9 @@
 
 namespace tgcalls {
 
-VideoCapturerInterfaceImpl::VideoCapturerInterfaceImpl(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, bool useFrontCamera, std::function<void(VideoState)> stateUpdated, std::function<void(PlatformCaptureInfo)> captureInfoUpdated, std::pair<int, int> &outResolution) :
+VideoCapturerInterfaceImpl::VideoCapturerInterfaceImpl(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, std::string deviceId, std::function<void(VideoState)> stateUpdated, std::function<void(PlatformCaptureInfo)> captureInfoUpdated, std::pair<int, int> &outResolution) :
     _source(source) {
-    VideoCapturerInterfaceImplSourceDescription *sourceDescription = [VideoCapturerInterfaceImplReference selectCapturerDescription:useFrontCamera];
+        VideoCapturerInterfaceImplSourceDescription *sourceDescription = [VideoCapturerInterfaceImplReference selectCapturerDescriptionWithDeviceId:[NSString stringWithUTF8String:deviceId.c_str()]];
         
     CMVideoDimensions dimensions = CMVideoFormatDescriptionGetDimensions(sourceDescription.format.formatDescription);
     #ifdef WEBRTC_IOS

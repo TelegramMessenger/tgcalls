@@ -21,6 +21,7 @@ class RtcEventLogNull;
 class TaskQueueFactory;
 class VideoBitrateAllocatorFactory;
 class VideoTrackSourceInterface;
+class AudioDeviceModule;
 } // namespace webrtc
 
 namespace cricket {
@@ -41,6 +42,7 @@ public:
 		rtc::Thread *thread,
 		bool isOutgoing,
         ProtocolVersion protocolVersion,
+		const MediaDevicesConfig &devicesConfig,
 		std::shared_ptr<VideoCaptureInterface> videoCapture,
 		std::function<void(Message &&)> sendSignalingMessage,
 		std::function<void(Message &&)> sendTransportMessage,
@@ -60,6 +62,11 @@ public:
     void remoteVideoStateUpdated(VideoState videoState);
     void setNetworkParameters(bool isLowCost, bool isDataSavingActive);
     void fillCallStats(CallStats &callStats);
+
+	void setAudioInputDevice(std::string id);
+	void setAudioOutputDevice(std::string id);
+	void setInputVolume(float level);
+	void setOutputVolume(float level);
 
 private:
 	struct SSRC {
@@ -103,7 +110,7 @@ private:
 	void setOutgoingAudioState(AudioState state);
 	void sendVideoParametersMessage();
 	void sendOutgoingMediaStateMessage();
-    
+
     void beginStatsTimer(int timeoutMs);
     void collectStats();
 
@@ -136,6 +143,7 @@ private:
 	std::unique_ptr<webrtc::Call> _call;
 	webrtc::FieldTrialBasedConfig _fieldTrials;
 	webrtc::LocalAudioSinkAdapter _audioSource;
+	rtc::scoped_refptr<webrtc::AudioDeviceModule> _audioDeviceModule;
 	std::unique_ptr<cricket::VoiceMediaChannel> _audioChannel;
 	std::unique_ptr<cricket::VideoMediaChannel> _videoChannel;
 	std::unique_ptr<webrtc::VideoBitrateAllocatorFactory> _videoBitrateAllocatorFactory;

@@ -91,8 +91,8 @@ void DarwinInterface::adaptVideoSource(rtc::scoped_refptr<webrtc::VideoTrackSour
     getObjCVideoSource(videoSource)->OnOutputFormatRequest(width, height, fps);
 }
 
-std::unique_ptr<VideoCapturerInterface> DarwinInterface::makeVideoCapturer(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, bool useFrontCamera, std::function<void(VideoState)> stateUpdated, std::function<void(PlatformCaptureInfo)> captureInfoUpdated, std::shared_ptr<PlatformContext> platformContext, std::pair<int, int> &outResolution) {
-    return std::make_unique<VideoCapturerInterfaceImpl>(source, useFrontCamera, stateUpdated, captureInfoUpdated, outResolution);
+std::unique_ptr<VideoCapturerInterface> DarwinInterface::makeVideoCapturer(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, std::string deviceId, std::function<void(VideoState)> stateUpdated, std::function<void(PlatformCaptureInfo)> captureInfoUpdated, std::shared_ptr<PlatformContext> platformContext, std::pair<int, int> &outResolution) {
+    return std::make_unique<VideoCapturerInterfaceImpl>(source, deviceId, stateUpdated, captureInfoUpdated, outResolution);
 }
 
 std::unique_ptr<PlatformInterface> CreatePlatformInterface() {

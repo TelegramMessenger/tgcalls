@@ -109,6 +109,7 @@ _enableStunMarking(descriptor.config.enableStunMarking),
 _protocolVersion(descriptor.config.protocolVersion),
 _statsLogPath(descriptor.config.statsLogPath),
 _rtcServers(std::move(descriptor.rtcServers)),
+_mediaDevicesConfig(std::move(descriptor.mediaDevicesConfig)),
 _videoCapture(std::move(descriptor.videoCapture)),
 _stateUpdated(std::move(descriptor.stateUpdated)),
 _remoteMediaStateUpdated(std::move(descriptor.remoteMediaStateUpdated)),
@@ -236,11 +237,12 @@ void Manager::start() {
 			});
 	}));
 	bool isOutgoing = _encryptionKey.isOutgoing;
-	_mediaManager.reset(new ThreadLocalObject<MediaManager>(getMediaThread(), [weak, isOutgoing, protocolVersion = _protocolVersion, thread, sendSignalingMessage, videoCapture = _videoCapture, enableHighBitrateVideo = _enableHighBitrateVideo, signalBarsUpdated = _signalBarsUpdated, preferredCodecs = _preferredCodecs]() {
+	_mediaManager.reset(new ThreadLocalObject<MediaManager>(getMediaThread(), [weak, isOutgoing, protocolVersion = _protocolVersion, thread, sendSignalingMessage, videoCapture = _videoCapture, mediaDevicesConfig = _mediaDevicesConfig, enableHighBitrateVideo = _enableHighBitrateVideo, signalBarsUpdated = _signalBarsUpdated, preferredCodecs = _preferredCodecs]() {
 		return new MediaManager(
 			getMediaThread(),
 			isOutgoing,
             protocolVersion,
+			mediaDevicesConfig,
 			videoCapture,
 			sendSignalingMessage,
 			[=](Message &&message) {
@@ -430,6 +432,30 @@ void Manager::sendInitialSignalingMessages() {
     if (_currentResolvedLocalNetworkStatus.has_value()) {
         _sendTransportMessage({ RemoteNetworkStatusMessage{ _currentResolvedLocalNetworkStatus->isLowCost, _currentResolvedLocalNetworkStatus->isLowDataRequested } });
     }
+}
+
+void Manager::setAudioInputDevice(std::string id) {
+	_mediaManager->perform(RTC_FROM_HERE, [id](MediaManager *mediaManager) {
+		mediaManager->setAudioInputDevice(id);
+	});
+}
+
+void Manager::setAudioOutputDevice(std::string id) {
+	_mediaManager->perform(RTC_FROM_HERE, [id](MediaManager *mediaManager) {
+		mediaManager->setAudioOutputDevice(id);
+	});
+}
+
+void Manager::setInputVolume(float level) {
+	_mediaManager->perform(RTC_FROM_HERE, [level](MediaManager *mediaManager) {
+		mediaManager->setInputVolume(level);
+	});
+}
+
+void Manager::setOutputVolume(float level) {
+	_mediaManager->perform(RTC_FROM_HERE, [level](MediaManager *mediaManager) {
+		mediaManager->setOutputVolume(level);
+	});
 }
 
 } // namespace tgcalls

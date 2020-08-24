@@ -865,7 +865,7 @@ private:
             });
         });
 
-        _localVideoTrack = _nativeFactory->CreateVideoTrack("video0", videoCaptureImpl->_videoSource);
+        _localVideoTrack = _nativeFactory->CreateVideoTrack("video0", videoCaptureImpl->source());
         _peerConnection->AddTrack(_localVideoTrack, _streamIds);
         for (auto &it : _peerConnection->GetTransceivers()) {
             if (it->media_type() == cricket::MediaType::MEDIA_TYPE_VIDEO) {

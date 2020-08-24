@@ -99,19 +99,27 @@ void InstanceImpl::setEchoCancellationStrength(int strength) {
 }
 
 void InstanceImpl::setAudioInputDevice(std::string id) {
-	// TODO: not implemented
+	_manager->perform(RTC_FROM_HERE, [id](Manager *manager) {
+		manager->setAudioInputDevice(id);
+	});
 }
 
 void InstanceImpl::setAudioOutputDevice(std::string id) {
-	// TODO: not implemented
+	_manager->perform(RTC_FROM_HERE, [id](Manager *manager) {
+		manager->setAudioOutputDevice(id);
+	});
 }
 
 void InstanceImpl::setInputVolume(float level) {
-	// TODO: not implemented
+	_manager->perform(RTC_FROM_HERE, [level](Manager *manager) {
+		manager->setInputVolume(level);
+	});
 }
 
 void InstanceImpl::setOutputVolume(float level) {
-	// TODO: not implemented
+	_manager->perform(RTC_FROM_HERE, [level](Manager *manager) {
+		manager->setOutputVolume(level);
+	});
 }
 
 void InstanceImpl::setAudioOutputDuckingEnabled(bool enabled) {

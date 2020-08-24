@@ -13,50 +13,73 @@
 
 namespace tgcalls {
 
-VideoCameraCapturer::VideoCameraCapturer(const CreateTag &) {
-}
+VideoCameraCapturer::VideoCameraCapturer() = default;
 
 VideoCameraCapturer::~VideoCameraCapturer() {
 	destroy();
 }
 
-bool VideoCameraCapturer::init(
-		size_t width,
-		size_t height,
-		size_t target_fps,
-		size_t capture_device_index) {
-	std::unique_ptr<webrtc::VideoCaptureModule::DeviceInfo> device_info(
+void VideoCameraCapturer::create() {
+	const auto info = std::unique_ptr<webrtc::VideoCaptureModule::DeviceInfo>(
 		webrtc::VideoCaptureFactory::CreateDeviceInfo());
-
-	char device_name[256];
-	char unique_name[256];
-	if (device_info->GetDeviceName(static_cast<uint32_t>(capture_device_index),
-		device_name, sizeof(device_name), unique_name,
-		sizeof(unique_name)) != 0) {
-		destroy();
-		return false;
+	if (!info) {
+		return;
 	}
+	const auto count = info->NumberOfDevices();
+	if (count <= 0) {
+		return;
+	}
+	const auto getId = [&](int index) {
+		constexpr auto kLengthLimit = 256;
+		char name[kLengthLimit] = { 0 };
+		char id[kLengthLimit] = { 0 };
+		return (info->GetDeviceName(index, name, kLengthLimit, id, kLengthLimit) == 0)
+			? std::string(id)
+			: std::string();
+	};
+	auto preferredId = std::string();
+	for (auto i = 0; i != count; ++i) {
+		const auto id = getId(i);
+		if ((_requestedDeviceId == id)
+			|| (preferredId.empty()
+				&& (_requestedDeviceId.empty() || _requestedDeviceId == "default"))) {
+			preferredId = id;
+		}
+	}
+	if (create(info.get(), preferredId)) {
+		return;
+	}
+	for (auto i = 0; i != count; ++i) {
+		if (create(info.get(), getId(i))) {
+			return;
+		}
+	}
+}
 
-	_module = webrtc::VideoCaptureFactory::Create(unique_name);
+bool VideoCameraCapturer::create(webrtc::VideoCaptureModule::DeviceInfo *info, const std::string &deviceId) {
+	_module = webrtc::VideoCaptureFactory::Create(deviceId.c_str());
 	if (!_module) {
+		RTC_LOG(LS_ERROR)
+			<< "Failed to create VideoCameraCapturer '" << deviceId << "'.";
 		return false;
 	}
 	_module->RegisterCaptureDataCallback(this);
 
-	device_info->GetCapability(_module->CurrentDeviceName(), 0, _capability);
+	info->GetCapability(_module->CurrentDeviceName(), 0, _capability);
 
-	_capability.width = static_cast<int32_t>(width);
-	_capability.height = static_cast<int32_t>(height);
-	_capability.maxFPS = static_cast<int32_t>(target_fps);
+	constexpr auto kWidth = 640;
+	constexpr auto kHeight = 480;
+	constexpr auto kFps = 30;
+	_capability.width = kWidth;
+	_capability.height = kHeight;
+	_capability.maxFPS = kFps;
 	_capability.videoType = webrtc::VideoType::kI420;
-
 	if (_module->StartCapture(_capability) != 0) {
+		RTC_LOG(LS_ERROR)
+			<< "Failed to start VideoCameraCapturer '" << _requestedDeviceId << "'.";
 		destroy();
 		return false;
 	}
-
-	RTC_CHECK(_module->CaptureStarted());
-
 	return true;
 }
 
@@ -65,32 +88,26 @@ void VideoCameraCapturer::setState(VideoState state) {
 		return;
 	}
 	_state = state;
-	if (_state == VideoState::Inactive) {
-		_module->StopCapture();
+	if (_state == VideoState::Active) {
+		create();
 	} else {
-		_module->StartCapture(_capability);
+		destroy();
+	}
+}
+
+void VideoCameraCapturer::setDeviceId(std::string deviceId) {
+	if (_requestedDeviceId == deviceId) {
+		return;
+	}
+	destroy();
+	_requestedDeviceId = deviceId;
+	if (_state == VideoState::Active) {
+		create();
 	}
 }
 
 void VideoCameraCapturer::setPreferredCaptureAspectRatio(float aspectRatio) {
 	_aspectRatio = aspectRatio;
-}
-
-std::unique_ptr<VideoCameraCapturer> VideoCameraCapturer::Create(
-		size_t width,
-		size_t height,
-		size_t target_fps,
-		size_t capture_device_index) {
-	auto result = std::make_unique<VideoCameraCapturer>(CreateTag{});
-	if (!result->init(width, height, target_fps, capture_device_index)) {
-		RTC_LOG(LS_WARNING)
-			<< "Failed to create VideoCameraCapturer("
-			<< "w = " << width << ", "
-			<< "h = " << height << ", "
-			<< "fps = " << target_fps << ")";
-		return nullptr;
-	}
-	return result;
 }
 
 void VideoCameraCapturer::destroy() {

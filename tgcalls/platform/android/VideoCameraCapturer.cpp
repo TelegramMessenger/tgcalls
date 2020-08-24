@@ -10,11 +10,12 @@
 
 namespace tgcalls {
 
-VideoCameraCapturer::VideoCameraCapturer(rtc::scoped_refptr<webrtc::JavaVideoTrackSourceInterface> source, bool useFrontCamera, std::function<void(VideoState)> stateUpdated, std::shared_ptr<PlatformContext> platformContext) : _source(source), _stateUpdated(stateUpdated), _platformContext(platformContext) {
+VideoCameraCapturer::VideoCameraCapturer(rtc::scoped_refptr<webrtc::JavaVideoTrackSourceInterface> source, std::string deviceId, std::function<void(VideoState)> stateUpdated, std::shared_ptr<PlatformContext> platformContext) : _source(source), _stateUpdated(stateUpdated), _platformContext(platformContext) {
     AndroidContext *context = (AndroidContext *) platformContext.get();
     JNIEnv *env = webrtc::AttachCurrentThreadIfNeeded();
     jmethodID methodId = env->GetMethodID(context->getJavaCapturerClass(), "init", "(JZ)V");
-    env->CallVoidMethod(context->getJavaCapturer(), methodId, (jlong) (intptr_t) this, (jboolean) useFrontCamera);
+    const auto useFrontCamera = deviceId.empty() || (deviceId == "default") || (deviceId == "front");
+    env->CallVoidMethod(context->getJavaCapturer(), methodId, reinterpret_cast<intptr_t>(this), useFrontCamera);
 }
 
 void VideoCameraCapturer::setState(VideoState state) {

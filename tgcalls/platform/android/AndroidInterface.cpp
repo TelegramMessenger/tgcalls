@@ -24,10 +24,6 @@ void AndroidInterface::configurePlatformAudio() {
 
 }
 
-float AndroidInterface::getDisplayAspectRatio() {
-    return 0;
-}
-
 std::unique_ptr<webrtc::VideoEncoderFactory> AndroidInterface::makeVideoEncoderFactory() {
     JNIEnv *env = webrtc::AttachCurrentThreadIfNeeded();
     webrtc::ScopedJavaLocalRef<jclass> factory_class =
@@ -87,8 +83,8 @@ bool AndroidInterface::supportsEncoding(const std::string &codecName) {
     return codecName == cricket::kVp8CodecName;
 }
 
-std::unique_ptr<VideoCapturerInterface> AndroidInterface::makeVideoCapturer(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, bool useFrontCamera, std::function<void(VideoState)> stateUpdated, std::shared_ptr<PlatformContext> platformContext, std::pair<int, int> &outResolution) {
-    return std::make_unique<VideoCapturerInterfaceImpl>(_source, useFrontCamera, stateUpdated, platformContext);
+std::unique_ptr<VideoCapturerInterface> AndroidInterface::makeVideoCapturer(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, std::string deviceId, std::function<void(VideoState)> stateUpdated, std::shared_ptr<PlatformContext> platformContext) {
+    return std::make_unique<VideoCapturerInterfaceImpl>(_source, deviceId, stateUpdated, platformContext);
 }
 
 
