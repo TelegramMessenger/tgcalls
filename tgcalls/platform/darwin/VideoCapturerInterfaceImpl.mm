@@ -63,7 +63,7 @@
 
 @implementation VideoCapturerInterfaceImplReference
 
-+ (AVCaptureDevice *)selectCapturerDescriptionWithDeviceId:(NSString *)deviceId {
++ (AVCaptureDevice *)selectCapturerDeviceWithDeviceId:(NSString *)deviceId {
     AVCaptureDevice *selectedCamera = nil;
 
 #ifdef WEBRTC_IOS
@@ -148,8 +148,8 @@
     return bestFormat;
 }
 
-+ (VideoCapturerInterfaceImplSourceDescription *)selectCapturerDescription:(bool)useFrontCamera {
-    AVCaptureDevice *selectedCamera = [VideoCapturerInterfaceImplReference selectCaptureDevice:useFrontCamera];
++ (VideoCapturerInterfaceImplSourceDescription *)selectCapturerDescriptionWithDeviceId:(NSString *)deviceId {
+    AVCaptureDevice *selectedCamera = [VideoCapturerInterfaceImplReference selectCapturerDeviceWithDeviceId:deviceId];
     
     if (selectedCamera == nil) {
         return nil;
@@ -161,7 +161,7 @@
         return nil;
     }
     
-    return [[VideoCapturerInterfaceImplSourceDescription alloc] initWithIsFrontCamera:useFrontCamera device:selectedCamera format:bestFormat];
+    return [[VideoCapturerInterfaceImplSourceDescription alloc] initWithIsFrontCamera:![deviceId isEqualToString:@"back"] device:selectedCamera format:bestFormat];
 }
 
 - (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source sourceDescription:(VideoCapturerInterfaceImplSourceDescription *)sourceDescription isActiveUpdated:(void (^)(bool))isActiveUpdated orientationUpdated:(void (^)(bool))orientationUpdated {
