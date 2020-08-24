@@ -151,6 +151,21 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 
 @end*/
 
+static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation) {
+    switch (orientation) {
+        case UIInterfaceOrientationPortrait:
+            return UIDeviceOrientationPortrait;
+        case UIInterfaceOrientationPortraitUpsideDown:
+            return UIDeviceOrientationPortraitUpsideDown;
+        case UIInterfaceOrientationLandscapeLeft:
+            return UIDeviceOrientationLandscapeLeft;
+        case UIInterfaceOrientationLandscapeRight:
+            return UIDeviceOrientationLandscapeRight;
+        default:
+            return UIDeviceOrientationPortrait;
+    }
+}
+
 @interface VideoCameraCapturer () <AVCaptureVideoDataOutputSampleBufferDelegate> {
     rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _source;
     
@@ -173,6 +188,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     FourCharCode _outputPixelFormat;
     RTCVideoRotation _rotation;
     UIDeviceOrientation _orientation;
+    bool _didReceiveOrientationUpdate;
     bool _rotationLock;
     
     // Live on mainThread.
@@ -216,7 +232,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
         }
         
         NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
-        _orientation = [[UIDevice currentDevice] orientation];
+        _orientation = deviceOrientation([[UIApplication sharedApplication] statusBarOrientation]);
         _rotation = RTCVideoRotation_90;
         
         switch (_orientation) {
@@ -373,7 +389,6 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
           return;
       }
       [self reconfigureCaptureSessionInput];
-      [self updateOrientation];
       [self updateDeviceCaptureFormat:format fps:fps];
       [self updateVideoDataOutputPixelFormat:format];
       [_captureSession startRunning];
@@ -411,10 +426,10 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 
 #if TARGET_OS_IPHONE
 - (void)deviceOrientationDidChange:(NSNotification *)notification {
-  [RTCDispatcher dispatchAsyncOnType:RTCDispatcherTypeCaptureSession
-                               block:^{
-                                 [self updateOrientation];
-                               }];
+    [RTCDispatcher dispatchAsyncOnType:RTCDispatcherTypeCaptureSession block:^{
+        _didReceiveOrientationUpdate = true;
+        [self updateOrientation];
+    }];
 }
 #endif
 
@@ -790,7 +805,10 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 - (void)updateOrientation {
     NSAssert([RTCDispatcher isOnQueueForType:RTCDispatcherTypeCaptureSession],
              @"updateOrientation must be called on the capture queue.");
-    _orientation = [UIDevice currentDevice].orientation;
+    if (_didReceiveOrientationUpdate) {
+        _orientation = [UIDevice currentDevice].orientation;
+    }
 }
 
 @end
+//
