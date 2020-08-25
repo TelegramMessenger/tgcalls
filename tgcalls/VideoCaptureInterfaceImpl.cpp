@@ -42,9 +42,9 @@ void VideoCaptureInterfaceObject::switchToDevice(std::string deviceId) {
         }, _platformContext, _videoCapturerResolution);
 	}
 	if (_videoCapturer) {
-		if (_preferredAspectRatio > 0) {
-			_videoCapturer->setPreferredCaptureAspectRatio(_preferredAspectRatio);
-		}
+//        if (_preferredAspectRatio > 0) {
+//            _videoCapturer->setPreferredCaptureAspectRatio(_preferredAspectRatio);
+//        }
 		if (_currentUncroppedSink) {
 			_videoCapturer->setUncroppedOutput(_currentUncroppedSink);
 		}

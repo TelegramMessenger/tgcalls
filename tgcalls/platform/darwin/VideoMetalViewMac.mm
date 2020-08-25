@@ -173,7 +173,7 @@ private:
     _metalView.delegate = self;
     _metalView.layer.cornerRadius = 4;
     _metalView.layer.backgroundColor = [NSColor clearColor].CGColor;
-    _metalView.layer.contentsGravity = kCAGravityResizeAspectFill;//UIViewContentModeScaleAspectFill;
+    _metalView.layer.contentsGravity = kCAGravityResizeAspect;//UIViewContentModeScaleAspectFill;
     [self addSubview:_metalView];
     _videoFrameSize = CGSizeZero;
 //    _metalView.layer.affineTransform = CGAffineTransformMakeScale(-1.0, -1.0);
@@ -184,7 +184,7 @@ private:
 - (void)layout {
     [super layout];
     
-    if (_shouldBeMirrored || _forceMirrored) {
+    if (_shouldBeMirrored) {
         _metalView.layer.anchorPoint = NSMakePoint(1, 0);
         _metalView.layer.affineTransform = CGAffineTransformMakeScale(-1, 1);
         //  _metalView.layer.transform = CATransform3DMakeScale(-1, 1, 1);
@@ -228,7 +228,7 @@ private:
                 _shouldBeMirrored = shouldBeMirrored;
                 bool shouldBeMirrored = ((TGRTCCVPixelBuffer *)buffer).shouldBeMirrored;
                 
-                if (shouldBeMirrored || _forceMirrored) {
+                if (shouldBeMirrored) {
                     _metalView.layer.anchorPoint = NSMakePoint(1, 0);
                     _metalView.layer.affineTransform = CGAffineTransformMakeScale(-1, 1);
                     //  _metalView.layer.transform = CATransform3DMakeScale(-1, 1, 1);
