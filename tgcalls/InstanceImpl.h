@@ -42,7 +42,6 @@ public:
 	TrafficStats getTrafficStats() override;
 	PersistentState getPersistentState() override;
 	void stop(std::function<void(FinalState)> completion) override;
-	//void controllerStateCallback(Controller::State state);
 
 private:
 	std::unique_ptr<ThreadLocalObject<Manager>> _manager;

@@ -50,10 +50,10 @@ public:
     VideoSinkInterfaceProxyImpl(bool rewriteRotation) :
     _rewriteRotation(rewriteRotation) {
     }
-    
+
     virtual ~VideoSinkInterfaceProxyImpl() {
     }
-    
+
     virtual void OnFrame(const webrtc::VideoFrame& frame) override {
         if (_impl) {
             if (_rewriteRotation) {
@@ -65,21 +65,21 @@ public:
             }
         }
     }
-    
+
     virtual void OnDiscardedFrame() override {
         if (_impl) {
             _impl->OnDiscardedFrame();
         }
     }
-    
+
     void setSink(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> impl) {
         _impl = impl;
     }
-    
+
 private:
     bool _rewriteRotation = false;
     std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _impl;
-    
+
 };
 
 rtc::Thread *MediaManager::getWorkerThread() {
@@ -120,7 +120,7 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
             break;
     }
     _incomingVideoSinkProxy.reset(new VideoSinkInterfaceProxyImpl(rewriteFrameRotation));
-    
+
 	_ssrcAudio.incoming = isOutgoing ? ssrcAudioIncoming : ssrcAudioOutgoing;
 	_ssrcAudio.outgoing = (!isOutgoing) ? ssrcAudioIncoming : ssrcAudioOutgoing;
 	_ssrcAudio.fecIncoming = isOutgoing ? ssrcAudioFecIncoming : ssrcAudioFecOutgoing;
@@ -159,9 +159,12 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
         preferredCodecs);
 
 	mediaDeps.audio_processing = webrtc::AudioProcessingBuilder().Create();
-	_audioDeviceModule = mediaDeps.adm = webrtc::AudioDeviceModule::Create(
-		webrtc::AudioDeviceModule::kPlatformDefaultAudio,
-		_taskQueueFactory.get());
+
+	_audioDeviceModule = createAudioDeviceModule();
+	if (!_audioDeviceModule) {
+		return;
+	}
+	mediaDeps.adm = _audioDeviceModule;
 
 	_mediaEngine = cricket::CreateMediaEngine(std::move(mediaDeps));
 	_mediaEngine->Init();
@@ -181,7 +184,7 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
     audioOptions.echo_cancellation = true;
     audioOptions.noise_suppression = true;
     audioOptions.audio_jitter_buffer_fast_accelerate = true;
-    
+
     std::vector<std::string> streamIds;
     streamIds.push_back("1");
 
@@ -236,8 +239,25 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
 	_audioChannel->SetPlayout(true);
 
 	_videoChannel->SetInterface(_videoNetworkInterface.get(), webrtc::MediaTransportConfig());
-    
+
     adjustBitratePreferences(true);
+}
+
+rtc::scoped_refptr<webrtc::AudioDeviceModule> MediaManager::createAudioDeviceModule() {
+	const auto check = [&](webrtc::AudioDeviceModule::AudioLayer layer) {
+		auto result = webrtc::AudioDeviceModule::Create(
+			layer,
+			_taskQueueFactory.get());
+		return (result && (result->Init() == 0)) ? result : nullptr;
+	};
+	if (auto result = check(webrtc::AudioDeviceModule::kPlatformDefaultAudio)) {
+		return result;
+#ifdef WEBRTC_LINUX
+	} else if (auto result = check(webrtc::AudioDeviceModule::kLinuxAlsaAudio)) {
+		return result;
+#endif // WEBRTC_LINUX
+	}
+	return nullptr;
 }
 
 void MediaManager::start() {
@@ -367,7 +387,7 @@ void MediaManager::collectStats() {
 	if (_signalBarsUpdated) {
 		_signalBarsUpdated((int)(adjustedQuality * signalBarsNorm));
 	}
-    
+
     _bitrateRecords.push_back(CallStatsBitrateRecord { (int32_t)(rtc::TimeMillis() / 1000), stats.send_bandwidth_bps / 1000 });
 
     beginStatsTimer(2000);
@@ -502,7 +522,7 @@ void MediaManager::configureSendingVideoIfNeeded() {
     } else {
         _videoChannel->AddSendStream(cricket::StreamParams::CreateLegacy(_ssrcVideo.outgoing));
     }
-    
+
     adjustBitratePreferences(true);
 }
 
@@ -526,7 +546,7 @@ void MediaManager::checkIsSendingVideoChanged(bool wasSending) {
 		_videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, nullptr);
 		_videoChannel->SetVideoSend(_ssrcVideo.fecOutgoing, NULL, nullptr);
 	}
-    
+
     adjustBitratePreferences(true);
 }
 
@@ -550,7 +570,7 @@ void MediaManager::adjustBitratePreferences(bool resetStartBitrate) {
             preferences.start_bitrate_bps = 400000;
         }
         preferences.max_bitrate_bps = getMaxVideoBitrate();
-        
+
         _call->GetTransportControllerSend()->SetSdpBitrateParameters(preferences);
     } else {
         webrtc::BitrateConstraints preferences;
@@ -569,7 +589,7 @@ void MediaManager::adjustBitratePreferences(bool resetStartBitrate) {
             }
             preferences.max_bitrate_bps = getMaxAudioBitrate();
         }
-        
+
         _call->GetTransportControllerSend()->SetSdpBitrateParameters(preferences);
     }
 }

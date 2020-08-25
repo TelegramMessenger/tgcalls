@@ -29,8 +29,11 @@ bool DesktopInterface::supportsEncoding(const std::string &codecName) {
 		|| (codecName == cricket::kVp8CodecName);
 }
 
-std::unique_ptr<VideoCapturerInterface> DesktopInterface::makeVideoCapturer(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, std::string deviceId, std::function<void(VideoState)> stateUpdated, std::shared_ptr<PlatformContext> platformContext) {
-	return std::make_unique<VideoCapturerInterfaceImpl>(source, deviceId, stateUpdated);
+void DesktopInterface::adaptVideoSource(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> videoSource, int width, int height, int fps) {
+}
+
+std::unique_ptr<VideoCapturerInterface> DesktopInterface::makeVideoCapturer(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, std::string deviceId, std::function<void(VideoState)> stateUpdated, std::function<void(PlatformCaptureInfo)> captureInfoUpdated, std::shared_ptr<PlatformContext> platformContext, std::pair<int, int> &outResolution) {
+	return std::make_unique<VideoCapturerInterfaceImpl>(source, deviceId, stateUpdated, outResolution);
 }
 
 std::unique_ptr<PlatformInterface> CreatePlatformInterface() {

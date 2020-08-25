@@ -12,6 +12,13 @@
 #include <algorithm>
 
 namespace tgcalls {
+namespace {
+
+constexpr auto kPreferredWidth = 640;
+constexpr auto kPreferredHeight = 480;
+constexpr auto kPreferredFps = 30;
+
+} // namespace
 
 VideoCameraCapturer::VideoCameraCapturer() = default;
 
@@ -65,14 +72,20 @@ bool VideoCameraCapturer::create(webrtc::VideoCaptureModule::DeviceInfo *info, c
 	}
 	_module->RegisterCaptureDataCallback(this);
 
-	info->GetCapability(_module->CurrentDeviceName(), 0, _capability);
-
-	constexpr auto kWidth = 640;
-	constexpr auto kHeight = 480;
-	constexpr auto kFps = 30;
-	_capability.width = kWidth;
-	_capability.height = kHeight;
-	_capability.maxFPS = kFps;
+	auto requested = webrtc::VideoCaptureCapability();
+	requested.videoType = webrtc::VideoType::kI420;
+	requested.width = kPreferredWidth;
+	requested.height = kPreferredHeight;
+	requested.maxFPS = kPreferredFps;
+	info->GetBestMatchedCapability(
+		_module->CurrentDeviceName(),
+		requested,
+		_capability);
+	if (!_capability.width || !_capability.height || !_capability.maxFPS) {
+		_capability.width = kPreferredWidth;
+		_capability.height = kPreferredHeight;
+		_capability.maxFPS = kPreferredFps;
+	}
 	_capability.videoType = webrtc::VideoType::kI420;
 	if (_module->StartCapture(_capability) != 0) {
 		RTC_LOG(LS_ERROR)
@@ -80,6 +93,7 @@ bool VideoCameraCapturer::create(webrtc::VideoCaptureModule::DeviceInfo *info, c
 		destroy();
 		return false;
 	}
+	_dimensions = std::make_pair(_capability.width, _capability.height);
 	return true;
 }
 
@@ -108,6 +122,10 @@ void VideoCameraCapturer::setDeviceId(std::string deviceId) {
 
 void VideoCameraCapturer::setPreferredCaptureAspectRatio(float aspectRatio) {
 	_aspectRatio = aspectRatio;
+}
+
+std::pair<int, int> VideoCameraCapturer::resolution() const {
+	return _dimensions;
 }
 
 void VideoCameraCapturer::destroy() {

@@ -26,17 +26,20 @@ rtc::Thread *makeMediaThread() {
 	return value.get();
 }
 
-void dumpStatsLog(const std::string path, const CallStats &stats) {
+void dumpStatsLog(const FilePath &path, const CallStats &stats) {
+	if (path.empty()) {
+		return;
+	}
     std::ofstream file;
     file.open(path);
-    
+
     file << "{";
     file << "\"v\":\"" << 1 << "\"";
     file << ",";
-    
+
     file << "\"codec\":\"" << stats.outgoingCodec << "\"";
     file << ",";
-    
+
     file << "\"bitrate\":[";
     bool addComma = false;
     for (auto &it : stats.bitrateRecords) {
@@ -52,7 +55,7 @@ void dumpStatsLog(const std::string path, const CallStats &stats) {
     }
     file << "]";
     file << ",";
-    
+
     file << "\"network\":[";
     addComma = false;
     for (auto &it : stats.networkRecords) {
@@ -69,9 +72,9 @@ void dumpStatsLog(const std::string path, const CallStats &stats) {
         addComma = true;
     }
     file << "]";
-    
+
     file << "}";
-    
+
     file.close();
 }
 
@@ -122,7 +125,7 @@ _dataSaving(descriptor.config.dataSaving) {
 	assert(_thread->IsCurrent());
 	assert(_stateUpdated != nullptr);
 	assert(_signalingDataEmitted != nullptr);
-    
+
     _preferredCodecs = descriptor.config.preferredVideoCodecs;
 
 	_sendSignalingMessage = [=](const Message &message) {
@@ -207,7 +210,7 @@ void Manager::start() {
 					strong->_mediaManager->perform(RTC_FROM_HERE, [=](MediaManager *mediaManager) {
 						mediaManager->setIsConnected(state.isReadyToSendData);
 					});
-                    
+
                     if (isFirstConnection) {
                         strong->sendInitialSignalingMessages();
                     }
@@ -354,7 +357,7 @@ void Manager::setIsLocalNetworkLowCost(bool isLocalNetworkLowCost) {
         _networkManager->perform(RTC_FROM_HERE, [isLocalNetworkLowCost](NetworkManager *networkManager) {
             networkManager->setIsLocalNetworkLowCost(isLocalNetworkLowCost);
         });
-        
+
         _localNetworkIsLowCost = isLocalNetworkLowCost;
         updateCurrentResolvedNetworkStatus();
     }
@@ -363,16 +366,16 @@ void Manager::setIsLocalNetworkLowCost(bool isLocalNetworkLowCost) {
 void Manager::getNetworkStats(std::function<void (TrafficStats, CallStats)> completion) {
     _networkManager->perform(RTC_FROM_HERE, [thread = _thread, weak = std::weak_ptr<Manager>(shared_from_this()), completion = std::move(completion), statsLogPath = _statsLogPath](NetworkManager *networkManager) {
         auto networkStats = networkManager->getNetworkStats();
-        
+
         CallStats callStats;
         networkManager->fillCallStats(callStats);
-        
+
         thread->PostTask(RTC_FROM_HERE, [weak, networkStats, completion = std::move(completion), callStats = std::move(callStats), statsLogPath = statsLogPath] {
             const auto strong = weak.lock();
             if (!strong) {
                 return;
             }
-            
+
             strong->_mediaManager->perform(RTC_FROM_HERE, [networkStats, completion = std::move(completion), callStatsValue = std::move(callStats), statsLogPath = statsLogPath](MediaManager *mediaManager) {
                 CallStats callStats = std::move(callStatsValue);
                 mediaManager->fillCallStats(callStats);
@@ -397,14 +400,14 @@ void Manager::updateCurrentResolvedNetworkStatus() {
         default:
             break;
     }
-    
+
     ResolvedNetworkStatus localStatus;
     localStatus.isLowCost = _localNetworkIsLowCost;
     localStatus.isLowDataRequested = localIsLowDataRequested;
-    
+
     if (!_currentResolvedLocalNetworkStatus.has_value() || *_currentResolvedLocalNetworkStatus != localStatus) {
         _currentResolvedLocalNetworkStatus = localStatus;
-        
+
         switch (_protocolVersion) {
             case ProtocolVersion::V1:
                 if (_didConnectOnce) {
@@ -415,11 +418,11 @@ void Manager::updateCurrentResolvedNetworkStatus() {
                 break;
         }
     }
-    
+
     ResolvedNetworkStatus status;
     status.isLowCost = _localNetworkIsLowCost && _remoteNetworkIsLowCost;
     status.isLowDataRequested = localIsLowDataRequested || _remoteIsLowDataRequested;
-    
+
     if (!_currentResolvedNetworkStatus.has_value() || *_currentResolvedNetworkStatus != status) {
         _currentResolvedNetworkStatus = status;
         _mediaManager->perform(RTC_FROM_HERE, [status](MediaManager *mediaManager) {
