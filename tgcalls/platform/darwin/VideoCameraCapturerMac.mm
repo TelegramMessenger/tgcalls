@@ -154,10 +154,11 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 
 @interface VideoCameraCapturer () <AVCaptureVideoDataOutputSampleBufferDelegate> {
     rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _source;
-    std::string _deviceId; // TODO
+    NSString *_deviceId; // TODO
 
     dispatch_queue_t _frameQueue;
     AVCaptureDevice *_currentDevice;
+    AVCaptureInput *_currentInput;
 
     // Live on RTCDispatcherTypeCaptureSession.
     BOOL _hasRetriedOnFatalError;
@@ -198,7 +199,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 
 @implementation VideoCameraCapturer
 
-- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source deviceId:(std::string)deviceId isActiveUpdated:(void (^)(bool))isActiveUpdated {
+- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source deviceId:(NSString *)deviceId isActiveUpdated:(void (^)(bool))isActiveUpdated {
     self = [super init];
     if (self != nil) {
         _source = source;
@@ -209,7 +210,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
         _isPaused = false;
         _skippedFrame = 0;
         _rotation = RTCVideoRotation_0;
-
+        
         _warmupFrameCount = 100;
 
         if (![self setupCaptureSession:[[AVCaptureSession alloc] init]]) {
@@ -293,13 +294,13 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 
 - (void)setUncroppedSink:(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)sink {
 	dispatch_async(self.frameQueue, ^{
-        _uncroppedSink = sink;
+        self->_uncroppedSink = sink;
     });
 }
 
 - (void)setPreferredCaptureAspectRatio:(float)aspectRatio {
 	dispatch_async(self.frameQueue, ^{
-        _aspectRatio = aspectRatio;
+        self->_aspectRatio = aspectRatio;
     });
 }
 
@@ -325,7 +326,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
       RTCLogInfo("startCaptureWithDevice %@ @ %ld fps", format, (long)fps);
 
       self->_currentDevice = device;
-
+      self->_currentInput = [[AVCaptureDeviceInput alloc] initWithDevice:device error:nil];
       NSError *error = nil;
       if (![self->_currentDevice lockForConfiguration:&error]) {
           RTCLogError(@"Failed to lock device %@. Error: %@",
@@ -347,6 +348,20 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
           completionHandler(nil);
       }
   }];
+}
+
+-(void)startWithScreenCapture {
+    _willBeRunning = true;
+    [RTCDispatcher
+     dispatchAsyncOnType:RTCDispatcherTypeCaptureSession
+     block:^{
+         self->_currentDevice = nil;
+         self->_currentInput = [[AVCaptureScreenInput alloc] initWithDisplayID:CGMainDisplayID()];
+         [self reconfigureCaptureSessionInput];
+         [self->_captureSession startRunning];
+         [self->_currentDevice unlockForConfiguration];
+         self->_isRunning = YES;
+     }];
 }
 
 - (void)stopCaptureWithCompletionHandler:(nullable void (^)(void))completionHandler {
@@ -393,7 +408,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     }
 
     TGRTCCVPixelBuffer *rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:pixelBuffer];
-    rtcPixelBuffer.shouldBeMirrored = YES;
+    rtcPixelBuffer.shouldBeMirrored = ![_deviceId isEqualToString:@"screen_capture"];
     if (_aspectRatio > 0.001) {
 		const auto originalWidth = rtcPixelBuffer.width;
 		const auto originalHeight = rtcPixelBuffer.height;
@@ -412,7 +427,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 
             rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:pixelBuffer adaptedWidth:width adaptedHeight:height cropWidth:width cropHeight:height cropX:left cropY:top];
 
-            rtcPixelBuffer.shouldBeMirrored = YES;
+            rtcPixelBuffer.shouldBeMirrored = ![_deviceId isEqualToString:@"screen_capture"];
 
             CVPixelBufferRef outputPixelBufferRef = NULL;
             OSType pixelFormat = CVPixelBufferGetPixelFormatType(rtcPixelBuffer.pixelBuffer);
@@ -424,7 +439,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
                 }
                 if ([rtcPixelBuffer cropAndScaleTo:outputPixelBufferRef withTempBuffer:_croppingBuffer.data()]) {
                     rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:outputPixelBufferRef];
-                    rtcPixelBuffer.shouldBeMirrored = YES;
+                    rtcPixelBuffer.shouldBeMirrored = ![_deviceId isEqualToString:@"screen_capture"];
                 }
                 CVPixelBufferRelease(outputPixelBufferRef);
             }
@@ -602,9 +617,6 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     videoDataOutput.alwaysDiscardsLateVideoFrames = NO;
     [videoDataOutput setSampleBufferDelegate:self queue:self.frameQueue];
     _videoDataOutput = videoDataOutput;
-
-
-
 }
 
 - (void)updateVideoDataOutputPixelFormat:(AVCaptureDeviceFormat *)format {
@@ -644,14 +656,13 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     NSAssert([RTCDispatcher isOnQueueForType:RTCDispatcherTypeCaptureSession],
              @"reconfigureCaptureSessionInput must be called on the capture queue.");
     NSError *error = nil;
-    AVCaptureDeviceInput *input =
-    [AVCaptureDeviceInput deviceInputWithDevice:_currentDevice error:&error];
+    AVCaptureInput *input = _currentInput;
     if (!input) {
         RTCLogError(@"Failed to create front camera input: %@", error.localizedDescription);
         return;
     }
     [_captureSession beginConfiguration];
-    for (AVCaptureDeviceInput *oldInput in [_captureSession.inputs copy]) {
+    for (AVCaptureInput *oldInput in [_captureSession.inputs copy]) {
         [_captureSession removeInput:oldInput];
     }
     if ([_captureSession canAddInput:input]) {

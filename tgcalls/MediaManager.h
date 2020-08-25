@@ -111,6 +111,8 @@ private:
 	void sendVideoParametersMessage();
 	void sendOutgoingMediaStateMessage();
 
+	rtc::scoped_refptr<webrtc::AudioDeviceModule> createAudioDeviceModule();
+
     void beginStatsTimer(int timeoutMs);
     void collectStats();
 

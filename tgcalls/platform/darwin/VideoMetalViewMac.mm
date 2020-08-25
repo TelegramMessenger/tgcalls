@@ -74,7 +74,7 @@ private:
     
     void (^_onFirstFrameReceived)(float);
     bool _firstFrameReceivedReported;
-    void (^_onOrientationUpdated)(int);
+    void (^_onOrientationUpdated)(int, CGFloat);
     void (^_onIsMirroredUpdated)(bool);
     
     bool _didSetShouldBeMirrored;
@@ -353,22 +353,31 @@ private:
     _firstFrameReceivedReported = false;
 }
 
-- (void)setInternalOrientation:(int)internalOrientation {
-    if (_internalOrientation != internalOrientation) {
+- (void)setInternalOrientationAndSize:(int)internalOrientation size:(CGSize)size {
+    CGFloat aspect = 1.0f;
+    if (size.width > 1.0f && size.height > 1.0f) {
+        aspect = size.width / size.height;
+    }
+    if (_internalOrientation != internalOrientation || ABS(_internalAspect - aspect) > 0.001) {
+        RTCLogInfo(@"VideoMetalView@%lx orientation: %d, aspect: %f", (intptr_t)self, internalOrientation, (float)aspect);
+        
         _internalOrientation = internalOrientation;
+        _internalAspect = aspect;
         if (_onOrientationUpdated) {
-            _onOrientationUpdated(internalOrientation);
+            _onOrientationUpdated(internalOrientation, aspect);
         }
     }
 }
-- (void)internalSetOnOrientationUpdated:(void (^ _Nullable)(int))onOrientationUpdated {
+
+- (void)internalSetOnOrientationUpdated:(void (^ _Nullable)(int, CGFloat))onOrientationUpdated {
     _onOrientationUpdated = [onOrientationUpdated copy];
 }
+
 - (void)internalSetOnIsMirroredUpdated:(void (^ _Nullable)(bool))onIsMirroredUpdated {
     _onIsMirroredUpdated = [onIsMirroredUpdated copy];
 }
 
-- (void)setIsForceMirrored:(BOOL)forceMirrored {
+- (void)setForceMirrored:(BOOL)forceMirrored {
     _forceMirrored = forceMirrored;
     [self setNeedsLayout:YES];
 }

@@ -168,29 +168,6 @@ void InstanceImpl::stop(std::function<void(FinalState)> completion) {
     });
 }
 
-/*void InstanceImpl::controllerStateCallback(Controller::State state) {
-	if (onStateUpdated_) {
-		const auto mappedState = [&] {
-			switch (state) {
-			case Controller::State::WaitInit:
-				return State::WaitInit;
-			case Controller::State::WaitInitAck:
-				return State::WaitInitAck;
-			case Controller::State::Established:
-				return State::Estabilished;
-			case Controller::State::Failed:
-				return State::Failed;
-			case Controller::State::Reconnecting:
-				return State::Reconnecting;
-			default:
-				return State::Estabilished;
-			}
-		}();
-
-		onStateUpdated_(mappedState);
-	}
-}*/
-
 int InstanceImpl::GetConnectionMaxLayer() {
 	return 92;  // TODO: retrieve from LayerBase
 }

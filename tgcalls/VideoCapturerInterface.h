@@ -24,8 +24,6 @@ public:
 	virtual void setPreferredCaptureAspectRatio(float aspectRatio) = 0;
 	virtual void setUncroppedOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) = 0;
     
-    virtual void enableScreenCast() = 0;
-    virtual void disableScreenCast() = 0;
 };
 
 } // namespace tgcalls

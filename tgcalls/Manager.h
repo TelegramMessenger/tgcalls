@@ -15,11 +15,11 @@ private:
     struct ResolvedNetworkStatus {
         bool isLowCost = false;
         bool isLowDataRequested = false;
-        
+
         bool operator==(const ResolvedNetworkStatus &rhs);
         bool operator!=(const ResolvedNetworkStatus &rhs);
     };
-    
+
 public:
 	static rtc::Thread *getMediaThread();
 
@@ -35,7 +35,7 @@ public:
     void setIsLowBatteryLevel(bool isLowBatteryLevel);
     void setIsLocalNetworkLowCost(bool isLocalNetworkLowCost);
     void getNetworkStats(std::function<void(TrafficStats, CallStats)> completion);
-    
+
 
 	void setAudioInputDevice(std::string id);
 	void setAudioOutputDevice(std::string id);
@@ -55,7 +55,7 @@ private:
     bool _enableTCP = false;
     bool _enableStunMarking = false;
     ProtocolVersion _protocolVersion = ProtocolVersion::V0;
-    std::string _statsLogPath;
+    FilePath _statsLogPath;
 	std::vector<RtcServer> _rtcServers;
 	MediaDevicesConfig _mediaDevicesConfig;
 	std::shared_ptr<VideoCaptureInterface> _videoCapture;

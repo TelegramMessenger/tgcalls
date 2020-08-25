@@ -22,6 +22,12 @@ namespace tgcalls {
 
 class VideoCaptureInterface;
 
+#ifndef _WIN32
+using FilePath = std::string;
+#else
+using FilePath = std::wstring;
+#endif
+
 struct Proxy {
 	std::string host;
 	uint16_t port = 0;
@@ -99,13 +105,8 @@ struct Config {
 	bool enableAGC = false;
 	bool enableCallUpgrade = false;
 	bool enableVolumeControl = false;
-#ifndef _WIN32
-	std::string logPath;
-    std::string statsLogPath;
-#else
-	std::wstring logPath;
-    std::wstring statsLogPath;
-#endif
+	FilePath logPath;
+    FilePath statsLogPath;
 	int maxApiLayer = 0;
     bool enableHighBitrateVideo = false;
     std::vector<std::string> preferredVideoCodecs;

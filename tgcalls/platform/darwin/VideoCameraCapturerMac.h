@@ -13,18 +13,16 @@
 + (NSArray<AVCaptureDevice *> *)captureDevices;
 + (NSArray<AVCaptureDeviceFormat *> *)supportedFormatsForDevice:(AVCaptureDevice *)device;
 
-- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source deviceId:(std::string)deviceId isActiveUpdated:(void (^)(bool))isActiveUpdated;
+- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source deviceId:(NSString *)deviceId isActiveUpdated:(void (^)(bool))isActiveUpdated;
 
 - (void)startCaptureWithDevice:(AVCaptureDevice *)device format:(AVCaptureDeviceFormat *)format fps:(NSInteger)fps;
-- (void)startWithScreenCast;
+- (void)startWithScreenCapture;
 - (void)stopCapture;
 - (void)setIsEnabled:(bool)isEnabled;
 - (void)setPreferredCaptureAspectRatio:(float)aspectRatio;
 - (void)setUncroppedSink:(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)sink;
 - (BOOL)deviceIsCaptureCompitable:(AVCaptureDevice *)device;
 
-- (void)enableScreenCast;
-- (void)disableScreenCast;
 @end
 #endif //WEBRTC_MAC
 #endif

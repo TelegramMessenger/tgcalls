@@ -13,9 +13,9 @@
 
 #ifdef WEBRTC_IOS
 #include "sdk/objc/components/audio/RTCAudioSession.h"
+#import <UIKit/UIKit.h>
 #endif // WEBRTC_IOS
 
-#import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
 
 #include <sys/sysctl.h>

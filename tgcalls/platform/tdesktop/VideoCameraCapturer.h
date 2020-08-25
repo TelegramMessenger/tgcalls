@@ -27,6 +27,8 @@ public:
 	void setDeviceId(std::string deviceId);
 	void setPreferredCaptureAspectRatio(float aspectRatio);
 
+	std::pair<int, int> resolution() const;
+
 	void AddOrUpdateSink(rtc::VideoSinkInterface<webrtc::VideoFrame>* sink,
 		const rtc::VideoSinkWants& wants) override;
 	void RemoveSink(rtc::VideoSinkInterface<webrtc::VideoFrame>* sink) override;
@@ -45,6 +47,7 @@ private:
 
 	VideoState _state = VideoState::Inactive;
 	std::string _requestedDeviceId;
+	std::pair<int, int> _dimensions;
 	float _aspectRatio = 0.;
 
 };
