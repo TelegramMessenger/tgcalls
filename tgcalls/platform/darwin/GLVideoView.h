@@ -9,7 +9,11 @@
  */
 
 #import <Foundation/Foundation.h>
+#ifdef WEBRTC_IOS
+#import <UIKit/UIKit.h>
+#else
 #import <AppKit/AppKit.h>
+#endif
 
 #import "RTCMacros.h"
 #import "RTCVideoRenderer.h"
@@ -28,7 +32,13 @@ NS_ASSUME_NONNULL_BEGIN
  * bounds using OpenGLES 2.0 or OpenGLES 3.0.
  */
 RTC_OBJC_EXPORT
-@interface GLVideoView : NSView <RTCVideoRenderer>
+@interface GLVideoView :
+#ifdef WEBRTC_IOS
+UIView
+#else
+NSView
+#endif
+<RTCVideoRenderer>
 
 @property(nonatomic, weak) id<RTCVideoViewDelegate> delegate;
 
@@ -43,10 +53,11 @@ RTC_OBJC_EXPORT
 @property(nonatomic, nullable) NSValue *rotationOverride;
 
 @property (nonatomic, readwrite) int internalOrientation;
+@property (nonatomic, readwrite) CGFloat internalAspect;
 
 - (std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)getSink;
 - (void)setOnFirstFrameReceived:(void (^ _Nullable)())onFirstFrameReceived;
-- (void)internalSetOnOrientationUpdated:(void (^ _Nullable)(int))onOrientationUpdated;
+- (void)internalSetOnOrientationUpdated:(void (^ _Nullable)(int, CGFloat))onOrientationUpdated;
 - (void)internalSetOnIsMirroredUpdated:(void (^ _Nullable)(bool))onIsMirroredUpdated;
 
 @end

@@ -19,20 +19,12 @@ namespace tgcalls {
 class VideoCameraCapturer :
 	public rtc::VideoSourceInterface<webrtc::VideoFrame>,
 	public rtc::VideoSinkInterface<webrtc::VideoFrame> {
-private:
-	enum CreateTag {
-	};
-
 public:
-	VideoCameraCapturer(const CreateTag &);
+	VideoCameraCapturer();
 	~VideoCameraCapturer();
 
-	static std::unique_ptr<VideoCameraCapturer> Create(size_t width,
-		size_t height,
-		size_t target_fps,
-		size_t capture_device_index);
-
 	void setState(VideoState state);
+	void setDeviceId(std::string deviceId);
 	void setPreferredCaptureAspectRatio(float aspectRatio);
 
 	void AddOrUpdateSink(rtc::VideoSinkInterface<webrtc::VideoFrame>* sink,
@@ -42,20 +34,17 @@ public:
 	void OnFrame(const webrtc::VideoFrame &frame) override;
 
 private:
-	bool init(size_t width,
-		size_t height,
-		size_t target_fps,
-		size_t capture_device_index);
+	void create();
+	bool create(webrtc::VideoCaptureModule::DeviceInfo *info, const std::string &deviceId);
 	void destroy();
 	void updateVideoAdapter();
 
 	rtc::VideoBroadcaster _broadcaster;
-	//cricket::VideoAdapter _videoAdapter;
-
 	rtc::scoped_refptr<webrtc::VideoCaptureModule> _module;
 	webrtc::VideoCaptureCapability _capability;
 
-	VideoState _state = VideoState::Active;
+	VideoState _state = VideoState::Inactive;
+	std::string _requestedDeviceId;
 	float _aspectRatio = 0.;
 
 };

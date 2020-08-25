@@ -7,39 +7,44 @@
 
 namespace tgcalls {
 
-VideoCaptureInterfaceObject::VideoCaptureInterfaceObject(std::shared_ptr<PlatformContext> platformContext, bool screenCast) {
-	_videoSource = PlatformInterface::SharedInstance()->makeVideoSource(Manager::getMediaThread(), MediaManager::getWorkerThread());
+VideoCaptureInterfaceObject::VideoCaptureInterfaceObject(std::string deviceId, std::shared_ptr<PlatformContext> platformContext)
+: _videoSource(PlatformInterface::SharedInstance()->makeVideoSource(Manager::getMediaThread(), MediaManager::getWorkerThread())) {
 	_platformContext = platformContext;
-	//this should outlive the capturer
-	if (_videoSource) {
-		_videoCapturer = PlatformInterface::SharedInstance()->makeVideoCapturer(_videoSource, _useFrontCamera, screenCast, [this](VideoState state) {
-			if (this->_stateUpdated) {
-				this->_stateUpdated(state);
-			}
-		}, platformContext);
-	}
+    
+	switchToDevice(deviceId);
 }
 
 VideoCaptureInterfaceObject::~VideoCaptureInterfaceObject() {
 	if (_videoCapturer && _currentUncroppedSink != nullptr) {
-		//_videoSource->RemoveSink(_currentSink.get());
 		_videoCapturer->setUncroppedOutput(nullptr);
 	}
 }
 
-void VideoCaptureInterfaceObject::switchCamera() {
-	_useFrontCamera = !_useFrontCamera;
+webrtc::VideoTrackSourceInterface *VideoCaptureInterfaceObject::source() {
+	return _videoSource;
+}
+
+void VideoCaptureInterfaceObject::switchToDevice(std::string deviceId) {
     if (_videoCapturer && _currentUncroppedSink) {
 		_videoCapturer->setUncroppedOutput(nullptr);
     }
 	if (_videoSource) {
-		_videoCapturer = PlatformInterface::SharedInstance()->makeVideoCapturer(_videoSource, _useFrontCamera, _enableScreenCast, [this](VideoState state) {
+        //this should outlive the capturer
+		_videoCapturer = PlatformInterface::SharedInstance()->makeVideoCapturer(_videoSource, deviceId, [this](VideoState state) {
 			if (this->_stateUpdated) {
 				this->_stateUpdated(state);
 			}
-		}, _platformContext);
+        }, [this](PlatformCaptureInfo info) {
+            if (this->_shouldBeAdaptedToReceiverAspectRate != info.shouldBeAdaptedToReceiverAspectRate) {
+                this->_shouldBeAdaptedToReceiverAspectRate = info.shouldBeAdaptedToReceiverAspectRate;
+                this->updateAspectRateAdaptation();
+            }
+        }, _platformContext, _videoCapturerResolution);
 	}
 	if (_videoCapturer) {
+		if (_preferredAspectRatio > 0) {
+			_videoCapturer->setPreferredCaptureAspectRatio(_preferredAspectRatio);
+		}
 		if (_currentUncroppedSink) {
 			_videoCapturer->setUncroppedOutput(_currentUncroppedSink);
 		}
@@ -47,15 +52,6 @@ void VideoCaptureInterfaceObject::switchCamera() {
 	}
 }
 
-void VideoCaptureInterfaceObject::enableScreenCast() {
-    _enableScreenCast = true;
-    _videoCapturer->enableScreenCast();
-}
-void VideoCaptureInterfaceObject::disableScreenCast() {
-    _enableScreenCast = false;
-    _videoCapturer->disableScreenCast();
-}
-    
 void VideoCaptureInterfaceObject::setState(VideoState state) {
 	if (_state != state) {
 		_state = state;
@@ -66,9 +62,32 @@ void VideoCaptureInterfaceObject::setState(VideoState state) {
 }
 
 void VideoCaptureInterfaceObject::setPreferredAspectRatio(float aspectRatio) {
-	if (_videoCapturer) {
-		_videoCapturer->setPreferredCaptureAspectRatio(aspectRatio);
-	}
+    _preferredAspectRatio = aspectRatio;
+    updateAspectRateAdaptation();
+}
+
+void VideoCaptureInterfaceObject::updateAspectRateAdaptation() {
+    if (_videoCapturer) {
+        if (_videoCapturerResolution.first != 0 && _videoCapturerResolution.second != 0) {
+            if (_preferredAspectRatio > 0.01 && _shouldBeAdaptedToReceiverAspectRate) {
+                float originalWidth = (float)_videoCapturerResolution.first;
+                float originalHeight = (float)_videoCapturerResolution.second;
+                
+                float aspectRatio = _preferredAspectRatio;
+                
+                float width = (originalWidth > aspectRatio * originalHeight)
+                    ? int(std::round(aspectRatio * originalHeight))
+                    : originalWidth;
+                float height = (originalWidth > aspectRatio * originalHeight)
+                    ? originalHeight
+                    : int(std::round(originalHeight / aspectRatio));
+                
+                PlatformInterface::SharedInstance()->adaptVideoSource(_videoSource, (int)width, (int)height, 30);
+            } else {
+                PlatformInterface::SharedInstance()->adaptVideoSource(_videoSource, _videoCapturerResolution.first, _videoCapturerResolution.second, 30);
+            }
+        }
+    }
 }
 
 void VideoCaptureInterfaceObject::setOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
@@ -82,28 +101,18 @@ void VideoCaptureInterfaceObject::setStateUpdated(std::function<void(VideoState)
 	_stateUpdated = stateUpdated;
 }
 
-VideoCaptureInterfaceImpl::VideoCaptureInterfaceImpl(std::shared_ptr<PlatformContext> platformContext, bool screenCast) :
-_impl(Manager::getMediaThread(), [platformContext, screenCast]() {
-	return new VideoCaptureInterfaceObject(platformContext, screenCast);
+VideoCaptureInterfaceImpl::VideoCaptureInterfaceImpl(std::string deviceId, std::shared_ptr<PlatformContext> platformContext) :
+_impl(Manager::getMediaThread(), [deviceId, platformContext]() {
+	return new VideoCaptureInterfaceObject(deviceId, platformContext);
 }) {
 }
 
 VideoCaptureInterfaceImpl::~VideoCaptureInterfaceImpl() = default;
 
-void VideoCaptureInterfaceImpl::switchCamera() {
-	_impl.perform(RTC_FROM_HERE, [](VideoCaptureInterfaceObject *impl) {
-		impl->switchCamera();
+void VideoCaptureInterfaceImpl::switchToDevice(std::string deviceId) {
+	_impl.perform(RTC_FROM_HERE, [deviceId](VideoCaptureInterfaceObject *impl) {
+		impl->switchToDevice(deviceId);
 	});
-}
-void VideoCaptureInterfaceImpl::enableScreenCast() {
-    _impl.perform(RTC_FROM_HERE, [](VideoCaptureInterfaceObject *impl) {
-        impl->enableScreenCast();
-    });
-}
-void VideoCaptureInterfaceImpl::disableScreenCast() {
-    _impl.perform(RTC_FROM_HERE, [](VideoCaptureInterfaceObject *impl) {
-        impl->disableScreenCast();
-    });
 }
 
 void VideoCaptureInterfaceImpl::setState(VideoState state) {

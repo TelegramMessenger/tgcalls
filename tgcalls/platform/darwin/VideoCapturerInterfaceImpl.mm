@@ -25,13 +25,35 @@
 
 #ifndef WEBRTC_IOS
 #import "VideoCameraCapturerMac.h"
-#import "ScreenCapturer.h"
 #else
 #import "VideoCameraCapturer.h"
 #endif
 #import <AVFoundation/AVFoundation.h>
 
 #import "VideoCaptureInterface.h"
+#import "platform/PlatformInterface.h"
+
+@interface VideoCapturerInterfaceImplSourceDescription : NSObject
+
+@property (nonatomic, readonly) bool isFrontCamera;
+@property (nonatomic, strong, readonly, nonnull) AVCaptureDevice *device;
+@property (nonatomic, strong, readonly, nonnull) AVCaptureDeviceFormat *format;
+
+@end
+
+@implementation VideoCapturerInterfaceImplSourceDescription
+
+- (instancetype)initWithIsFrontCamera:(bool)isFrontCamera device:(AVCaptureDevice * _Nonnull)device format:(AVCaptureDeviceFormat * _Nonnull)format {
+    self = [super init];
+    if (self != nil) {
+        _isFrontCamera = isFrontCamera;
+        _device = device;
+        _format = format;
+    }
+    return self;
+}
+
+@end
 
 @interface VideoCapturerInterfaceImplReference : NSObject {
     VideoCameraCapturer *_videoCapturer;
@@ -41,101 +63,119 @@
 
 @implementation VideoCapturerInterfaceImplReference
 
-- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source useFrontCamera:(bool)useFrontCamera screenCast:(bool)screenCast isActiveUpdated:(void (^)(bool))isActiveUpdated {
-    self = [super init];
-    if (self != nil) {
-        assert([NSThread isMainThread]);
-    #ifdef WEBRTC_IOS
-        _videoCapturer = [[VideoCameraCapturer alloc] initWithSource:source useFrontCamera:useFrontCamera isActiveUpdated:isActiveUpdated];
-    #else
-        _videoCapturer = [[VideoCameraCapturer alloc] initWithSource:source isActiveUpdated:isActiveUpdated];
-    #endif
-        AVCaptureDevice *selectedCamera = nil;
++ (AVCaptureDevice *)selectCapturerDeviceWithDeviceId:(NSString *)deviceId {
+    AVCaptureDevice *selectedCamera = nil;
 
 #ifdef WEBRTC_IOS
-        AVCaptureDevice *frontCamera = nil;
-        AVCaptureDevice *backCamera = nil;
-        for (AVCaptureDevice *device in [VideoCameraCapturer captureDevices]) {
-            if (device.position == AVCaptureDevicePositionFront) {
-                frontCamera = device;
-            } else if (device.position == AVCaptureDevicePositionBack) {
-                backCamera = device;
-            }
+    bool useFrontCamera = ![deviceId isEqualToString:@"back"];
+    AVCaptureDevice *frontCamera = nil;
+    AVCaptureDevice *backCamera = nil;
+    for (AVCaptureDevice *device in [VideoCameraCapturer captureDevices]) {
+        if (device.position == AVCaptureDevicePositionFront) {
+            frontCamera = device;
+        } else if (device.position == AVCaptureDevicePositionBack) {
+            backCamera = device;
         }
-        if (useFrontCamera && frontCamera != nil) {
-            selectedCamera = frontCamera;
-        } else {
-            selectedCamera = backCamera;
-        }
+    }
+    if (useFrontCamera && frontCamera != nil) {
+        selectedCamera = frontCamera;
+    } else {
+        selectedCamera = backCamera;
+    }
 #else
         NSArray<AVCaptureDevice *> *devices = [VideoCameraCapturer captureDevices];
         for (int i = 0; i < devices.count; i++) {
-            if ([_videoCapturer deviceIsCaptureCompitable:devices[i]]) {
+            if (devices[i].isConnected && !devices[i].isSuspended) {
                 selectedCamera = devices[i];
                 break;
             }
         }
-
 #endif
-        //        NSLog(@"%@", selectedCamera);
-//        if (selectedCamera == nil) {
-//            return nil;
-//        }
+    
+    return selectedCamera;
+}
 
-        NSArray<AVCaptureDeviceFormat *> *sortedFormats = [[VideoCameraCapturer supportedFormatsForDevice:selectedCamera] sortedArrayUsingComparator:^NSComparisonResult(AVCaptureDeviceFormat* lhs, AVCaptureDeviceFormat *rhs) {
-            int32_t width1 = CMVideoFormatDescriptionGetDimensions(lhs.formatDescription).width;
-            int32_t width2 = CMVideoFormatDescriptionGetDimensions(rhs.formatDescription).width;
-            return width1 < width2 ? NSOrderedAscending : NSOrderedDescending;
-        }];
++ (AVCaptureDeviceFormat *)selectCaptureDeviceFormatForDevice:(AVCaptureDevice *)selectedCamera {
+    NSArray<AVCaptureDeviceFormat *> *sortedFormats = [[VideoCameraCapturer supportedFormatsForDevice:selectedCamera] sortedArrayUsingComparator:^NSComparisonResult(AVCaptureDeviceFormat* lhs, AVCaptureDeviceFormat *rhs) {
+        int32_t width1 = CMVideoFormatDescriptionGetDimensions(lhs.formatDescription).width;
+        int32_t width2 = CMVideoFormatDescriptionGetDimensions(rhs.formatDescription).width;
+        return width1 < width2 ? NSOrderedAscending : NSOrderedDescending;
+    }];
 
-        AVCaptureDeviceFormat *bestFormat = sortedFormats.firstObject;
-
-        bool didSelectPreferredFormat = false;
-        #ifdef WEBRTC_IOS
+    AVCaptureDeviceFormat *bestFormat = sortedFormats.firstObject;
+    
+    bool didSelectPreferredFormat = false;
+    #ifdef WEBRTC_IOS
+    for (AVCaptureDeviceFormat *format in sortedFormats) {
+        CMVideoDimensions dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription);
+        if (dimensions.width == 1280 && dimensions.height == 720) {
+            if (format.videoFieldOfView > 60.0f && format.videoSupportedFrameRateRanges.lastObject.maxFrameRate == 30) {
+                didSelectPreferredFormat = true;
+                bestFormat = format;
+                break;
+            }
+        }
+    }
+    #endif
+    if (!didSelectPreferredFormat) {
         for (AVCaptureDeviceFormat *format in sortedFormats) {
             CMVideoDimensions dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription);
-            if (dimensions.width == 1280 && dimensions.height == 720) {
-                if (format.videoFieldOfView > 60.0f && format.videoSupportedFrameRateRanges.lastObject.maxFrameRate == 30) {
-                    didSelectPreferredFormat = true;
-                    bestFormat = format;
-                    break;
-                }
+            if (dimensions.width >= 1000 || dimensions.height >= 1000) {
+                bestFormat = format;
+                break;
             }
         }
-        #endif
-        if (!didSelectPreferredFormat) {
-            for (AVCaptureDeviceFormat *format in sortedFormats) {
-                CMVideoDimensions dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription);
-                if (dimensions.width >= 1000 || dimensions.height >= 1000) {
-                    bestFormat = format;
-                    break;
-                }
-            }
-        }
-//
-//        if (bestFormat == nil) {
-//            assert(false);
-//            return nil;
-//        }
+    }
 
-        AVFrameRateRange *frameRateRange = [[bestFormat.videoSupportedFrameRateRanges sortedArrayUsingComparator:^NSComparisonResult(AVFrameRateRange *lhs, AVFrameRateRange *rhs) {
-            if (lhs.maxFrameRate < rhs.maxFrameRate) {
-                return NSOrderedAscending;
-            } else {
-                return NSOrderedDescending;
-            }
-        }] lastObject];
+    if (bestFormat == nil) {
+        assert(false);
+        return nil;
+    }
 
-//        if (frameRateRange == nil) {
-//            assert(false);
-//            return nil;
-//        }
-
-        if (screenCast) {
-            [_videoCapturer startWithScreenCast];
+    AVFrameRateRange *frameRateRange = [[bestFormat.videoSupportedFrameRateRanges sortedArrayUsingComparator:^NSComparisonResult(AVFrameRateRange *lhs, AVFrameRateRange *rhs) {
+        if (lhs.maxFrameRate < rhs.maxFrameRate) {
+            return NSOrderedAscending;
         } else {
-            [_videoCapturer startCaptureWithDevice:selectedCamera format:bestFormat fps:30];
+            return NSOrderedDescending;
         }
+    }] lastObject];
+
+    if (frameRateRange == nil) {
+        assert(false);
+        return nil;
+    }
+    
+    return bestFormat;
+}
+
++ (VideoCapturerInterfaceImplSourceDescription *)selectCapturerDescriptionWithDeviceId:(NSString *)deviceId {
+    AVCaptureDevice *selectedCamera = [VideoCapturerInterfaceImplReference selectCapturerDeviceWithDeviceId:deviceId];
+    
+    if (selectedCamera == nil) {
+        return nil;
+    }
+
+    AVCaptureDeviceFormat *bestFormat = [VideoCapturerInterfaceImplReference selectCaptureDeviceFormatForDevice:selectedCamera];
+    
+    if (bestFormat == nil) {
+        return nil;
+    }
+    
+    return [[VideoCapturerInterfaceImplSourceDescription alloc] initWithIsFrontCamera:![deviceId isEqualToString:@"back"] device:selectedCamera format:bestFormat];
+}
+
+- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source sourceDescription:(VideoCapturerInterfaceImplSourceDescription *)sourceDescription isActiveUpdated:(void (^)(bool))isActiveUpdated orientationUpdated:(void (^)(bool))orientationUpdated {
+    self = [super init];
+    if (self != nil) {
+        assert([NSThread isMainThread]);
+        
+    #ifdef WEBRTC_IOS
+        _videoCapturer = [[VideoCameraCapturer alloc] initWithSource:source useFrontCamera:sourceDescription.isFrontCamera isActiveUpdated:isActiveUpdated orientationUpdated:orientationUpdated];
+    #else
+        _videoCapturer = [[VideoCameraCapturer alloc] initWithSource:source isActiveUpdated:isActiveUpdated];
+    #endif
+
+        [_videoCapturer startCaptureWithDevice:sourceDescription.device format:sourceDescription.format fps:30];
     }
     return self;
 }
@@ -150,12 +190,6 @@
     [_videoCapturer setIsEnabled:isEnabled];
 }
 
-- (void)enableScreenCast {
-    [_videoCapturer enableScreenCast];
-}
-- (void)disableScreenCast {
-    [_videoCapturer disableScreenCast];
-}
 - (void)setUncroppedSink:(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)sink {
     [_videoCapturer setUncroppedSink:sink];
 }
@@ -172,13 +206,28 @@
 
 namespace tgcalls {
 
-VideoCapturerInterfaceImpl::VideoCapturerInterfaceImpl(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, bool useFrontCamera, bool screenCast, std::function<void(VideoState)> stateUpdated) :
+VideoCapturerInterfaceImpl::VideoCapturerInterfaceImpl(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, std::string deviceId, std::function<void(VideoState)> stateUpdated, std::function<void(PlatformCaptureInfo)> captureInfoUpdated, std::pair<int, int> &outResolution) :
     _source(source) {
+        VideoCapturerInterfaceImplSourceDescription *sourceDescription = [VideoCapturerInterfaceImplReference selectCapturerDescriptionWithDeviceId:[NSString stringWithUTF8String:deviceId.c_str()]];
+        
+    CMVideoDimensions dimensions = CMVideoFormatDescriptionGetDimensions(sourceDescription.format.formatDescription);
+    #ifdef WEBRTC_IOS
+    outResolution.first = dimensions.height;
+    outResolution.second = dimensions.width;
+    #else
+    outResolution.first = dimensions.width;
+    outResolution.second = dimensions.height;
+    #endif
+        
     _implReference = [[VideoCapturerInterfaceImplHolder alloc] init];
     VideoCapturerInterfaceImplHolder *implReference = _implReference;
     dispatch_async(dispatch_get_main_queue(), ^{
-        VideoCapturerInterfaceImplReference *value = [[VideoCapturerInterfaceImplReference alloc] initWithSource:source useFrontCamera:useFrontCamera screenCast:screenCast isActiveUpdated:^(bool isActive) {
+        VideoCapturerInterfaceImplReference *value = [[VideoCapturerInterfaceImplReference alloc] initWithSource:source sourceDescription:sourceDescription isActiveUpdated:^(bool isActive) {
             stateUpdated(isActive ? VideoState::Active : VideoState::Paused);
+        } orientationUpdated:^(bool isLandscape) {
+            PlatformCaptureInfo info;
+            info.shouldBeAdaptedToReceiverAspectRate = !isLandscape;
+            captureInfoUpdated(info);
         }];
         if (value != nil) {
             implReference.reference = (void *)CFBridgingRetain(value);
@@ -211,24 +260,6 @@ void VideoCapturerInterfaceImpl::setPreferredCaptureAspectRatio(float aspectRati
         if (implReference.reference != nil) {
             VideoCapturerInterfaceImplReference *reference = (__bridge VideoCapturerInterfaceImplReference *)implReference.reference;
             [reference setPreferredCaptureAspectRatio:aspectRatio];
-        }
-    });
-}
-void VideoCapturerInterfaceImpl::enableScreenCast() {
-    VideoCapturerInterfaceImplHolder *implReference = _implReference;
-    dispatch_async(dispatch_get_main_queue(), ^{
-        if (implReference.reference != nil) {
-            VideoCapturerInterfaceImplReference *reference = (__bridge VideoCapturerInterfaceImplReference *)implReference.reference;
-            [reference enableScreenCast];
-        }
-    });
-}
-void VideoCapturerInterfaceImpl::disableScreenCast() {
-    VideoCapturerInterfaceImplHolder *implReference = _implReference;
-    dispatch_async(dispatch_get_main_queue(), ^{
-        if (implReference.reference != nil) {
-            VideoCapturerInterfaceImplReference *reference = (__bridge VideoCapturerInterfaceImplReference *)implReference.reference;
-            [reference disableScreenCast];
         }
     });
 }

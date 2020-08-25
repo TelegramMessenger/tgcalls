@@ -7,6 +7,8 @@
 #include <memory>
 #include <map>
 
+#include "Stats.h"
+
 namespace rtc {
 template <typename VideoFrameT>
 class VideoSinkInterface;
@@ -55,6 +57,11 @@ struct Endpoint {
 	unsigned char peerTag[16] = { 0 };
 };
 
+enum class ProtocolVersion {
+    V0,
+    V1 // Low-cost network negotiation
+};
+
 enum class NetworkType {
 	Unknown,
 	Gprs,
@@ -85,6 +92,8 @@ struct Config {
 	double receiveTimeout = 0.;
 	DataSaving dataSaving = DataSaving::Never;
 	bool enableP2P = false;
+    bool allowTCP = false;
+    bool enableStunMarking = false;
 	bool enableAEC = false;
 	bool enableNS = false;
 	bool enableAGC = false;
@@ -92,12 +101,15 @@ struct Config {
 	bool enableVolumeControl = false;
 #ifndef _WIN32
 	std::string logPath;
+    std::string statsLogPath;
 #else
 	std::wstring logPath;
+    std::wstring statsLogPath;
 #endif
 	int maxApiLayer = 0;
-    float preferredAspectRatio;
     bool enableHighBitrateVideo = false;
+    std::vector<std::string> preferredVideoCodecs;
+    ProtocolVersion protocolVersion = ProtocolVersion::V0;
 };
 
 struct EncryptionKey {
@@ -140,7 +152,15 @@ struct FinalState {
 	PersistentState persistentState;
 	std::string debugLog;
 	TrafficStats trafficStats;
+    CallStats callStats;
 	bool isRatingSuggested = false;
+};
+
+struct MediaDevicesConfig {
+	std::string audioInputId;
+	std::string audioOutputId;
+	float inputVolume = 1.f;
+	float outputVolume = 1.f;
 };
 
 class Instance {
@@ -155,6 +175,7 @@ public:
 	virtual void setAudioOutputGainControlEnabled(bool enabled) = 0;
 	virtual void setEchoCancellationStrength(int strength) = 0;
 
+	virtual bool supportsVideo() = 0;
 	virtual void setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) = 0;
 
 	virtual void setAudioInputDevice(std::string id) = 0;
@@ -162,7 +183,7 @@ public:
 	virtual void setInputVolume(float level) = 0;
 	virtual void setOutputVolume(float level) = 0;
 	virtual void setAudioOutputDuckingEnabled(bool enabled) = 0;
-    
+
     virtual void setIsLowBatteryLevel(bool isLowBatteryLevel) = 0;
 
 	virtual std::string getLastError() = 0;
@@ -173,8 +194,9 @@ public:
 
 	virtual void receiveSignalingData(const std::vector<uint8_t> &data) = 0;
 	virtual void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture) = 0;
+    virtual void setRequestedVideoAspect(float aspect) = 0;
 
-	virtual FinalState stop() = 0;
+	virtual void stop(std::function<void(FinalState)> completion) = 0;
 
 };
 
@@ -189,6 +211,7 @@ struct Descriptor {
 	std::vector<RtcServer> rtcServers;
 	NetworkType initialNetworkType = NetworkType();
 	EncryptionKey encryptionKey;
+	MediaDevicesConfig mediaDevicesConfig;
 	std::shared_ptr<VideoCaptureInterface> videoCapture;
 	std::function<void(State)> stateUpdated;
 	std::function<void(int)> signalBarsUpdated;
@@ -204,7 +227,7 @@ public:
 
 	virtual std::unique_ptr<Instance> construct(Descriptor &&descriptor) = 0;
 	virtual int connectionMaxLayer() = 0;
-	virtual std::string version() = 0;
+	virtual std::vector<std::string> versions() = 0;
 
 	static std::unique_ptr<Instance> Create(
 		const std::string &version,
@@ -218,7 +241,7 @@ private:
 
 	template <typename Implementation>
 	static bool RegisterOne();
-	static void RegisterOne(std::unique_ptr<Meta> meta);
+	static void RegisterOne(std::shared_ptr<Meta> meta);
 
 };
 
@@ -229,14 +252,14 @@ bool Meta::RegisterOne() {
 		int connectionMaxLayer() override {
 			return Implementation::GetConnectionMaxLayer();
 		}
-		std::string version() override {
-			return Implementation::GetVersion();
+		std::vector<std::string> versions() override {
+			return Implementation::GetVersions();
 		}
 		std::unique_ptr<Instance> construct(Descriptor &&descriptor) override {
 			return std::make_unique<Implementation>(std::move(descriptor));
 		}
 	};
-	RegisterOne(std::make_unique<MetaImpl>());
+	RegisterOne(std::make_shared<MetaImpl>());
 	return true;
 }
 

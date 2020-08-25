@@ -151,6 +151,21 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 
 @end*/
 
+static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation) {
+    switch (orientation) {
+        case UIInterfaceOrientationPortrait:
+            return UIDeviceOrientationPortrait;
+        case UIInterfaceOrientationPortraitUpsideDown:
+            return UIDeviceOrientationPortraitUpsideDown;
+        case UIInterfaceOrientationLandscapeLeft:
+            return UIDeviceOrientationLandscapeLeft;
+        case UIInterfaceOrientationLandscapeRight:
+            return UIDeviceOrientationLandscapeRight;
+        default:
+            return UIDeviceOrientationPortrait;
+    }
+}
+
 @interface VideoCameraCapturer () <AVCaptureVideoDataOutputSampleBufferDelegate> {
     rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _source;
     
@@ -173,12 +188,15 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     FourCharCode _outputPixelFormat;
     RTCVideoRotation _rotation;
     UIDeviceOrientation _orientation;
+    bool _didReceiveOrientationUpdate;
     bool _rotationLock;
     
     // Live on mainThread.
     void (^_isActiveUpdated)(bool);
     bool _isActiveValue;
     bool _inForegroundValue;
+    
+    void (^_orientationUpdated)(bool);
     
     // Live on frameQueue and main thread.
     std::atomic<bool> _isPaused;
@@ -196,7 +214,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 
 @implementation VideoCameraCapturer
 
-- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source useFrontCamera:(bool)useFrontCamera isActiveUpdated:(void (^)(bool))isActiveUpdated {
+- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source useFrontCamera:(bool)useFrontCamera isActiveUpdated:(void (^)(bool))isActiveUpdated orientationUpdated:(void (^)(bool))orientationUpdated {
     self = [super init];
     if (self != nil) {
         _source = source;
@@ -205,20 +223,50 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
         _inForegroundValue = true;
         _isPaused = false;
         _isActiveUpdated = [isActiveUpdated copy];
+        _orientationUpdated = [orientationUpdated copy];
         
         _warmupFrameCount = 100;
-        
-#if TARGET_OS_IPHONE
-        _rotationLock = true;
-#endif
         
         if (![self setupCaptureSession:[[AVCaptureSession alloc] init]]) {
             return nil;
         }
         
         NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
-        _orientation = UIDeviceOrientationPortrait;
+        _orientation = deviceOrientation([[UIApplication sharedApplication] statusBarOrientation]);
         _rotation = RTCVideoRotation_90;
+        
+        switch (_orientation) {
+            case UIDeviceOrientationPortrait:
+                _rotation = RTCVideoRotation_90;
+                break;
+            case UIDeviceOrientationPortraitUpsideDown:
+                _rotation = RTCVideoRotation_270;
+                break;
+            case UIDeviceOrientationLandscapeLeft:
+                _rotation = useFrontCamera ? RTCVideoRotation_180 : RTCVideoRotation_0;
+                break;
+            case UIDeviceOrientationLandscapeRight:
+                _rotation = useFrontCamera ? RTCVideoRotation_0 : RTCVideoRotation_180;
+                break;
+            case UIDeviceOrientationFaceUp:
+            case UIDeviceOrientationFaceDown:
+            case UIDeviceOrientationUnknown:
+                // Ignore.
+                break;
+        }
+        
+        if (_orientationUpdated) {
+            bool isLandscape = false;
+            switch (_rotation) {
+                case RTCVideoRotation_0:
+                case RTCVideoRotation_180:
+                    isLandscape = true;
+                    break;
+                default:
+                    break;
+            }
+            _orientationUpdated(isLandscape);
+        }
         [center addObserver:self
                    selector:@selector(deviceOrientationDidChange:)
                        name:UIDeviceOrientationDidChangeNotification
@@ -341,7 +389,6 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
           return;
       }
       [self reconfigureCaptureSessionInput];
-      [self updateOrientation];
       [self updateDeviceCaptureFormat:format fps:fps];
       [self updateVideoDataOutputPixelFormat:format];
       [_captureSession startRunning];
@@ -379,10 +426,10 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 
 #if TARGET_OS_IPHONE
 - (void)deviceOrientationDidChange:(NSNotification *)notification {
-  [RTCDispatcher dispatchAsyncOnType:RTCDispatcherTypeCaptureSession
-                               block:^{
-                                 [self updateOrientation];
-                               }];
+    [RTCDispatcher dispatchAsyncOnType:RTCDispatcherTypeCaptureSession block:^{
+        _didReceiveOrientationUpdate = true;
+        [self updateOrientation];
+    }];
 }
 #endif
 
@@ -423,24 +470,40 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
         usingFrontCamera = AVCaptureDevicePositionFront == deviceInput.device.position;
     }
     if (!_rotationLock) {
+        RTCVideoRotation updatedRotation = _rotation;
         switch (_orientation) {
             case UIDeviceOrientationPortrait:
-                _rotation = RTCVideoRotation_90;
+                updatedRotation = RTCVideoRotation_90;
                 break;
             case UIDeviceOrientationPortraitUpsideDown:
-                _rotation = RTCVideoRotation_270;
+                updatedRotation = RTCVideoRotation_270;
                 break;
             case UIDeviceOrientationLandscapeLeft:
-                _rotation = usingFrontCamera ? RTCVideoRotation_180 : RTCVideoRotation_0;
+                updatedRotation = usingFrontCamera ? RTCVideoRotation_180 : RTCVideoRotation_0;
                 break;
             case UIDeviceOrientationLandscapeRight:
-                _rotation = usingFrontCamera ? RTCVideoRotation_0 : RTCVideoRotation_180;
+                updatedRotation = usingFrontCamera ? RTCVideoRotation_0 : RTCVideoRotation_180;
                 break;
             case UIDeviceOrientationFaceUp:
             case UIDeviceOrientationFaceDown:
             case UIDeviceOrientationUnknown:
                 // Ignore.
                 break;
+        }
+        if (_rotation != updatedRotation) {
+            _rotation = updatedRotation;
+            if (_orientationUpdated) {
+                bool isLandscape = false;
+                switch (_rotation) {
+                    case RTCVideoRotation_0:
+                    case RTCVideoRotation_180:
+                        isLandscape = true;
+                        break;
+                    default:
+                        break;
+                }
+                _orientationUpdated(isLandscape);
+            }
         }
     }
     
@@ -742,7 +805,10 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 - (void)updateOrientation {
     NSAssert([RTCDispatcher isOnQueueForType:RTCDispatcherTypeCaptureSession],
              @"updateOrientation must be called on the capture queue.");
-    _orientation = [UIDevice currentDevice].orientation;
+    if (_didReceiveOrientationUpdate) {
+        _orientation = [UIDevice currentDevice].orientation;
+    }
 }
 
 @end
+//

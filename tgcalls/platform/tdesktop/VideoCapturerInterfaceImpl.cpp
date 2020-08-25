@@ -19,10 +19,12 @@ static VideoCameraCapturer *GetCapturer(
 
 VideoCapturerInterfaceImpl::VideoCapturerInterfaceImpl(
 	rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source,
-	bool useFrontCamera,
+	std::string deviceId,
 	std::function<void(VideoState)> stateUpdated)
 : _source(source)
 , _stateUpdated(stateUpdated) {
+	GetCapturer(_source)->setDeviceId(deviceId);
+	GetCapturer(_source)->setState(VideoState::Active);
 }
 
 VideoCapturerInterfaceImpl::~VideoCapturerInterfaceImpl() {

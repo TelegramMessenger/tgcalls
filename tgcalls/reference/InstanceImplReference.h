@@ -18,6 +18,10 @@ public:
 	void setNetworkType(NetworkType networkType) override;
 	void setMuteMicrophone(bool muteMicrophone) override;
 	void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture) override;
+    void setRequestedVideoAspect(float aspect) override;
+	bool supportsVideo() override {
+		return true;
+	}
 	void setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) override;
 	void setAudioOutputGainControlEnabled(bool enabled) override;
 	void setEchoCancellationStrength(int strength) override;
@@ -28,13 +32,13 @@ public:
 	void setAudioOutputDuckingEnabled(bool enabled) override;
     void setIsLowBatteryLevel(bool isLowBatteryLevel) override;
     static int GetConnectionMaxLayer();
-    static std::string GetVersion();
+    static std::vector<std::string> GetVersions();
 	std::string getLastError() override;
 	std::string getDebugInfo() override;
 	int64_t getPreferredRelayId() override;
 	TrafficStats getTrafficStats() override;
 	PersistentState getPersistentState() override;
-	FinalState stop() override;
+	void stop(std::function<void(FinalState)> completion) override;
 
 private:
     std::unique_ptr<LogSinkImpl> logSink_;

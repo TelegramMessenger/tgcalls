@@ -264,6 +264,24 @@ bool Deserialize(RemoteBatteryLevelIsLowMessage &to, rtc::ByteBufferReader &read
     return true;
 }
 
+void Serialize(rtc::ByteBufferWriter &to, const RemoteNetworkStatusMessage &from, bool singleMessagePacket) {
+    to.WriteUInt8(from.isLowCost ? 1 : 0);
+    to.WriteUInt8(from.isLowDataRequested ? 1 : 0);
+}
+
+bool Deserialize(RemoteNetworkStatusMessage &to, rtc::ByteBufferReader &reader, bool singleMessagePacket) {
+    uint8_t value = 0;
+    if (!reader.ReadUInt8(&value)) {
+        RTC_LOG(LS_ERROR) << "Could not read isLowCost.";
+        return false;
+    }
+    to.isLowCost = (value != 0);
+    if (reader.ReadUInt8(&value)) {
+        to.isLowDataRequested = (value != 0);
+    }
+    return true;
+}
+
 enum class TryResult : uint8_t {
 	Success,
 	TryNext,

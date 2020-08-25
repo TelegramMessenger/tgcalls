@@ -20,10 +20,14 @@
 
 namespace tgcalls {
 
+void AndroidInterface::configurePlatformAudio() {
+
+}
+
 std::unique_ptr<webrtc::VideoEncoderFactory> AndroidInterface::makeVideoEncoderFactory() {
     JNIEnv *env = webrtc::AttachCurrentThreadIfNeeded();
     webrtc::ScopedJavaLocalRef<jclass> factory_class =
-            webrtc::GetClass(env, "org/webrtc/HardwareVideoEncoderFactory");
+            webrtc::GetClass(env, "org/webrtc/DefaultVideoEncoderFactory");
     jmethodID factory_constructor = env->GetMethodID(
             factory_class.obj(), "<init>", "(Lorg/webrtc/EglBase$Context;ZZ)V");
     webrtc::ScopedJavaLocalRef<jobject> factory_object(
@@ -37,7 +41,7 @@ std::unique_ptr<webrtc::VideoEncoderFactory> AndroidInterface::makeVideoEncoderF
 std::unique_ptr<webrtc::VideoDecoderFactory> AndroidInterface::makeVideoDecoderFactory() {
     JNIEnv *env = webrtc::AttachCurrentThreadIfNeeded();
     webrtc::ScopedJavaLocalRef<jclass> factory_class =
-            webrtc::GetClass(env, "org/webrtc/HardwareVideoDecoderFactory");
+            webrtc::GetClass(env, "org/webrtc/DefaultVideoDecoderFactory");
     jmethodID factory_constructor = env->GetMethodID(
             factory_class.obj(), "<init>", "(Lorg/webrtc/EglBase$Context;)V");
     webrtc::ScopedJavaLocalRef<jobject> factory_object(
@@ -46,26 +50,41 @@ std::unique_ptr<webrtc::VideoDecoderFactory> AndroidInterface::makeVideoDecoderF
     return webrtc::JavaToNativeVideoDecoderFactory(env, factory_object.obj());
 }
 
+void AndroidInterface::adaptVideoSource(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> videoSource, int width, int height, int fps) {
+
+}
+
 rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> AndroidInterface::makeVideoSource(rtc::Thread *signalingThread, rtc::Thread *workerThread) {
     JNIEnv *env = webrtc::AttachCurrentThreadIfNeeded();
-    return _source = webrtc::CreateJavaVideoSource(env, signalingThread, false, true);
+    _source = webrtc::CreateJavaVideoSource(env, signalingThread, false, false);
+    return webrtc::VideoTrackSourceProxy::Create(signalingThread, workerThread, _source);
 }
 
 bool AndroidInterface::supportsEncoding(const std::string &codecName) {
-    if (videoEncoderFactory == nullptr) {
-        videoEncoderFactory = makeVideoEncoderFactory();
+    if (hardwareVideoEncoderFactory == nullptr) {
+        JNIEnv *env = webrtc::AttachCurrentThreadIfNeeded();
+        webrtc::ScopedJavaLocalRef<jclass> factory_class =
+                webrtc::GetClass(env, "org/webrtc/HardwareVideoEncoderFactory");
+        jmethodID factory_constructor = env->GetMethodID(
+                factory_class.obj(), "<init>", "(Lorg/webrtc/EglBase$Context;ZZ)V");
+        webrtc::ScopedJavaLocalRef<jobject> factory_object(
+                env, env->NewObject(factory_class.obj(), factory_constructor,
+                                    nullptr,
+                                    false,
+                                    true));
+        hardwareVideoEncoderFactory = webrtc::JavaToNativeVideoEncoderFactory(env, factory_object.obj());
     }
-    auto formats =  videoEncoderFactory->GetSupportedFormats();
+    auto formats = hardwareVideoEncoderFactory->GetSupportedFormats();
     for (auto format : formats) {
         if (format.name == codecName) {
             return true;
         }
     }
-    return false;
+    return codecName == cricket::kVp8CodecName;
 }
 
-std::unique_ptr<VideoCapturerInterface> AndroidInterface::makeVideoCapturer(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, bool useFrontCamera, std::function<void(VideoState)> stateUpdated, std::shared_ptr<PlatformContext> platformContext) {
-    return std::make_unique<VideoCapturerInterfaceImpl>(_source, useFrontCamera, stateUpdated, platformContext);
+std::unique_ptr<VideoCapturerInterface> AndroidInterface::makeVideoCapturer(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, std::string deviceId, std::function<void(VideoState)> stateUpdated, std::shared_ptr<PlatformContext> platformContext) {
+    return std::make_unique<VideoCapturerInterfaceImpl>(_source, deviceId, stateUpdated, platformContext);
 }
 
 
@@ -74,15 +93,3 @@ std::unique_ptr<PlatformInterface> CreatePlatformInterface() {
 }
 
 } // namespace tgcalls
-
-extern "C" {
-
-int webrtcOnJNILoad(JavaVM *vm, JNIEnv *env) {
-    webrtc::InitAndroid(vm);
-    webrtc::JVM::Initialize(vm);
-    rtc::InitializeSSL();
-
-    return JNI_TRUE;
-}
-
-}

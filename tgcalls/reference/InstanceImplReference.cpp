@@ -239,7 +239,6 @@ public:
     _remoteBatteryLevelIsLowUpdated(descriptor.remoteBatteryLevelIsLowUpdated),
     _remotePrefferedAspectRatioUpdated(descriptor.remotePrefferedAspectRatioUpdated),
 	_videoCapture(descriptor.videoCapture),
-	_localPreferredVideoAspectRatio(descriptor.config.preferredAspectRatio),
 	_state(State::Reconnecting),
 	_videoState(_videoCapture ? VideoState::Active : VideoState::Inactive) {
         assert(getMediaThread()->IsCurrent());
@@ -436,6 +435,9 @@ public:
             videoCaptureImpl->setPreferredAspectRatio(_preferredAspectRatio);
         }
 		beginSendingVideo();
+    }
+    
+    void setRequestedVideoAspect(float aspect) {
     }
 
     void receiveSignalingData(const std::vector<uint8_t> &data) {
@@ -863,7 +865,7 @@ private:
             });
         });
 
-        _localVideoTrack = _nativeFactory->CreateVideoTrack("video0", videoCaptureImpl->_videoSource);
+        _localVideoTrack = _nativeFactory->CreateVideoTrack("video0", videoCaptureImpl->source());
         _peerConnection->AddTrack(_localVideoTrack, _streamIds);
         for (auto &it : _peerConnection->GetTransceivers()) {
             if (it->media_type() == cricket::MediaType::MEDIA_TYPE_VIDEO) {
@@ -968,6 +970,12 @@ void InstanceImplReference::setVideoCapture(std::shared_ptr<VideoCaptureInterfac
     });
 }
 
+void InstanceImplReference::setRequestedVideoAspect(float aspect) {
+    internal_->perform(RTC_FROM_HERE, [aspect](InstanceImplReferenceInternal *internal) {
+        internal->setRequestedVideoAspect(aspect);
+    });
+}
+
 void InstanceImplReference::setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
     internal_->perform(RTC_FROM_HERE, [sink](InstanceImplReferenceInternal *internal) {
         internal->setIncomingVideoOutput(sink);
@@ -1002,8 +1010,10 @@ int InstanceImplReference::GetConnectionMaxLayer() {
     return 92;
 }
 
-std::string InstanceImplReference::GetVersion() {
-    return "2.8.8";
+std::vector<std::string> InstanceImplReference::GetVersions() {
+    std::vector<std::string> result;
+    result.push_back("2.8.8");
+    return result;
 }
 
 std::string InstanceImplReference::getLastError() {
@@ -1027,15 +1037,15 @@ PersistentState InstanceImplReference::getPersistentState() {
 	return PersistentState();
 }
 
-FinalState InstanceImplReference::stop() {
-	auto result = FinalState();
-
-	result.persistentState = getPersistentState();
-	result.debugLog = logSink_->result();
-	result.trafficStats = getTrafficStats();
-	result.isRatingSuggested = false;
-
-	return result;
+void InstanceImplReference::stop(std::function<void(FinalState)> completion) {
+    auto result = FinalState();
+    
+    result.persistentState = getPersistentState();
+    result.debugLog = logSink_->result();
+    result.trafficStats = getTrafficStats();
+    result.isRatingSuggested = false;
+    
+    completion(result);
 }
 
 template <>
