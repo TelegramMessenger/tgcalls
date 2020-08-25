@@ -180,6 +180,8 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     void (^_isActiveUpdated)(bool);
     bool _isActiveValue;
     bool _inForegroundValue;
+    bool _isScreenCast;
+
 
     // Live on frameQueue and main thread.
     std::atomic<bool> _isPaused;
@@ -203,12 +205,12 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     if (self != nil) {
         _source = source;
         _isActiveUpdated = [isActiveUpdated copy];
-        _isActiveValue = true;
-        _inForegroundValue = true;
-        _isPaused = false;
+        _isActiveValue = YES;
+        _inForegroundValue = YES;
+        _isPaused = NO;
         _skippedFrame = 0;
         _rotation = RTCVideoRotation_0;
-        
+        _isScreenCast = NO;
         _warmupFrameCount = 100;
 
         if (![self setupCaptureSession:[[AVCaptureSession alloc] init]]) {
@@ -257,6 +259,24 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
   [self startCaptureWithDevice:device format:format fps:fps completionHandler:nil];
 }
 
+- (void)startWithScreenCast {
+    _willBeRunning = true;
+    [RTCDispatcher
+     dispatchAsyncOnType:RTCDispatcherTypeCaptureSession
+     block:^{
+         
+         [self->_captureSession removeInput:self->_currentInput];
+         self->_currentInput = [[AVCaptureScreenInput alloc] initWithDisplayID:CGMainDisplayID()];
+         [self reconfigureCaptureSessionInput];
+         self->_isScreenCast = YES;
+      //   [self updateDeviceCaptureFormat:nil fps: 30];
+       //  [self updateVideoDataOutputPixelFormat: nil];
+         [self->_captureSession startRunning];
+         [self->_currentDevice unlockForConfiguration];
+         self->_isRunning = YES;
+     }];
+}
+
 - (void)stopCapture {
   _isActiveUpdated = nil;
   [self stopCaptureWithCompletionHandler:nil];
@@ -298,7 +318,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
          AVCaptureScreenInput *input = [[AVCaptureScreenInput alloc] initWithDisplayID:CGMainDisplayID()];
          input.minFrameDuration = CMTimeMake(1, (int32_t)30);
          self->_currentInput = input;
-         
+         self->_isScreenCast = YES;
          [self reconfigureCaptureSessionInput];
      }];
 }
@@ -308,6 +328,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
      block:^{
          [self->_captureSession removeInput:self->_currentInput];
          self->_currentInput = [AVCaptureDeviceInput deviceInputWithDevice:self->_currentDevice error:nil];
+         self->_isScreenCast = NO;
          [self reconfigureCaptureSessionInput];
      }];
 }
@@ -414,7 +435,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     }
 
     TGRTCCVPixelBuffer *rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:pixelBuffer];
-    rtcPixelBuffer.shouldBeMirrored = YES;
+    rtcPixelBuffer.shouldBeMirrored = !_isScreenCast;
     if (_aspectRatio > 0.001) {
 		const auto originalWidth = rtcPixelBuffer.width;
 		const auto originalHeight = rtcPixelBuffer.height;
@@ -433,7 +454,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 
             rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:pixelBuffer adaptedWidth:width adaptedHeight:height cropWidth:width cropHeight:height cropX:left cropY:top];
 
-            rtcPixelBuffer.shouldBeMirrored = YES;
+            rtcPixelBuffer.shouldBeMirrored = !_isScreenCast;
             
             CVPixelBufferRef outputPixelBufferRef = NULL;
             OSType pixelFormat = CVPixelBufferGetPixelFormatType(rtcPixelBuffer.pixelBuffer);
@@ -445,7 +466,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
                 }
                 if ([rtcPixelBuffer cropAndScaleTo:outputPixelBufferRef withTempBuffer:_croppingBuffer.data()]) {
                     rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:outputPixelBufferRef];
-                    rtcPixelBuffer.shouldBeMirrored = YES;
+                    rtcPixelBuffer.shouldBeMirrored = !_isScreenCast;
                 }
                 CVPixelBufferRelease(outputPixelBufferRef);
             }
@@ -639,12 +660,6 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
         _videoDataOutput.videoSettings =
         @{ (NSString *)kCVPixelBufferPixelFormatTypeKey : @(mediaSubType) };
     }
-    AVCaptureConnection *connection = [_videoDataOutput connectionWithMediaType:AVMediaTypeVideo];
-    
-    
-    if ([connection isVideoMirroringSupported]) {
-        [connection setVideoMirrored:YES];
-    }
 }
 
 #pragma mark - Private, called inside capture queue
@@ -678,7 +693,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     [_captureSession beginConfiguration];
     
     
-    for (AVCaptureDeviceInput *oldInput in [_captureSession.inputs copy]) {
+    for (AVCaptureInput *oldInput in [_captureSession.inputs copy]) {
         [_captureSession removeInput:oldInput];
     }
     if ([_captureSession canAddInput:input]) {

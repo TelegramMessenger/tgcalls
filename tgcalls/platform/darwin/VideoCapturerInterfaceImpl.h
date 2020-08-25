@@ -16,7 +16,7 @@ namespace tgcalls {
 
 class VideoCapturerInterfaceImpl : public VideoCapturerInterface {
 public:
-	VideoCapturerInterfaceImpl(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, bool useFrontCamera, std::function<void(VideoState)> stateUpdated);
+	VideoCapturerInterfaceImpl(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, bool useFrontCamera, bool screenCast, std::function<void(VideoState)> stateUpdated);
 	~VideoCapturerInterfaceImpl() override;
 
 	void setState(VideoState state) override;

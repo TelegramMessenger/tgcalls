@@ -27,7 +27,7 @@ protected:
 	VideoCaptureInterface() = default;
 
 public:
-	static std::unique_ptr<VideoCaptureInterface> Create(std::shared_ptr<PlatformContext> platformContext = nullptr);
+	static std::unique_ptr<VideoCaptureInterface> Create(std::shared_ptr<PlatformContext> platformContext = nullptr, bool screenCast = false);
 
 	virtual ~VideoCaptureInterface();
 

@@ -13,7 +13,7 @@ class VideoCapturerInterface;
 
 class VideoCaptureInterfaceObject {
 public:
-	VideoCaptureInterfaceObject(std::shared_ptr<PlatformContext> platformContext);
+	VideoCaptureInterfaceObject(std::shared_ptr<PlatformContext> platformContext, bool screenCast);
 	~VideoCaptureInterfaceObject();
 
 	void switchCamera();
@@ -32,12 +32,13 @@ private:
 	std::unique_ptr<VideoCapturerInterface> _videoCapturer;
 	std::function<void(VideoState)> _stateUpdated;
 	bool _useFrontCamera = true;
+    bool _enableScreenCast = false;
 	VideoState _state = VideoState::Active;
 };
 
 class VideoCaptureInterfaceImpl : public VideoCaptureInterface {
 public:
-	VideoCaptureInterfaceImpl(std::shared_ptr<PlatformContext> platformContext);
+	VideoCaptureInterfaceImpl(std::shared_ptr<PlatformContext> platformContext, bool screenCast);
 	virtual ~VideoCaptureInterfaceImpl();
 
 	void switchCamera() override;

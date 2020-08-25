@@ -16,6 +16,7 @@
 - (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source isActiveUpdated:(void (^)(bool))isActiveUpdated;
 
 - (void)startCaptureWithDevice:(AVCaptureDevice *)device format:(AVCaptureDeviceFormat *)format fps:(NSInteger)fps;
+- (void)startWithScreenCast;
 - (void)stopCapture;
 - (void)setIsEnabled:(bool)isEnabled;
 - (void)setPreferredCaptureAspectRatio:(float)aspectRatio;

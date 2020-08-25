@@ -7,12 +7,12 @@
 
 namespace tgcalls {
 
-VideoCaptureInterfaceObject::VideoCaptureInterfaceObject(std::shared_ptr<PlatformContext> platformContext) {
+VideoCaptureInterfaceObject::VideoCaptureInterfaceObject(std::shared_ptr<PlatformContext> platformContext, bool screenCast) {
 	_videoSource = PlatformInterface::SharedInstance()->makeVideoSource(Manager::getMediaThread(), MediaManager::getWorkerThread());
 	_platformContext = platformContext;
 	//this should outlive the capturer
 	if (_videoSource) {
-		_videoCapturer = PlatformInterface::SharedInstance()->makeVideoCapturer(_videoSource, _useFrontCamera, [this](VideoState state) {
+		_videoCapturer = PlatformInterface::SharedInstance()->makeVideoCapturer(_videoSource, _useFrontCamera, screenCast, [this](VideoState state) {
 			if (this->_stateUpdated) {
 				this->_stateUpdated(state);
 			}
@@ -33,7 +33,7 @@ void VideoCaptureInterfaceObject::switchCamera() {
 		_videoCapturer->setUncroppedOutput(nullptr);
     }
 	if (_videoSource) {
-		_videoCapturer = PlatformInterface::SharedInstance()->makeVideoCapturer(_videoSource, _useFrontCamera, [this](VideoState state) {
+		_videoCapturer = PlatformInterface::SharedInstance()->makeVideoCapturer(_videoSource, _useFrontCamera, _enableScreenCast, [this](VideoState state) {
 			if (this->_stateUpdated) {
 				this->_stateUpdated(state);
 			}
@@ -48,11 +48,14 @@ void VideoCaptureInterfaceObject::switchCamera() {
 }
 
 void VideoCaptureInterfaceObject::enableScreenCast() {
+    _enableScreenCast = true;
     _videoCapturer->enableScreenCast();
 }
 void VideoCaptureInterfaceObject::disableScreenCast() {
+    _enableScreenCast = false;
     _videoCapturer->disableScreenCast();
 }
+    
 void VideoCaptureInterfaceObject::setState(VideoState state) {
 	if (_state != state) {
 		_state = state;
@@ -79,9 +82,9 @@ void VideoCaptureInterfaceObject::setStateUpdated(std::function<void(VideoState)
 	_stateUpdated = stateUpdated;
 }
 
-VideoCaptureInterfaceImpl::VideoCaptureInterfaceImpl(std::shared_ptr<PlatformContext> platformContext) :
-_impl(Manager::getMediaThread(), [platformContext]() {
-	return new VideoCaptureInterfaceObject(platformContext);
+VideoCaptureInterfaceImpl::VideoCaptureInterfaceImpl(std::shared_ptr<PlatformContext> platformContext, bool screenCast) :
+_impl(Manager::getMediaThread(), [platformContext, screenCast]() {
+	return new VideoCaptureInterfaceObject(platformContext, screenCast);
 }) {
 }
 

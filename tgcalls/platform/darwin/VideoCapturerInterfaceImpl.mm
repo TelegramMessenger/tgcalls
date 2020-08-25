@@ -35,21 +35,19 @@
 
 @interface VideoCapturerInterfaceImplReference : NSObject {
     VideoCameraCapturer *_videoCapturer;
-    AppScreenCapturer *_screenCapturer;
 }
 
 @end
 
 @implementation VideoCapturerInterfaceImplReference
 
-- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source useFrontCamera:(bool)useFrontCamera isActiveUpdated:(void (^)(bool))isActiveUpdated {
+- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source useFrontCamera:(bool)useFrontCamera screenCast:(bool)screenCast isActiveUpdated:(void (^)(bool))isActiveUpdated {
     self = [super init];
     if (self != nil) {
         assert([NSThread isMainThread]);
     #ifdef WEBRTC_IOS
         _videoCapturer = [[VideoCameraCapturer alloc] initWithSource:source useFrontCamera:useFrontCamera isActiveUpdated:isActiveUpdated];
     #else
-       //_screenCapturer = [[AppScreenCapturer alloc] initWithSource:source];
         _videoCapturer = [[VideoCameraCapturer alloc] initWithSource:source isActiveUpdated:isActiveUpdated];
     #endif
         AVCaptureDevice *selectedCamera = nil;
@@ -80,9 +78,9 @@
 
 #endif
         //        NSLog(@"%@", selectedCamera);
-        if (selectedCamera == nil) {
-            return nil;
-        }
+//        if (selectedCamera == nil) {
+//            return nil;
+//        }
 
         NSArray<AVCaptureDeviceFormat *> *sortedFormats = [[VideoCameraCapturer supportedFormatsForDevice:selectedCamera] sortedArrayUsingComparator:^NSComparisonResult(AVCaptureDeviceFormat* lhs, AVCaptureDeviceFormat *rhs) {
             int32_t width1 = CMVideoFormatDescriptionGetDimensions(lhs.formatDescription).width;
@@ -114,11 +112,11 @@
                 }
             }
         }
-
-        if (bestFormat == nil) {
-            assert(false);
-            return nil;
-        }
+//
+//        if (bestFormat == nil) {
+//            assert(false);
+//            return nil;
+//        }
 
         AVFrameRateRange *frameRateRange = [[bestFormat.videoSupportedFrameRateRanges sortedArrayUsingComparator:^NSComparisonResult(AVFrameRateRange *lhs, AVFrameRateRange *rhs) {
             if (lhs.maxFrameRate < rhs.maxFrameRate) {
@@ -128,12 +126,16 @@
             }
         }] lastObject];
 
-        if (frameRateRange == nil) {
-            assert(false);
-            return nil;
-        }
+//        if (frameRateRange == nil) {
+//            assert(false);
+//            return nil;
+//        }
 
-        [_videoCapturer startCaptureWithDevice:selectedCamera format:bestFormat fps:30];
+        if (screenCast) {
+            [_videoCapturer startWithScreenCast];
+        } else {
+            [_videoCapturer startCaptureWithDevice:selectedCamera format:bestFormat fps:30];
+        }
     }
     return self;
 }
@@ -156,7 +158,6 @@
 }
 - (void)setUncroppedSink:(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)sink {
     [_videoCapturer setUncroppedSink:sink];
-    [_screenCapturer setSink:sink];
 }
 
 - (void)setPreferredCaptureAspectRatio:(float)aspectRatio {
@@ -171,12 +172,12 @@
 
 namespace tgcalls {
 
-VideoCapturerInterfaceImpl::VideoCapturerInterfaceImpl(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, bool useFrontCamera, std::function<void(VideoState)> stateUpdated) :
+VideoCapturerInterfaceImpl::VideoCapturerInterfaceImpl(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, bool useFrontCamera, bool screenCast, std::function<void(VideoState)> stateUpdated) :
     _source(source) {
     _implReference = [[VideoCapturerInterfaceImplHolder alloc] init];
     VideoCapturerInterfaceImplHolder *implReference = _implReference;
     dispatch_async(dispatch_get_main_queue(), ^{
-        VideoCapturerInterfaceImplReference *value = [[VideoCapturerInterfaceImplReference alloc] initWithSource:source useFrontCamera:useFrontCamera isActiveUpdated:^(bool isActive) {
+        VideoCapturerInterfaceImplReference *value = [[VideoCapturerInterfaceImplReference alloc] initWithSource:source useFrontCamera:useFrontCamera screenCast:screenCast isActiveUpdated:^(bool isActive) {
             stateUpdated(isActive ? VideoState::Active : VideoState::Paused);
         }];
         if (value != nil) {
