@@ -112,6 +112,7 @@ _enableStunMarking(descriptor.config.enableStunMarking),
 _protocolVersion(descriptor.config.protocolVersion),
 _statsLogPath(descriptor.config.statsLogPath),
 _rtcServers(std::move(descriptor.rtcServers)),
+_proxy(std::move(descriptor.proxy)),
 _mediaDevicesConfig(std::move(descriptor.mediaDevicesConfig)),
 _videoCapture(std::move(descriptor.videoCapture)),
 _stateUpdated(std::move(descriptor.stateUpdated)),
@@ -175,7 +176,7 @@ void Manager::start() {
 			strong->_sendSignalingMessage(std::move(message));
 		});
 	};
-	_networkManager.reset(new ThreadLocalObject<NetworkManager>(getNetworkThread(), [weak, thread, sendSignalingMessage, encryptionKey = _encryptionKey, enableP2P = _enableP2P, enableTCP = _enableTCP, enableStunMarking = _enableStunMarking, rtcServers = _rtcServers] {
+	_networkManager.reset(new ThreadLocalObject<NetworkManager>(getNetworkThread(), [weak, thread, sendSignalingMessage, encryptionKey = _encryptionKey, enableP2P = _enableP2P, enableTCP = _enableTCP, enableStunMarking = _enableStunMarking, rtcServers = _rtcServers, proxy = std::move(_proxy)] () mutable {
 		return new NetworkManager(
 			getNetworkThread(),
 			encryptionKey,
@@ -183,6 +184,7 @@ void Manager::start() {
             enableTCP,
             enableStunMarking,
 			rtcServers,
+            std::move(proxy),
 			[=](const NetworkManager::State &state) {
 				thread->PostTask(RTC_FROM_HERE, [=] {
 					const auto strong = weak.lock();
