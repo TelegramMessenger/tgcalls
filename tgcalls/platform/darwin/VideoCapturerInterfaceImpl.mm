@@ -88,8 +88,18 @@
         NSArray<AVCaptureDevice *> *devices = [VideoCameraCapturer captureDevices];
         for (int i = 0; i < devices.count; i++) {
             if (devices[i].isConnected && !devices[i].isSuspended) {
-                selectedCamera = devices[i];
-                break;
+                if ([deviceId isEqualToString:@""] || [deviceId isEqualToString:devices[i].uniqueID]) {
+                    selectedCamera = devices[i];
+                    break;
+                }
+            }
+        }
+        if (selectedCamera == nil && (![deviceId isEqualToString:@""] && ![deviceId isEqualToString:@"screen_capture"])) {
+            for (int i = 0; i < devices.count; i++) {
+                if (devices[i].isConnected && !devices[i].isSuspended) {
+                    selectedCamera = devices[i];
+                    break;
+                }
             }
         }
 #endif
