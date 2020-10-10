@@ -604,7 +604,9 @@ void MediaManager::checkIsReceivingVideoChanged(bool wasReceiving) {
         const auto codecs = {
             cricket::kFlexfecCodecName,
             cricket::kH264CodecName,
+#ifndef WEBRTC_DISABLE_H265
             cricket::kH265CodecName,
+#endif
             cricket::kVp8CodecName,
             cricket::kVp9CodecName,
             cricket::kAv1CodecName,
