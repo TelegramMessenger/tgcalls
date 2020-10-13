@@ -59,6 +59,54 @@ rtc::Thread *getMediaThread() {
     return Manager::getMediaThread();
 }
 
+class FrameEncryptorImpl : public webrtc::FrameEncryptorInterface {
+public:
+    FrameEncryptorImpl() {
+    }
+    
+    virtual int Encrypt(cricket::MediaType media_type,
+                        uint32_t ssrc,
+                        rtc::ArrayView<const uint8_t> additional_data,
+                        rtc::ArrayView<const uint8_t> frame,
+                        rtc::ArrayView<uint8_t> encrypted_frame,
+                        size_t* bytes_written) override {
+        memcpy(encrypted_frame.data(), frame.data(), frame.size());
+        for (auto it = encrypted_frame.begin(); it != encrypted_frame.end(); it++) {
+            *it ^= 123;
+        }
+        *bytes_written = frame.size();
+        return 0;
+    }
+
+    virtual size_t GetMaxCiphertextByteSize(cricket::MediaType media_type,
+                                            size_t frame_size) override {
+        return frame_size;
+    }
+};
+
+class FrameDecryptorImpl : public webrtc::FrameDecryptorInterface {
+public:
+    FrameDecryptorImpl() {
+    }
+    
+    virtual webrtc::FrameDecryptorInterface::Result Decrypt(cricket::MediaType media_type,
+                           const std::vector<uint32_t>& csrcs,
+                           rtc::ArrayView<const uint8_t> additional_data,
+                           rtc::ArrayView<const uint8_t> encrypted_frame,
+                           rtc::ArrayView<uint8_t> frame) override {
+        memcpy(frame.data(), encrypted_frame.data(), encrypted_frame.size());
+        for (auto it = frame.begin(); it != frame.end(); it++) {
+            *it ^= 123;
+        }
+        return webrtc::FrameDecryptorInterface::Result(webrtc::FrameDecryptorInterface::Status::kOk, encrypted_frame.size());
+    }
+
+    virtual size_t GetMaxPlaintextByteSize(cricket::MediaType media_type,
+                                           size_t encrypted_frame_size) override {
+        return encrypted_frame_size;
+    }
+};
+
 class PeerConnectionObserverImpl : public webrtc::PeerConnectionObserver {
 private:
     std::function<void(std::string, int, std::string)> _discoveredIceCandidate;
@@ -137,6 +185,11 @@ public:
     }
 
     virtual void OnTrack(rtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver) {
+        if (transceiver->receiver()) {
+            rtc::scoped_refptr<FrameDecryptorImpl> decryptor(new rtc::RefCountedObject<FrameDecryptorImpl>());
+            transceiver->receiver()->SetFrameDecryptor(decryptor);
+        }
+        
         _onTrack(transceiver);
     }
 
@@ -190,8 +243,7 @@ public:
 
 class GroupInstanceManager : public std::enable_shared_from_this<GroupInstanceManager> {
 public:
-	GroupInstanceManager(rtc::Thread *thread, GroupInstanceDescriptor &&descriptor) :
-	_thread(thread),
+	GroupInstanceManager(GroupInstanceDescriptor &&descriptor) :
     _sdpAnswerEmitted(descriptor.sdpAnswerEmitted) {
 	}
 
@@ -252,6 +304,12 @@ public:
         config.prioritize_most_likely_ice_candidate_pairs = true;
         config.presume_writable_when_fully_relayed = true;
         config.audio_jitter_buffer_enable_rtx_handling = true;*/
+        
+        webrtc::CryptoOptions cryptoOptions;
+        webrtc::CryptoOptions::SFrame sframe;
+        sframe.require_frame_encryption = true;
+        cryptoOptions.sframe = sframe;
+        config.crypto_options = cryptoOptions;
 
         _observer.reset(new PeerConnectionObserverImpl(
             [weak](std::string sdp, int mid, std::string sdpMid) {
@@ -283,13 +341,30 @@ public:
         _peerConnection = _nativeFactory->CreatePeerConnection(config, nullptr, nullptr, _observer.get());
         assert(_peerConnection != nullptr);
 
-        cricket::AudioOptions options;
-        rtc::scoped_refptr<webrtc::AudioSourceInterface> audioSource = _nativeFactory->CreateAudioSource(options);
-        _localAudioTrack = _nativeFactory->CreateAudioTrack("audio0", audioSource);
-        _peerConnection->AddTrack(_localAudioTrack, _streamIds);
+        for (int i = 0; i < 2; i++) {
+            cricket::AudioOptions options;
+            rtc::scoped_refptr<webrtc::AudioSourceInterface> audioSource = _nativeFactory->CreateAudioSource(options);
+            std::stringstream name;
+            name << "audio";
+            name << i;
+            rtc::scoped_refptr<webrtc::AudioTrackInterface> localAudioTrack = _nativeFactory->CreateAudioTrack(name.str(), audioSource);
+            _peerConnection->AddTrack(localAudioTrack, _streamIds);
+        }
+        
+        for (auto &it : _peerConnection->GetTransceivers()) {
+            if (it->sender()) {
+                rtc::scoped_refptr<FrameEncryptorImpl> encryptor(new rtc::RefCountedObject<FrameEncryptorImpl>());
+                it->sender()->SetFrameEncryptor(encryptor);
+            }
+        }
 	}
     
     void setOfferSdp(std::string const &offerSdp) {
+        if (_appliedRemoteRescription == offerSdp) {
+            return;
+        }
+        _appliedRemoteRescription = offerSdp;
+        
         webrtc::SdpParseError error;
         webrtc::SessionDescriptionInterface *sessionDescription = webrtc::CreateSessionDescription("offer", offerSdp, &error);
         if (!sessionDescription) {
@@ -331,7 +406,10 @@ public:
                         if (!strong) {
                             return;
                         }
-                        strong->_sdpAnswerEmitted(sdp);
+                        if (!strong->_didEmitAnswer) {
+                            strong->_didEmitAnswer = true;
+                            strong->_sdpAnswerEmitted(std::string(sdp));
+                        }
                     }));
                     strong->_peerConnection->SetLocalDescription(observer, sessionDescription);
                 }
@@ -341,15 +419,16 @@ public:
     }
 
 private:
-	rtc::Thread *_thread;
     std::function<void(std::string const &)> _sdpAnswerEmitted;
+    
+    bool _didEmitAnswer = false;
+    std::string _appliedRemoteRescription;
     
     std::vector<std::string> _streamIds;
     rtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> _nativeFactory;
     std::unique_ptr<PeerConnectionObserverImpl> _observer;
     rtc::scoped_refptr<webrtc::PeerConnectionInterface> _peerConnection;
     std::unique_ptr<webrtc::MediaConstraints> _nativeConstraints;
-    rtc::scoped_refptr<webrtc::AudioTrackInterface> _localAudioTrack;
 };
 
 GroupInstanceImpl::GroupInstanceImpl(GroupInstanceDescriptor &&descriptor) {
@@ -360,7 +439,7 @@ GroupInstanceImpl::GroupInstanceImpl(GroupInstanceDescriptor &&descriptor) {
 	}
     
 	_manager.reset(new ThreadLocalObject<GroupInstanceManager>(getMediaThread(), [descriptor = std::move(descriptor)]() mutable {
-		return new GroupInstanceManager(getMediaThread(), std::move(descriptor));
+		return new GroupInstanceManager(std::move(descriptor));
 	}));
 	_manager->perform(RTC_FROM_HERE, [](GroupInstanceManager *manager) {
 		manager->start();
