@@ -111,17 +111,20 @@ class PeerConnectionObserverImpl : public webrtc::PeerConnectionObserver {
 private:
     std::function<void(std::string, int, std::string)> _discoveredIceCandidate;
     std::function<void(bool)> _connectionStateChanged;
-    std::function<void(rtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver)> _onTrack;
+    std::function<void(rtc::scoped_refptr<webrtc::RtpTransceiverInterface>)> _onTrackAdded;
+    std::function<void(rtc::scoped_refptr<webrtc::RtpReceiverInterface>)> _onTrackRemoved;
 
 public:
     PeerConnectionObserverImpl(
         std::function<void(std::string, int, std::string)> discoveredIceCandidate,
         std::function<void(bool)> connectionStateChanged,
-        std::function<void(rtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver)> onTrack
+        std::function<void(rtc::scoped_refptr<webrtc::RtpTransceiverInterface>)> onTrackAdded,
+        std::function<void(rtc::scoped_refptr<webrtc::RtpReceiverInterface>)> onTrackRemoved
     ) :
     _discoveredIceCandidate(discoveredIceCandidate),
     _connectionStateChanged(connectionStateChanged),
-    _onTrack(onTrack) {
+    _onTrackAdded(onTrackAdded),
+    _onTrackRemoved(onTrackRemoved) {
     }
 
     virtual void OnSignalingChange(webrtc::PeerConnectionInterface::SignalingState new_state) {
@@ -190,10 +193,11 @@ public:
             transceiver->receiver()->SetFrameDecryptor(decryptor);
         }
         
-        _onTrack(transceiver);
+        _onTrackAdded(transceiver);
     }
 
     virtual void OnRemoveTrack(rtc::scoped_refptr<webrtc::RtpReceiverInterface> receiver) {
+        _onTrackRemoved(receiver);
     }
 
     virtual void OnInterestingUsage(int usage_pattern) {
@@ -239,6 +243,39 @@ public:
     }
 };
 
+template <typename Out>
+void split(const std::string &s, char delim, Out result) {
+    std::istringstream iss(s);
+    std::string item;
+    while (std::getline(iss, item, delim)) {
+        *result++ = item;
+    }
+}
+
+std::vector<std::string> split(const std::string &s, char delim) {
+    std::vector<std::string> elems;
+    split(s, delim, std::back_inserter(elems));
+    return elems;
+}
+
+std::string adjustLocalDescription(const std::string &sdp) {
+    std::vector<std::string> lines = split(sdp, '\n');
+    
+    std::string pattern = "c=IN ";
+    
+    bool foundAudio = false;
+    std::stringstream result;
+    for (const auto &it : lines) {
+        result << it << "\n";
+        if (!foundAudio && it.compare(0, pattern.size(), pattern) == 0) {
+            foundAudio = true;
+            result << "b=AS:" << 16 << "\n";
+        }
+    }
+    
+    return result.str();
+}
+
 } // namespace
 
 class GroupInstanceManager : public std::enable_shared_from_this<GroupInstanceManager> {
@@ -257,10 +294,17 @@ public:
 
 	void start() {
         const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
+        
+        webrtc::field_trial::InitFieldTrialsFromString(
+            "WebRTC-Audio-SendSideBwe/Enabled/"
+            "WebRTC-Audio-Allocation/min:6kbps,max:32kbps/"
+            "WebRTC-Audio-OpusMinPacketLossRate/Enabled-1/"
+            "WebRTC-FlexFEC-03/Enabled/"
+            "WebRTC-FlexFEC-03-Advertised/Enabled/"
+            "WebRTC-PcFactoryDefaultBitrates/min:6kbps,start:12kbps,max:32kbps/"
+        );
 
         PlatformInterface::SharedInstance()->configurePlatformAudio();
-        
-        _streamIds.push_back("stream0");
         
         webrtc::PeerConnectionFactoryDependencies dependencies;
         dependencies.network_thread = getNetworkThread();
@@ -300,10 +344,10 @@ public:
         webrtc::PeerConnectionInterface::RTCConfiguration config;
         config.sdp_semantics = webrtc::SdpSemantics::kUnifiedPlan;
         //config.continual_gathering_policy = webrtc::PeerConnectionInterface::ContinualGatheringPolicy::GATHER_CONTINUALLY;
-        /*config.audio_jitter_buffer_fast_accelerate = true;
+        config.audio_jitter_buffer_fast_accelerate = true;
         config.prioritize_most_likely_ice_candidate_pairs = true;
         config.presume_writable_when_fully_relayed = true;
-        config.audio_jitter_buffer_enable_rtx_handling = true;*/
+        //config.audio_jitter_buffer_enable_rtx_handling = true;
         
         webrtc::CryptoOptions cryptoOptions;
         webrtc::CryptoOptions::SFrame sframe;
@@ -313,12 +357,12 @@ public:
 
         _observer.reset(new PeerConnectionObserverImpl(
             [weak](std::string sdp, int mid, std::string sdpMid) {
-                getMediaThread()->PostTask(RTC_FROM_HERE, [weak, sdp, mid, sdpMid](){
+                /*getMediaThread()->PostTask(RTC_FROM_HERE, [weak, sdp, mid, sdpMid](){
                     auto strong = weak.lock();
                     if (strong) {
                         //strong->emitIceCandidate(sdp, mid, sdpMid);
                     }
-                });
+                });*/
             },
             [weak](bool isConnected) {
                 getMediaThread()->PostTask(RTC_FROM_HERE, [weak, isConnected](){
@@ -329,44 +373,117 @@ public:
                 });
             },
             [weak](rtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver) {
-                getMediaThread()->PostTask(RTC_FROM_HERE, [weak, transceiver](){
+                /*getMediaThread()->PostTask(RTC_FROM_HERE, [weak, transceiver](){
                     auto strong = weak.lock();
                     if (!strong) {
                         return;
                     }
                     //strong->onTrack(transceiver);
-                });
+                });*/
+            },
+            [weak](rtc::scoped_refptr<webrtc::RtpReceiverInterface> received) {
             }
         ));
         _peerConnection = _nativeFactory->CreatePeerConnection(config, nullptr, nullptr, _observer.get());
         assert(_peerConnection != nullptr);
 
-        for (int i = 0; i < 2; i++) {
+        for (int i = 0; i < 1; i++) {
             cricket::AudioOptions options;
             rtc::scoped_refptr<webrtc::AudioSourceInterface> audioSource = _nativeFactory->CreateAudioSource(options);
             std::stringstream name;
             name << "audio";
             name << i;
+            std::vector<std::string> streamIds;
+            streamIds.push_back(name.str());
             rtc::scoped_refptr<webrtc::AudioTrackInterface> localAudioTrack = _nativeFactory->CreateAudioTrack(name.str(), audioSource);
-            _peerConnection->AddTrack(localAudioTrack, _streamIds);
+            _peerConnection->AddTrack(localAudioTrack, streamIds);
         }
         
         for (auto &it : _peerConnection->GetTransceivers()) {
             if (it->sender()) {
+                auto params = it->sender()->GetParameters();
+                if (params.encodings.size() != 0) {
+                    params.encodings[0].max_bitrate_bps = 16000;
+                }
+                it->sender()->SetParameters(params);
                 rtc::scoped_refptr<FrameEncryptorImpl> encryptor(new rtc::RefCountedObject<FrameEncryptorImpl>());
                 it->sender()->SetFrameEncryptor(encryptor);
             }
         }
 	}
     
-    void setOfferSdp(std::string const &offerSdp) {
-        if (_appliedRemoteRescription == offerSdp) {
+    void emitOffer() {
+        const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
+        webrtc::PeerConnectionInterface::RTCOfferAnswerOptions options;
+        rtc::scoped_refptr<CreateSessionDescriptionObserverImpl> observer(new rtc::RefCountedObject<CreateSessionDescriptionObserverImpl>([weak](std::string sdp, std::string type) {
+            getMediaThread()->PostTask(RTC_FROM_HERE, [weak, sdp, type](){
+                auto strong = weak.lock();
+                if (!strong) {
+                    return;
+                }
+
+                webrtc::SdpParseError error;
+                webrtc::SessionDescriptionInterface *sessionDescription = webrtc::CreateSessionDescription(type, adjustLocalDescription(sdp), &error);
+                if (sessionDescription != nullptr) {
+                    rtc::scoped_refptr<SetSessionDescriptionObserverImpl> observer(new rtc::RefCountedObject<SetSessionDescriptionObserverImpl>([weak, sdp]() {
+                        auto strong = weak.lock();
+                        if (!strong) {
+                            return;
+                        }
+                        if (!strong->_didEmitAnswer) {
+                            strong->_didEmitAnswer = true;
+                            strong->_sdpAnswerEmitted(std::string(sdp));
+                        }
+                    }));
+                    strong->_peerConnection->SetLocalDescription(observer, sessionDescription);
+                }
+            });
+        }));
+        _peerConnection->CreateOffer(observer, options);
+    }
+    
+    void setOfferSdp(std::string const &offerSdp, bool isPartial) {
+        if (isPartial) {
+            bool startNow = _partialRemoteDescriptionQueue.size() == 0;
+            _partialRemoteDescriptionQueue.push_back(offerSdp);
+            if (startNow) {
+                applyNextPartialOfferSdp();
+            }
+        } else {
+            if (_appliedRemoteRescription == offerSdp) {
+                return;
+            }
+            _appliedRemoteRescription = offerSdp;
+            
+            webrtc::SdpParseError error;
+            webrtc::SessionDescriptionInterface *sessionDescription = webrtc::CreateSessionDescription(isPartial ? "pranswer" : "offer", adjustLocalDescription(offerSdp), &error);
+            if (!sessionDescription) {
+                return;
+            }
+            
+            const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
+            rtc::scoped_refptr<SetSessionDescriptionObserverImpl> observer(new rtc::RefCountedObject<SetSessionDescriptionObserverImpl>([weak]() {
+                getMediaThread()->PostTask(RTC_FROM_HERE, [weak](){
+                    auto strong = weak.lock();
+                    if (!strong) {
+                        return;
+                    }
+                    strong->emitAnswer();
+                });
+            }));
+            
+            _peerConnection->SetRemoteDescription(observer, sessionDescription);
+        }
+    }
+    
+    void applyNextPartialOfferSdp() {
+        if (_partialRemoteDescriptionQueue.size() == 0) {
             return;
         }
-        _appliedRemoteRescription = offerSdp;
+        std::string offerSdp = _partialRemoteDescriptionQueue[0];
         
         webrtc::SdpParseError error;
-        webrtc::SessionDescriptionInterface *sessionDescription = webrtc::CreateSessionDescription("offer", offerSdp, &error);
+        webrtc::SessionDescriptionInterface *sessionDescription = webrtc::CreateSessionDescription("pranswer", offerSdp, &error);
         if (!sessionDescription) {
             return;
         }
@@ -378,7 +495,34 @@ public:
                 if (!strong) {
                     return;
                 }
-                strong->emitAnswer();
+                
+                webrtc::PeerConnectionInterface::RTCOfferAnswerOptions options;
+                rtc::scoped_refptr<CreateSessionDescriptionObserverImpl> observer(new rtc::RefCountedObject<CreateSessionDescriptionObserverImpl>([weak](std::string sdp, std::string type) {
+                    getMediaThread()->PostTask(RTC_FROM_HERE, [weak, sdp, type](){
+                        auto strong = weak.lock();
+                        if (!strong) {
+                            return;
+                        }
+
+                        webrtc::SdpParseError error;
+                        webrtc::SessionDescriptionInterface *sessionDescription = webrtc::CreateSessionDescription(type, adjustLocalDescription(sdp), &error);
+                        if (sessionDescription != nullptr) {
+                            rtc::scoped_refptr<SetSessionDescriptionObserverImpl> observer(new rtc::RefCountedObject<SetSessionDescriptionObserverImpl>([weak, sdp]() {
+                                auto strong = weak.lock();
+                                if (!strong) {
+                                    return;
+                                }
+                                
+                                strong->_partialRemoteDescriptionQueue.erase(strong->_partialRemoteDescriptionQueue.begin());
+                                if (strong->_partialRemoteDescriptionQueue.size() != 0) {
+                                    strong->applyNextPartialOfferSdp();
+                                }
+                            }));
+                            strong->_peerConnection->SetLocalDescription(observer, sessionDescription);
+                        }
+                    });
+                }));
+                strong->_peerConnection->CreateAnswer(observer, options);
             });
         }));
         
@@ -389,8 +533,6 @@ public:
         const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
 
         webrtc::PeerConnectionInterface::RTCOfferAnswerOptions options;
-        options.offer_to_receive_audio = 1;
-
         rtc::scoped_refptr<CreateSessionDescriptionObserverImpl> observer(new rtc::RefCountedObject<CreateSessionDescriptionObserverImpl>([weak](std::string sdp, std::string type) {
             getMediaThread()->PostTask(RTC_FROM_HERE, [weak, sdp, type](){
                 auto strong = weak.lock();
@@ -399,7 +541,7 @@ public:
                 }
 
                 webrtc::SdpParseError error;
-                webrtc::SessionDescriptionInterface *sessionDescription = webrtc::CreateSessionDescription(type, sdp, &error);
+                webrtc::SessionDescriptionInterface *sessionDescription = webrtc::CreateSessionDescription(type, adjustLocalDescription(sdp), &error);
                 if (sessionDescription != nullptr) {
                     rtc::scoped_refptr<SetSessionDescriptionObserverImpl> observer(new rtc::RefCountedObject<SetSessionDescriptionObserverImpl>([weak, sdp]() {
                         auto strong = weak.lock();
@@ -423,8 +565,8 @@ private:
     
     bool _didEmitAnswer = false;
     std::string _appliedRemoteRescription;
+    std::vector<std::string> _partialRemoteDescriptionQueue;
     
-    std::vector<std::string> _streamIds;
     rtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> _nativeFactory;
     std::unique_ptr<PeerConnectionObserverImpl> _observer;
     rtc::scoped_refptr<webrtc::PeerConnectionInterface> _peerConnection;
@@ -452,9 +594,15 @@ GroupInstanceImpl::~GroupInstanceImpl() {
 	}
 }
 
-void GroupInstanceImpl::setOfferSdp(std::string const &offerSdp) {
-    _manager->perform(RTC_FROM_HERE, [offerSdp](GroupInstanceManager *manager) {
-        manager->setOfferSdp(offerSdp);
+void GroupInstanceImpl::emitOffer() {
+    _manager->perform(RTC_FROM_HERE, [](GroupInstanceManager *manager) {
+        manager->emitOffer();
+    });
+}
+
+void GroupInstanceImpl::setOfferSdp(std::string const &offerSdp, bool isPartial) {
+    _manager->perform(RTC_FROM_HERE, [offerSdp, isPartial](GroupInstanceManager *manager) {
+        manager->setOfferSdp(offerSdp, isPartial);
     });
 }
 
