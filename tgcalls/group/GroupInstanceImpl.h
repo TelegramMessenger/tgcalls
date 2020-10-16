@@ -24,7 +24,8 @@ public:
 	explicit GroupInstanceImpl(GroupInstanceDescriptor &&descriptor);
 	~GroupInstanceImpl();
     
-    void setOfferSdp(std::string const &offerSdp);
+    void emitOffer();
+    void setOfferSdp(std::string const &offerSdp, bool isPartial);
 
 private:
 	std::unique_ptr<ThreadLocalObject<GroupInstanceManager>> _manager;
