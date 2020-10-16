@@ -26,6 +26,7 @@ public:
     
     void emitOffer();
     void setOfferSdp(std::string const &offerSdp, bool isPartial);
+    void setIsMuted(bool isMuted);
 
 private:
 	std::unique_ptr<ThreadLocalObject<GroupInstanceManager>> _manager;

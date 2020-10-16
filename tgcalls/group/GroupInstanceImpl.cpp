@@ -7,6 +7,10 @@
 #include "api/peer_connection_interface.h"
 #include "api/task_queue/default_task_queue_factory.h"
 #include "media/engine/webrtc_media_engine.h"
+#include "api/audio_codecs/audio_decoder_factory_template.h"
+#include "api/audio_codecs/audio_encoder_factory_template.h"
+#include "api/audio_codecs/opus/audio_decoder_opus.h"
+#include "api/audio_codecs/opus/audio_encoder_opus.h"
 #include "api/audio_codecs/builtin_audio_encoder_factory.h"
 #include "api/audio_codecs/builtin_audio_decoder_factory.h"
 #include "api/rtc_event_log/rtc_event_log_factory.h"
@@ -269,7 +273,7 @@ std::string adjustLocalDescription(const std::string &sdp) {
         result << it << "\n";
         if (!foundAudio && it.compare(0, pattern.size(), pattern) == 0) {
             foundAudio = true;
-            result << "b=AS:" << 16 << "\n";
+            result << "b=AS:" << 32 << "\n";
         }
     }
     
@@ -301,7 +305,7 @@ public:
             "WebRTC-Audio-OpusMinPacketLossRate/Enabled-1/"
             "WebRTC-FlexFEC-03/Enabled/"
             "WebRTC-FlexFEC-03-Advertised/Enabled/"
-            "WebRTC-PcFactoryDefaultBitrates/min:6kbps,start:12kbps,max:32kbps/"
+            "WebRTC-PcFactoryDefaultBitrates/min:6kbps,start:32kbps,max:32kbps/"
         );
 
         PlatformInterface::SharedInstance()->configurePlatformAudio();
@@ -314,8 +318,8 @@ public:
 
         cricket::MediaEngineDependencies mediaDeps;
         mediaDeps.task_queue_factory = dependencies.task_queue_factory.get();
-        mediaDeps.audio_encoder_factory = webrtc::CreateBuiltinAudioEncoderFactory();
-        mediaDeps.audio_decoder_factory = webrtc::CreateBuiltinAudioDecoderFactory();
+        mediaDeps.audio_encoder_factory = webrtc::CreateAudioEncoderFactory<webrtc::AudioEncoderOpus>();
+        mediaDeps.audio_decoder_factory = webrtc::CreateAudioDecoderFactory<webrtc::AudioDecoderOpus>();
         mediaDeps.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory();
         mediaDeps.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactory();
 
@@ -387,23 +391,21 @@ public:
         _peerConnection = _nativeFactory->CreatePeerConnection(config, nullptr, nullptr, _observer.get());
         assert(_peerConnection != nullptr);
 
-        for (int i = 0; i < 1; i++) {
-            cricket::AudioOptions options;
-            rtc::scoped_refptr<webrtc::AudioSourceInterface> audioSource = _nativeFactory->CreateAudioSource(options);
-            std::stringstream name;
-            name << "audio";
-            name << i;
-            std::vector<std::string> streamIds;
-            streamIds.push_back(name.str());
-            rtc::scoped_refptr<webrtc::AudioTrackInterface> localAudioTrack = _nativeFactory->CreateAudioTrack(name.str(), audioSource);
-            _peerConnection->AddTrack(localAudioTrack, streamIds);
-        }
+        cricket::AudioOptions options;
+        rtc::scoped_refptr<webrtc::AudioSourceInterface> audioSource = _nativeFactory->CreateAudioSource(options);
+        std::stringstream name;
+        name << "audio";
+        name << 0;
+        std::vector<std::string> streamIds;
+        streamIds.push_back(name.str());
+        _localAudioTrack = _nativeFactory->CreateAudioTrack(name.str(), audioSource);
+        _peerConnection->AddTrack(_localAudioTrack, streamIds);
         
         for (auto &it : _peerConnection->GetTransceivers()) {
             if (it->sender()) {
                 auto params = it->sender()->GetParameters();
                 if (params.encodings.size() != 0) {
-                    params.encodings[0].max_bitrate_bps = 16000;
+                    params.encodings[0].max_bitrate_bps = 32000;
                 }
                 it->sender()->SetParameters(params);
                 rtc::scoped_refptr<FrameEncryptorImpl> encryptor(new rtc::RefCountedObject<FrameEncryptorImpl>());
@@ -474,6 +476,10 @@ public:
             
             _peerConnection->SetRemoteDescription(observer, sessionDescription);
         }
+    }
+    
+    void setIsMuted(bool isMuted) {
+        _localAudioTrack->set_enabled(!isMuted);
     }
     
     void applyNextPartialOfferSdp() {
@@ -570,6 +576,7 @@ private:
     rtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> _nativeFactory;
     std::unique_ptr<PeerConnectionObserverImpl> _observer;
     rtc::scoped_refptr<webrtc::PeerConnectionInterface> _peerConnection;
+    rtc::scoped_refptr<webrtc::AudioTrackInterface> _localAudioTrack;
     std::unique_ptr<webrtc::MediaConstraints> _nativeConstraints;
 };
 
@@ -603,6 +610,12 @@ void GroupInstanceImpl::emitOffer() {
 void GroupInstanceImpl::setOfferSdp(std::string const &offerSdp, bool isPartial) {
     _manager->perform(RTC_FROM_HERE, [offerSdp, isPartial](GroupInstanceManager *manager) {
         manager->setOfferSdp(offerSdp, isPartial);
+    });
+}
+
+void GroupInstanceImpl::setIsMuted(bool isMuted) {
+    _manager->perform(RTC_FROM_HERE, [isMuted](GroupInstanceManager *manager) {
+        manager->setIsMuted(isMuted);
     });
 }
 
