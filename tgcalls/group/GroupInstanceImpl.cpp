@@ -192,10 +192,10 @@ public:
     }
 
     virtual void OnTrack(rtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver) {
-        if (transceiver->receiver()) {
+        /*if (transceiver->receiver()) {
             rtc::scoped_refptr<FrameDecryptorImpl> decryptor(new rtc::RefCountedObject<FrameDecryptorImpl>());
             transceiver->receiver()->SetFrameDecryptor(decryptor);
-        }
+        }*/
         
         _onTrackAdded(transceiver);
     }
@@ -280,12 +280,19 @@ std::string adjustLocalDescription(const std::string &sdp) {
     return result.str();
 }
 
+VideoCaptureInterfaceObject *GetVideoCaptureAssumingSameThread(VideoCaptureInterface *videoCapture) {
+    return videoCapture
+        ? static_cast<VideoCaptureInterfaceImpl*>(videoCapture)->object()->getSyncAssumingSameThread()
+        : nullptr;
+}
+
 } // namespace
 
 class GroupInstanceManager : public std::enable_shared_from_this<GroupInstanceManager> {
 public:
 	GroupInstanceManager(GroupInstanceDescriptor &&descriptor) :
-    _sdpAnswerEmitted(descriptor.sdpAnswerEmitted) {
+    _sdpAnswerEmitted(descriptor.sdpAnswerEmitted),
+    _videoCapture(descriptor.videoCapture) {
 	}
 
 	~GroupInstanceManager() {
@@ -300,11 +307,11 @@ public:
         const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
         
         webrtc::field_trial::InitFieldTrialsFromString(
-            "WebRTC-Audio-SendSideBwe/Enabled/"
+            //"WebRTC-Audio-SendSideBwe/Enabled/"
             "WebRTC-Audio-Allocation/min:6kbps,max:32kbps/"
             "WebRTC-Audio-OpusMinPacketLossRate/Enabled-1/"
-            "WebRTC-FlexFEC-03/Enabled/"
-            "WebRTC-FlexFEC-03-Advertised/Enabled/"
+            //"WebRTC-FlexFEC-03/Enabled/"
+            //"WebRTC-FlexFEC-03-Advertised/Enabled/"
             "WebRTC-PcFactoryDefaultBitrates/min:6kbps,start:32kbps,max:32kbps/"
         );
 
@@ -353,11 +360,11 @@ public:
         config.presume_writable_when_fully_relayed = true;
         //config.audio_jitter_buffer_enable_rtx_handling = true;
         
-        webrtc::CryptoOptions cryptoOptions;
+        /*webrtc::CryptoOptions cryptoOptions;
         webrtc::CryptoOptions::SFrame sframe;
         sframe.require_frame_encryption = true;
         cryptoOptions.sframe = sframe;
-        config.crypto_options = cryptoOptions;
+        config.crypto_options = cryptoOptions;*/
 
         _observer.reset(new PeerConnectionObserverImpl(
             [weak](std::string sdp, int mid, std::string sdpMid) {
@@ -401,7 +408,41 @@ public:
         _localAudioTrack = _nativeFactory->CreateAudioTrack(name.str(), audioSource);
         _peerConnection->AddTrack(_localAudioTrack, streamIds);
         
-        for (auto &it : _peerConnection->GetTransceivers()) {
+        if (_videoCapture) {
+            VideoCaptureInterfaceObject *videoCaptureImpl = GetVideoCaptureAssumingSameThread(_videoCapture.get());
+
+            videoCaptureImpl->setStateUpdated([weak](VideoState state) {
+                getMediaThread()->PostTask(RTC_FROM_HERE, [weak, state](){
+                    auto strong = weak.lock();
+                    if (strong) {
+                        //strong->changeVideoState(state);
+                    }
+                });
+            });
+
+            _localVideoTrack = _nativeFactory->CreateVideoTrack("video0", videoCaptureImpl->source());
+            _peerConnection->AddTrack(_localVideoTrack, streamIds);
+            for (auto &it : _peerConnection->GetTransceivers()) {
+                if (it->media_type() == cricket::MediaType::MEDIA_TYPE_VIDEO) {
+                    auto capabilities = _nativeFactory->GetRtpSenderCapabilities(
+                        cricket::MediaType::MEDIA_TYPE_VIDEO);
+
+                    std::vector<webrtc::RtpCodecCapability> codecs;
+                    for (auto &codec : capabilities.codecs) {
+                        if (codec.name == cricket::kVp8CodecName) {
+                            codecs.insert(codecs.begin(), codec);
+                        } else {
+                            codecs.push_back(codec);
+                        }
+                    }
+                    it->SetCodecPreferences(codecs);
+
+                    break;
+                }
+            }
+        }
+        
+        /*for (auto &it : _peerConnection->GetTransceivers()) {
             if (it->sender()) {
                 auto params = it->sender()->GetParameters();
                 if (params.encodings.size() != 0) {
@@ -411,7 +452,7 @@ public:
                 rtc::scoped_refptr<FrameEncryptorImpl> encryptor(new rtc::RefCountedObject<FrameEncryptorImpl>());
                 it->sender()->SetFrameEncryptor(encryptor);
             }
-        }
+        }*/
 	}
     
     void emitOffer() {
@@ -568,6 +609,9 @@ public:
 
 private:
     std::function<void(std::string const &)> _sdpAnswerEmitted;
+    std::shared_ptr<VideoCaptureInterface> _videoCapture;
+    
+    rtc::scoped_refptr<webrtc::VideoTrackInterface> _localVideoTrack;
     
     bool _didEmitAnswer = false;
     std::string _appliedRemoteRescription;

@@ -7,6 +7,8 @@
 #include <memory>
 #include <map>
 
+#include "Instance.h"
+
 namespace tgcalls {
 
 class LogSinkImpl;
@@ -14,6 +16,7 @@ class GroupInstanceManager;
 
 struct GroupInstanceDescriptor {
     std::function<void(std::string const &)> sdpAnswerEmitted;
+    std::shared_ptr<VideoCaptureInterface> videoCapture;
 };
 
 template <typename T>
