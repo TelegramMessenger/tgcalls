@@ -16,6 +16,7 @@ class GroupInstanceManager;
 
 struct GroupInstanceDescriptor {
     std::function<void(std::string const &)> sdpAnswerEmitted;
+    std::function<void(std::vector<std::string> const &)> incomingVideoStreamListUpdated;
     std::shared_ptr<VideoCaptureInterface> videoCapture;
 };
 
@@ -30,6 +31,7 @@ public:
     void emitOffer();
     void setOfferSdp(std::string const &offerSdp, bool isPartial);
     void setIsMuted(bool isMuted);
+    void setIncomingVideoOutput(std::string const &streamId, std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
 
 private:
 	std::unique_ptr<ThreadLocalObject<GroupInstanceManager>> _manager;
