@@ -292,6 +292,7 @@ class GroupInstanceManager : public std::enable_shared_from_this<GroupInstanceMa
 public:
 	GroupInstanceManager(GroupInstanceDescriptor &&descriptor) :
     _sdpAnswerEmitted(descriptor.sdpAnswerEmitted),
+    _incomingVideoStreamListUpdated(descriptor.incomingVideoStreamListUpdated),
     _videoCapture(descriptor.videoCapture) {
 	}
 
@@ -384,13 +385,13 @@ public:
                 });
             },
             [weak](rtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver) {
-                /*getMediaThread()->PostTask(RTC_FROM_HERE, [weak, transceiver](){
+                getMediaThread()->PostTask(RTC_FROM_HERE, [weak, transceiver](){
                     auto strong = weak.lock();
                     if (!strong) {
                         return;
                     }
-                    //strong->onTrack(transceiver);
-                });*/
+                    strong->onTrackAdded(transceiver);
+                });
             },
             [weak](rtc::scoped_refptr<webrtc::RtpReceiverInterface> received) {
             }
@@ -519,8 +520,35 @@ public:
         }
     }
     
+    void onTrackAdded(rtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver) {
+        if (transceiver->direction() == webrtc::RtpTransceiverDirection::kRecvOnly && transceiver->media_type() == cricket::MediaType::MEDIA_TYPE_VIDEO) {
+            if (transceiver->mid()) {
+                auto streamId = transceiver->mid().value();
+                auto remoteVideoTrack = static_cast<webrtc::VideoTrackInterface *>(transceiver->receiver()->track().get());
+                _incomingVideoTracks[streamId] = remoteVideoTrack;
+                auto it = _incomingVideoSinks.find(streamId);
+                if (it != _incomingVideoSinks.end()) {
+                    remoteVideoTrack->AddOrUpdateSink(it->second.get(), rtc::VideoSinkWants());
+                }
+                std::vector<std::string> incomingVideoStreamList;
+                for (auto &it : _incomingVideoTracks) {
+                    incomingVideoStreamList.push_back(it.first);
+                }
+                _incomingVideoStreamListUpdated(incomingVideoStreamList);
+            }
+        }
+    }
+    
     void setIsMuted(bool isMuted) {
         _localAudioTrack->set_enabled(!isMuted);
+    }
+    
+    void setIncomingVideoOutput(std::string const &streamId, std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+        _incomingVideoSinks[streamId] = sink;
+        auto it = _incomingVideoTracks.find(streamId);
+        if (it != _incomingVideoTracks.end()) {
+            it->second->AddOrUpdateSink(sink.get(), rtc::VideoSinkWants());
+        }
     }
     
     void applyNextPartialOfferSdp() {
@@ -609,6 +637,7 @@ public:
 
 private:
     std::function<void(std::string const &)> _sdpAnswerEmitted;
+    std::function<void(std::vector<std::string> const &)> _incomingVideoStreamListUpdated;
     std::shared_ptr<VideoCaptureInterface> _videoCapture;
     
     rtc::scoped_refptr<webrtc::VideoTrackInterface> _localVideoTrack;
@@ -622,6 +651,9 @@ private:
     rtc::scoped_refptr<webrtc::PeerConnectionInterface> _peerConnection;
     rtc::scoped_refptr<webrtc::AudioTrackInterface> _localAudioTrack;
     std::unique_ptr<webrtc::MediaConstraints> _nativeConstraints;
+    
+    std::map<std::string, std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>> _incomingVideoSinks;
+    std::map<std::string, rtc::scoped_refptr<webrtc::VideoTrackInterface>> _incomingVideoTracks;
 };
 
 GroupInstanceImpl::GroupInstanceImpl(GroupInstanceDescriptor &&descriptor) {
@@ -660,6 +692,12 @@ void GroupInstanceImpl::setOfferSdp(std::string const &offerSdp, bool isPartial)
 void GroupInstanceImpl::setIsMuted(bool isMuted) {
     _manager->perform(RTC_FROM_HERE, [isMuted](GroupInstanceManager *manager) {
         manager->setIsMuted(isMuted);
+    });
+}
+
+void GroupInstanceImpl::setIncomingVideoOutput(std::string const &streamId, std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+    _manager->perform(RTC_FROM_HERE, [streamId, sink](GroupInstanceManager *manager) {
+        manager->setIncomingVideoOutput(streamId, sink);
     });
 }
 
