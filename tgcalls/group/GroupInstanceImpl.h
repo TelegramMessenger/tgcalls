@@ -28,7 +28,7 @@ public:
 	explicit GroupInstanceImpl(GroupInstanceDescriptor &&descriptor);
 	~GroupInstanceImpl();
     
-    void emitOffer();
+    void emitOffer(std::function<std::string(std::string const &)> adjustSdp, std::function<void(std::string const &)> completion);
     void setOfferSdp(std::string const &offerSdp, bool isPartial);
     void setIsMuted(bool isMuted);
     void setIncomingVideoOutput(std::string const &streamId, std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
