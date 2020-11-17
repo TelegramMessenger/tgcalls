@@ -18,6 +18,7 @@ struct GroupInstanceDescriptor {
     std::function<void(std::string const &)> sdpAnswerEmitted;
     std::function<void(std::vector<std::string> const &)> incomingVideoStreamListUpdated;
     std::shared_ptr<VideoCaptureInterface> videoCapture;
+    std::function<void(bool)> networkStateUpdated;
 };
 
 template <typename T>
