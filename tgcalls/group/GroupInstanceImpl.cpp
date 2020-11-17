@@ -294,7 +294,8 @@ public:
 	GroupInstanceManager(GroupInstanceDescriptor &&descriptor) :
     _sdpAnswerEmitted(descriptor.sdpAnswerEmitted),
     _incomingVideoStreamListUpdated(descriptor.incomingVideoStreamListUpdated),
-    _videoCapture(descriptor.videoCapture) {
+    _videoCapture(descriptor.videoCapture),
+    _networkStateUpdated(descriptor.networkStateUpdated) {
 	}
 
 	~GroupInstanceManager() {
@@ -381,7 +382,7 @@ public:
                 getMediaThread()->PostTask(RTC_FROM_HERE, [weak, isConnected](){
                     auto strong = weak.lock();
                     if (strong) {
-                        //strong->updateIsConnected(isConnected);
+                        strong->updateIsConnected(isConnected);
                     }
                 });
             },
@@ -408,6 +409,7 @@ public:
         std::vector<std::string> streamIds;
         streamIds.push_back(name.str());
         _localAudioTrack = _nativeFactory->CreateAudioTrack(name.str(), audioSource);
+        _localAudioTrack->set_enabled(false);
         _peerConnection->AddTrack(_localAudioTrack, streamIds);
         
         if (_videoCapture) {
@@ -455,7 +457,13 @@ public:
                 it->sender()->SetFrameEncryptor(encryptor);
             }
         }*/
+        
+        beginStatsTimer(100);
 	}
+    
+    void updateIsConnected(bool isConnected) {
+        _networkStateUpdated(isConnected);
+    }
     
     void emitOffer(std::function<std::string(std::string const &)> adjustSdp, std::function<void(std::string const &)> completion) {
         const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
@@ -489,43 +497,69 @@ public:
     }
     
     void setOfferSdp(std::string const &offerSdp, bool isPartial) {
-        if (false && isPartial) {
-            bool startNow = _partialRemoteDescriptionQueue.size() == 0;
-            _partialRemoteDescriptionQueue.push_back(offerSdp);
-            if (startNow) {
-                applyNextPartialOfferSdp();
-            }
-        } else {
-            if (!isPartial && _appliedRemoteRescription == offerSdp) {
-                return;
-            }
-            _appliedRemoteRescription = offerSdp;
-            
-            printf("----- setOfferSdp %s -----\n", isPartial ? "answer" : "offer");
-            printf("%s\n", offerSdp.c_str());
-            printf("-----\n");
-            
-            webrtc::SdpParseError error;
-            webrtc::SessionDescriptionInterface *sessionDescription = webrtc::CreateSessionDescription(isPartial ? "answer" : "offer", adjustLocalDescription(offerSdp), &error);
-            if (!sessionDescription) {
-                return;
-            }
-            
-            const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
-            rtc::scoped_refptr<SetSessionDescriptionObserverImpl> observer(new rtc::RefCountedObject<SetSessionDescriptionObserverImpl>([weak, isPartial]() {
-                getMediaThread()->PostTask(RTC_FROM_HERE, [weak, isPartial](){
-                    auto strong = weak.lock();
-                    if (!strong) {
-                        return;
-                    }
-                    if (!isPartial) {
-                        strong->emitAnswer();
-                    }
-                });
-            }));
-            
-            _peerConnection->SetRemoteDescription(observer, sessionDescription);
+        if (!isPartial && _appliedRemoteRescription == offerSdp) {
+            return;
         }
+        _appliedRemoteRescription = offerSdp;
+        
+        printf("----- setOfferSdp %s -----\n", isPartial ? "answer" : "offer");
+        printf("%s\n", offerSdp.c_str());
+        printf("-----\n");
+        
+        webrtc::SdpParseError error;
+        webrtc::SessionDescriptionInterface *sessionDescription = webrtc::CreateSessionDescription(isPartial ? "answer" : "offer", adjustLocalDescription(offerSdp), &error);
+        if (!sessionDescription) {
+            return;
+        }
+        
+        const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
+        rtc::scoped_refptr<SetSessionDescriptionObserverImpl> observer(new rtc::RefCountedObject<SetSessionDescriptionObserverImpl>([weak, isPartial]() {
+            getMediaThread()->PostTask(RTC_FROM_HERE, [weak, isPartial](){
+                auto strong = weak.lock();
+                if (!strong) {
+                    return;
+                }
+                if (!isPartial) {
+                    strong->emitAnswer();
+                }
+            });
+        }));
+        
+        _peerConnection->SetRemoteDescription(observer, sessionDescription);
+    }
+    
+    void beginStatsTimer(int timeoutMs) {
+        const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
+        getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
+            getMediaThread()->PostTask(RTC_FROM_HERE, [weak](){
+                auto strong = weak.lock();
+                if (!strong) {
+                    return;
+                }
+                strong->collectStats();
+            });
+        }, timeoutMs);
+    }
+    
+    void collectStats() {
+        /*for (auto &it : _peerConnection->GetTransceivers()) {
+            if (it->media_type() == cricket::MediaType::MEDIA_TYPE_AUDIO && it->receiver()) {
+                if (it->receiver()->streams().size() == 0) {
+                    continue;
+                }
+                if (it->receiver()->streams()[0]->GetAudioTracks().size() == 0) {
+                    continue;
+                }
+                int signalLevel = 0;
+                if (it->receiver()->streams()[0]->GetAudioTracks()[0]->GetSignalLevel(&signalLevel)) {
+                    if (signalLevel > 10) {
+                        printf("level %d\n", signalLevel);
+                    }
+                }
+            }
+        }*/
+        
+        beginStatsTimer(100);
     }
     
     void onTrackAdded(rtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver) {
@@ -559,58 +593,7 @@ public:
         }
     }
     
-    void applyNextPartialOfferSdp() {
-        if (_partialRemoteDescriptionQueue.size() == 0) {
-            return;
-        }
-        std::string offerSdp = _partialRemoteDescriptionQueue[0];
-        
-        webrtc::SdpParseError error;
-        webrtc::SessionDescriptionInterface *sessionDescription = webrtc::CreateSessionDescription("pranswer", offerSdp, &error);
-        if (!sessionDescription) {
-            return;
-        }
-        
-        const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
-        rtc::scoped_refptr<SetSessionDescriptionObserverImpl> observer(new rtc::RefCountedObject<SetSessionDescriptionObserverImpl>([weak]() {
-            getMediaThread()->PostTask(RTC_FROM_HERE, [weak](){
-                auto strong = weak.lock();
-                if (!strong) {
-                    return;
-                }
-                
-                webrtc::PeerConnectionInterface::RTCOfferAnswerOptions options;
-                rtc::scoped_refptr<CreateSessionDescriptionObserverImpl> observer(new rtc::RefCountedObject<CreateSessionDescriptionObserverImpl>([weak](std::string sdp, std::string type) {
-                    getMediaThread()->PostTask(RTC_FROM_HERE, [weak, sdp, type](){
-                        auto strong = weak.lock();
-                        if (!strong) {
-                            return;
-                        }
-
-                        webrtc::SdpParseError error;
-                        webrtc::SessionDescriptionInterface *sessionDescription = webrtc::CreateSessionDescription(type, adjustLocalDescription(sdp), &error);
-                        if (sessionDescription != nullptr) {
-                            rtc::scoped_refptr<SetSessionDescriptionObserverImpl> observer(new rtc::RefCountedObject<SetSessionDescriptionObserverImpl>([weak, sdp]() {
-                                auto strong = weak.lock();
-                                if (!strong) {
-                                    return;
-                                }
-                                
-                                strong->_partialRemoteDescriptionQueue.erase(strong->_partialRemoteDescriptionQueue.begin());
-                                if (strong->_partialRemoteDescriptionQueue.size() != 0) {
-                                    strong->applyNextPartialOfferSdp();
-                                }
-                            }));
-                            strong->_peerConnection->SetLocalDescription(observer, sessionDescription);
-                        }
-                    });
-                }));
-                strong->_peerConnection->CreateAnswer(observer, options);
-            });
-        }));
-        
-        _peerConnection->SetRemoteDescription(observer, sessionDescription);
-    }
+    
     
     void emitAnswer() {
         const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
@@ -649,6 +632,7 @@ private:
     std::function<void(std::string const &)> _sdpAnswerEmitted;
     std::function<void(std::vector<std::string> const &)> _incomingVideoStreamListUpdated;
     std::shared_ptr<VideoCaptureInterface> _videoCapture;
+    std::function<void(bool)> _networkStateUpdated;
     
     rtc::scoped_refptr<webrtc::VideoTrackInterface> _localVideoTrack;
     
