@@ -14,7 +14,6 @@
 #include "api/audio_codecs/builtin_audio_encoder_factory.h"
 #include "api/audio_codecs/builtin_audio_decoder_factory.h"
 #include "api/rtc_event_log/rtc_event_log_factory.h"
-#include "sdk/media_constraints.h"
 #include "api/peer_connection_interface.h"
 #include "api/video_track_source_proxy.h"
 #include "system_wrappers/include/field_trial.h"
@@ -344,7 +343,7 @@ static std::string createSdp(uint32_t sessionId, GroupJoinResponsePayload const 
     return result.str();
 }
 
-static std::string parseJoinResponseIntoSdp(uint32_t sessionId, uint32_t mainStreamAudioSsrc, GroupJoinResponsePayload const &payload, bool isAnswer, std::vector<uint32_t> const &otherSsrcs) {
+static std::string parseJoinResponseIntoSdp(uint32_t sessionId, uint32_t mainStreamAudioSsrc, GroupJoinResponsePayload const &payload, bool isAnswer, std::vector<uint32_t> const &allOtherSsrcs, std::set<uint32_t> const &activeOtherSsrcs) {
     
     std::vector<StreamSpec> bundleStreams;
     
@@ -354,11 +353,11 @@ static std::string parseJoinResponseIntoSdp(uint32_t sessionId, uint32_t mainStr
     mainStream.isRemoved = false;
     bundleStreams.push_back(mainStream);
     
-    for (auto ssrc : otherSsrcs) {
+    for (auto ssrc : allOtherSsrcs) {
         StreamSpec stream;
         stream.isMain = false;
         stream.audioSsrc = ssrc;
-        stream.isRemoved = false;
+        stream.isRemoved = activeOtherSsrcs.find(ssrc) == activeOtherSsrcs.end();
         bundleStreams.push_back(stream);
     }
     
@@ -846,7 +845,7 @@ public:
     
     void setJoinResponsePayload(GroupJoinResponsePayload payload) {
         _joinPayload = payload;
-        auto sdp = parseJoinResponseIntoSdp(_sessionId, _mainStreamAudioSsrc, payload, true, _otherSsrcs);
+        auto sdp = parseJoinResponseIntoSdp(_sessionId, _mainStreamAudioSsrc, payload, true, _allOtherSsrcs, _activeOtherSsrcs);
         setOfferSdp(sdp, true);
     }
     
@@ -855,13 +854,16 @@ public:
             return;
         }
         
+        _activeOtherSsrcs.clear();
+        
         for (auto ssrc : ssrcs) {
-            if (std::find(_otherSsrcs.begin(), _otherSsrcs.end(), ssrc) == _otherSsrcs.end()) {
-                _otherSsrcs.push_back(ssrc);
+            if (std::find(_allOtherSsrcs.begin(), _allOtherSsrcs.end(), ssrc) == _allOtherSsrcs.end()) {
+                _allOtherSsrcs.push_back(ssrc);
             }
+            _activeOtherSsrcs.insert(ssrc);
         }
         
-        auto sdp = parseJoinResponseIntoSdp(_sessionId, _mainStreamAudioSsrc, _joinPayload.value(), false, _otherSsrcs);
+        auto sdp = parseJoinResponseIntoSdp(_sessionId, _mainStreamAudioSsrc, _joinPayload.value(), false, _allOtherSsrcs, _activeOtherSsrcs);
         setOfferSdp(sdp, false);
     }
     
@@ -967,7 +969,7 @@ public:
                 iss >> ssrc;
                 
                 auto remoteAudioTrack = static_cast<webrtc::AudioTrackInterface *>(transceiver->receiver()->track().get());
-                if (_audioTrackSinks.find(streamId) == _audioTrackSinks.end()) {
+                if (_audioTrackSinks.find(ssrc) == _audioTrackSinks.end()) {
                     const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
                     std::shared_ptr<AudioTrackSinkInterfaceImpl> sink(new AudioTrackSinkInterfaceImpl([weak, ssrc](float level) {
                         getMediaThread()->PostTask(RTC_FROM_HERE, [weak, ssrc, level](){
@@ -978,7 +980,7 @@ public:
                             strong->_audioLevels[ssrc] = level;
                         });
                     }));
-                    _audioTrackSinks[streamId] = sink;
+                    _audioTrackSinks[ssrc] = sink;
                     remoteAudioTrack->AddSink(sink.get());
                 }
             }
@@ -986,6 +988,7 @@ public:
     }
     
     void onTrackRemoved(rtc::scoped_refptr<webrtc::RtpReceiverInterface> receiver) {
+        
     }
     
     void setIsMuted(bool isMuted) {
@@ -1022,18 +1025,17 @@ public:
     }
 
 private:
-    std::function<void(std::string const &)> _sdpAnswerEmitted;
-    std::function<void(std::vector<std::string> const &)> _incomingVideoStreamListUpdated;
     std::function<void(bool)> _networkStateUpdated;
     std::function<void(std::vector<std::pair<uint32_t, float>> const &)> _audioLevelsUpdated;
     
     uint32_t _sessionId = 6543245;
     uint32_t _mainStreamAudioSsrc = 0;
     absl::optional<GroupJoinResponsePayload> _joinPayload;
-    std::vector<uint32_t> _otherSsrcs;
+    
+    std::vector<uint32_t> _allOtherSsrcs;
+    std::set<uint32_t> _activeOtherSsrcs;
     
     std::string _appliedRemoteRescription;
-    std::vector<std::string> _partialRemoteDescriptionQueue;
     
     rtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> _nativeFactory;
     std::unique_ptr<PeerConnectionObserverImpl> _observer;
@@ -1041,9 +1043,8 @@ private:
     std::unique_ptr<AudioTrackSinkInterfaceImpl> _localAudioTrackSink;
     rtc::scoped_refptr<webrtc::AudioTrackInterface> _localAudioTrack;
     
-    std::map<std::string, std::shared_ptr<AudioTrackSinkInterfaceImpl>> _audioTrackSinks;
+    std::map<uint32_t, std::shared_ptr<AudioTrackSinkInterfaceImpl>> _audioTrackSinks;
     std::map<uint32_t, float> _audioLevels;
-    std::unique_ptr<webrtc::MediaConstraints> _nativeConstraints;
 };
 
 GroupInstanceImpl::GroupInstanceImpl(GroupInstanceDescriptor &&descriptor) {
