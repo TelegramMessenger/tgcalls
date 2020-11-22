@@ -65,6 +65,8 @@ public:
 	explicit GroupInstanceImpl(GroupInstanceDescriptor &&descriptor);
 	~GroupInstanceImpl();
     
+    void stop();
+    
     void emitJoinPayload(std::function<void(GroupJoinPayload)> completion);
     void setJoinResponsePayload(GroupJoinResponsePayload payload);
     void setSsrcs(std::vector<uint32_t> ssrcs);

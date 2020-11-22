@@ -465,11 +465,6 @@ public:
     }
 
     virtual void OnSignalingChange(webrtc::PeerConnectionInterface::SignalingState new_state) {
-        bool isConnected = false;
-        if (new_state == webrtc::PeerConnectionInterface::SignalingState::kStable) {
-            isConnected = true;
-        }
-        _connectionStateChanged(isConnected);
     }
 
     virtual void OnAddStream(rtc::scoped_refptr<webrtc::MediaStreamInterface> stream) {
@@ -485,6 +480,16 @@ public:
     }
 
     virtual void OnIceConnectionChange(webrtc::PeerConnectionInterface::IceConnectionState new_state) {
+        bool isConnected = false;
+        switch (new_state) {
+            case webrtc::PeerConnectionInterface::IceConnectionState::kIceConnectionConnected:
+            case webrtc::PeerConnectionInterface::IceConnectionState::kIceConnectionCompleted:
+                isConnected = true;
+                break;
+            default:
+                break;
+        }
+        _connectionStateChanged(isConnected);
     }
 
     virtual void OnStandardizedIceConnectionChange(webrtc::PeerConnectionInterface::IceConnectionState new_state) {
@@ -591,9 +596,6 @@ public:
             _peak = 0;
             _peakCount = 0;
             _update(level);
-            if (level > 0.1f) {
-                printf("level: %f\n", level);
-            }
         }
     }
 };
@@ -802,10 +804,35 @@ public:
         _peerConnection->AddTrack(_localAudioTrack, streamIds);
         
         //beginStatsTimer(100);
+        beginLevelsTimer(50);
 	}
     
     void updateIsConnected(bool isConnected) {
-        _networkStateUpdated(isConnected);
+        _isConnected = isConnected;
+        
+        auto timestamp = rtc::TimeMillis();
+        
+        _isConnectedUpdateValidTaskId++;
+        
+        if (!isConnected && _appliedOfferTimestamp > timestamp - 1000) {
+            auto taskId = _isConnectedUpdateValidTaskId;
+            const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
+            getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak, taskId]() {
+                auto strong = weak.lock();
+                if (!strong) {
+                    return;
+                }
+                if (strong->_isConnectedUpdateValidTaskId == taskId) {
+                    strong->_networkStateUpdated(strong->_isConnected);
+                }
+            }, 1000);
+        } else {
+            _networkStateUpdated(_isConnected);
+        }
+    }
+    
+    void stop() {
+        _peerConnection->Close();
     }
     
     void emitJoinPayload(std::function<void(GroupJoinPayload)> completion) {
@@ -883,6 +910,10 @@ public:
             return;
         }
         
+        if (!isAnswer) {
+            _appliedOfferTimestamp = rtc::TimeMillis();
+        }
+        
         const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
         rtc::scoped_refptr<SetSessionDescriptionObserverImpl> observer(new rtc::RefCountedObject<SetSessionDescriptionObserverImpl>([weak, isAnswer]() {
             getMediaThread()->PostTask(RTC_FROM_HERE, [weak, isAnswer](){
@@ -915,22 +946,20 @@ public:
     void beginLevelsTimer(int timeoutMs) {
         const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
         getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
-            getMediaThread()->PostTask(RTC_FROM_HERE, [weak](){
-                auto strong = weak.lock();
-                if (!strong) {
-                    return;
+            auto strong = weak.lock();
+            if (!strong) {
+                return;
+            }
+            
+            std::vector<std::pair<uint32_t, float>> levels;
+            for (auto &it : strong->_audioLevels) {
+                if (it.second > 0.001f) {
+                    levels.push_back(std::make_pair(it.first, it.second));
                 }
-                
-                std::vector<std::pair<uint32_t, float>> levels;
-                for (auto &it : strong->_audioLevels) {
-                    if (it.second > 0.001f) {
-                        levels.push_back(std::make_pair(it.first, it.second));
-                    }
-                }
-                strong->_audioLevelsUpdated(levels);
-                
-                strong->beginLevelsTimer(50);
-            });
+            }
+            strong->_audioLevelsUpdated(levels);
+            
+            strong->beginLevelsTimer(50);
         }, timeoutMs);
     }
     
@@ -1032,6 +1061,10 @@ private:
     uint32_t _mainStreamAudioSsrc = 0;
     absl::optional<GroupJoinResponsePayload> _joinPayload;
     
+    int64_t _appliedOfferTimestamp = 0;
+    bool _isConnected = false;
+    int _isConnectedUpdateValidTaskId = 0;
+    
     std::vector<uint32_t> _allOtherSsrcs;
     std::set<uint32_t> _activeOtherSsrcs;
     
@@ -1066,6 +1099,12 @@ GroupInstanceImpl::~GroupInstanceImpl() {
 	if (_logSink) {
 		rtc::LogMessage::RemoveLogToStream(_logSink.get());
 	}
+}
+
+void GroupInstanceImpl::stop() {
+    _manager->perform(RTC_FROM_HERE, [](GroupInstanceManager *manager) {
+        manager->stop();
+    });
 }
 
 void GroupInstanceImpl::emitJoinPayload(std::function<void(GroupJoinPayload)> completion) {
