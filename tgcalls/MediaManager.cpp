@@ -731,6 +731,8 @@ void MediaManager::fillCallStats(CallStats &callStats) {
 }
 
 void MediaManager::setAudioInputDevice(std::string id) {
+#if defined(WEBRTC_IOS)
+#else
 	const auto recording = _audioDeviceModule->Recording();
 	if (recording) {
 		_audioDeviceModule->StopRecording();
@@ -772,9 +774,12 @@ void MediaManager::setAudioInputDevice(std::string id) {
 	}
 	RTC_LOG(LS_ERROR) << "setAudioInputDevice(" << id << "): Could not find recording device.";
 	return finish();
+#endif
 }
 
 void MediaManager::setAudioOutputDevice(std::string id) {
+#if defined(WEBRTC_IOS)
+#else
 	const auto playing = _audioDeviceModule->Playing();
 	if (playing) {
 		_audioDeviceModule->StopPlayout();
@@ -816,6 +821,7 @@ void MediaManager::setAudioOutputDevice(std::string id) {
 	}
 	RTC_LOG(LS_ERROR) << "setAudioOutputDevice(" << id << "): Could not find playout device.";
 	return finish();
+#endif
 }
 
 void MediaManager::setInputVolume(float level) {

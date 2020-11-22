@@ -57,6 +57,7 @@ private:
     ProtocolVersion _protocolVersion = ProtocolVersion::V0;
     FilePath _statsLogPath;
 	std::vector<RtcServer> _rtcServers;
+    std::unique_ptr<Proxy> _proxy;
 	MediaDevicesConfig _mediaDevicesConfig;
 	std::shared_ptr<VideoCaptureInterface> _videoCapture;
 	std::function<void(State)> _stateUpdated;
