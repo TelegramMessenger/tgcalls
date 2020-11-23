@@ -7,14 +7,19 @@
 #include <memory>
 #include <map>
 
-#include "Instance.h"
+#include "../Instance.h"
 
 namespace tgcalls {
 
 class LogSinkImpl;
 class GroupInstanceManager;
 
+struct GroupConfig {
+    FilePath logPath;
+};
+
 struct GroupInstanceDescriptor {
+    GroupConfig config;
     std::function<void(bool)> networkStateUpdated;
     std::function<void(std::vector<std::pair<uint32_t, float>> const &)> audioLevelsUpdated;
 };
@@ -29,7 +34,7 @@ struct GroupJoinPayload {
     std::string ufrag;
     std::string pwd;
     std::vector<GroupJoinPayloadFingerprint> fingerprints;
-    
+
     uint32_t ssrc = 0;
 };
 
@@ -44,7 +49,7 @@ struct GroupJoinResponseCandidate {
     std::string priority;
     std::string ip;
     std::string type;
-    
+
     std::string tcpType;
     std::string relAddr;
     std::string relPort;
@@ -64,11 +69,11 @@ class GroupInstanceImpl final {
 public:
 	explicit GroupInstanceImpl(GroupInstanceDescriptor &&descriptor);
 	~GroupInstanceImpl();
-    
+
     void emitJoinPayload(std::function<void(GroupJoinPayload)> completion);
     void setJoinResponsePayload(GroupJoinResponsePayload payload);
     void setSsrcs(std::vector<uint32_t> ssrcs);
-    
+
     void setIsMuted(bool isMuted);
 
 private:
