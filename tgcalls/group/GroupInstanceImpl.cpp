@@ -1067,6 +1067,11 @@ GroupInstanceImpl::~GroupInstanceImpl() {
 	if (_logSink) {
 		rtc::LogMessage::RemoveLogToStream(_logSink.get());
 	}
+    _manager = nullptr;
+
+    // Wait until _manager is destroyed, otherwise there is a race condition
+    // in destruction of PeerConnection on media thread and network thread.
+    getMediaThread()->Invoke<void>(RTC_FROM_HERE, [] {});
 }
 
 void GroupInstanceImpl::emitJoinPayload(std::function<void(GroupJoinPayload)> completion) {
