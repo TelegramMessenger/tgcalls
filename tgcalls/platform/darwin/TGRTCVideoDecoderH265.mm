@@ -31,6 +31,14 @@
 
 #include "Manager.h"
 
+@interface MarkedDecodedH2651RTCCVPixelBuffer : RTCCVPixelBuffer
+
+@end
+
+@implementation MarkedDecodedH2651RTCCVPixelBuffer
+
+@end
+
 typedef void (^TGRTCVideoDecoderRequestKeyframeCallback)();
 
 // Struct that we pass to the decoder per frame to decode. We receive it again
@@ -63,7 +71,7 @@ static void tg_h265DecompressionOutputCallback(void* decoder,
   }
   // TODO(tkchin): Handle CVO properly.
   RTCCVPixelBuffer* frameBuffer =
-      [[RTCCVPixelBuffer alloc] initWithPixelBuffer:imageBuffer];
+      [[MarkedDecodedH2651RTCCVPixelBuffer alloc] initWithPixelBuffer:imageBuffer];
   RTCVideoFrame* decodedFrame = [[RTCVideoFrame alloc]
       initWithBuffer:frameBuffer
             rotation:RTCVideoRotation_0

@@ -29,6 +29,14 @@
 #include "rtc_base/time_utils.h"
 #include "sdk/objc/components/video_codec/nalu_rewriter.h"
 
+@interface MarkedDecodedH264RTCCVPixelBuffer : RTCCVPixelBuffer
+
+@end
+
+@implementation MarkedDecodedH264RTCCVPixelBuffer
+
+@end
+
 // Struct that we pass to the decoder per frame to decode. We receive it again
 // in the decoder callback.
 struct RTCFrameDecodeParams {
@@ -59,13 +67,15 @@ static void decompressionOutputCallback(void *decoderRef,
     return;
   }
   // TODO(tkchin): Handle CVO properly.
-  RTCCVPixelBuffer *frameBuffer = [[RTCCVPixelBuffer alloc] initWithPixelBuffer:imageBuffer];
-  RTCVideoFrame *decodedFrame =
-      [[RTCVideoFrame alloc] initWithBuffer:frameBuffer
-                                   rotation:RTCVideoRotation_0
-                                timeStampNs:CMTimeGetSeconds(timestamp) * rtc::kNumNanosecsPerSec];
-  decodedFrame.timeStamp = (int32_t)decodeParams->timestamp;
-  decodeParams->callback(decodedFrame);
+  @autoreleasepool {
+      RTCCVPixelBuffer *frameBuffer = [[MarkedDecodedH264RTCCVPixelBuffer alloc] initWithPixelBuffer:imageBuffer];
+      RTCVideoFrame *decodedFrame =
+          [[RTCVideoFrame alloc] initWithBuffer:frameBuffer
+                                       rotation:RTCVideoRotation_0
+                                    timeStampNs:CMTimeGetSeconds(timestamp) * rtc::kNumNanosecsPerSec];
+      decodedFrame.timeStamp = (int32_t)decodeParams->timestamp;
+      decodeParams->callback(decodedFrame);
+  }
 }
 
 // Decoder.

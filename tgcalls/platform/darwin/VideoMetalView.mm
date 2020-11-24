@@ -43,14 +43,16 @@ class VideoRendererAdapterImpl : public rtc::VideoSinkInterface<webrtc::VideoFra
     }
     
     void OnFrame(const webrtc::VideoFrame& nativeVideoFrame) override {
-        RTCVideoRotation rotation = RTCVideoRotation_90;
-        RTCVideoFrame* videoFrame = customToObjCVideoFrame(nativeVideoFrame, rotation);
-        
-        //CGSize currentSize = (videoFrame.rotation % 180 == 0) ? CGSizeMake(videoFrame.width, videoFrame.height) : CGSizeMake(videoFrame.height, videoFrame.width);
-        CGSize currentSize = CGSizeMake(videoFrame.width, videoFrame.height);
-        
-        if (_frameReceived) {
-            _frameReceived(currentSize, videoFrame, rotation);
+        @autoreleasepool {
+            RTCVideoRotation rotation = RTCVideoRotation_90;
+            RTCVideoFrame* videoFrame = customToObjCVideoFrame(nativeVideoFrame, rotation);
+            
+            //CGSize currentSize = (videoFrame.rotation % 180 == 0) ? CGSizeMake(videoFrame.width, videoFrame.height) : CGSizeMake(videoFrame.height, videoFrame.width);
+            CGSize currentSize = CGSizeMake(videoFrame.width, videoFrame.height);
+            
+            if (_frameReceived) {
+                _frameReceived(currentSize, videoFrame, rotation);
+            }
         }
     }
     
