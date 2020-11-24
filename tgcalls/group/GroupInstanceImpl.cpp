@@ -679,7 +679,8 @@ class GroupInstanceManager : public std::enable_shared_from_this<GroupInstanceMa
 public:
 	GroupInstanceManager(GroupInstanceDescriptor &&descriptor) :
     _networkStateUpdated(descriptor.networkStateUpdated),
-    _audioLevelsUpdated(descriptor.audioLevelsUpdated) {
+    _audioLevelsUpdated(descriptor.audioLevelsUpdated),
+    _myAudioLevelUpdated(descriptor.myAudioLevelUpdated) {
 	}
 
 	~GroupInstanceManager() {
@@ -803,7 +804,7 @@ public:
         _localAudioTrack->set_enabled(false);
         _peerConnection->AddTrack(_localAudioTrack, streamIds);
         
-        //beginStatsTimer(100);
+        beginStatsTimer(100);
         beginLevelsTimer(50);
 	}
     
@@ -958,31 +959,47 @@ public:
                 }
             }
             strong->_audioLevelsUpdated(levels);
-            
+
             strong->beginLevelsTimer(50);
         }, timeoutMs);
     }
     
     void collectStats() {
-        /*for (auto &it : _peerConnection->GetTransceivers()) {
-            if (it->media_type() == cricket::MediaType::MEDIA_TYPE_AUDIO && it->receiver()) {
-                if (it->receiver()->streams().size() == 0) {
-                    continue;
+        const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
+
+        rtc::scoped_refptr<RTCStatsCollectorCallbackImpl> observer(new rtc::RefCountedObject<RTCStatsCollectorCallbackImpl>([weak](const rtc::scoped_refptr<const webrtc::RTCStatsReport> &stats) {
+            getMediaThread()->PostTask(RTC_FROM_HERE, [weak, stats](){
+                auto strong = weak.lock();
+                if (!strong) {
+                    return;
                 }
-                if (it->receiver()->streams()[0]->GetAudioTracks().size() == 0) {
-                    continue;
-                }
-                int signalLevel = 0;
-                if (it->receiver()->streams()[0]->GetAudioTracks()[0]->GetSignalLevel(&signalLevel)) {
-                    if (signalLevel > 10) {
-                        printf("level %d\n", signalLevel);
-                    }
-                }
-            }
-        }*/
+                strong->reportStats(stats);
+                strong->beginStatsTimer(100);
+            });
+        }));
+        _peerConnection->GetStats(observer);
     }
     
     void reportStats(const rtc::scoped_refptr<const webrtc::RTCStatsReport> &stats) {
+        double audioInputLevel = 0.0;
+        
+        for (auto it = stats->begin(); it != stats->end(); it++) {
+            bool found = false;
+            if (it->type() == std::string("media-source")) {
+                for (auto &member : it->Members()) {
+                    if (member->name() == std::string("audioLevel") && member->is_defined()) {
+                        audioInputLevel = *(member->cast_to<webrtc::RTCStatsMember<double>>());
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if (found) {
+                break;
+            }
+        }
+        
+        _myAudioLevelUpdated((float)audioInputLevel);
     }
     
     void onTrackAdded(rtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver) {
@@ -1056,6 +1073,7 @@ public:
 private:
     std::function<void(bool)> _networkStateUpdated;
     std::function<void(std::vector<std::pair<uint32_t, float>> const &)> _audioLevelsUpdated;
+    std::function<void(float)> _myAudioLevelUpdated;
     
     uint32_t _sessionId = 6543245;
     uint32_t _mainStreamAudioSsrc = 0;
