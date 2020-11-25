@@ -10,7 +10,7 @@ namespace tgcalls {
 VideoCaptureInterfaceObject::VideoCaptureInterfaceObject(std::string deviceId, std::shared_ptr<PlatformContext> platformContext)
 : _videoSource(PlatformInterface::SharedInstance()->makeVideoSource(Manager::getMediaThread(), MediaManager::getWorkerThread())) {
 	_platformContext = platformContext;
-    
+
 	switchToDevice(deviceId);
 }
 
@@ -42,9 +42,9 @@ void VideoCaptureInterfaceObject::switchToDevice(std::string deviceId) {
         }, _platformContext, _videoCapturerResolution);
 	}
 	if (_videoCapturer) {
-//        if (_preferredAspectRatio > 0) {
-//            _videoCapturer->setPreferredCaptureAspectRatio(_preferredAspectRatio);
-//        }
+		if (_preferredAspectRatio > 0) {
+			_videoCapturer->setPreferredCaptureAspectRatio(_preferredAspectRatio);
+		}
 		if (_currentUncroppedSink) {
 			_videoCapturer->setUncroppedOutput(_currentUncroppedSink);
 		}
@@ -72,16 +72,16 @@ void VideoCaptureInterfaceObject::updateAspectRateAdaptation() {
             if (_preferredAspectRatio > 0.01 && _shouldBeAdaptedToReceiverAspectRate) {
                 float originalWidth = (float)_videoCapturerResolution.first;
                 float originalHeight = (float)_videoCapturerResolution.second;
-                
+
                 float aspectRatio = _preferredAspectRatio;
-                
+
                 float width = (originalWidth > aspectRatio * originalHeight)
                     ? int(std::round(aspectRatio * originalHeight))
                     : originalWidth;
                 float height = (originalWidth > aspectRatio * originalHeight)
                     ? originalHeight
                     : int(std::round(originalHeight / aspectRatio));
-                
+
                 PlatformInterface::SharedInstance()->adaptVideoSource(_videoSource, (int)width, (int)height, 30);
             } else {
                 PlatformInterface::SharedInstance()->adaptVideoSource(_videoSource, _videoCapturerResolution.first, _videoCapturerResolution.second, 30);

@@ -697,6 +697,8 @@ std::string adjustLocalDescription(const std::string &sdp) {
 
 } // namespace
 
+
+
 class GroupInstanceManager : public std::enable_shared_from_this<GroupInstanceManager> {
 public:
 	GroupInstanceManager(GroupInstanceDescriptor &&descriptor) :
@@ -712,9 +714,34 @@ public:
             _peerConnection->Close();
         }
 	}
+    
+    rtc::scoped_refptr<webrtc::AudioDeviceModule> createAudioDeviceModule() {
+        const auto check = [&](webrtc::AudioDeviceModule::AudioLayer layer) {
+            auto result = webrtc::AudioDeviceModule::Create(
+                layer,
+                _taskQueueFactory.get());
+            return (result && (result->Init() == 0)) ? result : nullptr;
+        };
+        if (auto result = check(webrtc::AudioDeviceModule::kPlatformDefaultAudio)) {
+            return result;
+    #ifdef WEBRTC_LINUX
+        } else if (auto result = check(webrtc::AudioDeviceModule::kLinuxAlsaAudio)) {
+            return result;
+    #endif // WEBRTC_LINUX
+        }
+        return nullptr;
+    }
 
 	void start() {
         const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
+        
+        _taskQueueFactory = webrtc::CreateDefaultTaskQueueFactory();
+        
+        _audioDeviceModule = createAudioDeviceModule();
+        if (!_audioDeviceModule) {
+            return;
+        }
+       
         
         webrtc::field_trial::InitFieldTrialsFromString(
             //"WebRTC-Audio-SendSideBwe/Enabled/"
@@ -740,6 +767,8 @@ public:
         mediaDeps.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory();
         mediaDeps.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactory();
 
+        mediaDeps.adm = _audioDeviceModule;
+        
         webrtc::AudioProcessing *apm = webrtc::AudioProcessingBuilder().Create();
         webrtc::AudioProcessing::Config audioConfig;
         webrtc::AudioProcessing::Config::NoiseSuppression noiseSuppression;
@@ -835,6 +864,14 @@ public:
         _localAudioTrack->set_enabled(false);
         _peerConnection->AddTrack(_localAudioTrack, streamIds);
         
+        
+        _audioDeviceModule->SetRecordingDevice(webrtc::AudioDeviceModule::kDefaultCommunicationDevice);
+        
+        _audioDeviceModule->InitRecording();
+        _audioDeviceModule->StartRecording();
+       
+        
+        //beginStatsTimer(100);
         beginStatsTimer(100);
         beginLevelsTimer(50);
 	}
@@ -1153,6 +1190,11 @@ private:
     rtc::scoped_refptr<webrtc::PeerConnectionInterface> _peerConnection;
     std::unique_ptr<AudioTrackSinkInterfaceImpl> _localAudioTrackSink;
     rtc::scoped_refptr<webrtc::AudioTrackInterface> _localAudioTrack;
+    
+    std::unique_ptr<webrtc::TaskQueueFactory> _taskQueueFactory;
+    
+    rtc::scoped_refptr<webrtc::AudioDeviceModule> _audioDeviceModule;
+
     
     std::map<uint32_t, std::shared_ptr<AudioTrackSinkInterfaceImpl>> _audioTrackSinks;
     std::map<uint32_t, float> _audioLevels;

@@ -561,6 +561,7 @@ static NSUInteger GetMaxSampleRate(const webrtc::H264::ProfileLevelId &profile_l
   OSType framePixelFormat = [self pixelFormatOfFrame:frame];
 
   if (_compressionSession) {
+      _pixelBufferPool = VTCompressionSessionGetPixelBufferPool(_compressionSession);
     // The pool attribute `kCVPixelBufferPixelFormatTypeKey` can contain either an array of pixel
     // formats or a single pixel format.
     NSDictionary *poolAttributes =
