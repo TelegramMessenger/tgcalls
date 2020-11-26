@@ -704,7 +704,9 @@ public:
 	GroupInstanceManager(GroupInstanceDescriptor &&descriptor) :
     _networkStateUpdated(descriptor.networkStateUpdated),
     _audioLevelsUpdated(descriptor.audioLevelsUpdated),
-    _myAudioLevelUpdated(descriptor.myAudioLevelUpdated) {
+    _myAudioLevelUpdated(descriptor.myAudioLevelUpdated),
+    _initialInputDeviceId(descriptor.initialInputDeviceId),
+    _initialOutputDeviceId(descriptor.initialOutputDeviceId) {
 	}
 
 	~GroupInstanceManager() {
@@ -872,11 +874,109 @@ public:
         
         _audioDeviceModule->InitRecording();
         _audioDeviceModule->StartRecording();
+        
+        setAudioInputDevice(_initialInputDeviceId);
+        setAudioOutputDevice(_initialOutputDeviceId);
 #endif
         
         //beginStatsTimer(100);
         beginLevelsTimer(50);
 	}
+    
+    
+    void setAudioInputDevice(std::string id) {
+    #if defined(WEBRTC_IOS)
+    #else
+        const auto recording = _audioDeviceModule->Recording();
+        if (recording) {
+            _audioDeviceModule->StopRecording();
+        }
+        const auto finish = [&] {
+            if (recording) {
+                _audioDeviceModule->InitRecording();
+                _audioDeviceModule->StartRecording();
+            }
+        };
+        if (id == "default" || id.empty()) {
+            if (const auto result = _audioDeviceModule->SetRecordingDevice(webrtc::AudioDeviceModule::kDefaultCommunicationDevice)) {
+                RTC_LOG(LS_ERROR) << "setAudioInputDevice(" << id << "): SetRecordingDevice(kDefaultCommunicationDevice) failed: " << result << ".";
+            } else {
+                RTC_LOG(LS_INFO) << "setAudioInputDevice(" << id << "): SetRecordingDevice(kDefaultCommunicationDevice) success.";
+            }
+            return finish();
+        }
+        const auto count = _audioDeviceModule
+            ? _audioDeviceModule->RecordingDevices()
+            : int16_t(-666);
+        if (count <= 0) {
+            RTC_LOG(LS_ERROR) << "setAudioInputDevice(" << id << "): Could not get recording devices count: " << count << ".";
+            return finish();
+        }
+        for (auto i = 0; i != count; ++i) {
+            char name[webrtc::kAdmMaxDeviceNameSize + 1] = { 0 };
+            char guid[webrtc::kAdmMaxGuidSize + 1] = { 0 };
+            _audioDeviceModule->RecordingDeviceName(i, name, guid);
+            if (id == guid) {
+                const auto result = _audioDeviceModule->SetRecordingDevice(i);
+                if (result != 0) {
+                    RTC_LOG(LS_ERROR) << "setAudioInputDevice(" << id << ") name '" << std::string(name) << "' failed: " << result << ".";
+                } else {
+                    RTC_LOG(LS_INFO) << "setAudioInputDevice(" << id << ") name '" << std::string(name) << "' success.";
+                }
+                return finish();
+            }
+        }
+        RTC_LOG(LS_ERROR) << "setAudioInputDevice(" << id << "): Could not find recording device.";
+        return finish();
+    #endif
+    }
+
+    void setAudioOutputDevice(std::string id) {
+    #if defined(WEBRTC_IOS)
+    #else
+        const auto playing = _audioDeviceModule->Playing();
+        if (playing) {
+            _audioDeviceModule->StopPlayout();
+        }
+        const auto finish = [&] {
+            if (playing) {
+                _audioDeviceModule->InitPlayout();
+                _audioDeviceModule->StartPlayout();
+            }
+        };
+        if (id == "default" || id.empty()) {
+            if (const auto result = _audioDeviceModule->SetPlayoutDevice(webrtc::AudioDeviceModule::kDefaultCommunicationDevice)) {
+                RTC_LOG(LS_ERROR) << "setAudioOutputDevice(" << id << "): SetPlayoutDevice(kDefaultCommunicationDevice) failed: " << result << ".";
+            } else {
+                RTC_LOG(LS_INFO) << "setAudioOutputDevice(" << id << "): SetPlayoutDevice(kDefaultCommunicationDevice) success.";
+            }
+            return finish();
+        }
+        const auto count = _audioDeviceModule
+            ? _audioDeviceModule->PlayoutDevices()
+            : int16_t(-666);
+        if (count <= 0) {
+            RTC_LOG(LS_ERROR) << "setAudioOutputDevice(" << id << "): Could not get playout devices count: " << count << ".";
+            return finish();
+        }
+        for (auto i = 0; i != count; ++i) {
+            char name[webrtc::kAdmMaxDeviceNameSize + 1] = { 0 };
+            char guid[webrtc::kAdmMaxGuidSize + 1] = { 0 };
+            _audioDeviceModule->PlayoutDeviceName(i, name, guid);
+            if (id == guid) {
+                const auto result = _audioDeviceModule->SetPlayoutDevice(i);
+                if (result != 0) {
+                    RTC_LOG(LS_ERROR) << "setAudioOutputDevice(" << id << ") name '" << std::string(name) << "' failed: " << result << ".";
+                } else {
+                    RTC_LOG(LS_INFO) << "setAudioOutputDevice(" << id << ") name '" << std::string(name) << "' success.";
+                }
+                return finish();
+            }
+        }
+        RTC_LOG(LS_ERROR) << "setAudioOutputDevice(" << id << "): Could not find playout device.";
+        return finish();
+    #endif
+    }
     
     void updateIsConnected(bool isConnected) {
         _isConnected = isConnected;
@@ -1173,6 +1273,9 @@ private:
     std::function<void(std::vector<std::pair<uint32_t, float>> const &)> _audioLevelsUpdated;
     std::function<void(float)> _myAudioLevelUpdated;
     
+    std::string _initialInputDeviceId;
+    std::string _initialOutputDeviceId;
+    
     uint32_t _sessionId = 6543245;
     uint32_t _mainStreamAudioSsrc = 0;
     absl::optional<GroupJoinResponsePayload> _joinPayload;
@@ -1251,6 +1354,17 @@ void GroupInstanceImpl::setSsrcs(std::vector<uint32_t> ssrcs) {
 void GroupInstanceImpl::setIsMuted(bool isMuted) {
     _manager->perform(RTC_FROM_HERE, [isMuted](GroupInstanceManager *manager) {
         manager->setIsMuted(isMuted);
+    });
+}
+
+void GroupInstanceImpl::setAudioInputDevice(std::string id) {
+    _manager->perform(RTC_FROM_HERE, [id](GroupInstanceManager *manager) {
+        manager->setAudioInputDevice(id);
+    });
+}
+void GroupInstanceImpl::setAudioOutputDevice(std::string id) {
+    _manager->perform(RTC_FROM_HERE, [id](GroupInstanceManager *manager) {
+        manager->setAudioOutputDevice(id);
     });
 }
 
