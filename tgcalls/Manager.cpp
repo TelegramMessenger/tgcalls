@@ -27,11 +27,11 @@ rtc::Thread *makeMediaThread() {
 }
 
 void dumpStatsLog(const FilePath &path, const CallStats &stats) {
-	if (path.empty()) {
+	if (path.data.empty()) {
 		return;
 	}
     std::ofstream file;
-    file.open(path);
+    file.open(path.data);
 
     file << "{";
     file << "\"v\":\"" << 1 << "\"";
