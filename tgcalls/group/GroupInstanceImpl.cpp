@@ -98,7 +98,7 @@ static absl::optional<GroupJoinPayload> parseSdpIntoJoinPayload(std::string cons
         }
     }
 
-    std::vector<uint32_t> audioSources;
+    /*std::vector<uint32_t> audioSources;
     for (auto &line : getLines(audioLines, "a=ssrc:")) {
         std::istringstream iss(line);
         uint32_t value = 0;
@@ -111,7 +111,8 @@ static absl::optional<GroupJoinPayload> parseSdpIntoJoinPayload(std::string cons
     if (audioSources.size() != 1) {
         return absl::nullopt;
     }
-    result.ssrc = audioSources[0];
+    result.ssrc = audioSources[0];*/
+    result.ssrc = 0;
 
     auto ufragLines = getLines(lines, "a=ice-ufrag:");
     if (ufragLines.size() != 1) {
@@ -707,6 +708,7 @@ public:
     _myAudioLevelUpdated(descriptor.myAudioLevelUpdated),
     _initialInputDeviceId(descriptor.initialInputDeviceId),
     _initialOutputDeviceId(descriptor.initialOutputDeviceId) {
+        _mainStreamAudioSsrc = arc4random();
 	}
 
 	~GroupInstanceManager() {
@@ -786,6 +788,16 @@ public:
         apm->ApplyConfig(audioConfig);
 
         mediaDeps.audio_processing = apm;
+        
+        mediaDeps.onUnknownAudioSsrc = [weak](uint32_t ssrc) {
+            getMediaThread()->PostTask(RTC_FROM_HERE, [weak, ssrc](){
+                auto strong = weak.lock();
+                if (!strong) {
+                    return;
+                }
+                strong->onMissingSsrc(ssrc);
+            });
+        };
 
         dependencies.media_engine = cricket::CreateMediaEngine(std::move(mediaDeps));
         dependencies.call_factory = webrtc::CreateCallFactory();
@@ -867,7 +879,20 @@ public:
         streamIds.push_back(name.str());
         _localAudioTrack = _nativeFactory->CreateAudioTrack(name.str(), audioSource);
         _localAudioTrack->set_enabled(false);
-        _peerConnection->AddTrack(_localAudioTrack, streamIds);
+        auto addedTrack = _peerConnection->AddTrack(_localAudioTrack, streamIds);
+        
+        if (addedTrack.ok()) {
+            _localAudioTrackSender = addedTrack.value();
+            for (auto &it : _peerConnection->GetTransceivers()) {
+                if (it->media_type() == cricket::MediaType::MEDIA_TYPE_AUDIO) {
+                    if (_localAudioTrackSender.get() == it->sender().get()) {
+                        it->SetDirection(webrtc::RtpTransceiverDirection::kRecvOnly);
+                    }
+
+                    break;
+                }
+            }
+        }
         
 #if defined(WEBRTC_MAC) && !defined(WEBRTC_IOS)
         _audioDeviceModule->SetRecordingDevice(webrtc::AudioDeviceModule::kDefaultCommunicationDevice);
@@ -1015,8 +1040,38 @@ public:
                 if (!strong) {
                     return;
                 }
+                
+                auto lines = splitSdpLines(sdp);
+                std::vector<std::string> resultSdp;
+                
+                std::ostringstream generatedSsrcStringStream;
+                generatedSsrcStringStream << strong->_mainStreamAudioSsrc;
+                auto generatedSsrcString = generatedSsrcStringStream.str();
+                
+                for (auto &line : lines) {
+                    auto adjustedLine = line;
+                    if (adjustedLine.find("a=ssrc:") == 0) {
+                        int startIndex = 7;
+                        int i = startIndex;
+                        while (i < adjustedLine.size()) {
+                            if (!isdigit(adjustedLine[i])) {
+                                break;
+                            }
+                            i++;
+                        }
+                        if (i >= startIndex) {
+                            adjustedLine.replace(startIndex, i - startIndex, generatedSsrcString);
+                        }
+                    }
+                    appendSdp(resultSdp, adjustedLine);
+                }
+                
+                std::ostringstream result;
+                for (auto &line : resultSdp) {
+                    result << line << "\n";
+                }
 
-                auto adjustedSdp = sdp;
+                auto adjustedSdp = result.str();
                 
                 printf("----- setLocalDescription join -----\n");
                 printf("%s\n", adjustedSdp.c_str());
@@ -1032,7 +1087,7 @@ public:
                         }
                         auto payload = parseSdpIntoJoinPayload(adjustedSdp);
                         if (payload) {
-                            strong->_mainStreamAudioSsrc = payload->ssrc;
+                            payload->ssrc = strong->_mainStreamAudioSsrc;
                             completion(payload.value());
                         }
                     }));
@@ -1051,7 +1106,23 @@ public:
         setOfferSdp(sdp, true);
     }
 
-    void setSsrcs(std::vector<uint32_t> ssrcs) {
+    void removeSsrcs(std::vector<uint32_t> ssrcs) {
+        if (!_joinPayload) {
+            return;
+        }
+        
+        bool updated = false;
+        for (auto ssrc : ssrcs) {
+            if (std::find(_allOtherSsrcs.begin(), _allOtherSsrcs.end(), ssrc) != _allOtherSsrcs.end() && std::find(_activeOtherSsrcs.begin(), _activeOtherSsrcs.end(), ssrc) != _activeOtherSsrcs.end()) {
+                _activeOtherSsrcs.erase(ssrc);
+                updated = true;
+            }
+        }
+        
+        if (updated) {
+            auto sdp = parseJoinResponseIntoSdp(_sessionId, _mainStreamAudioSsrc, _joinPayload.value(), false, _allOtherSsrcs, _activeOtherSsrcs);
+            setOfferSdp(sdp, false);
+        }
     }
     
     void addSsrcsInternal(std::vector<uint32_t> const &ssrcs) {
@@ -1068,6 +1139,77 @@ public:
 
         auto sdp = parseJoinResponseIntoSdp(_sessionId, _mainStreamAudioSsrc, _joinPayload.value(), false, _allOtherSsrcs, _activeOtherSsrcs);
         setOfferSdp(sdp, false);
+    }
+    
+    void applyLocalSdp() {
+        const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
+        webrtc::PeerConnectionInterface::RTCOfferAnswerOptions options;
+        rtc::scoped_refptr<CreateSessionDescriptionObserverImpl> observer(new rtc::RefCountedObject<CreateSessionDescriptionObserverImpl>([weak](std::string sdp, std::string type) {
+            getMediaThread()->PostTask(RTC_FROM_HERE, [weak, sdp, type](){
+                auto strong = weak.lock();
+                if (!strong) {
+                    return;
+                }
+                
+                auto lines = splitSdpLines(sdp);
+                std::vector<std::string> resultSdp;
+                
+                std::ostringstream generatedSsrcStringStream;
+                generatedSsrcStringStream << strong->_mainStreamAudioSsrc;
+                auto generatedSsrcString = generatedSsrcStringStream.str();
+                
+                for (auto &line : lines) {
+                    auto adjustedLine = line;
+                    if (adjustedLine.find("a=ssrc:") == 0) {
+                        int startIndex = 7;
+                        int i = startIndex;
+                        while (i < adjustedLine.size()) {
+                            if (!isdigit(adjustedLine[i])) {
+                                break;
+                            }
+                            i++;
+                        }
+                        if (i >= startIndex) {
+                            adjustedLine.replace(startIndex, i - startIndex, generatedSsrcString);
+                        }
+                    }
+                    appendSdp(resultSdp, adjustedLine);
+                }
+                
+                std::ostringstream result;
+                for (auto &line : resultSdp) {
+                    result << line << "\n";
+                }
+
+                auto adjustedSdp = result.str();
+                
+                printf("----- setLocalDescription applyLocalSdp -----\n");
+                printf("%s\n", adjustedSdp.c_str());
+                printf("-----\n");
+
+                webrtc::SdpParseError error;
+                webrtc::SessionDescriptionInterface *sessionDescription = webrtc::CreateSessionDescription(type, adjustLocalDescription(adjustedSdp), &error);
+                if (sessionDescription != nullptr) {
+                    rtc::scoped_refptr<SetSessionDescriptionObserverImpl> observer(new rtc::RefCountedObject<SetSessionDescriptionObserverImpl>([weak, adjustedSdp]() {
+                        auto strong = weak.lock();
+                        if (!strong) {
+                            return;
+                        }
+                        
+                        if (!strong->_joinPayload) {
+                            return;
+                        }
+                        
+                        auto sdp = parseJoinResponseIntoSdp(strong->_sessionId, strong->_mainStreamAudioSsrc, strong->_joinPayload.value(), true, strong->_allOtherSsrcs, strong->_activeOtherSsrcs);
+                        strong->setOfferSdp(sdp, true);
+                    }));
+                    strong->_peerConnection->SetLocalDescription(observer, sessionDescription);
+                } else {
+                    return;
+                }
+            });
+        }));
+        _peerConnection->CreateOffer(observer, options);
     }
 
     void setOfferSdp(std::string const &offerSdp, bool isAnswer) {
@@ -1232,6 +1374,36 @@ public:
     }
 
     void setIsMuted(bool isMuted) {
+        if (!_localAudioTrackSender) {
+            return;
+        }
+        
+        for (auto &it : _peerConnection->GetTransceivers()) {
+            if (it->media_type() == cricket::MediaType::MEDIA_TYPE_AUDIO) {
+                if (_localAudioTrackSender.get() == it->sender().get()) {
+                    if (isMuted) {
+                        /*if (it->direction() == webrtc::RtpTransceiverDirection::kSendRecv) {
+                            it->SetDirection(webrtc::RtpTransceiverDirection::kRecvOnly);
+                            
+                            applyLocalSdp();
+                            
+                            break;
+                        }*/
+                    } else {
+                        if (it->direction() == webrtc::RtpTransceiverDirection::kRecvOnly) {
+                            it->SetDirection(webrtc::RtpTransceiverDirection::kSendRecv);
+                            
+                            applyLocalSdp();
+                            
+                            break;
+                        }
+                    }
+                }
+
+                break;
+            }
+        }
+    
         _localAudioTrack->set_enabled(!isMuted);
     }
 
@@ -1295,6 +1467,7 @@ private:
     rtc::scoped_refptr<webrtc::PeerConnectionInterface> _peerConnection;
     std::unique_ptr<AudioTrackSinkInterfaceImpl> _localAudioTrackSink;
     rtc::scoped_refptr<webrtc::AudioTrackInterface> _localAudioTrack;
+    rtc::scoped_refptr<webrtc::RtpSenderInterface> _localAudioTrackSender;
     
     std::unique_ptr<webrtc::TaskQueueFactory> _taskQueueFactory;
     
@@ -1351,9 +1524,9 @@ void GroupInstanceImpl::setJoinResponsePayload(GroupJoinResponsePayload payload)
     });
 }
 
-void GroupInstanceImpl::setSsrcs(std::vector<uint32_t> ssrcs) {
+void GroupInstanceImpl::removeSsrcs(std::vector<uint32_t> ssrcs) {
     _manager->perform(RTC_FROM_HERE, [ssrcs](GroupInstanceManager *manager) {
-        manager->setSsrcs(ssrcs);
+        manager->removeSsrcs(ssrcs);
     });
 }
 

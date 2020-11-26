@@ -86,7 +86,7 @@ public:
     
     void emitJoinPayload(std::function<void(GroupJoinPayload)> completion);
     void setJoinResponsePayload(GroupJoinResponsePayload payload);
-    void setSsrcs(std::vector<uint32_t> ssrcs);
+    void removeSsrcs(std::vector<uint32_t> ssrcs);
 
     void setIsMuted(bool isMuted);
     void setAudioOutputDevice(std::string id);
