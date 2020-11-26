@@ -737,11 +737,12 @@ public:
         
         _taskQueueFactory = webrtc::CreateDefaultTaskQueueFactory();
         
+#if defined(WEBRTC_MAC) && !defined(WEBRTC_IOS)
         _audioDeviceModule = createAudioDeviceModule();
         if (!_audioDeviceModule) {
             return;
         }
-       
+#endif
         
         webrtc::field_trial::InitFieldTrialsFromString(
             //"WebRTC-Audio-SendSideBwe/Enabled/"
@@ -767,7 +768,9 @@ public:
         mediaDeps.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory();
         mediaDeps.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactory();
 
+#if defined(WEBRTC_MAC) && !defined(WEBRTC_IOS)
         mediaDeps.adm = _audioDeviceModule;
+#endif
         
         webrtc::AudioProcessing *apm = webrtc::AudioProcessingBuilder().Create();
         webrtc::AudioProcessing::Config audioConfig;
@@ -864,15 +867,14 @@ public:
         _localAudioTrack->set_enabled(false);
         _peerConnection->AddTrack(_localAudioTrack, streamIds);
         
-        
+#if defined(WEBRTC_MAC) && !defined(WEBRTC_IOS)
         _audioDeviceModule->SetRecordingDevice(webrtc::AudioDeviceModule::kDefaultCommunicationDevice);
         
         _audioDeviceModule->InitRecording();
         _audioDeviceModule->StartRecording();
-       
+#endif
         
         //beginStatsTimer(100);
-        beginStatsTimer(100);
         beginLevelsTimer(50);
 	}
     
@@ -1193,8 +1195,9 @@ private:
     
     std::unique_ptr<webrtc::TaskQueueFactory> _taskQueueFactory;
     
+#if defined(WEBRTC_MAC) && !defined(WEBRTC_IOS)
     rtc::scoped_refptr<webrtc::AudioDeviceModule> _audioDeviceModule;
-
+#endif
     
     std::map<uint32_t, std::shared_ptr<AudioTrackSinkInterfaceImpl>> _audioTrackSinks;
     std::map<uint32_t, float> _audioLevels;
