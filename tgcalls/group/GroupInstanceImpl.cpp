@@ -862,6 +862,9 @@ public:
                 }
                 if (strong->_myAudioLevelPeakCount >= 1200) {
                     float level = ((float)(strong->_myAudioLevelPeak)) / 4000.0f;
+                    if (strong->_isMuted) {
+                        level = 0.0f;
+                    }
                     strong->_myAudioLevelPeak = 0;
                     strong->_myAudioLevelPeakCount = 0;
                     if (strong->_myAudioLevelUpdated) {
@@ -1480,6 +1483,7 @@ public:
             }
         }
 
+        _isMuted = isMuted;
         _localAudioTrack->set_enabled(!isMuted);
     }
 
@@ -1541,6 +1545,8 @@ private:
     int64_t _appliedOfferTimestamp = 0;
     bool _isConnected = false;
     int _isConnectedUpdateValidTaskId = 0;
+    
+    bool _isMuted = true;
 
     std::vector<uint32_t> _allOtherSsrcs;
     std::set<uint32_t> _activeOtherSsrcs;
