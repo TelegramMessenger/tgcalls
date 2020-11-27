@@ -974,6 +974,12 @@ public:
 
         // At least on Windows recording doesn't work without started playout.
         withAudioDeviceModule([&](webrtc::AudioDeviceModule *adm) {
+#ifdef WEBRTC_WIN
+            // At least on Windows starting/stopping playout while recording
+            // is active leads to errors in recording and assertion violation.
+			adm->EnableBuiltInAEC(false);
+#endif // WEBRTC_WIN
+
             adm->InitPlayout();
             adm->StartPlayout();
         });
