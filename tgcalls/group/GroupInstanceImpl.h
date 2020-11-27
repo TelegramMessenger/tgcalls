@@ -1,9 +1,6 @@
 #ifndef TGCALLS_GROUP_INSTANCE_IMPL_H
 #define TGCALLS_GROUP_INSTANCE_IMPL_H
 
-#include "rtc_base/copy_on_write_buffer.h"
-
-
 #include <functional>
 #include <vector>
 #include <string>
@@ -80,10 +77,9 @@ class GroupInstanceImpl final {
 public:
 	explicit GroupInstanceImpl(GroupInstanceDescriptor &&descriptor);
 	~GroupInstanceImpl();
-    
-    
+
     void stop();
-    
+
     void emitJoinPayload(std::function<void(GroupJoinPayload)> completion);
     void setJoinResponsePayload(GroupJoinResponsePayload payload);
     void removeSsrcs(std::vector<uint32_t> ssrcs);
@@ -94,8 +90,6 @@ public:
 private:
 	std::unique_ptr<ThreadLocalObject<GroupInstanceManager>> _manager;
 	std::unique_ptr<LogSinkImpl> _logSink;
-    rtc::scoped_refptr<webrtc::AudioDeviceModule> createAudioDeviceModule();
-    rtc::scoped_refptr<webrtc::AudioDeviceModule> _audioDeviceModule;
 
 };
 
