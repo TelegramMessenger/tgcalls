@@ -287,8 +287,13 @@ static std::string createSdp(uint32_t sessionId, GroupJoinResponsePayload const 
         appendSdp(sdp, "a=extmap:3 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time");
         appendSdp(sdp, "a=extmap:5 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01");
         appendSdp(sdp, "a=rtcp-fb:111 transport-cc");
+<<<<<<< HEAD
         
         if (isAnswer && stream.isMain) {
+=======
+
+        if (isAnswer) {
+>>>>>>> c1e69b1455ad99f01433c9e9e9ee1436d545265b
             appendSdp(sdp, "a=recvonly");
         } else {
             if (stream.isMain) {
@@ -911,11 +916,13 @@ public:
         setAudioInputDevice(_initialInputDeviceId);
         setAudioOutputDevice(_initialOutputDeviceId);
 
+#ifdef WEBRTC_APP_TDESKTOP
         // Recording doesn't work without started Playout, at least on Windows.
         withAudioDeviceModule([&](webrtc::AudioDeviceModule *adm) {
             adm->InitPlayout();
             adm->StartPlayout();
         });
+#endif // WEBRTC_APP_TDESKTOP
 
         //beginStatsTimer(100);
         beginLevelsTimer(50);
