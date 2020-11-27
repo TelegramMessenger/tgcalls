@@ -279,7 +279,7 @@ static std::string createSdp(uint32_t sessionId, GroupJoinResponsePayload const 
         
         appendSdp(sdp, "a=rtpmap:111 opus/48000/2");
         appendSdp(sdp, "a=rtpmap:126 telephone-event/8000");
-        appendSdp(sdp, "a=fmtp:111 minptime=10; useinbandfec=1; usedtx=1");
+        appendSdp(sdp, "a=fmtp:111 minptime=10; useinbandfec=1");
         appendSdp(sdp, "a=rtcp:1 IN IP4 0.0.0.0");
         appendSdp(sdp, "a=rtcp-mux");
         appendSdp(sdp, "a=extmap:1 urn:ietf:params:rtp-hdrext:ssrc-audio-level");
