@@ -1134,9 +1134,7 @@ public:
                 }
             }
             strong->_audioLevels.clear();
-            if (levels.size() != 0) {
-                strong->_audioLevelsUpdated(levels);
-            }
+            strong->_audioLevelsUpdated(levels);
             
             strong->beginLevelsTimer(50);
         }, timeoutMs);
