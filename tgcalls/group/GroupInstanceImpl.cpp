@@ -660,7 +660,6 @@ public:
     }
 
     virtual void OnFailure(webrtc::RTCError error) override {
-        printf("Error\n");
     }
 };
 
@@ -1147,9 +1146,9 @@ public:
 
                 auto adjustedSdp = result.str();
 
-                printf("----- setLocalDescription join -----\n");
-                printf("%s\n", adjustedSdp.c_str());
-                printf("-----\n");
+                RTC_LOG(LoggingSeverity::WARNING) << "----- setLocalDescription join -----";
+                RTC_LOG(LoggingSeverity::WARNING) << adjustedSdp;
+                RTC_LOG(LoggingSeverity::WARNING) << "-----";
 
                 webrtc::SdpParseError error;
                 webrtc::SessionDescriptionInterface *sessionDescription = webrtc::CreateSessionDescription(type, adjustLocalDescription(adjustedSdp), &error);
@@ -1260,9 +1259,9 @@ public:
 
                 auto adjustedSdp = result.str();
 
-                printf("----- setLocalDescription applyLocalSdp -----\n");
-                printf("%s\n", adjustedSdp.c_str());
-                printf("-----\n");
+                RTC_LOG(LoggingSeverity::WARNING) << "----- setLocalDescription applyLocalSdp -----";
+                RTC_LOG(LoggingSeverity::WARNING) << adjustedSdp;
+                RTC_LOG(LoggingSeverity::WARNING) << "-----";
 
                 webrtc::SdpParseError error;
                 webrtc::SessionDescriptionInterface *sessionDescription = webrtc::CreateSessionDescription(type, adjustLocalDescription(adjustedSdp), &error);
@@ -1295,9 +1294,9 @@ public:
         }
         _appliedRemoteRescription = offerSdp;
 
-        printf("----- setOfferSdp %s -----\n", isAnswer ? "answer" : "offer");
-        printf("%s\n", offerSdp.c_str());
-        printf("-----\n");
+        RTC_LOG(LoggingSeverity::WARNING) << "----- setOfferSdp " << (isAnswer ? "answer" : "offer") << " -----";
+        RTC_LOG(LoggingSeverity::WARNING) << offerSdp;
+        RTC_LOG(LoggingSeverity::WARNING) << "-----";
 
         webrtc::SdpParseError error;
         webrtc::SessionDescriptionInterface *sessionDescription = webrtc::CreateSessionDescription(isAnswer ? "answer" : "offer", adjustLocalDescription(offerSdp), &error);
@@ -1494,10 +1493,10 @@ public:
                 if (!strong) {
                     return;
                 }
-
-                printf("----- setLocalDescription answer -----\n");
-                printf("%s\n", sdp.c_str());
-                printf("-----\n");
+                
+                RTC_LOG(LoggingSeverity::WARNING) << "----- setLocalDescription answer -----";
+                RTC_LOG(LoggingSeverity::WARNING) << sdp;
+                RTC_LOG(LoggingSeverity::WARNING) << "-----";
 
                 webrtc::SdpParseError error;
                 webrtc::SessionDescriptionInterface *sessionDescription = webrtc::CreateSessionDescription(type, adjustLocalDescription(sdp), &error);
