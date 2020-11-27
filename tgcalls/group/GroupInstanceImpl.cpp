@@ -908,14 +908,16 @@ public:
             }
         }
 
-        withAudioDeviceModule([&](webrtc::AudioDeviceModule *adm) {
-            adm->SetRecordingDevice(webrtc::AudioDeviceModule::kDefaultCommunicationDevice);
-
-            adm->InitRecording();
-            adm->StartRecording();
-        });
         setAudioInputDevice(_initialInputDeviceId);
         setAudioOutputDevice(_initialOutputDeviceId);
+
+#ifdef WEBRTC_APP_TDESKTOP
+        // Recording doesn't work without started Playout, at least on Windows.
+        withAudioDeviceModule([&](webrtc::AudioDeviceModule *adm) {
+            adm->InitPlayout();
+            adm->StartPlayout();
+        });
+#endif // WEBRTC_APP_TDESKTOP
 
         //beginStatsTimer(100);
         beginLevelsTimer(50);
