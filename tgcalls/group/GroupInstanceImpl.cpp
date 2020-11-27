@@ -287,7 +287,7 @@ static std::string createSdp(uint32_t sessionId, GroupJoinResponsePayload const 
         appendSdp(sdp, "a=extmap:5 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01");
         appendSdp(sdp, "a=rtcp-fb:111 transport-cc");
         
-        if (isAnswer) {
+        if (isAnswer && stream.isMain) {
             appendSdp(sdp, "a=recvonly");
         } else {
             if (stream.isMain) {
