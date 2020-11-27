@@ -280,7 +280,7 @@ static std::string createSdp(uint32_t sessionId, GroupJoinResponsePayload const 
 
         appendSdp(sdp, "a=rtpmap:111 opus/48000/2");
         appendSdp(sdp, "a=rtpmap:126 telephone-event/8000");
-        appendSdp(sdp, "a=fmtp:111 minptime=10; useinbandfec=1; usedtx=1");
+        appendSdp(sdp, "a=fmtp:111 minptime=10; useinbandfec=1");
         appendSdp(sdp, "a=rtcp:1 IN IP4 0.0.0.0");
         appendSdp(sdp, "a=rtcp-mux");
         appendSdp(sdp, "a=extmap:1 urn:ietf:params:rtp-hdrext:ssrc-audio-level");
@@ -725,6 +725,23 @@ public:
         }
 	}
 
+    void generateAndInsertFakeIncomingSsrc() {
+        // At least on Windows recording can't be started without playout.
+        // We keep a fake incoming stream, so that playout is always started.
+        auto generator = std::mt19937(std::random_device()());
+        auto distribution = std::uniform_int_distribution<uint32_t>();
+        while (true) {
+            _fakeIncomingSsrc = distribution(generator);
+            if (_fakeIncomingSsrc != 0
+                && _fakeIncomingSsrc != _mainStreamAudioSsrc
+                && std::find(_allOtherSsrcs.begin(), _allOtherSsrcs.end(), _fakeIncomingSsrc) == _allOtherSsrcs.end()) {
+                break;
+            }
+        }
+        _activeOtherSsrcs.emplace(_fakeIncomingSsrc);
+        _allOtherSsrcs.emplace_back(_fakeIncomingSsrc);
+    }
+
     bool createAudioDeviceModule(
             const webrtc::PeerConnectionFactoryDependencies &dependencies) {
         using Result = rtc::scoped_refptr<webrtc::AudioDeviceModule>;
@@ -953,7 +970,7 @@ public:
         setAudioInputDevice(_initialInputDeviceId);
         setAudioOutputDevice(_initialOutputDeviceId);
 
-        // Recording doesn't work without started Playout, at least on Windows.
+        // At least on Windows recording doesn't work without started playout.
         withAudioDeviceModule([&](webrtc::AudioDeviceModule *adm) {
             adm->InitPlayout();
             adm->StartPlayout();
@@ -1171,6 +1188,9 @@ public:
         bool updated = false;
         for (auto ssrc : ssrcs) {
             if (std::find(_allOtherSsrcs.begin(), _allOtherSsrcs.end(), ssrc) != _allOtherSsrcs.end() && std::find(_activeOtherSsrcs.begin(), _activeOtherSsrcs.end(), ssrc) != _activeOtherSsrcs.end()) {
+                if (!_fakeIncomingSsrc || ssrc == _fakeIncomingSsrc) {
+                    generateAndInsertFakeIncomingSsrc();
+                }
                 _activeOtherSsrcs.erase(ssrc);
                 updated = true;
             }
@@ -1516,6 +1536,7 @@ private:
 
     uint32_t _sessionId = 6543245;
     uint32_t _mainStreamAudioSsrc = 0;
+    uint32_t _fakeIncomingSsrc = 0;
     absl::optional<GroupJoinResponsePayload> _joinPayload;
 
     int64_t _appliedOfferTimestamp = 0;
