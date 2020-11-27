@@ -812,6 +812,48 @@ public:
                 strong->onMissingSsrc(ssrc);
             });
         };
+        
+        mediaDeps.onProcessAudioFrame = [weak](const webrtc::AudioFrame * audioFrame) {
+            if (!audioFrame) {
+                return;
+            }
+            if (audioFrame->num_channels() != 1) {
+                return;
+            }
+            
+            int16_t peak = 0;
+            int peakCount = 0;
+            const int16_t *samples = audioFrame->data();
+            for (int i = 0; i < audioFrame->samples_per_channel(); i++) {
+                int16_t sample = samples[i];
+                if (sample < 0) {
+                    sample = -sample;
+                }
+                if (peak < sample) {
+                    peak = sample;
+                }
+                peakCount += 1;
+            }
+            
+            getMediaThread()->PostTask(RTC_FROM_HERE, [weak, peak, peakCount](){
+                auto strong = weak.lock();
+                if (!strong) {
+                    return;
+                }
+                strong->_myAudioLevelPeakCount += peakCount;
+                if (strong->_myAudioLevelPeak < peak) {
+                    strong->_myAudioLevelPeak = peak;
+                }
+                if (strong->_myAudioLevelPeakCount >= 1200) {
+                    float level = ((float)(strong->_myAudioLevelPeak)) / 4000.0f;
+                    strong->_myAudioLevelPeak = 0;
+                    strong->_myAudioLevelPeakCount = 0;
+                    if (strong->_myAudioLevelUpdated) {
+                        strong->_myAudioLevelUpdated(level);
+                    }
+                }
+            });
+        };
 
         dependencies.media_engine = cricket::CreateMediaEngine(std::move(mediaDeps));
         dependencies.call_factory = webrtc::CreateCallFactory();
@@ -1465,6 +1507,9 @@ private:
     std::function<void(bool)> _networkStateUpdated;
     std::function<void(std::vector<std::pair<uint32_t, float>> const &)> _audioLevelsUpdated;
     std::function<void(float)> _myAudioLevelUpdated;
+    
+    int _myAudioLevelPeakCount = 0;
+    uint16_t _myAudioLevelPeak = 0;
 
     std::string _initialInputDeviceId;
     std::string _initialOutputDeviceId;
