@@ -649,10 +649,11 @@ public:
 class SetSessionDescriptionObserverImpl : public webrtc::SetSessionDescriptionObserver {
 private:
     std::function<void()> _completion;
+    std::function<void(webrtc::RTCError)> _error;
 
 public:
-    SetSessionDescriptionObserverImpl(std::function<void()> completion) :
-    _completion(completion) {
+    SetSessionDescriptionObserverImpl(std::function<void()> completion, std::function<void(webrtc::RTCError)> error) :
+    _completion(completion), _error(error) {
     }
 
     virtual void OnSuccess() override {
@@ -660,6 +661,7 @@ public:
     }
 
     virtual void OnFailure(webrtc::RTCError error) override {
+        _error(error);
     }
 };
 
@@ -1166,6 +1168,7 @@ public:
                             payload->ssrc = strong->_mainStreamAudioSsrc;
                             completion(payload.value());
                         }
+                    }, [](webrtc::RTCError error) {
                     }));
                     strong->_peerConnection->SetLocalDescription(observer, sessionDescription);
                 } else {
@@ -1179,7 +1182,7 @@ public:
     void setJoinResponsePayload(GroupJoinResponsePayload payload) {
         _joinPayload = payload;
         auto sdp = parseJoinResponseIntoSdp(_sessionId, _mainStreamAudioSsrc, payload, true, _allOtherSsrcs, _activeOtherSsrcs);
-        setOfferSdp(sdp, true);
+        setOfferSdp(sdp, true, true, false);
     }
 
     void removeSsrcs(std::vector<uint32_t> ssrcs) {
@@ -1200,12 +1203,15 @@ public:
 
         if (updated) {
             auto sdp = parseJoinResponseIntoSdp(_sessionId, _mainStreamAudioSsrc, _joinPayload.value(), false, _allOtherSsrcs, _activeOtherSsrcs);
-            setOfferSdp(sdp, false);
+            setOfferSdp(sdp, false, false, false);
         }
     }
 
-    void addSsrcsInternal(std::vector<uint32_t> const &ssrcs) {
+    void addSsrcsInternal(std::vector<uint32_t> const &ssrcs, bool completeMissingSsrcSetup) {
         if (!_joinPayload) {
+            if (completeMissingSsrcSetup) {
+                completeProcessingMissingSsrcs();
+            }
             return;
         }
 
@@ -1217,7 +1223,7 @@ public:
         }
 
         auto sdp = parseJoinResponseIntoSdp(_sessionId, _mainStreamAudioSsrc, _joinPayload.value(), false, _allOtherSsrcs, _activeOtherSsrcs);
-        setOfferSdp(sdp, false);
+        setOfferSdp(sdp, false, false, completeMissingSsrcSetup);
     }
 
     void applyLocalSdp() {
@@ -1280,7 +1286,8 @@ public:
                         }
 
                         auto sdp = parseJoinResponseIntoSdp(strong->_sessionId, strong->_mainStreamAudioSsrc, strong->_joinPayload.value(), true, strong->_allOtherSsrcs, strong->_activeOtherSsrcs);
-                        strong->setOfferSdp(sdp, true);
+                        strong->setOfferSdp(sdp, false, true, false);
+                    }, [](webrtc::RTCError error) {
                     }));
                     strong->_peerConnection->SetLocalDescription(observer, sessionDescription);
                 } else {
@@ -1291,8 +1298,11 @@ public:
         _peerConnection->CreateOffer(observer, options);
     }
 
-    void setOfferSdp(std::string const &offerSdp, bool isAnswer) {
+    void setOfferSdp(std::string const &offerSdp, bool isInitialJoinAnswer, bool isAnswer, bool completeMissingSsrcSetup) {
         if (!isAnswer && _appliedRemoteRescription == offerSdp) {
+            if (completeMissingSsrcSetup) {
+                completeProcessingMissingSsrcs();
+            }
             return;
         }
         _appliedRemoteRescription = offerSdp;
@@ -1304,6 +1314,9 @@ public:
         webrtc::SdpParseError error;
         webrtc::SessionDescriptionInterface *sessionDescription = webrtc::CreateSessionDescription(isAnswer ? "answer" : "offer", adjustLocalDescription(offerSdp), &error);
         if (!sessionDescription) {
+            if (completeMissingSsrcSetup) {
+                completeProcessingMissingSsrcs();
+            }
             return;
         }
 
@@ -1312,14 +1325,32 @@ public:
         }
 
         const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
-        rtc::scoped_refptr<SetSessionDescriptionObserverImpl> observer(new rtc::RefCountedObject<SetSessionDescriptionObserverImpl>([weak, isAnswer]() {
-            getMediaThread()->PostTask(RTC_FROM_HERE, [weak, isAnswer](){
+        rtc::scoped_refptr<SetSessionDescriptionObserverImpl> observer(new rtc::RefCountedObject<SetSessionDescriptionObserverImpl>([weak, isInitialJoinAnswer, isAnswer, completeMissingSsrcSetup]() {
+            getMediaThread()->PostTask(RTC_FROM_HERE, [weak, isInitialJoinAnswer, isAnswer, completeMissingSsrcSetup](){
                 auto strong = weak.lock();
                 if (!strong) {
                     return;
                 }
                 if (!isAnswer) {
-                    strong->emitAnswer();
+                    strong->emitAnswer(completeMissingSsrcSetup);
+                } else {
+                    if (isInitialJoinAnswer) {
+                        strong->completedInitialSetup();
+                    }
+                    
+                    if (completeMissingSsrcSetup) {
+                        strong->completeProcessingMissingSsrcs();
+                    }
+                }
+            });
+        }, [weak, completeMissingSsrcSetup](webrtc::RTCError error) {
+            getMediaThread()->PostTask(RTC_FROM_HERE, [weak, completeMissingSsrcSetup](){
+                auto strong = weak.lock();
+                if (!strong) {
+                    return;
+                }
+                if (completeMissingSsrcSetup) {
+                    strong->completeProcessingMissingSsrcs();
                 }
             });
         }));
@@ -1446,12 +1477,85 @@ public:
         if (_processedMissingSsrcs.find(ssrc) == _processedMissingSsrcs.end()) {
             _processedMissingSsrcs.insert(ssrc);
 
-            std::vector<uint32_t> addSsrcs;
-            addSsrcs.push_back(ssrc);
-            addSsrcsInternal(addSsrcs);
+            _missingSsrcQueue.insert(ssrc);
+            if (!_isProcessingMissingSsrcs) {
+                beginProcessingMissingSsrcs();
+            }
         }
     }
 
+    void beginProcessingMissingSsrcs() {
+        if (_isProcessingMissingSsrcs) {
+            return;
+        }
+        _isProcessingMissingSsrcs = true;
+        auto timestamp = rtc::TimeMillis();
+        if (timestamp > _missingSsrcsProcessedTimestamp + 200) {
+            applyMissingSsrcs();
+        } else {
+            const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
+            getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
+                auto strong = weak.lock();
+                if (!strong) {
+                    return;
+                }
+                strong->applyMissingSsrcs();
+            }, 200);
+        }
+    }
+    
+    void applyMissingSsrcs() {
+        assert(_isProcessingMissingSsrcs);
+        if (_missingSsrcQueue.size() == 0) {
+            completeProcessingMissingSsrcs();
+            return;
+        }
+        
+        std::vector<uint32_t> addSsrcs;
+        for (auto ssrc : _missingSsrcQueue) {
+            addSsrcs.push_back(ssrc);
+        }
+        _missingSsrcQueue.clear();
+        
+        const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
+        addSsrcsInternal(addSsrcs, true);
+    }
+    
+    void completeProcessingMissingSsrcs() {
+        assert(_isProcessingMissingSsrcs);
+        _isProcessingMissingSsrcs = false;
+        _missingSsrcsProcessedTimestamp = rtc::TimeMillis();
+        
+        if (_missingSsrcQueue.size() != 0) {
+            beginProcessingMissingSsrcs();
+        }
+    }
+    
+    void completedInitialSetup() {
+        beginDebugSsrcTimer(1000);
+    }
+    
+    uint32_t _nextTestSsrc = 100;
+    
+    void beginDebugSsrcTimer(int timeout) {
+        const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
+        getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
+            auto strong = weak.lock();
+            if (!strong) {
+                return;
+            }
+            
+            if (strong->_nextTestSsrc >= 100 + 50) {
+                return;
+            }
+
+            strong->_nextTestSsrc++;
+            strong->onMissingSsrc(strong->_nextTestSsrc);
+
+            strong->beginDebugSsrcTimer(20);
+        }, timeout);
+    }
+    
     void setIsMuted(bool isMuted) {
         if (!_localAudioTrackSender) {
             return;
@@ -1487,12 +1591,12 @@ public:
         _localAudioTrack->set_enabled(!isMuted);
     }
 
-    void emitAnswer() {
+    void emitAnswer(bool completeMissingSsrcSetup) {
         const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
 
         webrtc::PeerConnectionInterface::RTCOfferAnswerOptions options;
-        rtc::scoped_refptr<CreateSessionDescriptionObserverImpl> observer(new rtc::RefCountedObject<CreateSessionDescriptionObserverImpl>([weak](std::string sdp, std::string type) {
-            getMediaThread()->PostTask(RTC_FROM_HERE, [weak, sdp, type](){
+        rtc::scoped_refptr<CreateSessionDescriptionObserverImpl> observer(new rtc::RefCountedObject<CreateSessionDescriptionObserverImpl>([weak, completeMissingSsrcSetup](std::string sdp, std::string type) {
+            getMediaThread()->PostTask(RTC_FROM_HERE, [weak, sdp, type, completeMissingSsrcSetup](){
                 auto strong = weak.lock();
                 if (!strong) {
                     return;
@@ -1505,15 +1609,30 @@ public:
                 webrtc::SdpParseError error;
                 webrtc::SessionDescriptionInterface *sessionDescription = webrtc::CreateSessionDescription(type, adjustLocalDescription(sdp), &error);
                 if (sessionDescription != nullptr) {
-                    rtc::scoped_refptr<SetSessionDescriptionObserverImpl> observer(new rtc::RefCountedObject<SetSessionDescriptionObserverImpl>([weak, sdp]() {
+                    rtc::scoped_refptr<SetSessionDescriptionObserverImpl> observer(new rtc::RefCountedObject<SetSessionDescriptionObserverImpl>([weak, sdp, completeMissingSsrcSetup]() {
                         auto strong = weak.lock();
                         if (!strong) {
                             return;
                         }
+                        
+                        if (completeMissingSsrcSetup) {
+                            strong->completeProcessingMissingSsrcs();
+                        }
+                    }, [weak, completeMissingSsrcSetup](webrtc::RTCError error) {
+                        auto strong = weak.lock();
+                        if (!strong) {
+                            return;
+                        }
+                        
+                        if (completeMissingSsrcSetup) {
+                            strong->completeProcessingMissingSsrcs();
+                        }
                     }));
                     strong->_peerConnection->SetLocalDescription(observer, sessionDescription);
                 } else {
-                    return;
+                    if (completeMissingSsrcSetup) {
+                        strong->completeProcessingMissingSsrcs();
+                    }
                 }
             });
         }));
@@ -1551,6 +1670,10 @@ private:
     std::vector<uint32_t> _allOtherSsrcs;
     std::set<uint32_t> _activeOtherSsrcs;
     std::set<uint32_t> _processedMissingSsrcs;
+    
+    int64_t _missingSsrcsProcessedTimestamp = 0;
+    bool _isProcessingMissingSsrcs = false;
+    std::set<uint32_t> _missingSsrcQueue;
 
     std::string _appliedRemoteRescription;
 
