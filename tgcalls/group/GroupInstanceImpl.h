@@ -30,6 +30,7 @@ struct GroupInstanceDescriptor {
     std::function<void(float)> myAudioLevelUpdated;
     std::string initialInputDeviceId;
     std::string initialOutputDeviceId;
+    bool debugIgnoreMissingSsrcs = false;
 };
 
 struct GroupJoinPayloadFingerprint {

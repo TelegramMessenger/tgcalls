@@ -735,7 +735,8 @@ public:
     _audioLevelsUpdated(descriptor.audioLevelsUpdated),
     _myAudioLevelUpdated(descriptor.myAudioLevelUpdated),
     _initialInputDeviceId(descriptor.initialInputDeviceId),
-    _initialOutputDeviceId(descriptor.initialOutputDeviceId) {
+    _initialOutputDeviceId(descriptor.initialOutputDeviceId),
+    _ignoreMissingSsrcs(descriptor.debugIgnoreMissingSsrcs) {
 		auto generator = std::mt19937(std::random_device()());
 		auto distribution = std::uniform_int_distribution<uint32_t>();
 		do {
@@ -960,7 +961,10 @@ public:
                     strong->onTrackRemoved(receiver);
                 });
             },
-            [weak](uint32_t ssrc) {
+            [weak, ignore = _ignoreMissingSsrcs](uint32_t ssrc) {
+                if (ignore) {
+                  return;
+                }
                 getMediaThread()->PostTask(RTC_FROM_HERE, [weak, ssrc](){
                     auto strong = weak.lock();
                     if (!strong) {
@@ -1682,6 +1686,8 @@ private:
     int _isConnectedUpdateValidTaskId = 0;
     
     bool _isMuted = true;
+
+    bool _ignoreMissingSsrcs = false;
 
     std::vector<uint32_t> _allOtherSsrcs;
     std::set<uint32_t> _activeOtherSsrcs;
