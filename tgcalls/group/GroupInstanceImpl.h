@@ -88,6 +88,13 @@ public:
     void setIsMuted(bool isMuted);
     void setAudioOutputDevice(std::string id);
     void setAudioInputDevice(std::string id);
+
+    struct AudioDevice {
+      enum class Type {Input, Output};
+      std::string name;
+      std::string guid;
+    };
+    static std::vector<AudioDevice> getAudioDevices(AudioDevice::Type type);
 private:
 	std::unique_ptr<ThreadLocalObject<GroupInstanceManager>> _manager;
 	std::unique_ptr<LogSinkImpl> _logSink;
