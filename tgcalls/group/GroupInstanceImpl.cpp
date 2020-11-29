@@ -871,9 +871,7 @@ public:
                     }
                     strong->_myAudioLevelPeak = 0;
                     strong->_myAudioLevelPeakCount = 0;
-                    if (strong->_myAudioLevelUpdated) {
-                        strong->_myAudioLevelUpdated(level);
-                    }
+                    strong->_myAudioLevel = level;
                 }
             });
         });
@@ -1422,6 +1420,10 @@ public:
             strong->_audioLevels.clear();
             strong->_audioLevelsUpdated(levels);
             
+            if (strong->_myAudioLevelUpdated) {
+                strong->_myAudioLevelUpdated(strong->_myAudioLevel);
+            }
+            
             strong->beginLevelsTimer(50);
         }, timeoutMs);
     }
@@ -1443,25 +1445,6 @@ public:
     }
 
     void reportStats(const rtc::scoped_refptr<const webrtc::RTCStatsReport> &stats) {
-        double audioInputLevel = 0.0;
-
-        for (auto it = stats->begin(); it != stats->end(); it++) {
-            bool found = false;
-            if (it->type() == std::string("media-source")) {
-                for (auto &member : it->Members()) {
-                    if (member->name() == std::string("audioLevel") && member->is_defined()) {
-                        audioInputLevel = *(member->cast_to<webrtc::RTCStatsMember<double>>());
-                        found = true;
-                        break;
-                    }
-                }
-            }
-            if (found) {
-                break;
-            }
-        }
-
-        _myAudioLevelUpdated((float)audioInputLevel);
     }
 
     void onTrackAdded(rtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver) {
@@ -1564,7 +1547,7 @@ public:
     }
     
     void completedInitialSetup() {
-        beginDebugSsrcTimer(1000);
+        //beginDebugSsrcTimer(1000);
     }
     
     uint32_t _nextTestSsrc = 100;
@@ -1684,6 +1667,7 @@ private:
     
     int32_t _myAudioLevelPeakCount = 0;
     float _myAudioLevelPeak = 0;
+    float _myAudioLevel = 0;
 
     std::string _initialInputDeviceId;
     std::string _initialOutputDeviceId;
