@@ -289,7 +289,7 @@ static std::string createSdp(uint32_t sessionId, GroupJoinResponsePayload const 
         appendSdp(sdp, "a=extmap:3 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time");
         appendSdp(sdp, "a=extmap:5 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01");
         appendSdp(sdp, "a=rtcp-fb:111 transport-cc");
-        
+
         if (isAnswer && stream.isMain) {
             appendSdp(sdp, "a=recvonly");
         } else {
@@ -772,7 +772,6 @@ public:
 
     bool createAudioDeviceModule(
             const webrtc::PeerConnectionFactoryDependencies &dependencies) {
-        using Result = rtc::scoped_refptr<webrtc::AudioDeviceModule>;
         _adm_thread = dependencies.worker_thread;
         if (!_adm_thread) {
             return false;
@@ -880,7 +879,7 @@ public:
         webrtc::AudioProcessingBuilder builder;
         builder.SetCaptureAnalyzer(std::unique_ptr<AudioCaptureAnalyzer>(analyzer));
         webrtc::AudioProcessing *apm = builder.Create();
-        
+
         webrtc::AudioProcessing::Config audioConfig;
         webrtc::AudioProcessing::Config::NoiseSuppression noiseSuppression;
         noiseSuppression.enabled = true;
@@ -1373,7 +1372,7 @@ public:
                     if (isInitialJoinAnswer) {
                         strong->completedInitialSetup();
                     }
-                    
+
                     if (completeMissingSsrcSetup) {
                         strong->completeProcessingMissingSsrcs();
                     }
@@ -1423,11 +1422,11 @@ public:
             }
             strong->_audioLevels.clear();
             strong->_audioLevelsUpdated(levels);
-            
+
             if (strong->_myAudioLevelUpdated) {
                 strong->_myAudioLevelUpdated(strong->_myAudioLevel);
             }
-            
+
             strong->beginLevelsTimer(50);
         }, timeoutMs);
     }
@@ -1522,40 +1521,40 @@ public:
             }, 200);
         }
     }
-    
+
     void applyMissingSsrcs() {
         assert(_isProcessingMissingSsrcs);
         if (_missingSsrcQueue.size() == 0) {
             completeProcessingMissingSsrcs();
             return;
         }
-        
+
         std::vector<uint32_t> addSsrcs;
         for (auto ssrc : _missingSsrcQueue) {
             addSsrcs.push_back(ssrc);
         }
         _missingSsrcQueue.clear();
-        
+
         const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
         addSsrcsInternal(addSsrcs, true);
     }
-    
+
     void completeProcessingMissingSsrcs() {
         assert(_isProcessingMissingSsrcs);
         _isProcessingMissingSsrcs = false;
         _missingSsrcsProcessedTimestamp = rtc::TimeMillis();
-        
+
         if (_missingSsrcQueue.size() != 0) {
             beginProcessingMissingSsrcs();
         }
     }
-    
+
     void completedInitialSetup() {
         //beginDebugSsrcTimer(1000);
     }
-    
+
     uint32_t _nextTestSsrc = 100;
-    
+
     void beginDebugSsrcTimer(int timeout) {
         const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
         getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
@@ -1563,7 +1562,7 @@ public:
             if (!strong) {
                 return;
             }
-            
+
             if (strong->_nextTestSsrc >= 100 + 50) {
                 return;
             }
@@ -1574,7 +1573,7 @@ public:
             strong->beginDebugSsrcTimer(20);
         }, timeout);
     }
-    
+
     void setIsMuted(bool isMuted) {
         if (!_localAudioTrackSender) {
             return;
@@ -1620,7 +1619,7 @@ public:
                 if (!strong) {
                     return;
                 }
-                
+
                 RTC_LOG(LoggingSeverity::WARNING) << "----- setLocalDescription answer -----";
                 RTC_LOG(LoggingSeverity::WARNING) << sdp;
                 RTC_LOG(LoggingSeverity::WARNING) << "-----";
@@ -1633,7 +1632,7 @@ public:
                         if (!strong) {
                             return;
                         }
-                        
+
                         if (completeMissingSsrcSetup) {
                             strong->completeProcessingMissingSsrcs();
                         }
@@ -1642,7 +1641,7 @@ public:
                         if (!strong) {
                             return;
                         }
-                        
+
                         if (completeMissingSsrcSetup) {
                             strong->completeProcessingMissingSsrcs();
                         }
@@ -1668,7 +1667,7 @@ private:
     std::function<void(bool)> _networkStateUpdated;
     std::function<void(std::vector<std::pair<uint32_t, float>> const &)> _audioLevelsUpdated;
     std::function<void(float)> _myAudioLevelUpdated;
-    
+
     int32_t _myAudioLevelPeakCount = 0;
     float _myAudioLevelPeak = 0;
     float _myAudioLevel = 0;
@@ -1684,7 +1683,7 @@ private:
     int64_t _appliedOfferTimestamp = 0;
     bool _isConnected = false;
     int _isConnectedUpdateValidTaskId = 0;
-    
+
     bool _isMuted = true;
 
     bool _ignoreMissingSsrcs = false;
@@ -1692,7 +1691,7 @@ private:
     std::vector<uint32_t> _allOtherSsrcs;
     std::set<uint32_t> _activeOtherSsrcs;
     std::set<uint32_t> _processedMissingSsrcs;
-    
+
     int64_t _missingSsrcsProcessedTimestamp = 0;
     bool _isProcessingMissingSsrcs = false;
     std::set<uint32_t> _missingSsrcQueue;
