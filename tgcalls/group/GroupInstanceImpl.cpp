@@ -733,7 +733,6 @@ public:
 	GroupInstanceManager(GroupInstanceDescriptor &&descriptor) :
     _networkStateUpdated(descriptor.networkStateUpdated),
     _audioLevelsUpdated(descriptor.audioLevelsUpdated),
-    _myAudioLevelUpdated(descriptor.myAudioLevelUpdated),
     _initialInputDeviceId(descriptor.initialInputDeviceId),
     _initialOutputDeviceId(descriptor.initialOutputDeviceId) {
 		auto generator = std::mt19937(std::random_device()());
@@ -1417,12 +1416,10 @@ public:
                     levels.push_back(std::make_pair(it.first, it.second));
                 }
             }
+            levels.push_back(std::make_pair(0, strong->_myAudioLevel));
+            
             strong->_audioLevels.clear();
             strong->_audioLevelsUpdated(levels);
-            
-            if (strong->_myAudioLevelUpdated) {
-                strong->_myAudioLevelUpdated(strong->_myAudioLevel);
-            }
             
             strong->beginLevelsTimer(50);
         }, timeoutMs);
@@ -1663,7 +1660,6 @@ private:
 
     std::function<void(bool)> _networkStateUpdated;
     std::function<void(std::vector<std::pair<uint32_t, float>> const &)> _audioLevelsUpdated;
-    std::function<void(float)> _myAudioLevelUpdated;
     
     int32_t _myAudioLevelPeakCount = 0;
     float _myAudioLevelPeak = 0;

@@ -27,7 +27,6 @@ struct GroupInstanceDescriptor {
     GroupConfig config;
     std::function<void(bool)> networkStateUpdated;
     std::function<void(std::vector<std::pair<uint32_t, float>> const &)> audioLevelsUpdated;
-    std::function<void(float)> myAudioLevelUpdated;
     std::string initialInputDeviceId;
     std::string initialOutputDeviceId;
 };
