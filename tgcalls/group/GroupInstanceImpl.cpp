@@ -1572,6 +1572,9 @@ public:
         if (!_localAudioTrackSender) {
             return;
         }
+        if (_isMuted == isMuted) {
+            return;
+        }
 
         for (auto &it : _peerConnection->GetTransceivers()) {
             if (it->media_type() == cricket::MediaType::MEDIA_TYPE_AUDIO) {
@@ -1601,6 +1604,8 @@ public:
 
         _isMuted = isMuted;
         _localAudioTrack->set_enabled(!isMuted);
+        
+        RTC_LOG(LoggingSeverity::WARNING) << "setIsMuted: " << isMuted;
     }
 
     void emitAnswer(bool completeMissingSsrcSetup) {
