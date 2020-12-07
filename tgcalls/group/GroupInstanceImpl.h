@@ -29,6 +29,7 @@ struct GroupInstanceDescriptor {
     std::function<void(std::vector<std::pair<uint32_t, float>> const &)> audioLevelsUpdated;
     std::string initialInputDeviceId;
     std::string initialOutputDeviceId;
+    bool debugIgnoreMissingSsrcs = false;
 };
 
 struct GroupJoinPayloadFingerprint {
@@ -86,6 +87,13 @@ public:
     void setIsMuted(bool isMuted);
     void setAudioOutputDevice(std::string id);
     void setAudioInputDevice(std::string id);
+
+    struct AudioDevice {
+      enum class Type {Input, Output};
+      std::string name;
+      std::string guid;
+    };
+    static std::vector<AudioDevice> getAudioDevices(AudioDevice::Type type);
 private:
 	std::unique_ptr<ThreadLocalObject<GroupInstanceManager>> _manager;
 	std::unique_ptr<LogSinkImpl> _logSink;
