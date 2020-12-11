@@ -20,6 +20,8 @@
 #include "api/stats/rtcstats_objects.h"
 #include "modules/audio_processing/audio_buffer.h"
 #include "common_audio/include/audio_util.h"
+#include "common_audio/vad/include/webrtc_vad.h"
+#include "modules/audio_processing/agc2/vad_with_level.h"
 
 #include "ThreadLocalObject.h"
 #include "Manager.h"
@@ -586,15 +588,57 @@ private:
     std::function<void(const rtc::scoped_refptr<const webrtc::RTCStatsReport> &)> _completion;
 };
 
+static const int kVadResultHistoryLength = 8;
+
+class CombinedVad {
+private:
+    webrtc::VadWithLevel _vadWithLevel;
+    float _vadResultHistory[kVadResultHistoryLength];
+    
+public:
+    CombinedVad() {
+        for (int i = 0; i < kVadResultHistoryLength; i++) {
+            _vadResultHistory[i] = 0.0f;
+        }
+    }
+    
+    ~CombinedVad() {
+    }
+    
+    bool update(webrtc::AudioBuffer *buffer) {
+        webrtc::AudioFrameView<float> frameView(buffer->channels(), buffer->num_channels(), buffer->num_frames());
+        auto result = _vadWithLevel.AnalyzeFrame(frameView);
+        for (int i = 1; i < kVadResultHistoryLength; i++) {
+            _vadResultHistory[i - 1] = _vadResultHistory[i];
+        }
+        _vadResultHistory[kVadResultHistoryLength - 1] = result.speech_probability;
+        
+        float movingAverage = 0.0f;
+        for (int i = 0; i < kVadResultHistoryLength; i++) {
+            movingAverage += _vadResultHistory[i];
+        }
+        movingAverage /= (float)kVadResultHistoryLength;
+        
+        bool vadResult = false;
+        if (movingAverage > 0.8f) {
+            vadResult = true;
+        }
+        
+        return vadResult;
+    }
+};
+
 class AudioTrackSinkInterfaceImpl: public webrtc::AudioTrackSinkInterface {
 private:
-    std::function<void(float)> _update;
-
+    std::function<void(float, bool)> _update;
+    
     int _peakCount = 0;
     uint16_t _peak = 0;
+    
+    CombinedVad _vad;
 
 public:
-    AudioTrackSinkInterfaceImpl(std::function<void(float)> update) :
+    AudioTrackSinkInterfaceImpl(std::function<void(float, bool)> update) :
     _update(update) {
     }
 
@@ -603,9 +647,16 @@ public:
 
     virtual void OnData(const void *audio_data, int bits_per_sample, int sample_rate, size_t number_of_channels, size_t number_of_frames) override {
         if (bits_per_sample == 16 && number_of_channels == 1) {
-            int bytesPerSample = bits_per_sample / 8;
             int16_t *samples = (int16_t *)audio_data;
-            for (int i = 0; i < number_of_frames / bytesPerSample; i++) {
+            int numberOfSamplesInFrame = (int)number_of_frames;
+            
+            webrtc::AudioBuffer buffer(sample_rate, 1, 48000, 1, 48000, 1);
+            webrtc::StreamConfig config(sample_rate, 1);
+            buffer.CopyFrom(samples, config);
+            
+            bool vadResult = _vad.update(&buffer);
+            
+            for (int i = 0; i < numberOfSamplesInFrame; i++) {
                 int16_t sample = samples[i];
                 if (sample < 0) {
                     sample = -sample;
@@ -615,13 +666,13 @@ public:
                 }
                 _peakCount += 1;
             }
-        }
-
-        if (_peakCount >= 1200) {
-            float level = ((float)(_peak)) / 4000.0f;
-            _peak = 0;
-            _peakCount = 0;
-            _update(level);
+            
+            if (_peakCount >= 1200) {
+                float level = ((float)(_peak)) / 4000.0f;
+                _peak = 0;
+                _peakCount = 0;
+                _update(level, vadResult);
+            }
         }
     }
 };
@@ -832,8 +883,10 @@ public:
         mediaDeps.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory();
         mediaDeps.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactory();
         mediaDeps.adm = _adm_use_withAudioDeviceModule;
+        
+        std::shared_ptr<CombinedVad> myVad(new CombinedVad());
 
-        auto analyzer = new AudioCaptureAnalyzer([&, weak](const webrtc::AudioBuffer* buffer) {
+        auto analyzer = new AudioCaptureAnalyzer([&, weak, myVad](const webrtc::AudioBuffer* buffer) {
             if (!buffer) {
                 return;
             }
@@ -854,11 +907,15 @@ public:
                 }
                 peakCount += 1;
             }
-            getMediaThread()->PostTask(RTC_FROM_HERE, [weak, peak, peakCount](){
+            
+            bool vadStatus = myVad->update((webrtc::AudioBuffer *)buffer);
+            
+            getMediaThread()->PostTask(RTC_FROM_HERE, [weak, peak, peakCount, vadStatus](){
                 auto strong = weak.lock();
                 if (!strong) {
                     return;
                 }
+                
                 strong->_myAudioLevelPeakCount += peakCount;
                 if (strong->_myAudioLevelPeak < peak) {
                     strong->_myAudioLevelPeak = peak;
@@ -870,7 +927,7 @@ public:
                     }
                     strong->_myAudioLevelPeak = 0;
                     strong->_myAudioLevelPeakCount = 0;
-                    strong->_myAudioLevel = level;
+                    strong->_myAudioLevel = std::make_pair(level, vadStatus);
                 }
             });
         });
@@ -1410,9 +1467,9 @@ public:
                 return;
             }
 
-            std::vector<std::pair<uint32_t, float>> levels;
+            std::vector<std::pair<uint32_t, std::pair<float, bool>>> levels;
             for (auto &it : strong->_audioLevels) {
-                if (it.second > 0.001f) {
+                if (it.second.first > 0.001f) {
                     levels.push_back(std::make_pair(it.first, it.second));
                 }
             }
@@ -1459,19 +1516,19 @@ public:
                 auto remoteAudioTrack = static_cast<webrtc::AudioTrackInterface *>(transceiver->receiver()->track().get());
                 if (_audioTrackSinks.find(ssrc) == _audioTrackSinks.end()) {
                     const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
-                    std::shared_ptr<AudioTrackSinkInterfaceImpl> sink(new AudioTrackSinkInterfaceImpl([weak, ssrc](float level) {
-                        getMediaThread()->PostTask(RTC_FROM_HERE, [weak, ssrc, level](){
+                    std::shared_ptr<AudioTrackSinkInterfaceImpl> sink(new AudioTrackSinkInterfaceImpl([weak, ssrc](float level, bool hasSpeech) {
+                        getMediaThread()->PostTask(RTC_FROM_HERE, [weak, ssrc, level, hasSpeech]() {
                             auto strong = weak.lock();
                             if (!strong) {
                                 return;
                             }
                             auto current = strong->_audioLevels.find(ssrc);
                             if (current != strong->_audioLevels.end()) {
-                                if (current->second < level) {
-                                    strong->_audioLevels[ssrc] = level;
+                                if (current->second.first < level) {
+                                    strong->_audioLevels[ssrc] = std::make_pair(level, hasSpeech);
                                 }
                             } else {
-                                strong->_audioLevels[ssrc] = level;
+                                strong->_audioLevels[ssrc] = std::make_pair(level, hasSpeech);
                             }
                         });
                     }));
@@ -1664,11 +1721,11 @@ private:
     }
 
     std::function<void(bool)> _networkStateUpdated;
-    std::function<void(std::vector<std::pair<uint32_t, float>> const &)> _audioLevelsUpdated;
+    std::function<void(std::vector<std::pair<uint32_t, std::pair<float, bool>>> const &)> _audioLevelsUpdated;
     
     int32_t _myAudioLevelPeakCount = 0;
     float _myAudioLevelPeak = 0;
-    float _myAudioLevel = 0;
+    std::pair<float, bool> _myAudioLevel;
 
     std::string _initialInputDeviceId;
     std::string _initialOutputDeviceId;
@@ -1705,7 +1762,7 @@ private:
     rtc::scoped_refptr<webrtc::AudioDeviceModule> _adm_use_withAudioDeviceModule;
 
     std::map<uint32_t, std::shared_ptr<AudioTrackSinkInterfaceImpl>> _audioTrackSinks;
-    std::map<uint32_t, float> _audioLevels;
+    std::map<uint32_t, std::pair<float, bool>> _audioLevels;
 };
 
 GroupInstanceImpl::GroupInstanceImpl(GroupInstanceDescriptor &&descriptor)
