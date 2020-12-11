@@ -108,11 +108,16 @@
 }
 
 + (AVCaptureDeviceFormat *)selectCaptureDeviceFormatForDevice:(AVCaptureDevice *)selectedCamera {
-    NSArray<AVCaptureDeviceFormat *> *sortedFormats = [[VideoCameraCapturer supportedFormatsForDevice:selectedCamera] sortedArrayUsingComparator:^NSComparisonResult(AVCaptureDeviceFormat* lhs, AVCaptureDeviceFormat *rhs) {
+    NSMutableArray<AVCaptureDeviceFormat *> *sortedFormats = [NSMutableArray arrayWithArray:[[VideoCameraCapturer supportedFormatsForDevice:selectedCamera] sortedArrayUsingComparator:^NSComparisonResult(AVCaptureDeviceFormat* lhs, AVCaptureDeviceFormat *rhs) {
         int32_t width1 = CMVideoFormatDescriptionGetDimensions(lhs.formatDescription).width;
         int32_t width2 = CMVideoFormatDescriptionGetDimensions(rhs.formatDescription).width;
         return width1 < width2 ? NSOrderedAscending : NSOrderedDescending;
-    }];
+    }]];
+    for (int i = (int)[sortedFormats count] - 1; i >= 0; i--) {
+        if ([[sortedFormats[i] description] containsString:@"x420"]) {
+            [sortedFormats removeObjectAtIndex:i];
+        }
+    }
 
     AVCaptureDeviceFormat *bestFormat = sortedFormats.firstObject;
     
