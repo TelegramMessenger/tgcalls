@@ -1064,8 +1064,15 @@ public:
 			adm->EnableBuiltInAEC(false);
 #endif // WEBRTC_WIN
 
-            adm->InitPlayout();
-            adm->StartPlayout();
+            if (adm->InitPlayout()) {
+                adm->StartPlayout();
+            } else {
+                getWorkerThread()->PostDelayedTask(RTC_FROM_HERE, [adm] {
+                    if (adm->InitPlayout()) {
+                        adm->StartPlayout();
+                    }
+                }, 2000);
+            }
         });
 
         //beginStatsTimer(100);
