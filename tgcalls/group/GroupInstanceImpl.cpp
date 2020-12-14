@@ -1057,7 +1057,7 @@ public:
         setAudioOutputDevice(_initialOutputDeviceId);
 
         // At least on Windows recording doesn't work without started playout.
-        withAudioDeviceModule([&](webrtc::AudioDeviceModule *adm) {
+        withAudioDeviceModule([weak](webrtc::AudioDeviceModule *adm) {
 #ifdef WEBRTC_WIN
             // At least on Windows starting/stopping playout while recording
             // is active leads to errors in recording and assertion violation.
@@ -1067,10 +1067,16 @@ public:
             if (adm->InitPlayout()) {
                 adm->StartPlayout();
             } else {
-                getWorkerThread()->PostDelayedTask(RTC_FROM_HERE, [adm] {
-                    if (adm->InitPlayout()) {
-                        adm->StartPlayout();
+                getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak](){
+                    auto strong = weak.lock();
+                    if (!strong) {
+                        return;
                     }
+                    strong->withAudioDeviceModule([](webrtc::AudioDeviceModule *adm) {
+                        if (adm->InitPlayout()) {
+                            adm->StartPlayout();
+                        }
+                    });
                 }, 2000);
             }
         });
