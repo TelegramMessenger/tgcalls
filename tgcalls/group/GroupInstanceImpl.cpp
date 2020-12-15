@@ -20,6 +20,8 @@
 #include "api/stats/rtcstats_objects.h"
 #include "modules/audio_processing/audio_buffer.h"
 #include "common_audio/include/audio_util.h"
+#include "common_audio/vad/include/webrtc_vad.h"
+#include "modules/audio_processing/agc2/vad_with_level.h"
 
 #include "ThreadLocalObject.h"
 #include "Manager.h"
@@ -289,7 +291,7 @@ static std::string createSdp(uint32_t sessionId, GroupJoinResponsePayload const 
         appendSdp(sdp, "a=extmap:3 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time");
         appendSdp(sdp, "a=extmap:5 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01");
         appendSdp(sdp, "a=rtcp-fb:111 transport-cc");
-
+        
         if (isAnswer && stream.isMain) {
             appendSdp(sdp, "a=recvonly");
         } else {
@@ -586,15 +588,57 @@ private:
     std::function<void(const rtc::scoped_refptr<const webrtc::RTCStatsReport> &)> _completion;
 };
 
+static const int kVadResultHistoryLength = 8;
+
+class CombinedVad {
+private:
+    webrtc::VadWithLevel _vadWithLevel;
+    float _vadResultHistory[kVadResultHistoryLength];
+    
+public:
+    CombinedVad() {
+        for (int i = 0; i < kVadResultHistoryLength; i++) {
+            _vadResultHistory[i] = 0.0f;
+        }
+    }
+    
+    ~CombinedVad() {
+    }
+    
+    bool update(webrtc::AudioBuffer *buffer) {
+        webrtc::AudioFrameView<float> frameView(buffer->channels(), buffer->num_channels(), buffer->num_frames());
+        auto result = _vadWithLevel.AnalyzeFrame(frameView);
+        for (int i = 1; i < kVadResultHistoryLength; i++) {
+            _vadResultHistory[i - 1] = _vadResultHistory[i];
+        }
+        _vadResultHistory[kVadResultHistoryLength - 1] = result.speech_probability;
+        
+        float movingAverage = 0.0f;
+        for (int i = 0; i < kVadResultHistoryLength; i++) {
+            movingAverage += _vadResultHistory[i];
+        }
+        movingAverage /= (float)kVadResultHistoryLength;
+        
+        bool vadResult = false;
+        if (movingAverage > 0.8f) {
+            vadResult = true;
+        }
+        
+        return vadResult;
+    }
+};
+
 class AudioTrackSinkInterfaceImpl: public webrtc::AudioTrackSinkInterface {
 private:
-    std::function<void(float)> _update;
-
+    std::function<void(float, bool)> _update;
+    
     int _peakCount = 0;
     uint16_t _peak = 0;
+    
+    CombinedVad _vad;
 
 public:
-    AudioTrackSinkInterfaceImpl(std::function<void(float)> update) :
+    AudioTrackSinkInterfaceImpl(std::function<void(float, bool)> update) :
     _update(update) {
     }
 
@@ -603,9 +647,16 @@ public:
 
     virtual void OnData(const void *audio_data, int bits_per_sample, int sample_rate, size_t number_of_channels, size_t number_of_frames) override {
         if (bits_per_sample == 16 && number_of_channels == 1) {
-            int bytesPerSample = bits_per_sample / 8;
             int16_t *samples = (int16_t *)audio_data;
-            for (int i = 0; i < number_of_frames / bytesPerSample; i++) {
+            int numberOfSamplesInFrame = (int)number_of_frames;
+            
+            webrtc::AudioBuffer buffer(sample_rate, 1, 48000, 1, 48000, 1);
+            webrtc::StreamConfig config(sample_rate, 1);
+            buffer.CopyFrom(samples, config);
+            
+            bool vadResult = _vad.update(&buffer);
+            
+            for (int i = 0; i < numberOfSamplesInFrame; i++) {
                 int16_t sample = samples[i];
                 if (sample < 0) {
                     sample = -sample;
@@ -615,13 +666,13 @@ public:
                 }
                 _peakCount += 1;
             }
-        }
-
-        if (_peakCount >= 1200) {
-            float level = ((float)(_peak)) / 4000.0f;
-            _peak = 0;
-            _peakCount = 0;
-            _update(level);
+            
+            if (_peakCount >= 1200) {
+                float level = ((float)(_peak)) / 4000.0f;
+                _peak = 0;
+                _peakCount = 0;
+                _update(level, vadResult);
+            }
         }
     }
 };
@@ -691,6 +742,264 @@ public:
     virtual ~AudioCaptureAnalyzer() = default;
 };
 
+class WrappedAudioDeviceModule : public webrtc::AudioDeviceModule {
+private:
+    rtc::scoped_refptr<webrtc::AudioDeviceModule> _impl;
+    
+public:
+    WrappedAudioDeviceModule(rtc::scoped_refptr<webrtc::AudioDeviceModule> impl) :
+    _impl(impl) {
+    }
+    
+    virtual ~WrappedAudioDeviceModule() {
+    }
+    
+    virtual int32_t ActiveAudioLayer(AudioLayer *audioLayer) const override {
+        return _impl->ActiveAudioLayer(audioLayer);
+    }
+    
+    virtual int32_t RegisterAudioCallback(webrtc::AudioTransport *audioCallback) override {
+        return _impl->RegisterAudioCallback(audioCallback);
+    }
+    
+    virtual int32_t Init() override {
+        return _impl->Init();
+    }
+    
+    virtual int32_t Terminate() override {
+        return _impl->Terminate();
+    }
+    
+    virtual bool Initialized() const override {
+        return _impl->Initialized();
+    }
+    
+    virtual int16_t PlayoutDevices() override {
+        return _impl->PlayoutDevices();
+    }
+    
+    virtual int16_t RecordingDevices() override {
+        return _impl->RecordingDevices();
+    }
+    
+    virtual int32_t PlayoutDeviceName(uint16_t index, char name[webrtc::kAdmMaxDeviceNameSize], char guid[webrtc::kAdmMaxGuidSize]) override {
+        return _impl->PlayoutDeviceName(index, name, guid);
+    }
+    
+    virtual int32_t RecordingDeviceName(uint16_t index, char name[webrtc::kAdmMaxDeviceNameSize], char guid[webrtc::kAdmMaxGuidSize]) override {
+        return _impl->RecordingDeviceName(index, name, guid);
+    }
+    
+    virtual int32_t SetPlayoutDevice(uint16_t index) override {
+        return _impl->SetPlayoutDevice(index);
+    }
+    
+    virtual int32_t SetPlayoutDevice(WindowsDeviceType device) override {
+        return _impl->SetPlayoutDevice(device);
+    }
+    
+    virtual int32_t SetRecordingDevice(uint16_t index) override {
+        return _impl->SetRecordingDevice(index);
+    }
+    
+    virtual int32_t SetRecordingDevice(WindowsDeviceType device) override {
+        return _impl->SetRecordingDevice(device);
+    }
+    
+    virtual int32_t PlayoutIsAvailable(bool *available) override {
+        return _impl->PlayoutIsAvailable(available);
+    }
+    
+    virtual int32_t InitPlayout() override {
+        return _impl->InitPlayout();
+    }
+    
+    virtual bool PlayoutIsInitialized() const override {
+        return _impl->PlayoutIsInitialized();
+    }
+    
+    virtual int32_t RecordingIsAvailable(bool *available) override {
+        return _impl->RecordingIsAvailable(available);
+    }
+    
+    virtual int32_t InitRecording() override {
+        return _impl->InitRecording();
+    }
+    
+    virtual bool RecordingIsInitialized() const override {
+        return _impl->RecordingIsInitialized();
+    }
+    
+    virtual int32_t StartPlayout() override {
+        return _impl->StartPlayout();
+    }
+    
+    virtual int32_t StopPlayout() override {
+        return _impl->StopPlayout();
+    }
+    
+    virtual bool Playing() const override {
+        return _impl->Playing();
+    }
+    
+    virtual int32_t StartRecording() override {
+        return _impl->StartRecording();
+    }
+    
+    virtual int32_t StopRecording() override {
+        return _impl->StopRecording();
+    }
+    
+    virtual bool Recording() const override {
+        return _impl->Recording();
+    }
+    
+    virtual int32_t InitSpeaker() override {
+        return _impl->InitSpeaker();
+    }
+    
+    virtual bool SpeakerIsInitialized() const override {
+        return _impl->SpeakerIsInitialized();
+    }
+    
+    virtual int32_t InitMicrophone() override {
+        return _impl->InitMicrophone();
+    }
+    
+    virtual bool MicrophoneIsInitialized() const override {
+        return _impl->MicrophoneIsInitialized();
+    }
+    
+    virtual int32_t SpeakerVolumeIsAvailable(bool *available) override {
+        return _impl->SpeakerVolumeIsAvailable(available);
+    }
+    
+    virtual int32_t SetSpeakerVolume(uint32_t volume) override {
+        return _impl->SetSpeakerVolume(volume);
+    }
+    
+    virtual int32_t SpeakerVolume(uint32_t* volume) const override {
+        return _impl->SpeakerVolume(volume);
+    }
+    
+    virtual int32_t MaxSpeakerVolume(uint32_t *maxVolume) const override {
+        return _impl->MaxSpeakerVolume(maxVolume);
+    }
+    
+    virtual int32_t MinSpeakerVolume(uint32_t *minVolume) const override {
+        return _impl->MinSpeakerVolume(minVolume);
+    }
+    
+    virtual int32_t MicrophoneVolumeIsAvailable(bool *available) override {
+        return _impl->MicrophoneVolumeIsAvailable(available);
+    }
+    
+    virtual int32_t SetMicrophoneVolume(uint32_t volume) override {
+        return _impl->SetMicrophoneVolume(volume);
+    }
+    
+    virtual int32_t MicrophoneVolume(uint32_t *volume) const override {
+        return _impl->MicrophoneVolume(volume);
+    }
+    
+    virtual int32_t MaxMicrophoneVolume(uint32_t *maxVolume) const override {
+        return _impl->MaxMicrophoneVolume(maxVolume);
+    }
+    
+    virtual int32_t MinMicrophoneVolume(uint32_t *minVolume) const override {
+        return _impl->MinMicrophoneVolume(minVolume);
+    }
+    
+    virtual int32_t SpeakerMuteIsAvailable(bool *available) override {
+        return _impl->SpeakerMuteIsAvailable(available);
+    }
+    
+    virtual int32_t SetSpeakerMute(bool enable) override {
+        return _impl->SetSpeakerMute(enable);
+    }
+    
+    virtual int32_t SpeakerMute(bool *enabled) const override {
+        return _impl->SpeakerMute(enabled);
+    }
+    
+    virtual int32_t MicrophoneMuteIsAvailable(bool *available) override {
+        return _impl->MicrophoneMuteIsAvailable(available);
+    }
+    
+    virtual int32_t SetMicrophoneMute(bool enable) override {
+        return _impl->SetMicrophoneMute(enable);
+    }
+    
+    virtual int32_t MicrophoneMute(bool *enabled) const override {
+        return _impl->MicrophoneMute(enabled);
+    }
+    
+    virtual int32_t StereoPlayoutIsAvailable(bool *available) const override {
+        return _impl->StereoPlayoutIsAvailable(available);
+    }
+    
+    virtual int32_t SetStereoPlayout(bool enable) override {
+        return _impl->SetStereoPlayout(enable);
+    }
+    
+    virtual int32_t StereoPlayout(bool *enabled) const override {
+        return _impl->StereoPlayout(enabled);
+    }
+    
+    virtual int32_t StereoRecordingIsAvailable(bool *available) const override {
+        return _impl->StereoRecordingIsAvailable(available);
+    }
+    
+    virtual int32_t SetStereoRecording(bool enable) override {
+        return _impl->SetStereoRecording(enable);
+    }
+    
+    virtual int32_t StereoRecording(bool *enabled) const override {
+        return _impl->StereoRecording(enabled);
+    }
+    
+    virtual int32_t PlayoutDelay(uint16_t* delayMS) const override {
+        return _impl->PlayoutDelay(delayMS);
+    }
+    
+    virtual bool BuiltInAECIsAvailable() const override {
+        return _impl->BuiltInAECIsAvailable();
+    }
+    
+    virtual bool BuiltInAGCIsAvailable() const override {
+        return _impl->BuiltInAGCIsAvailable();
+    }
+    
+    virtual bool BuiltInNSIsAvailable() const override {
+        return _impl->BuiltInNSIsAvailable();
+    }
+    
+    virtual int32_t EnableBuiltInAEC(bool enable) override {
+        return _impl->EnableBuiltInAEC(enable);
+    }
+    
+    virtual int32_t EnableBuiltInAGC(bool enable) override {
+        return _impl->EnableBuiltInAGC(enable);
+    }
+    
+    virtual int32_t EnableBuiltInNS(bool enable) override {
+        return _impl->EnableBuiltInNS(enable);
+    }
+    
+    virtual int32_t GetPlayoutUnderrunCount() const override {
+        return _impl->GetPlayoutUnderrunCount();
+    }
+    
+#if defined(WEBRTC_IOS)
+    virtual int GetPlayoutAudioParameters(webrtc::AudioParameters *params) const override {
+        return _impl->GetPlayoutAudioParameters(params);
+    }
+    virtual int GetRecordAudioParameters(webrtc::AudioParameters *params) const override {
+        return _impl->GetRecordAudioParameters(params);
+    }
+#endif  // WEBRTC_IOS
+};
+
 template <typename Out>
 void split(const std::string &s, char delim, Out result) {
     std::istringstream iss(s);
@@ -733,10 +1042,8 @@ public:
 	GroupInstanceManager(GroupInstanceDescriptor &&descriptor) :
     _networkStateUpdated(descriptor.networkStateUpdated),
     _audioLevelsUpdated(descriptor.audioLevelsUpdated),
-    _myAudioLevelUpdated(descriptor.myAudioLevelUpdated),
     _initialInputDeviceId(descriptor.initialInputDeviceId),
-    _initialOutputDeviceId(descriptor.initialOutputDeviceId),
-    _ignoreMissingSsrcs(descriptor.debugIgnoreMissingSsrcs) {
+    _initialOutputDeviceId(descriptor.initialOutputDeviceId) {
 		auto generator = std::mt19937(std::random_device()());
 		auto distribution = std::uniform_int_distribution<uint32_t>();
 		do {
@@ -772,6 +1079,7 @@ public:
 
     bool createAudioDeviceModule(
             const webrtc::PeerConnectionFactoryDependencies &dependencies) {
+        using Result = rtc::scoped_refptr<webrtc::AudioDeviceModule>;
         _adm_thread = dependencies.worker_thread;
         if (!_adm_thread) {
             return false;
@@ -784,10 +1092,10 @@ public:
                 return (result && (result->Init() == 0)) ? result : nullptr;
             };
             if (auto result = check(webrtc::AudioDeviceModule::kPlatformDefaultAudio)) {
-                _adm_use_withAudioDeviceModule = result;
+                _adm_use_withAudioDeviceModule = new rtc::RefCountedObject<WrappedAudioDeviceModule>(result);
 #ifdef WEBRTC_LINUX
             } else if (auto result = check(webrtc::AudioDeviceModule::kLinuxAlsaAudio)) {
-                _adm_use_withAudioDeviceModule = result;
+                _adm_use_withAudioDeviceModule = new rtc::RefCountedObject<WrappedAudioDeviceModule>(result);
 #endif // WEBRTC_LINUX
             }
         });
@@ -833,8 +1141,10 @@ public:
         mediaDeps.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory();
         mediaDeps.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactory();
         mediaDeps.adm = _adm_use_withAudioDeviceModule;
+        
+        std::shared_ptr<CombinedVad> myVad(new CombinedVad());
 
-        auto analyzer = new AudioCaptureAnalyzer([&, weak](const webrtc::AudioBuffer* buffer) {
+        auto analyzer = new AudioCaptureAnalyzer([&, weak, myVad](const webrtc::AudioBuffer* buffer) {
             if (!buffer) {
                 return;
             }
@@ -855,11 +1165,15 @@ public:
                 }
                 peakCount += 1;
             }
-            getMediaThread()->PostTask(RTC_FROM_HERE, [weak, peak, peakCount](){
+            
+            bool vadStatus = myVad->update((webrtc::AudioBuffer *)buffer);
+            
+            getMediaThread()->PostTask(RTC_FROM_HERE, [weak, peak, peakCount, vadStatus](){
                 auto strong = weak.lock();
                 if (!strong) {
                     return;
                 }
+                
                 strong->_myAudioLevelPeakCount += peakCount;
                 if (strong->_myAudioLevelPeak < peak) {
                     strong->_myAudioLevelPeak = peak;
@@ -871,7 +1185,7 @@ public:
                     }
                     strong->_myAudioLevelPeak = 0;
                     strong->_myAudioLevelPeakCount = 0;
-                    strong->_myAudioLevel = level;
+                    strong->_myAudioLevel = std::make_pair(level, vadStatus);
                 }
             });
         });
@@ -879,7 +1193,7 @@ public:
         webrtc::AudioProcessingBuilder builder;
         builder.SetCaptureAnalyzer(std::unique_ptr<AudioCaptureAnalyzer>(analyzer));
         webrtc::AudioProcessing *apm = builder.Create();
-
+        
         webrtc::AudioProcessing::Config audioConfig;
         webrtc::AudioProcessing::Config::NoiseSuppression noiseSuppression;
         noiseSuppression.enabled = true;
@@ -960,10 +1274,7 @@ public:
                     strong->onTrackRemoved(receiver);
                 });
             },
-            [weak, ignore = _ignoreMissingSsrcs](uint32_t ssrc) {
-                if (ignore) {
-                  return;
-                }
+            [weak](uint32_t ssrc) {
                 getMediaThread()->PostTask(RTC_FROM_HERE, [weak, ssrc](){
                     auto strong = weak.lock();
                     if (!strong) {
@@ -1004,15 +1315,28 @@ public:
         setAudioOutputDevice(_initialOutputDeviceId);
 
         // At least on Windows recording doesn't work without started playout.
-        withAudioDeviceModule([&](webrtc::AudioDeviceModule *adm) {
+        withAudioDeviceModule([weak](webrtc::AudioDeviceModule *adm) {
 #ifdef WEBRTC_WIN
             // At least on Windows starting/stopping playout while recording
             // is active leads to errors in recording and assertion violation.
 			adm->EnableBuiltInAEC(false);
 #endif // WEBRTC_WIN
 
-            adm->InitPlayout();
-            adm->StartPlayout();
+            if (adm->InitPlayout()) {
+                adm->StartPlayout();
+            } else {
+                getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak](){
+                    auto strong = weak.lock();
+                    if (!strong) {
+                        return;
+                    }
+                    strong->withAudioDeviceModule([](webrtc::AudioDeviceModule *adm) {
+                        if (adm->InitPlayout()) {
+                            adm->StartPlayout();
+                        }
+                    });
+                }, 2000);
+            }
         });
 
         //beginStatsTimer(100);
@@ -1052,7 +1376,7 @@ public:
                 char name[webrtc::kAdmMaxDeviceNameSize + 1] = { 0 };
                 char guid[webrtc::kAdmMaxGuidSize + 1] = { 0 };
                 adm->RecordingDeviceName(i, name, guid);
-                if (id == guid || id == name) {
+                if (id == guid) {
                     const auto result = adm->SetRecordingDevice(i);
                     if (result != 0) {
                         RTC_LOG(LS_ERROR) << "setAudioInputDevice(" << id << ") name '" << std::string(name) << "' failed: " << result << ".";
@@ -1100,7 +1424,7 @@ public:
                 char name[webrtc::kAdmMaxDeviceNameSize + 1] = { 0 };
                 char guid[webrtc::kAdmMaxGuidSize + 1] = { 0 };
                 adm->PlayoutDeviceName(i, name, guid);
-                if (id == guid || id == name) {
+                if (id == guid) {
                     const auto result = adm->SetPlayoutDevice(i);
                     if (result != 0) {
                         RTC_LOG(LS_ERROR) << "setAudioOutputDevice(" << id << ") name '" << std::string(name) << "' failed: " << result << ".";
@@ -1372,7 +1696,7 @@ public:
                     if (isInitialJoinAnswer) {
                         strong->completedInitialSetup();
                     }
-
+                    
                     if (completeMissingSsrcSetup) {
                         strong->completeProcessingMissingSsrcs();
                     }
@@ -1414,19 +1738,17 @@ public:
                 return;
             }
 
-            std::vector<std::pair<uint32_t, float>> levels;
+            std::vector<std::pair<uint32_t, std::pair<float, bool>>> levels;
             for (auto &it : strong->_audioLevels) {
-                if (it.second > 0.001f) {
+                if (it.second.first > 0.001f) {
                     levels.push_back(std::make_pair(it.first, it.second));
                 }
             }
+            levels.push_back(std::make_pair(0, strong->_myAudioLevel));
+            
             strong->_audioLevels.clear();
             strong->_audioLevelsUpdated(levels);
-
-            if (strong->_myAudioLevelUpdated) {
-                strong->_myAudioLevelUpdated(strong->_myAudioLevel);
-            }
-
+            
             strong->beginLevelsTimer(50);
         }, timeoutMs);
     }
@@ -1465,19 +1787,19 @@ public:
                 auto remoteAudioTrack = static_cast<webrtc::AudioTrackInterface *>(transceiver->receiver()->track().get());
                 if (_audioTrackSinks.find(ssrc) == _audioTrackSinks.end()) {
                     const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
-                    std::shared_ptr<AudioTrackSinkInterfaceImpl> sink(new AudioTrackSinkInterfaceImpl([weak, ssrc](float level) {
-                        getMediaThread()->PostTask(RTC_FROM_HERE, [weak, ssrc, level](){
+                    std::shared_ptr<AudioTrackSinkInterfaceImpl> sink(new AudioTrackSinkInterfaceImpl([weak, ssrc](float level, bool hasSpeech) {
+                        getMediaThread()->PostTask(RTC_FROM_HERE, [weak, ssrc, level, hasSpeech]() {
                             auto strong = weak.lock();
                             if (!strong) {
                                 return;
                             }
                             auto current = strong->_audioLevels.find(ssrc);
                             if (current != strong->_audioLevels.end()) {
-                                if (current->second < level) {
-                                    strong->_audioLevels[ssrc] = level;
+                                if (current->second.first < level) {
+                                    strong->_audioLevels[ssrc] = std::make_pair(level, hasSpeech);
                                 }
                             } else {
-                                strong->_audioLevels[ssrc] = level;
+                                strong->_audioLevels[ssrc] = std::make_pair(level, hasSpeech);
                             }
                         });
                     }));
@@ -1521,40 +1843,40 @@ public:
             }, 200);
         }
     }
-
+    
     void applyMissingSsrcs() {
         assert(_isProcessingMissingSsrcs);
         if (_missingSsrcQueue.size() == 0) {
             completeProcessingMissingSsrcs();
             return;
         }
-
+        
         std::vector<uint32_t> addSsrcs;
         for (auto ssrc : _missingSsrcQueue) {
             addSsrcs.push_back(ssrc);
         }
         _missingSsrcQueue.clear();
-
+        
         const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
         addSsrcsInternal(addSsrcs, true);
     }
-
+    
     void completeProcessingMissingSsrcs() {
         assert(_isProcessingMissingSsrcs);
         _isProcessingMissingSsrcs = false;
         _missingSsrcsProcessedTimestamp = rtc::TimeMillis();
-
+        
         if (_missingSsrcQueue.size() != 0) {
             beginProcessingMissingSsrcs();
         }
     }
-
+    
     void completedInitialSetup() {
         //beginDebugSsrcTimer(1000);
     }
-
+    
     uint32_t _nextTestSsrc = 100;
-
+    
     void beginDebugSsrcTimer(int timeout) {
         const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
         getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
@@ -1562,7 +1884,7 @@ public:
             if (!strong) {
                 return;
             }
-
+            
             if (strong->_nextTestSsrc >= 100 + 50) {
                 return;
             }
@@ -1573,9 +1895,12 @@ public:
             strong->beginDebugSsrcTimer(20);
         }, timeout);
     }
-
+    
     void setIsMuted(bool isMuted) {
         if (!_localAudioTrackSender) {
+            return;
+        }
+        if (_isMuted == isMuted) {
             return;
         }
 
@@ -1607,6 +1932,8 @@ public:
 
         _isMuted = isMuted;
         _localAudioTrack->set_enabled(!isMuted);
+        
+        RTC_LOG(LoggingSeverity::WARNING) << "setIsMuted: " << isMuted;
     }
 
     void emitAnswer(bool completeMissingSsrcSetup) {
@@ -1619,7 +1946,7 @@ public:
                 if (!strong) {
                     return;
                 }
-
+                
                 RTC_LOG(LoggingSeverity::WARNING) << "----- setLocalDescription answer -----";
                 RTC_LOG(LoggingSeverity::WARNING) << sdp;
                 RTC_LOG(LoggingSeverity::WARNING) << "-----";
@@ -1632,7 +1959,7 @@ public:
                         if (!strong) {
                             return;
                         }
-
+                        
                         if (completeMissingSsrcSetup) {
                             strong->completeProcessingMissingSsrcs();
                         }
@@ -1641,7 +1968,7 @@ public:
                         if (!strong) {
                             return;
                         }
-
+                        
                         if (completeMissingSsrcSetup) {
                             strong->completeProcessingMissingSsrcs();
                         }
@@ -1665,12 +1992,11 @@ private:
     }
 
     std::function<void(bool)> _networkStateUpdated;
-    std::function<void(std::vector<std::pair<uint32_t, float>> const &)> _audioLevelsUpdated;
-    std::function<void(float)> _myAudioLevelUpdated;
-
+    std::function<void(std::vector<std::pair<uint32_t, std::pair<float, bool>>> const &)> _audioLevelsUpdated;
+    
     int32_t _myAudioLevelPeakCount = 0;
     float _myAudioLevelPeak = 0;
-    float _myAudioLevel = 0;
+    std::pair<float, bool> _myAudioLevel;
 
     std::string _initialInputDeviceId;
     std::string _initialOutputDeviceId;
@@ -1683,15 +2009,13 @@ private:
     int64_t _appliedOfferTimestamp = 0;
     bool _isConnected = false;
     int _isConnectedUpdateValidTaskId = 0;
-
+    
     bool _isMuted = true;
-
-    bool _ignoreMissingSsrcs = false;
 
     std::vector<uint32_t> _allOtherSsrcs;
     std::set<uint32_t> _activeOtherSsrcs;
     std::set<uint32_t> _processedMissingSsrcs;
-
+    
     int64_t _missingSsrcsProcessedTimestamp = 0;
     bool _isProcessingMissingSsrcs = false;
     std::set<uint32_t> _missingSsrcQueue;
@@ -1709,39 +2033,8 @@ private:
     rtc::scoped_refptr<webrtc::AudioDeviceModule> _adm_use_withAudioDeviceModule;
 
     std::map<uint32_t, std::shared_ptr<AudioTrackSinkInterfaceImpl>> _audioTrackSinks;
-    std::map<uint32_t, float> _audioLevels;
+    std::map<uint32_t, std::pair<float, bool>> _audioLevels;
 };
-
-std::vector<GroupInstanceImpl::AudioDevice> GroupInstanceImpl::getAudioDevices(AudioDevice::Type type) {
-  auto result = std::vector<AudioDevice>();
-#ifdef WEBRTC_LINUX //Not needed for ios, and some crl::sync stuff is needed for windows
-  const auto resolve = [&] {
-    const auto queueFactory = webrtc::CreateDefaultTaskQueueFactory();
-    const auto info = webrtc::AudioDeviceModule::Create(
-        webrtc::AudioDeviceModule::kPlatformDefaultAudio,
-        queueFactory.get());
-    if (!info || info->Init() < 0) {
-      return;
-    }
-    const auto count = type == AudioDevice::Type::Input ? info->RecordingDevices() : info->PlayoutDevices();
-    if (count <= 0) {
-      return;
-    }
-    for (auto i = int16_t(); i != count; ++i) {
-      char name[webrtc::kAdmMaxDeviceNameSize + 1] = { 0 };
-      char id[webrtc::kAdmMaxGuidSize + 1] = { 0 };
-      if (type == AudioDevice::Type::Input) {
-        info->RecordingDeviceName(i, name, id);
-      } else {
-        info->PlayoutDeviceName(i, name, id);
-      }
-      result.push_back({ id, name });
-    }
-  };
-  resolve();
-#endif
-  return result;
-}
 
 GroupInstanceImpl::GroupInstanceImpl(GroupInstanceDescriptor &&descriptor)
 : _logSink(std::make_unique<LogSinkImpl>(descriptor.config.logPath)) {

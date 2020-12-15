@@ -121,6 +121,7 @@ _remoteBatteryLevelIsLowUpdated(std::move(descriptor.remoteBatteryLevelIsLowUpda
 _remotePrefferedAspectRatioUpdated(std::move(descriptor.remotePrefferedAspectRatioUpdated)),
 _signalingDataEmitted(std::move(descriptor.signalingDataEmitted)),
 _signalBarsUpdated(std::move(descriptor.signalBarsUpdated)),
+_audioLevelUpdated(std::move(descriptor.audioLevelUpdated)),
 _enableHighBitrateVideo(descriptor.config.enableHighBitrateVideo),
 _dataSaving(descriptor.config.dataSaving) {
 	assert(_thread->IsCurrent());
@@ -242,7 +243,7 @@ void Manager::start() {
 			});
 	}));
 	bool isOutgoing = _encryptionKey.isOutgoing;
-	_mediaManager.reset(new ThreadLocalObject<MediaManager>(getMediaThread(), [weak, isOutgoing, protocolVersion = _protocolVersion, thread, sendSignalingMessage, videoCapture = _videoCapture, mediaDevicesConfig = _mediaDevicesConfig, enableHighBitrateVideo = _enableHighBitrateVideo, signalBarsUpdated = _signalBarsUpdated, preferredCodecs = _preferredCodecs]() {
+	_mediaManager.reset(new ThreadLocalObject<MediaManager>(getMediaThread(), [weak, isOutgoing, protocolVersion = _protocolVersion, thread, sendSignalingMessage, videoCapture = _videoCapture, mediaDevicesConfig = _mediaDevicesConfig, enableHighBitrateVideo = _enableHighBitrateVideo, signalBarsUpdated = _signalBarsUpdated, audioLevelUpdated = _audioLevelUpdated, preferredCodecs = _preferredCodecs]() {
 		return new MediaManager(
 			getMediaThread(),
 			isOutgoing,
@@ -260,6 +261,7 @@ void Manager::start() {
 				});
 			},
             signalBarsUpdated,
+            audioLevelUpdated,
             enableHighBitrateVideo,
             preferredCodecs);
 	}));
