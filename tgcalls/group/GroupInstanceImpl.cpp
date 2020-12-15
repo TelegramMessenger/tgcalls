@@ -1079,7 +1079,6 @@ public:
 
     bool createAudioDeviceModule(
             const webrtc::PeerConnectionFactoryDependencies &dependencies) {
-        using Result = rtc::scoped_refptr<webrtc::AudioDeviceModule>;
         _adm_thread = dependencies.worker_thread;
         if (!_adm_thread) {
             return false;
