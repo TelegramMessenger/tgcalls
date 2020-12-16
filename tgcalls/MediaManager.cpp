@@ -334,7 +334,9 @@ void MediaManager::start() {
     }
 
     beginStatsTimer(3000);
-    beginLevelsTimer(50);
+    if (_audioLevelUpdated != nullptr) {
+        beginLevelsTimer(50);
+    }
 }
 
 MediaManager::~MediaManager() {
