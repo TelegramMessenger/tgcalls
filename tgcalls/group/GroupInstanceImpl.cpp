@@ -19,6 +19,7 @@
 #include "system_wrappers/include/field_trial.h"
 #include "api/stats/rtcstats_objects.h"
 #include "modules/audio_processing/audio_buffer.h"
+#include "modules/audio_device/include/audio_device_factory.h"
 #include "common_audio/include/audio_util.h"
 #include "common_audio/vad/include/webrtc_vad.h"
 #include "modules/audio_processing/agc2/vad_with_level.h"
@@ -1090,6 +1091,14 @@ public:
                     dependencies.task_queue_factory.get());
                 return (result && (result->Init() == 0)) ? result : nullptr;
             };
+#ifdef WEBRTC_WIN
+            if (auto result = webrtc::CreateWindowsCoreAudioAudioDeviceModule(dependencies.task_queue_factory.get())) {
+                if (result->Init() == 0) {
+                    _adm_use_withAudioDeviceModule = new rtc::RefCountedObject<WrappedAudioDeviceModule>(result);
+                    return;
+                }
+            }
+#endif // WEBRTC_WIN
             if (auto result = check(webrtc::AudioDeviceModule::kPlatformDefaultAudio)) {
                 _adm_use_withAudioDeviceModule = new rtc::RefCountedObject<WrappedAudioDeviceModule>(result);
 #ifdef WEBRTC_LINUX
