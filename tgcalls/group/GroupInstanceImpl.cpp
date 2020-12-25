@@ -73,6 +73,27 @@ static std::vector<std::string> splitFingerprintLines(std::string const &line) {
     return result;
 }
 
+static std::vector<uint32_t> splitSsrcList(std::string const &line) {
+    std::vector<uint32_t> result;
+
+    std::istringstream sdpStream(line);
+
+    std::string s;
+    while (std::getline(sdpStream, s, ' ')) {
+        if (s.size() == 0) {
+            continue;
+        }
+        
+        std::istringstream iss(s);
+        uint32_t ssrc = 0;
+        iss >> ssrc;
+        
+        result.push_back(ssrc);
+    }
+
+    return result;
+}
+
 static std::vector<std::string> getLines(std::vector<std::string> const &lines, std::string prefix) {
     std::vector<std::string> result;
 
@@ -87,51 +108,142 @@ static std::vector<std::string> getLines(std::vector<std::string> const &lines, 
     return result;
 }
 
+static absl::optional<GroupJoinPayloadVideoPayloadType> parsePayloadType(uint32_t id, std::string const &line) {
+    std::string s;
+    std::istringstream lineStream(line);
+    std::string codec;
+    uint32_t clockrate = 0;
+    uint32_t channels = 0;
+    for (int i = 0; std::getline(lineStream, s, '/'); i++) {
+        if (s.size() == 0) {
+            continue;
+        }
+        
+        if (i == 0) {
+            codec = s;
+        } else if (i == 1) {
+            std::istringstream iss(s);
+            iss >> clockrate;
+        } else if (i == 2) {
+            std::istringstream iss(s);
+            iss >> channels;
+        }
+    }
+    if (codec.size() != 0) {
+        GroupJoinPayloadVideoPayloadType payloadType;
+        payloadType.id = id;
+        payloadType.name = codec;
+        payloadType.clockrate = clockrate;
+        payloadType.channels = channels;
+        return payloadType;
+    } else {
+        return absl::nullopt;
+    }
+}
+
+static absl::optional<GroupJoinPayloadVideoPayloadFeedbackType> parseFeedbackType(std::string const &line) {
+    std::istringstream lineStream(line);
+    std::string s;
+
+    std::string type;
+    std::string subtype;
+    for (int i = 0; std::getline(lineStream, s, ' '); i++) {
+        if (s.size() == 0) {
+            continue;
+        }
+        
+        if (i == 0) {
+            type = s;
+        } else if (i == 1) {
+            subtype = s;
+        }
+    }
+    
+    if (type.size() != 0) {
+        GroupJoinPayloadVideoPayloadFeedbackType parsedType;
+        parsedType.type = type;
+        parsedType.subtype = subtype;
+        return parsedType;
+    } else {
+        return absl::nullopt;
+    }
+}
+
+static void parsePayloadParameter(std::string const &line, std::vector<std::pair<std::string, std::string>> &result) {
+    std::istringstream lineStream(line);
+    std::string s;
+
+    std::string key;
+    std::string value;
+    for (int i = 0; std::getline(lineStream, s, '='); i++) {
+        if (s.size() == 0) {
+            continue;
+        }
+        
+        if (i == 0) {
+            key = s;
+        } else if (i == 1) {
+            value = s;
+        }
+    }
+    if (key.size() != 0 && value.size() != 0) {
+        result.push_back(std::make_pair(key, value));
+    }
+}
+
+static std::vector<std::pair<std::string, std::string>> parsePayloadParameters(std::string const &line) {
+    std::vector<std::pair<std::string, std::string>> result;
+    
+    std::istringstream lineStream(line);
+    std::string s;
+
+    while (std::getline(lineStream, s, ';')) {
+        if (s.size() == 0) {
+            continue;
+        }
+        
+        parsePayloadParameter(s, result);
+    }
+    
+    return result;
+}
+
 static absl::optional<GroupJoinPayload> parseSdpIntoJoinPayload(std::string const &sdp) {
     GroupJoinPayload result;
 
     auto lines = splitSdpLines(sdp);
 
     std::vector<std::string> audioLines;
+    std::vector<std::string> videoLines;
     bool isAudioLine = false;
     for (auto &line : lines) {
         if (line.find("m=audio") == 0) {
             isAudioLine = true;
+        } else if (line.find("m=video") == 0) {
+            isAudioLine = false;
         }
         if (isAudioLine) {
             audioLines.push_back(line);
+        } else {
+            videoLines.push_back(line);
         }
     }
 
-    /*std::vector<uint32_t> audioSources;
-    for (auto &line : getLines(audioLines, "a=ssrc:")) {
-        std::istringstream iss(line);
-        uint32_t value = 0;
-        iss >> value;
-        if (std::find(audioSources.begin(), audioSources.end(), value) == audioSources.end()) {
-            audioSources.push_back(value);
-        }
-    }
-
-    if (audioSources.size() != 1) {
-        return absl::nullopt;
-    }
-    result.ssrc = audioSources[0];*/
     result.ssrc = 0;
 
-    auto ufragLines = getLines(lines, "a=ice-ufrag:");
+    auto ufragLines = getLines(audioLines, "a=ice-ufrag:");
     if (ufragLines.size() != 1) {
         return absl::nullopt;
     }
     result.ufrag = ufragLines[0];
 
-    auto pwdLines = getLines(lines, "a=ice-pwd:");
+    auto pwdLines = getLines(audioLines, "a=ice-pwd:");
     if (pwdLines.size() != 1) {
         return absl::nullopt;
     }
     result.pwd = pwdLines[0];
 
-    for (auto &line : getLines(lines, "a=fingerprint:")) {
+    for (auto &line : getLines(audioLines, "a=fingerprint:")) {
         auto fingerprintComponents = splitFingerprintLines(line);
         if (fingerprintComponents.size() != 2) {
             continue;
@@ -143,14 +255,95 @@ static absl::optional<GroupJoinPayload> parseSdpIntoJoinPayload(std::string cons
         fingerprint.setup = "active";
         result.fingerprints.push_back(fingerprint);
     }
+    
+    for (auto &line : getLines(videoLines, "a=rtpmap:")) {
+        std::string s;
+        std::istringstream lineStream(line);
+        uint32_t id = 0;
+        for (int i = 0; std::getline(lineStream, s, ' '); i++) {
+            if (s.size() == 0) {
+                continue;
+            }
+            
+            if (i == 0) {
+                std::istringstream iss(s);
+                iss >> id;
+            } else if (i == 1) {
+                if (id != 0) {
+                    auto payloadType = parsePayloadType(id, s);
+                    if (payloadType.has_value()) {
+                        std::ostringstream fbPrefixStream;
+                        fbPrefixStream << "a=rtcp-fb:";
+                        fbPrefixStream << id;
+                        fbPrefixStream << " ";
+                        for (auto &feedbackLine : getLines(videoLines, fbPrefixStream.str())) {
+                            auto feedbackType = parseFeedbackType(feedbackLine);
+                            if (feedbackType.has_value()) {
+                                payloadType->feedbackTypes.push_back(feedbackType.value());
+                            }
+                        }
+                        
+                        std::ostringstream parametersPrefixStream;
+                        parametersPrefixStream << "a=fmtp:";
+                        parametersPrefixStream << id;
+                        parametersPrefixStream << " ";
+                        for (auto &parametersLine : getLines(videoLines, parametersPrefixStream.str())) {
+                            payloadType->parameters = parsePayloadParameters(parametersLine);
+                        }
+                        
+                        result.videoPayloadTypes.push_back(payloadType.value());
+                    }
+                }
+            }
+        }
+    }
+    
+    for (auto &line : getLines(videoLines, "a=extmap:")) {
+        std::string s;
+        std::istringstream lineStream(line);
+        uint32_t id = 0;
+        for (int i = 0; std::getline(lineStream, s, ' '); i++) {
+            if (s.size() == 0) {
+                continue;
+            }
+            
+            if (i == 0) {
+                std::istringstream iss(s);
+                iss >> id;
+            } else if (i == 1) {
+                if (id != 0) {
+                    result.videoExtensionMap.push_back(std::make_pair(id, s));
+                }
+            }
+        }
+    }
+    
+    for (auto &line : getLines(videoLines, "a=ssrc-group:FID ")) {
+        auto ssrcs = splitSsrcList(line);
+        GroupJoinPayloadVideoSourceGroup group;
+        group.semantics = "FID";
+        group.ssrcs = ssrcs;
+        result.videoSourceGroups.push_back(std::move(group));
+    }
+    for (auto &line : getLines(videoLines, "a=ssrc-group:SIM ")) {
+        auto ssrcs = splitSsrcList(line);
+        GroupJoinPayloadVideoSourceGroup group;
+        group.semantics = "SIM";
+        group.ssrcs = ssrcs;
+        result.videoSourceGroups.push_back(std::move(group));
+    }
 
     return result;
 }
 
 struct StreamSpec {
     bool isMain = false;
+    bool isOutgoing = false;
     uint32_t streamId = 0;
-    uint32_t audioSsrcOrZero = 0;
+    uint32_t ssrc = 0;
+    std::vector<GroupJoinPayloadVideoSourceGroup> videoSourceGroups;
+    std::vector<GroupJoinPayloadVideoPayloadType> videoPayloadTypes;
+    std::vector<std::pair<uint32_t, std::string>> videoExtensionMap;
     bool isRemoved = false;
 };
 
@@ -176,10 +369,17 @@ static std::string createSdp(uint32_t sessionId, GroupJoinResponsePayload const 
     bundleString << "a=group:BUNDLE";
     for (auto &stream : bundleStreams) {
         bundleString << " ";
-        if (stream.isMain) {
-            bundleString << "0";
-        } else {
+        if (stream.isOutgoing) {
+            if (stream.videoPayloadTypes.size() == 0) {
+                bundleString << "0";
+            } else {
+                bundleString << "1";
+            }
+        } else if (stream.videoPayloadTypes.size() == 0) {
             bundleString << "audio";
+            bundleString << stream.streamId;
+        } else {
+            bundleString << "video";
             bundleString << stream.streamId;
         }
     }
@@ -188,22 +388,40 @@ static std::string createSdp(uint32_t sessionId, GroupJoinResponsePayload const 
     appendSdp(sdp, "a=ice-lite");
 
     for (auto &stream : bundleStreams) {
-        std::ostringstream audioMidString;
-        if (stream.isMain) {
-            audioMidString << "0";
+        std::ostringstream streamMidString;
+        if (stream.isOutgoing) {
+            if (stream.videoPayloadTypes.size() == 0) {
+                streamMidString << "0";
+            } else {
+                streamMidString << "1";
+            }
+        } else if (stream.videoPayloadTypes.size() == 0) {
+            streamMidString << "audio";
+            streamMidString << stream.streamId;
         } else {
-            audioMidString << "audio";
-            audioMidString << stream.streamId;
+            streamMidString << "video";
+            streamMidString << stream.streamId;
         }
 
         std::ostringstream mLineString;
-        mLineString << "m=audio ";
+        if (stream.videoPayloadTypes.size() == 0) {
+            mLineString << "m=audio ";
+        } else {
+            mLineString << "m=video ";
+        }
         if (stream.isMain) {
             mLineString << "1";
         } else {
             mLineString << "0";
         }
-        mLineString << " RTP/SAVPF 111 126";
+        if (stream.videoPayloadTypes.size() == 0) {
+            mLineString << " RTP/SAVPF 111 126";
+        } else {
+            mLineString << " RTP/SAVPF";
+            for (auto &it : stream.videoPayloadTypes) {
+                mLineString << " " << it.id;
+            }
+        }
 
         appendSdp(sdp, mLineString.str());
 
@@ -213,7 +431,7 @@ static std::string createSdp(uint32_t sessionId, GroupJoinResponsePayload const 
 
         std::ostringstream mLineMidString;
         mLineMidString << "a=mid:";
-        mLineMidString << audioMidString.str();
+        mLineMidString << streamMidString.str();
         appendSdp(sdp, mLineMidString.str());
 
         if (stream.isMain) {
@@ -282,62 +500,177 @@ static std::string createSdp(uint32_t sessionId, GroupJoinResponsePayload const 
             }
         }
 
-        appendSdp(sdp, "a=rtpmap:111 opus/48000/2");
-        appendSdp(sdp, "a=rtpmap:126 telephone-event/8000");
-        appendSdp(sdp, "a=fmtp:111 minptime=10; useinbandfec=1");
-        appendSdp(sdp, "a=rtcp:1 IN IP4 0.0.0.0");
-        appendSdp(sdp, "a=rtcp-mux");
-        appendSdp(sdp, "a=extmap:1 urn:ietf:params:rtp-hdrext:ssrc-audio-level");
-        appendSdp(sdp, "a=extmap:3 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time");
-        appendSdp(sdp, "a=extmap:5 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01");
-        appendSdp(sdp, "a=rtcp-fb:111 transport-cc");
-        
-        if (isAnswer && stream.isMain) {
-            appendSdp(sdp, "a=recvonly");
+        if (stream.videoPayloadTypes.size() == 0) {
+            appendSdp(sdp, "a=rtpmap:111 opus/48000/2");
+            appendSdp(sdp, "a=rtpmap:126 telephone-event/8000");
+            appendSdp(sdp, "a=fmtp:111 minptime=10; useinbandfec=1");
+            appendSdp(sdp, "a=rtcp:1 IN IP4 0.0.0.0");
+            appendSdp(sdp, "a=rtcp-mux");
+            appendSdp(sdp, "a=extmap:1 urn:ietf:params:rtp-hdrext:ssrc-audio-level");
+            appendSdp(sdp, "a=extmap:3 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time");
+            appendSdp(sdp, "a=extmap:5 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01");
+            appendSdp(sdp, "a=rtcp-fb:111 transport-cc");
+            
+            if (isAnswer && stream.isMain) {
+                appendSdp(sdp, "a=recvonly");
+            } else {
+                if (stream.isMain) {
+                    appendSdp(sdp, "a=sendrecv");
+                } else {
+                    appendSdp(sdp, "a=sendonly");
+                    appendSdp(sdp, "a=bundle-only");
+                }
+
+                if (stream.isRemoved) {
+                    appendSdp(sdp, "a=inactive");
+                } else {
+                    std::ostringstream cnameString;
+                    cnameString << "a=ssrc:";
+                    cnameString << stream.ssrc;
+                    cnameString << " cname:stream";
+                    cnameString << stream.streamId;
+                    appendSdp(sdp, cnameString.str());
+
+                    std::ostringstream msidString;
+                    msidString << "a=ssrc:";
+                    msidString << stream.ssrc;
+                    msidString << " msid:stream";
+                    msidString << stream.streamId;
+                    msidString << " audio" << stream.streamId;
+                    appendSdp(sdp, msidString.str());
+
+                    std::ostringstream mslabelString;
+                    mslabelString << "a=ssrc:";
+                    mslabelString << stream.ssrc;
+                    mslabelString << " mslabel:audio";
+                    mslabelString << stream.streamId;
+                    appendSdp(sdp, mslabelString.str());
+
+                    std::ostringstream labelString;
+                    labelString << "a=ssrc:";
+                    labelString << stream.ssrc;
+                    labelString << " label:audio";
+                    labelString << stream.streamId;
+                    appendSdp(sdp, labelString.str());
+                }
+            }
         } else {
-            if (stream.isMain) {
-                appendSdp(sdp, "a=sendrecv");
+            appendSdp(sdp, "a=rtcp:1 IN IP4 0.0.0.0");
+            appendSdp(sdp, "a=rtcp-mux");
+            
+            for (auto &it : stream.videoPayloadTypes) {
+                std::ostringstream rtpmapString;
+                rtpmapString << "a=rtpmap:";
+                rtpmapString << it.id;
+                rtpmapString << " ";
+                rtpmapString << it.name;
+                rtpmapString << "/";
+                rtpmapString << it.clockrate;
+                if (it.channels != 0) {
+                    rtpmapString << "/";
+                    rtpmapString << it.channels;
+                }
+                appendSdp(sdp, rtpmapString.str());
+                
+                for (auto &feedbackType : it.feedbackTypes) {
+                    std::ostringstream feedbackString;
+                    feedbackString << "a=rtcp-fb:";
+                    feedbackString << it.id;
+                    feedbackString << " ";
+                    feedbackString << feedbackType.type;
+                    if (feedbackType.subtype.size() != 0) {
+                        feedbackString << " ";
+                        feedbackString << feedbackType.subtype;
+                    }
+                    appendSdp(sdp, feedbackString.str());
+                }
+                
+                if (it.parameters.size() != 0) {
+                    std::ostringstream fmtpString;
+                    fmtpString << "a=fmtp:";
+                    fmtpString << it.id;
+                    fmtpString << " ";
+                    
+                    for (int i = 0; i < it.parameters.size(); i++) {
+                        if (i != 0) {
+                            fmtpString << ";";
+                        }
+                        fmtpString << it.parameters[i].first;
+                        fmtpString << "=";
+                        fmtpString << it.parameters[i].second;
+                    }
+                    
+                    appendSdp(sdp, fmtpString.str());
+                }
+            }
+            
+            for (auto &it : stream.videoExtensionMap) {
+                std::ostringstream extString;
+                extString << "a=extmap:";
+                extString << it.first;
+                extString << " ";
+                extString << it.second;
+                appendSdp(sdp, extString.str());
+            }
+            
+            if (isAnswer && stream.isOutgoing) {
+                appendSdp(sdp, "a=recvonly");
+                appendSdp(sdp, "a=bundle-only");
             } else {
                 appendSdp(sdp, "a=sendonly");
                 appendSdp(sdp, "a=bundle-only");
-            }
+                
+                if (stream.isRemoved) {
+                    appendSdp(sdp, "a=inactive");
+                } else {
+                    std::vector<uint32_t> ssrcs;
+                    for (auto &group : stream.videoSourceGroups) {
+                        std::ostringstream groupString;
+                        groupString << "a=ssrc-group:";
+                        groupString << group.semantics;
+                        
+                        for (auto ssrc : group.ssrcs) {
+                            groupString << " " << ssrc;
+                            
+                            if (std::find(ssrcs.begin(), ssrcs.end(), ssrc) == ssrcs.end()) {
+                                ssrcs.push_back(ssrc);
+                            }
+                        }
+                        
+                        appendSdp(sdp, groupString.str());
+                    }
+                    
+                    for (auto ssrc : ssrcs) {
+                        std::ostringstream cnameString;
+                        cnameString << "a=ssrc:";
+                        cnameString << ssrc;
+                        cnameString << " cname:stream";
+                        cnameString << stream.streamId;
+                        appendSdp(sdp, cnameString.str());
 
-            /*std::ostringstream ssrcGroupString;
-            ssrcGroupString << "a=ssrc-group:FID ";
-            ssrcGroupString << stream.audioSsrc;
-            appendSdp(sdp, ssrcGroupString.str());*/
+                        std::ostringstream msidString;
+                        msidString << "a=ssrc:";
+                        msidString << ssrc;
+                        msidString << " msid:stream";
+                        msidString << stream.streamId;
+                        msidString << " video" << stream.streamId;
+                        appendSdp(sdp, msidString.str());
 
-            if (stream.isRemoved) {
-                appendSdp(sdp, "a=inactive");
-            } else {
-                std::ostringstream cnameString;
-                cnameString << "a=ssrc:";
-                cnameString << stream.audioSsrcOrZero;
-                cnameString << " cname:stream";
-                cnameString << stream.streamId;
-                appendSdp(sdp, cnameString.str());
+                        std::ostringstream mslabelString;
+                        mslabelString << "a=ssrc:";
+                        mslabelString << ssrc;
+                        mslabelString << " mslabel:video";
+                        mslabelString << stream.streamId;
+                        appendSdp(sdp, mslabelString.str());
 
-                std::ostringstream msidString;
-                msidString << "a=ssrc:";
-                msidString << stream.audioSsrcOrZero;
-                msidString << " msid:stream";
-                msidString << stream.streamId;
-                msidString << " audio" << stream.streamId;
-                appendSdp(sdp, msidString.str());
-
-                std::ostringstream mslabelString;
-                mslabelString << "a=ssrc:";
-                mslabelString << stream.audioSsrcOrZero;
-                mslabelString << " mslabel:audio";
-                mslabelString << stream.streamId;
-                appendSdp(sdp, mslabelString.str());
-
-                std::ostringstream labelString;
-                labelString << "a=ssrc:";
-                labelString << stream.audioSsrcOrZero;
-                labelString << " label:audio";
-                labelString << stream.streamId;
-                appendSdp(sdp, labelString.str());
+                        std::ostringstream labelString;
+                        labelString << "a=ssrc:";
+                        labelString << ssrc;
+                        labelString << " label:video";
+                        labelString << stream.streamId;
+                        appendSdp(sdp, labelString.str());
+                    }
+                }
             }
         }
     }
@@ -350,36 +683,54 @@ static std::string createSdp(uint32_t sessionId, GroupJoinResponsePayload const 
     return result.str();
 }
 
-static std::string parseJoinResponseIntoSdp(uint32_t sessionId, uint32_t mainStreamAudioSsrc, GroupJoinResponsePayload const &payload, bool isAnswer, std::vector<uint32_t> const &allOtherSsrcs, std::set<uint32_t> const &activeOtherSsrcs) {
+static std::string parseJoinResponseIntoSdp(uint32_t sessionId, GroupJoinPayload const &joinPayload, GroupJoinResponsePayload const &payload, bool isAnswer, std::vector<GroupParticipantDescription> const &allOtherParticipants) {
 
     std::vector<StreamSpec> bundleStreams;
 
     StreamSpec mainStream;
     mainStream.isMain = true;
+    mainStream.isOutgoing = true;
     mainStream.streamId = 0;
-    mainStream.audioSsrcOrZero = mainStreamAudioSsrc;
+    mainStream.ssrc = joinPayload.ssrc;
     mainStream.isRemoved = false;
     bundleStreams.push_back(mainStream);
+    
+    if (joinPayload.videoSourceGroups.size() != 0) {
+        StreamSpec mainVideoStream;
+        mainVideoStream.isMain = false;
+        mainVideoStream.isOutgoing = true;
+        mainVideoStream.streamId = joinPayload.videoSourceGroups[0].ssrcs[0];
+        mainVideoStream.ssrc = joinPayload.videoSourceGroups[0].ssrcs[0];
+        mainVideoStream.videoSourceGroups = joinPayload.videoSourceGroups;
+        mainVideoStream.videoPayloadTypes = joinPayload.videoPayloadTypes;
+        mainVideoStream.videoExtensionMap = joinPayload.videoExtensionMap;
+        
+        mainVideoStream.isRemoved = false;
+        bundleStreams.push_back(mainVideoStream);
+    }
 
-    uint32_t numStreamsToAllocate = (uint32_t)allOtherSsrcs.size();
-    /*if (numStreamsToAllocate < 10) {
-        numStreamsToAllocate = 10;
-    }*/
-
-    for (uint32_t i = 0; i < numStreamsToAllocate; i++) {
-        StreamSpec stream;
-        stream.isMain = false;
-        if (i < allOtherSsrcs.size()) {
-            uint32_t ssrc = allOtherSsrcs[i];
-            stream.audioSsrcOrZero = ssrc;
-            stream.isRemoved = activeOtherSsrcs.find(ssrc) == activeOtherSsrcs.end();
-            stream.streamId = ssrc;
-        } else {
-            stream.audioSsrcOrZero = 0;
-            stream.isRemoved = true;
-            stream.streamId = 1 + (uint32_t)i;
+    for (auto &participant : allOtherParticipants) {
+        StreamSpec audioStream;
+        audioStream.isMain = false;
+        
+        audioStream.ssrc = participant.audioSsrc;
+        audioStream.isRemoved = false;
+        audioStream.streamId = participant.audioSsrc;
+        bundleStreams.push_back(audioStream);
+        
+        if (participant.videoPayloadTypes.size() != 0) {
+            StreamSpec videoStream;
+            videoStream.isMain = false;
+            
+            videoStream.ssrc = participant.videoSourceGroups[0].ssrcs[0];
+            videoStream.isRemoved = false;
+            videoStream.streamId = participant.videoSourceGroups[0].ssrcs[0];
+            videoStream.videoSourceGroups = participant.videoSourceGroups;
+            videoStream.videoExtensionMap = participant.videoExtensionMap;
+            videoStream.videoPayloadTypes = participant.videoPayloadTypes;
+            
+            bundleStreams.push_back(videoStream);
         }
-        bundleStreams.push_back(stream);
     }
 
     return createSdp(sessionId, payload, isAnswer, bundleStreams);
@@ -417,53 +768,11 @@ rtc::Thread *getMediaThread() {
     return Manager::getMediaThread();
 }
 
-class FrameEncryptorImpl : public webrtc::FrameEncryptorInterface {
-public:
-    FrameEncryptorImpl() {
-    }
-
-    virtual int Encrypt(cricket::MediaType media_type,
-                        uint32_t ssrc,
-                        rtc::ArrayView<const uint8_t> additional_data,
-                        rtc::ArrayView<const uint8_t> frame,
-                        rtc::ArrayView<uint8_t> encrypted_frame,
-                        size_t* bytes_written) override {
-        memcpy(encrypted_frame.data(), frame.data(), frame.size());
-        for (auto it = encrypted_frame.begin(); it != encrypted_frame.end(); it++) {
-            *it ^= 123;
-        }
-        *bytes_written = frame.size();
-        return 0;
-    }
-
-    virtual size_t GetMaxCiphertextByteSize(cricket::MediaType media_type,
-                                            size_t frame_size) override {
-        return frame_size;
-    }
-};
-
-class FrameDecryptorImpl : public webrtc::FrameDecryptorInterface {
-public:
-    FrameDecryptorImpl() {
-    }
-
-    virtual webrtc::FrameDecryptorInterface::Result Decrypt(cricket::MediaType media_type,
-                           const std::vector<uint32_t>& csrcs,
-                           rtc::ArrayView<const uint8_t> additional_data,
-                           rtc::ArrayView<const uint8_t> encrypted_frame,
-                           rtc::ArrayView<uint8_t> frame) override {
-        memcpy(frame.data(), encrypted_frame.data(), encrypted_frame.size());
-        for (auto it = frame.begin(); it != frame.end(); it++) {
-            *it ^= 123;
-        }
-        return webrtc::FrameDecryptorInterface::Result(webrtc::FrameDecryptorInterface::Status::kOk, encrypted_frame.size());
-    }
-
-    virtual size_t GetMaxPlaintextByteSize(cricket::MediaType media_type,
-                                           size_t encrypted_frame_size) override {
-        return encrypted_frame_size;
-    }
-};
+VideoCaptureInterfaceObject *GetVideoCaptureAssumingSameThread(VideoCaptureInterface *videoCapture) {
+    return videoCapture
+        ? static_cast<VideoCaptureInterfaceImpl*>(videoCapture)->object()->getSyncAssumingSameThread()
+        : nullptr;
+}
 
 class PeerConnectionObserverImpl : public webrtc::PeerConnectionObserver {
 private:
@@ -1033,6 +1342,35 @@ std::string adjustLocalDescription(const std::string &sdp) {
     return result.str();
 }
 
+class CustomVideoSinkInterfaceProxyImpl : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
+public:
+    CustomVideoSinkInterfaceProxyImpl() {
+    }
+
+    virtual ~CustomVideoSinkInterfaceProxyImpl() {
+    }
+
+    virtual void OnFrame(const webrtc::VideoFrame& frame) override {
+        if (_impl) {
+            _impl->OnFrame(frame);
+        }
+    }
+
+    virtual void OnDiscardedFrame() override {
+        if (_impl) {
+            _impl->OnDiscardedFrame();
+        }
+    }
+
+    void setSink(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> impl) {
+        _impl = impl;
+    }
+
+private:
+    std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _impl;
+
+};
+
 } // namespace
 
 
@@ -1042,8 +1380,10 @@ public:
 	GroupInstanceManager(GroupInstanceDescriptor &&descriptor) :
     _networkStateUpdated(descriptor.networkStateUpdated),
     _audioLevelsUpdated(descriptor.audioLevelsUpdated),
+    _incomingVideoSourcesUpdated(descriptor.incomingVideoSourcesUpdated),
     _initialInputDeviceId(descriptor.initialInputDeviceId),
-    _initialOutputDeviceId(descriptor.initialOutputDeviceId) {
+    _initialOutputDeviceId(descriptor.initialOutputDeviceId),
+    _videoCapture(descriptor.videoCapture) {
 		auto generator = std::mt19937(std::random_device()());
 		auto distribution = std::uniform_int_distribution<uint32_t>();
 		do {
@@ -1063,7 +1403,7 @@ public:
     void generateAndInsertFakeIncomingSsrc() {
         // At least on Windows recording can't be started without playout.
         // We keep a fake incoming stream, so that playout is always started.
-        auto generator = std::mt19937(std::random_device()());
+        /*auto generator = std::mt19937(std::random_device()());
         auto distribution = std::uniform_int_distribution<uint32_t>();
         while (true) {
             _fakeIncomingSsrc = distribution(generator);
@@ -1074,12 +1414,11 @@ public:
             }
         }
         _activeOtherSsrcs.emplace(_fakeIncomingSsrc);
-        _allOtherSsrcs.emplace_back(_fakeIncomingSsrc);
+        _allOtherSsrcs.emplace_back(_fakeIncomingSsrc);*/
     }
 
     bool createAudioDeviceModule(
             const webrtc::PeerConnectionFactoryDependencies &dependencies) {
-        using Result = rtc::scoped_refptr<webrtc::AudioDeviceModule>;
         _adm_thread = dependencies.worker_thread;
         if (!_adm_thread) {
             return false;
@@ -1296,10 +1635,10 @@ public:
         streamIds.push_back(name.str());
         _localAudioTrack = _nativeFactory->CreateAudioTrack(name.str(), audioSource);
         _localAudioTrack->set_enabled(false);
-        auto addedTrack = _peerConnection->AddTrack(_localAudioTrack, streamIds);
+        auto addedAudioTrack = _peerConnection->AddTrack(_localAudioTrack, streamIds);
 
-        if (addedTrack.ok()) {
-            _localAudioTrackSender = addedTrack.value();
+        if (addedAudioTrack.ok()) {
+            _localAudioTrackSender = addedAudioTrack.value();
             for (auto &it : _peerConnection->GetTransceivers()) {
                 if (it->media_type() == cricket::MediaType::MEDIA_TYPE_AUDIO) {
                     if (_localAudioTrackSender.get() == it->sender().get()) {
@@ -1307,6 +1646,39 @@ public:
                     }
 
                     break;
+                }
+            }
+        }
+        
+        if (_videoCapture) {
+            VideoCaptureInterfaceObject *videoCaptureImpl = GetVideoCaptureAssumingSameThread(_videoCapture.get());
+            
+            _localVideoTrack = _nativeFactory->CreateVideoTrack("video0", videoCaptureImpl->source());
+            auto addedVideoTrack = _peerConnection->AddTrack(_localVideoTrack, streamIds);
+            if (addedVideoTrack.ok()) {
+                for (auto &it : _peerConnection->GetTransceivers()) {
+                    if (it->media_type() == cricket::MediaType::MEDIA_TYPE_VIDEO) {
+                        if (addedVideoTrack.value().get() == it->sender().get()) {
+                            auto capabilities = _nativeFactory->GetRtpSenderCapabilities(
+                                cricket::MediaType::MEDIA_TYPE_VIDEO);
+
+                            std::vector<webrtc::RtpCodecCapability> codecs;
+                            bool hasH264 = false;
+                            for (auto &codec : capabilities.codecs) {
+                                if (codec.name == cricket::kVp8CodecName) {
+                                    if (!hasH264) {
+                                        codecs.insert(codecs.begin(), codec);
+                                        hasH264 = true;
+                                    }
+                                } else if (codec.name == cricket::kRtxCodecName) {
+                                    codecs.push_back(codec);
+                                }
+                            }
+                            it->SetCodecPreferences(codecs);
+
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -1439,6 +1811,17 @@ public:
         });
 #endif
     }
+    
+    void setIncomingVideoOutput(uint32_t ssrc, std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+        auto current = _remoteVideoTrackSinks.find(ssrc);
+        if (current != _remoteVideoTrackSinks.end()) {
+            current->second->setSink(sink);
+        } else {
+            std::unique_ptr<CustomVideoSinkInterfaceProxyImpl> sinkProxy(new CustomVideoSinkInterfaceProxyImpl());
+            sinkProxy->setSink(sink);
+            _remoteVideoTrackSinks[ssrc] = std::move(sinkProxy);
+        }
+    }
 
     void updateIsConnected(bool isConnected) {
         _isConnected = isConnected;
@@ -1485,21 +1868,32 @@ public:
                 generatedSsrcStringStream << strong->_mainStreamAudioSsrc;
                 auto generatedSsrcString = generatedSsrcStringStream.str();
 
+                bool isAudio = false;
                 for (auto &line : lines) {
                     auto adjustedLine = line;
-                    if (adjustedLine.find("a=ssrc:") == 0) {
-                        int startIndex = 7;
-                        int i = startIndex;
-                        while (i < adjustedLine.size()) {
-                            if (!isdigit(adjustedLine[i])) {
-                                break;
+                    
+                    if (adjustedLine.find("m=audio") == 0) {
+                        isAudio = true;
+                    } else if (adjustedLine.find("m=video") == 0) {
+                        isAudio = false;
+                    }
+                    
+                    if (isAudio) {
+                        if (adjustedLine.find("a=ssrc:") == 0) {
+                            int startIndex = 7;
+                            int i = startIndex;
+                            while (i < adjustedLine.size()) {
+                                if (!isdigit(adjustedLine[i])) {
+                                    break;
+                                }
+                                i++;
                             }
-                            i++;
-                        }
-                        if (i >= startIndex) {
-                            adjustedLine.replace(startIndex, i - startIndex, generatedSsrcString);
+                            if (i >= startIndex) {
+                                adjustedLine.replace(startIndex, i - startIndex, generatedSsrcString);
+                            }
                         }
                     }
+                    
                     appendSdp(resultSdp, adjustedLine);
                 }
 
@@ -1525,6 +1919,7 @@ public:
                         auto payload = parseSdpIntoJoinPayload(adjustedSdp);
                         if (payload) {
                             payload->ssrc = strong->_mainStreamAudioSsrc;
+                            strong->_joinPayload = payload;
                             completion(payload.value());
                         }
                     }, [](webrtc::RTCError error) {
@@ -1538,14 +1933,22 @@ public:
         _peerConnection->CreateOffer(observer, options);
     }
 
-    void setJoinResponsePayload(GroupJoinResponsePayload payload) {
-        _joinPayload = payload;
-        auto sdp = parseJoinResponseIntoSdp(_sessionId, _mainStreamAudioSsrc, payload, true, _allOtherSsrcs, _activeOtherSsrcs);
+    void setJoinResponsePayload(GroupJoinResponsePayload payload, std::vector<tgcalls::GroupParticipantDescription> &&participants) {
+        if (!_joinPayload) {
+            return;
+        }
+        _joinResponsePayload = payload;
+        auto sdp = parseJoinResponseIntoSdp(_sessionId, _joinPayload.value(), payload, true, _allOtherParticipants);
         setOfferSdp(sdp, true, true, false);
+        
+        addParticipantsInternal(std::move(participants), false);
     }
 
     void removeSsrcs(std::vector<uint32_t> ssrcs) {
-        if (!_joinPayload) {
+        /*if (!_joinPayload) {
+            return;
+        }
+        if (!_joinResponsePayload) {
             return;
         }
 
@@ -1561,27 +1964,39 @@ public:
         }
 
         if (updated) {
-            auto sdp = parseJoinResponseIntoSdp(_sessionId, _mainStreamAudioSsrc, _joinPayload.value(), false, _allOtherSsrcs, _activeOtherSsrcs);
+            auto sdp = parseJoinResponseIntoSdp(_sessionId, _joinPayload.value(), _joinResponsePayload.value(), false, _allOtherSsrcs, _activeOtherSsrcs);
             setOfferSdp(sdp, false, false, false);
-        }
+        }*/
+    }
+    
+    void addParticipants(std::vector<GroupParticipantDescription> &&participants) {
+        addParticipantsInternal(std::move(participants), false);
     }
 
-    void addSsrcsInternal(std::vector<uint32_t> const &ssrcs, bool completeMissingSsrcSetup) {
-        if (!_joinPayload) {
+    void addParticipantsInternal(std::vector<GroupParticipantDescription> const &participants, bool completeMissingSsrcSetup) {
+        if (!_joinPayload || !_joinResponsePayload) {
             if (completeMissingSsrcSetup) {
                 completeProcessingMissingSsrcs();
             }
             return;
         }
 
-        for (auto ssrc : ssrcs) {
-            if (std::find(_allOtherSsrcs.begin(), _allOtherSsrcs.end(), ssrc) == _allOtherSsrcs.end()) {
-                _allOtherSsrcs.push_back(ssrc);
-                _activeOtherSsrcs.insert(ssrc);
+        for (auto &participant : participants) {
+            bool found = false;
+            for (auto &other : _allOtherParticipants) {
+                if (other.audioSsrc == participant.audioSsrc) {
+                    found = true;
+                    break;
+                }
+            }
+            
+            if (!found) {
+                _allOtherParticipants.push_back(participant);
+                //_activeOtherSsrcs.insert(participant.audioSsrc);
             }
         }
 
-        auto sdp = parseJoinResponseIntoSdp(_sessionId, _mainStreamAudioSsrc, _joinPayload.value(), false, _allOtherSsrcs, _activeOtherSsrcs);
+        auto sdp = parseJoinResponseIntoSdp(_sessionId, _joinPayload.value(), _joinResponsePayload.value(), false, _allOtherParticipants);
         setOfferSdp(sdp, false, false, completeMissingSsrcSetup);
     }
 
@@ -1602,21 +2017,33 @@ public:
                 generatedSsrcStringStream << strong->_mainStreamAudioSsrc;
                 auto generatedSsrcString = generatedSsrcStringStream.str();
 
+                bool isAudio = false;
+                
                 for (auto &line : lines) {
                     auto adjustedLine = line;
-                    if (adjustedLine.find("a=ssrc:") == 0) {
-                        int startIndex = 7;
-                        int i = startIndex;
-                        while (i < adjustedLine.size()) {
-                            if (!isdigit(adjustedLine[i])) {
-                                break;
+                    
+                    if (adjustedLine.find("m=audio") == 0) {
+                        isAudio = true;
+                    } else if (adjustedLine.find("m=video") == 0) {
+                        isAudio = false;
+                    }
+                    
+                    if (isAudio) {
+                        if (adjustedLine.find("a=ssrc:") == 0) {
+                            int startIndex = 7;
+                            int i = startIndex;
+                            while (i < adjustedLine.size()) {
+                                if (!isdigit(adjustedLine[i])) {
+                                    break;
+                                }
+                                i++;
                             }
-                            i++;
-                        }
-                        if (i >= startIndex) {
-                            adjustedLine.replace(startIndex, i - startIndex, generatedSsrcString);
+                            if (i >= startIndex) {
+                                adjustedLine.replace(startIndex, i - startIndex, generatedSsrcString);
+                            }
                         }
                     }
+                    
                     appendSdp(resultSdp, adjustedLine);
                 }
 
@@ -1643,8 +2070,11 @@ public:
                         if (!strong->_joinPayload) {
                             return;
                         }
+                        if (!strong->_joinResponsePayload) {
+                            return;
+                        }
 
-                        auto sdp = parseJoinResponseIntoSdp(strong->_sessionId, strong->_mainStreamAudioSsrc, strong->_joinPayload.value(), true, strong->_allOtherSsrcs, strong->_activeOtherSsrcs);
+                        auto sdp = parseJoinResponseIntoSdp(strong->_sessionId, strong->_joinPayload.value(), strong->_joinResponsePayload.value(), true, strong->_allOtherParticipants);
                         strong->setOfferSdp(sdp, false, true, false);
                     }, [](webrtc::RTCError error) {
                     }));
@@ -1807,6 +2237,36 @@ public:
                     remoteAudioTrack->AddSink(sink.get());
                 }
             }
+        } else if (transceiver->direction() == webrtc::RtpTransceiverDirection::kRecvOnly && transceiver->media_type() == cricket::MediaType::MEDIA_TYPE_VIDEO) {
+            auto streamId = transceiver->mid().value();
+            if (streamId.find("video") != 0) {
+                return;
+            }
+            streamId.replace(0, 5, "");
+            std::istringstream iss(streamId);
+            uint32_t ssrc = 0;
+            iss >> ssrc;
+            
+            auto remoteVideoTrack = static_cast<webrtc::VideoTrackInterface *>(transceiver->receiver()->track().get());
+            if (_remoteVideoTracks.find(ssrc) == _remoteVideoTracks.end()) {
+                _remoteVideoTracks[ssrc] = remoteVideoTrack;
+                auto current = _remoteVideoTrackSinks.find(ssrc);
+                if (current != _remoteVideoTrackSinks.end()) {
+                    remoteVideoTrack->AddOrUpdateSink(current->second.get(), rtc::VideoSinkWants());
+                } else {
+                    std::unique_ptr<CustomVideoSinkInterfaceProxyImpl> sink(new CustomVideoSinkInterfaceProxyImpl());
+                    remoteVideoTrack->AddOrUpdateSink(sink.get(), rtc::VideoSinkWants());
+                    _remoteVideoTrackSinks[ssrc] = std::move(sink);
+                }
+                
+                if (_incomingVideoSourcesUpdated) {
+                    std::vector<uint32_t> allSources;
+                    for (auto &it : _remoteVideoTracks) {
+                        allSources.push_back(it.first);
+                    }
+                    _incomingVideoSourcesUpdated(allSources);
+                }
+            }
         }
     }
 
@@ -1814,14 +2274,14 @@ public:
     }
 
     void onMissingSsrc(uint32_t ssrc) {
-        if (_processedMissingSsrcs.find(ssrc) == _processedMissingSsrcs.end()) {
+        /*if (_processedMissingSsrcs.find(ssrc) == _processedMissingSsrcs.end()) {
             _processedMissingSsrcs.insert(ssrc);
 
             _missingSsrcQueue.insert(ssrc);
             if (!_isProcessingMissingSsrcs) {
                 beginProcessingMissingSsrcs();
             }
-        }
+        }*/
     }
 
     void beginProcessingMissingSsrcs() {
@@ -1851,14 +2311,17 @@ public:
             return;
         }
         
-        std::vector<uint32_t> addSsrcs;
+        std::vector<GroupParticipantDescription> addParticipants;
         for (auto ssrc : _missingSsrcQueue) {
-            addSsrcs.push_back(ssrc);
+            GroupParticipantDescription participant;
+            participant.audioSsrc = ssrc;
+            addParticipants.push_back(participant);
         }
         _missingSsrcQueue.clear();
         
         const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
-        addSsrcsInternal(addSsrcs, true);
+        
+        addParticipantsInternal(addParticipants, true);
     }
     
     void completeProcessingMissingSsrcs() {
@@ -1993,6 +2456,7 @@ private:
 
     std::function<void(bool)> _networkStateUpdated;
     std::function<void(std::vector<std::pair<uint32_t, std::pair<float, bool>>> const &)> _audioLevelsUpdated;
+    std::function<void(std::vector<uint32_t> const &)> _incomingVideoSourcesUpdated;
     
     int32_t _myAudioLevelPeakCount = 0;
     float _myAudioLevelPeak = 0;
@@ -2003,8 +2467,9 @@ private:
 
     uint32_t _sessionId = 6543245;
     uint32_t _mainStreamAudioSsrc = 0;
+    absl::optional<GroupJoinPayload> _joinPayload;
     uint32_t _fakeIncomingSsrc = 0;
-    absl::optional<GroupJoinResponsePayload> _joinPayload;
+    absl::optional<GroupJoinResponsePayload> _joinResponsePayload;
 
     int64_t _appliedOfferTimestamp = 0;
     bool _isConnected = false;
@@ -2012,8 +2477,7 @@ private:
     
     bool _isMuted = true;
 
-    std::vector<uint32_t> _allOtherSsrcs;
-    std::set<uint32_t> _activeOtherSsrcs;
+    std::vector<GroupParticipantDescription> _allOtherParticipants;
     std::set<uint32_t> _processedMissingSsrcs;
     
     int64_t _missingSsrcsProcessedTimestamp = 0;
@@ -2028,12 +2492,19 @@ private:
     std::unique_ptr<AudioTrackSinkInterfaceImpl> _localAudioTrackSink;
     rtc::scoped_refptr<webrtc::AudioTrackInterface> _localAudioTrack;
     rtc::scoped_refptr<webrtc::RtpSenderInterface> _localAudioTrackSender;
+    
+    rtc::scoped_refptr<webrtc::VideoTrackInterface> _localVideoTrack;
 
     rtc::Thread *_adm_thread = nullptr;
     rtc::scoped_refptr<webrtc::AudioDeviceModule> _adm_use_withAudioDeviceModule;
 
     std::map<uint32_t, std::shared_ptr<AudioTrackSinkInterfaceImpl>> _audioTrackSinks;
     std::map<uint32_t, std::pair<float, bool>> _audioLevels;
+    
+    std::map<uint32_t, rtc::scoped_refptr<webrtc::VideoTrackInterface>> _remoteVideoTracks;
+    std::map<uint32_t, std::unique_ptr<CustomVideoSinkInterfaceProxyImpl>> _remoteVideoTrackSinks;
+    
+    std::shared_ptr<VideoCaptureInterface> _videoCapture;
 };
 
 GroupInstanceImpl::GroupInstanceImpl(GroupInstanceDescriptor &&descriptor)
@@ -2075,15 +2546,21 @@ void GroupInstanceImpl::emitJoinPayload(std::function<void(GroupJoinPayload)> co
     });
 }
 
-void GroupInstanceImpl::setJoinResponsePayload(GroupJoinResponsePayload payload) {
-    _manager->perform(RTC_FROM_HERE, [payload](GroupInstanceManager *manager) {
-        manager->setJoinResponsePayload(payload);
+void GroupInstanceImpl::setJoinResponsePayload(GroupJoinResponsePayload payload, std::vector<tgcalls::GroupParticipantDescription> &&participants) {
+    _manager->perform(RTC_FROM_HERE, [payload, participants = std::move(participants)](GroupInstanceManager *manager) mutable {
+        manager->setJoinResponsePayload(payload, std::move(participants));
     });
 }
 
 void GroupInstanceImpl::removeSsrcs(std::vector<uint32_t> ssrcs) {
     _manager->perform(RTC_FROM_HERE, [ssrcs](GroupInstanceManager *manager) {
         manager->removeSsrcs(ssrcs);
+    });
+}
+
+void GroupInstanceImpl::addParticipants(std::vector<GroupParticipantDescription> &&participants) {
+    _manager->perform(RTC_FROM_HERE, [participants = std::move(participants)](GroupInstanceManager *manager) mutable {
+        manager->addParticipants(std::move(participants));
     });
 }
 
@@ -2101,6 +2578,12 @@ void GroupInstanceImpl::setAudioInputDevice(std::string id) {
 void GroupInstanceImpl::setAudioOutputDevice(std::string id) {
     _manager->perform(RTC_FROM_HERE, [id](GroupInstanceManager *manager) {
         manager->setAudioOutputDevice(id);
+    });
+}
+
+void GroupInstanceImpl::setIncomingVideoOutput(uint32_t ssrc, std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+    _manager->perform(RTC_FROM_HERE, [ssrc, sink](GroupInstanceManager *manager) {
+        manager->setIncomingVideoOutput(ssrc, sink);
     });
 }
 
