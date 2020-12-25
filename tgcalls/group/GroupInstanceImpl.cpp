@@ -1333,7 +1333,7 @@ public:
 			adm->EnableBuiltInAEC(false);
 #endif // WEBRTC_WIN
 
-            if (adm->InitPlayout()) {
+            if (adm->InitPlayout() == 0) {
                 adm->StartPlayout();
             } else {
                 getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak](){
@@ -1342,7 +1342,7 @@ public:
                         return;
                     }
                     strong->withAudioDeviceModule([](webrtc::AudioDeviceModule *adm) {
-                        if (adm->InitPlayout()) {
+                        if (adm->InitPlayout() == 0) {
                             adm->StartPlayout();
                         }
                     });
