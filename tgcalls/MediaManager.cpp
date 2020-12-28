@@ -337,7 +337,7 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
 	audioSendPrameters.rtcp.remote_estimate = true;
 	_audioChannel->SetSendParameters(audioSendPrameters);
 	_audioChannel->AddSendStream(cricket::StreamParams::CreateLegacy(_ssrcAudio.outgoing));
-	_audioChannel->SetInterface(_audioNetworkInterface.get(), webrtc::MediaTransportConfig());
+	_audioChannel->SetInterface(_audioNetworkInterface.get());
 
 	cricket::AudioRecvParameters audioRecvParameters;
 	audioRecvParameters.codecs.emplace_back(opusSdpPayload, opusSdpName, opusClockrate, opusSdpBitrate, opusSdpChannels);
@@ -351,7 +351,7 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
     _audioChannel->AddRecvStream(audioRecvStreamParams);
 	_audioChannel->SetPlayout(true);
 
-	_videoChannel->SetInterface(_videoNetworkInterface.get(), webrtc::MediaTransportConfig());
+	_videoChannel->SetInterface(_videoNetworkInterface.get());
 
     adjustBitratePreferences(true);
 }
@@ -423,7 +423,7 @@ MediaManager::~MediaManager() {
 	_audioChannel->RemoveRecvStream(_ssrcAudio.incoming);
 	_audioChannel->RemoveSendStream(_ssrcAudio.outgoing);
 
-	_audioChannel->SetInterface(nullptr, webrtc::MediaTransportConfig());
+	_audioChannel->SetInterface(nullptr);
 
 	setSendVideo(nullptr);
 
@@ -446,7 +446,7 @@ MediaManager::~MediaManager() {
         }
     }
 
-    _videoChannel->SetInterface(nullptr, webrtc::MediaTransportConfig());
+    _videoChannel->SetInterface(nullptr);
 }
 
 void MediaManager::setIsConnected(bool isConnected) {

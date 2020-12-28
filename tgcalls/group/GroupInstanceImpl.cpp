@@ -570,9 +570,9 @@ public:
     virtual void OnInterestingUsage(int usage_pattern) override {
     }
 
-    virtual void OnErrorDemuxingPacket(uint32_t ssrc) override {
+    /*virtual void OnErrorDemuxingPacket(uint32_t ssrc) override {
         _onMissingSsrc(ssrc);
-    }
+    }*/
 };
 
 class RTCStatsCollectorCallbackImpl : public webrtc::RTCStatsCollectorCallback {
@@ -593,7 +593,7 @@ static const int kVadResultHistoryLength = 8;
 
 class CombinedVad {
 private:
-    webrtc::VadWithLevel _vadWithLevel;
+    webrtc::VadLevelAnalyzer _vadWithLevel;
     float _vadResultHistory[kVadResultHistoryLength];
 
 public:
@@ -1217,7 +1217,7 @@ public:
 
         mediaDeps.audio_processing = apm;
 
-        mediaDeps.onUnknownAudioSsrc = [weak](uint32_t ssrc) {
+        /*mediaDeps.onUnknownAudioSsrc = [weak](uint32_t ssrc) {
             getMediaThread()->PostTask(RTC_FROM_HERE, [weak, ssrc](){
                 auto strong = weak.lock();
                 if (!strong) {
@@ -1225,14 +1225,13 @@ public:
                 }
                 strong->onMissingSsrc(ssrc);
             });
-        };
+        };*/
 
         dependencies.media_engine = cricket::CreateMediaEngine(std::move(mediaDeps));
         dependencies.call_factory = webrtc::CreateCallFactory();
         dependencies.event_log_factory =
             std::make_unique<webrtc::RtcEventLogFactory>(dependencies.task_queue_factory.get());
         dependencies.network_controller_factory = nullptr;
-        dependencies.media_transport_factory = nullptr;
 
         _nativeFactory = webrtc::CreateModularPeerConnectionFactory(std::move(dependencies));
 

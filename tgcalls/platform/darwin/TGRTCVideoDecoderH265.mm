@@ -162,6 +162,8 @@ static void tg_h265DecompressionOutputCallback(void* decoder,
     _error = noErr;
     return WEBRTC_VIDEO_CODEC_ERROR;
   }
+    
+  RTC_LOG(LS_WARNING) << "inputImage.buffer.length = " << inputImage.buffer.length;
 
   rtc::ScopedCFTypeRef<CMVideoFormatDescriptionRef> inputFormat =
       rtc::ScopedCF(webrtc::CreateH265VideoFormatDescription(
