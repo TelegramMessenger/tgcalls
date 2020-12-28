@@ -19,6 +19,7 @@
 #include "modules/rtp_rtcp/source/rtp_utility.h"
 #include "api/call/audio_sink.h"
 #include "modules/audio_processing/audio_buffer.h"
+#include "modules/audio_device/include/audio_device_factory.h"
 
 namespace tgcalls {
 namespace {
@@ -112,7 +113,7 @@ private:
 class AudioTrackSinkInterfaceImpl: public webrtc::AudioSinkInterface {
 private:
     std::function<void(float)> _update;
-    
+
     int _peakCount = 0;
     uint16_t _peak = 0;
 
@@ -128,7 +129,7 @@ public:
         if (audio.channels == 1) {
             int16_t *samples = (int16_t *)audio.data;
             int numberOfSamplesInFrame = (int)audio.samples_per_channel;
-            
+
             for (int i = 0; i < numberOfSamplesInFrame; i++) {
                 int16_t sample = samples[i];
                 if (sample < 0) {
@@ -139,7 +140,7 @@ public:
                 }
                 _peakCount += 1;
             }
-            
+
             if (_peakCount >= 1200) {
                 float level = ((float)(_peak)) / 4000.0f;
                 _peak = 0;
@@ -227,7 +228,7 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
 		mediaDeps.video_encoder_factory->GetSupportedFormats(),
 		mediaDeps.video_decoder_factory->GetSupportedFormats(),
         preferredCodecs);
-    
+
     // [this] should outlive the analyzer
     auto analyzer = new AudioCaptureAnalyzer([this](const webrtc::AudioBuffer* buffer) {
         if (!buffer) {
@@ -250,10 +251,10 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
             }
             peakCount += 1;
         }
-        
+
         this->_thread->PostTask(RTC_FROM_HERE, [this, peak, peakCount](){
             auto strong = this;
-            
+
             strong->_myAudioLevelPeakCount += peakCount;
             if (strong->_myAudioLevelPeak < peak) {
                 strong->_myAudioLevelPeak = peak;
@@ -362,6 +363,13 @@ rtc::scoped_refptr<webrtc::AudioDeviceModule> MediaManager::createAudioDeviceMod
 			_taskQueueFactory.get());
 		return (result && (result->Init() == 0)) ? result : nullptr;
 	};
+#ifdef WEBRTC_WIN
+	if (auto result = webrtc::CreateWindowsCoreAudioAudioDeviceModule(_taskQueueFactory.get())) {
+		if (result->Init() == 0) {
+            return result;
+	    }
+    }
+#endif // WEBRTC_WIN
 	if (auto result = check(webrtc::AudioDeviceModule::kPlatformDefaultAudio)) {
 		return result;
 #ifdef WEBRTC_LINUX
@@ -374,7 +382,7 @@ rtc::scoped_refptr<webrtc::AudioDeviceModule> MediaManager::createAudioDeviceMod
 
 void MediaManager::start() {
     const auto weak = std::weak_ptr<MediaManager>(shared_from_this());
-    
+
     // Here we hope that thread outlives the sink
     rtc::Thread *thread = _thread;
     std::unique_ptr<AudioTrackSinkInterfaceImpl> incomingSink(new AudioTrackSinkInterfaceImpl([weak, thread](float level) {
@@ -385,15 +393,17 @@ void MediaManager::start() {
         });
     }));
     _audioChannel->SetRawAudioSink(_ssrcAudio.incoming, std::move(incomingSink));
-    
-	_sendSignalingMessage({ _myVideoFormats });
+
+    _sendSignalingMessage({ _myVideoFormats });
 
 	if (_videoCapture != nullptr) {
         setSendVideo(_videoCapture);
     }
 
     beginStatsTimer(3000);
-    beginLevelsTimer(50);
+    if (_audioLevelUpdated != nullptr) {
+        beginLevelsTimer(50);
+    }
 }
 
 MediaManager::~MediaManager() {
@@ -502,7 +512,7 @@ void MediaManager::beginLevelsTimer(int timeoutMs) {
 
         float effectiveLevel = fmaxf(strong->_currentAudioLevel, strong->_currentMyAudioLevel);
         strong->_audioLevelUpdated(effectiveLevel);
-        
+
         strong->beginLevelsTimer(50);
     }, timeoutMs);
 }
