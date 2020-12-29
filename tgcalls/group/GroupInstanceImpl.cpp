@@ -30,6 +30,7 @@
 #include "VideoCaptureInterfaceImpl.h"
 #include "platform/PlatformInterface.h"
 #include "LogSinkImpl.h"
+#include "AudioDeviceHelper.h"
 
 #include <random>
 #include <sstream>
@@ -1358,47 +1359,7 @@ public:
     void setAudioInputDevice(std::string id) {
 #ifndef WEBRTC_IOS
         withAudioDeviceModule([&](webrtc::AudioDeviceModule *adm) {
-            const auto recording = adm->Recording();
-            if (recording) {
-                adm->StopRecording();
-            }
-            const auto finish = [&] {
-                if (recording) {
-                    adm->InitRecording();
-                    adm->StartRecording();
-                }
-            };
-            if (id == "default" || id.empty()) {
-                if (const auto result = adm->SetRecordingDevice(webrtc::AudioDeviceModule::kDefaultCommunicationDevice)) {
-                    RTC_LOG(LS_ERROR) << "setAudioInputDevice(" << id << "): SetRecordingDevice(kDefaultCommunicationDevice) failed: " << result << ".";
-                } else {
-                    RTC_LOG(LS_INFO) << "setAudioInputDevice(" << id << "): SetRecordingDevice(kDefaultCommunicationDevice) success.";
-                }
-                return finish();
-            }
-            const auto count = adm
-                ? adm->RecordingDevices()
-                : int16_t(-666);
-            if (count <= 0) {
-                RTC_LOG(LS_ERROR) << "setAudioInputDevice(" << id << "): Could not get recording devices count: " << count << ".";
-                return finish();
-            }
-            for (auto i = 0; i != count; ++i) {
-                char name[webrtc::kAdmMaxDeviceNameSize + 1] = { 0 };
-                char guid[webrtc::kAdmMaxGuidSize + 1] = { 0 };
-                adm->RecordingDeviceName(i, name, guid);
-                if (id == guid) {
-                    const auto result = adm->SetRecordingDevice(i);
-                    if (result != 0) {
-                        RTC_LOG(LS_ERROR) << "setAudioInputDevice(" << id << ") name '" << std::string(name) << "' failed: " << result << ".";
-                    } else {
-                        RTC_LOG(LS_INFO) << "setAudioInputDevice(" << id << ") name '" << std::string(name) << "' success.";
-                    }
-                    return finish();
-                }
-            }
-            RTC_LOG(LS_ERROR) << "setAudioInputDevice(" << id << "): Could not find recording device.";
-            return finish();
+            SetAudioInputDeviceById(adm, id);
         });
 #endif
     }
@@ -1406,51 +1367,11 @@ public:
     void setAudioOutputDevice(std::string id) {
 #ifndef WEBRTC_IOS
         withAudioDeviceModule([&](webrtc::AudioDeviceModule *adm) {
-            const auto playing = adm->Playing();
-            if (playing) {
-                adm->StopPlayout();
-            }
-            const auto finish = [&] {
-                if (playing) {
-                    adm->InitPlayout();
-                    adm->StartPlayout();
-                }
-            };
-            if (id == "default" || id.empty()) {
-                if (const auto result = adm->SetPlayoutDevice(webrtc::AudioDeviceModule::kDefaultCommunicationDevice)) {
-                    RTC_LOG(LS_ERROR) << "setAudioOutputDevice(" << id << "): SetPlayoutDevice(kDefaultCommunicationDevice) failed: " << result << ".";
-                } else {
-                    RTC_LOG(LS_INFO) << "setAudioOutputDevice(" << id << "): SetPlayoutDevice(kDefaultCommunicationDevice) success.";
-                }
-                return finish();
-            }
-            const auto count = adm
-                ? adm->PlayoutDevices()
-                : int16_t(-666);
-            if (count <= 0) {
-                RTC_LOG(LS_ERROR) << "setAudioOutputDevice(" << id << "): Could not get playout devices count: " << count << ".";
-                return finish();
-            }
-            for (auto i = 0; i != count; ++i) {
-                char name[webrtc::kAdmMaxDeviceNameSize + 1] = { 0 };
-                char guid[webrtc::kAdmMaxGuidSize + 1] = { 0 };
-                adm->PlayoutDeviceName(i, name, guid);
-                if (id == guid) {
-                    const auto result = adm->SetPlayoutDevice(i);
-                    if (result != 0) {
-                        RTC_LOG(LS_ERROR) << "setAudioOutputDevice(" << id << ") name '" << std::string(name) << "' failed: " << result << ".";
-                    } else {
-                        RTC_LOG(LS_INFO) << "setAudioOutputDevice(" << id << ") name '" << std::string(name) << "' success.";
-                    }
-                    return finish();
-                }
-            }
-            RTC_LOG(LS_ERROR) << "setAudioOutputDevice(" << id << "): Could not find playout device.";
-            return finish();
+            SetAudioOutputDeviceById(adm, id);
         });
 #endif
     }
-    
+
     void setVolume(uint32_t ssrc, double volume) {
         auto current = _audioTrackVolumes.find(ssrc);
         bool updated = false;
@@ -2088,7 +2009,7 @@ private:
     std::map<uint32_t, std::shared_ptr<AudioTrackSinkInterfaceImpl>> _audioTrackSinks;
     std::map<uint32_t, GroupLevelValue> _audioLevels;
     std::map<uint32_t, double> _audioTrackVolumes;
-    
+
 };
 
 GroupInstanceImpl::GroupInstanceImpl(GroupInstanceDescriptor &&descriptor)
