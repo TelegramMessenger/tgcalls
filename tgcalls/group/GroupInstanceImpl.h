@@ -23,10 +23,24 @@ struct GroupConfig {
     FilePath logPath;
 };
 
+struct GroupLevelValue {
+    float level = 0.;
+    bool voice = false;
+};
+
+struct GroupLevelUpdate {
+    uint32_t ssrc = 0;
+    GroupLevelValue value;
+};
+
+struct GroupLevelsUpdate {
+    std::vector<GroupLevelUpdate> updates;
+};
+
 struct GroupInstanceDescriptor {
     GroupConfig config;
     std::function<void(bool)> networkStateUpdated;
-    std::function<void(std::vector<std::pair<uint32_t, std::pair<float, bool>>> const &)> audioLevelsUpdated;
+    std::function<void(GroupLevelsUpdate const &)> audioLevelsUpdated;
     std::string initialInputDeviceId;
     std::string initialOutputDeviceId;
     bool debugIgnoreMissingSsrcs = false;
@@ -121,6 +135,8 @@ public:
     void setAudioInputDevice(std::string id);
     
     void setIncomingVideoOutput(uint32_t ssrc, std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
+    
+    void setVolume(uint32_t ssrc, double volume);
 
     struct AudioDevice {
       enum class Type {Input, Output};

@@ -112,7 +112,7 @@ public:
             memcpy(data.data(), buffer->data(), buffer->size());
             sendPacket(data, sentPacket);
         }));
-        _audioChannel->SetInterface(_audioInterface.get(), webrtc::MediaTransportConfig());
+        _audioChannel->SetInterface(_audioInterface.get());
         
         const uint32_t opusClockrate = 48000;
         const uint16_t opusSdpPayload = 111;
@@ -139,7 +139,7 @@ public:
     ~IncomingAudioChannel() {
         _audioChannel->SetPlayout(false);
         _audioChannel->RemoveRecvStream(_ssrc);
-        _audioChannel->SetInterface(nullptr, webrtc::MediaTransportConfig());
+        _audioChannel->SetInterface(nullptr);
     }
     
 private:
@@ -270,7 +270,7 @@ public:
                 strong->_call->OnSentPacket(sentPacket);
             });
         }));
-        _outgoingAudioChannel->SetInterface(_outgoingAudioInterface.get(), webrtc::MediaTransportConfig());
+        _outgoingAudioChannel->SetInterface(_outgoingAudioInterface.get());
         
         setIsConnected(true);
     }
