@@ -660,7 +660,7 @@ static std::string createSdp(uint32_t sessionId, GroupJoinResponsePayload const 
                         }
                         
                         if (!hasBitrate) {
-                            parameters.push_back(std::make_pair("x-google-max-bitrate", "800"));
+                            parameters.push_back(std::make_pair("x-google-max-bitrate", "2000"));
                             parameters.push_back(std::make_pair("x-google-start-bitrate", "300"));
                         }
                     }
@@ -1868,8 +1868,8 @@ public:
             }
         });
 
-        //beginStatsTimer(100);
         beginLevelsTimer(50);
+        beginTestQualityTimer(2000);
 	}
 
 
@@ -2437,6 +2437,21 @@ public:
             strong->beginLevelsTimer(50);
         }, timeoutMs);
     }
+    
+    void beginTestQualityTimer(int timeoutMs) {
+        const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
+        getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
+            auto strong = weak.lock();
+            if (!strong) {
+                return;
+            }
+
+            strong->_debugQualityValue = !strong->_debugQualityValue;
+            strong->updateRemoteVideoConstaints();
+
+            strong->beginTestQualityTimer(5000);
+        }, timeoutMs);
+    }
 
     void collectStats() {
         const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
@@ -2740,18 +2755,35 @@ public:
         
         std::ostringstream string;
         string << "{" << "\n";
-        string << " colibriClass: \"ReceiverVideoConstraintsChangedEvent\"," << "\n";
-        string << " videoConstraints: [" << "\n";
+        string << " \"colibriClass\": \"ReceiverVideoConstraintsChangedEvent\"," << "\n";
+        string << " \"videoConstraints\": [" << "\n";
         for (size_t i = 0; i < keys.size(); i++) {
             auto it = _videoConstraints.find(keys[i]);
-            int idealHeight = 1280;
+            int idealHeight = 720;
             if (!it->second) {
                 idealHeight = 180;
             }
+            if (_debugQualityValue) {
+                idealHeight = 720;
+            } else {
+                idealHeight = 90;
+            }
+            
+            std::string endpointId;
+            for (auto &participant : _allOtherParticipants) {
+                if (participant.audioSsrc == keys[i]) {
+                    endpointId = participant.endpointId;
+                    break;
+                }
+            }
+            
+            if (endpointId.size() == 0) {
+                continue;
+            }
             
             string << "    {\n";
-            string << "      id: \"" << keys[i] << "\",\n";
-            string << "      idealHeight: " << idealHeight << "\n";
+            string << "      \"id\": \"" << endpointId << "\",\n";
+            string << "      \"idealHeight\": " << idealHeight << "\n";
             string << "    }";
             if (i != keys.size() - 1) {
                 string << ",";
@@ -2829,6 +2861,7 @@ private:
     std::map<uint32_t, GroupLevelValue> _audioLevels;
     
     std::map<uint32_t, bool> _videoConstraints;
+    bool _debugQualityValue = false;
     
     std::map<uint32_t, rtc::scoped_refptr<webrtc::VideoTrackInterface>> _remoteVideoTracks;
     std::map<uint32_t, std::unique_ptr<CustomVideoSinkInterfaceProxyImpl>> _remoteVideoTrackSinks;

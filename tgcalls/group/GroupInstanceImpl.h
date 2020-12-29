@@ -85,6 +85,7 @@ struct GroupJoinPayload {
 };
 
 struct GroupParticipantDescription {
+    std::string endpointId;
     uint32_t audioSsrc = 0;
     std::vector<GroupJoinPayloadVideoPayloadType> videoPayloadTypes;
     std::vector<std::pair<uint32_t, std::string>> videoExtensionMap;
