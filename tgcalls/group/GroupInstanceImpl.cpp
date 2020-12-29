@@ -1375,16 +1375,15 @@ public:
     void setVolume(uint32_t ssrc, double volume) {
         auto current = _audioTrackVolumes.find(ssrc);
         bool updated = false;
-        if (current != _audioTrackVolumes.end()) {
-            if (abs(current->second - volume) > 0.001) {
-                updated = true;
-            }
-        } else {
-            if (volume < 1.0 - 0.001) {
-                updated = true;
-            }
-        }
-        if (updated) {
+        const auto currentValue = (current != _audioTrackVolumes.end())
+            ? current->second
+            : 1.;
+        if (abs(currentValue - volume) > 0.001) {
+            //if (abs(volume - 1.) > 0.001) {
+            //    _audioTrackVolumes[ssrc] = volume;
+            //} else {
+            //    _audioTrackVolumes.erase(ssrc);
+            //}
             _audioTrackVolumes[ssrc] = volume;
             auto track = _audioTracks.find(ssrc);
             if (track != _audioTracks.end()) {
