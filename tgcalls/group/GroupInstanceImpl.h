@@ -90,6 +90,7 @@ struct GroupParticipantDescription {
     std::vector<GroupJoinPayloadVideoPayloadType> videoPayloadTypes;
     std::vector<std::pair<uint32_t, std::string>> videoExtensionMap;
     std::vector<GroupJoinPayloadVideoSourceGroup> videoSourceGroups;
+    bool isRemoved = false;
 };
 
 struct GroupJoinResponseCandidate {
@@ -138,6 +139,7 @@ public:
     void setIncomingVideoOutput(uint32_t ssrc, std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
     
     void setVolume(uint32_t ssrc, double volume);
+    void setFullSizeVideoSsrc(uint32_t ssrc);
 
     struct AudioDevice {
       enum class Type {Input, Output};
