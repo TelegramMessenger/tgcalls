@@ -24,6 +24,10 @@
 #include "common_audio/vad/include/webrtc_vad.h"
 #include "modules/audio_processing/agc2/vad_with_level.h"
 
+#ifdef WEBRTC_WIN
+#include "rtc_base/win/scoped_com_initializer.h"
+#endif // WEBRTC_WIN
+
 #include "ThreadLocalObject.h"
 #include "Manager.h"
 #include "NetworkManager.h"
@@ -594,7 +598,7 @@ static const int kVadResultHistoryLength = 8;
 
 class CombinedVad {
 private:
-    webrtc::VadWithLevel _vadWithLevel;
+    webrtc::VadLevelAnalyzer _vadWithLevel;
     float _vadResultHistory[kVadResultHistoryLength];
 
 public:
@@ -1093,6 +1097,10 @@ public:
                 return (result && (result->Init() == 0)) ? result : nullptr;
             };
 #ifdef WEBRTC_WIN
+			if (!_comInitializer) {
+				_comInitializer = std::make_unique<webrtc::ScopedCOMInitializer>(
+					webrtc::ScopedCOMInitializer::kMTA);
+			}
             if (auto result = webrtc::CreateWindowsCoreAudioAudioDeviceModule(dependencies.task_queue_factory.get())) {
                 if (result->Init() == 0) {
                     _adm_use_withAudioDeviceModule = new rtc::RefCountedObject<WrappedAudioDeviceModule>(result);
@@ -1116,6 +1124,10 @@ public:
 		}
         _adm_thread->Invoke<void>(RTC_FROM_HERE, [&] {
             _adm_use_withAudioDeviceModule = nullptr;
+
+#ifdef WEBRTC_WIN
+            _comInitializer = nullptr;
+#endif // WEBRTC_WIN
         });
     }
 
@@ -1233,7 +1245,6 @@ public:
         dependencies.event_log_factory =
             std::make_unique<webrtc::RtcEventLogFactory>(dependencies.task_queue_factory.get());
         dependencies.network_controller_factory = nullptr;
-        dependencies.media_transport_factory = nullptr;
 
         _nativeFactory = webrtc::CreateModularPeerConnectionFactory(std::move(dependencies));
 
@@ -2003,6 +2014,10 @@ private:
 
     rtc::Thread *_adm_thread = nullptr;
     rtc::scoped_refptr<webrtc::AudioDeviceModule> _adm_use_withAudioDeviceModule;
+
+#ifdef WEBRTC_WIN
+    std::unique_ptr<webrtc::ScopedCOMInitializer> _comInitializer;
+#endif // WEBRTC_WIN
 
     std::map<uint32_t, rtc::scoped_refptr<webrtc::AudioTrackInterface>> _audioTracks;
     std::map<uint32_t, std::shared_ptr<AudioTrackSinkInterfaceImpl>> _audioTrackSinks;
