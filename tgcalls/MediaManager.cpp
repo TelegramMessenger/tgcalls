@@ -167,6 +167,7 @@ MediaManager::MediaManager(
 	std::function<void(Message &&)> sendTransportMessage,
     std::function<void(int)> signalBarsUpdated,
     std::function<void(float)> audioLevelUpdated,
+    std::function<rtc::scoped_refptr<webrtc::AudioDeviceModule>(webrtc::TaskQueueFactory*)> createAudioDeviceModule,
     bool enableHighBitrateVideo,
     std::vector<std::string> preferredCodecs) :
 _thread(thread),
@@ -176,6 +177,7 @@ _sendSignalingMessage(std::move(sendSignalingMessage)),
 _sendTransportMessage(std::move(sendTransportMessage)),
 _signalBarsUpdated(std::move(signalBarsUpdated)),
 _audioLevelUpdated(std::move(audioLevelUpdated)),
+_createAudioDeviceModule(std::move(createAudioDeviceModule)),
 _protocolVersion(protocolVersion),
 _outgoingVideoState(videoCapture ? VideoState::Active : VideoState::Inactive),
 _videoCapture(std::move(videoCapture)),
@@ -274,7 +276,7 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
 
     mediaDeps.audio_processing = builder.Create();
 
-	_audioDeviceModule = createAudioDeviceModule();
+	_audioDeviceModule = this->createAudioDeviceModule();
 	if (!_audioDeviceModule) {
 		return;
 	}
@@ -358,31 +360,20 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
 }
 
 rtc::scoped_refptr<webrtc::AudioDeviceModule> MediaManager::createAudioDeviceModule() {
-	const auto check = [&](webrtc::AudioDeviceModule::AudioLayer layer) {
-		auto result = webrtc::AudioDeviceModule::Create(
+	const auto create = [&](webrtc::AudioDeviceModule::AudioLayer layer) {
+		return webrtc::AudioDeviceModule::Create(
 			layer,
-			_taskQueueFactory.get());
-		return (result && (result->Init() == 0)) ? result : nullptr;
+            _taskQueueFactory.get());
 	};
-#ifdef WEBRTC_WIN
-	if (!_comInitializer) {
-		_comInitializer = std::make_unique<webrtc::ScopedCOMInitializer>(
-			webrtc::ScopedCOMInitializer::kMTA);
-	}
-	if (auto result = webrtc::CreateWindowsCoreAudioAudioDeviceModule(_taskQueueFactory.get())) {
-		if (result->Init() == 0) {
+	const auto check = [&](const rtc::scoped_refptr<webrtc::AudioDeviceModule> &result) {
+        return (result && result->Init() == 0) ? result : nullptr;
+	};
+	if (_createAudioDeviceModule) {
+        if (const auto result = check(_createAudioDeviceModule(_taskQueueFactory.get()))) {
             return result;
-	    }
-    }
-#endif // WEBRTC_WIN
-	if (auto result = check(webrtc::AudioDeviceModule::kPlatformDefaultAudio)) {
-		return result;
-#ifdef WEBRTC_LINUX
-	} else if (auto result = check(webrtc::AudioDeviceModule::kLinuxAlsaAudio)) {
-		return result;
-#endif // WEBRTC_LINUX
+        }
 	}
-	return nullptr;
+    return check(create(webrtc::AudioDeviceModule::kPlatformDefaultAudio));
 }
 
 void MediaManager::start() {
@@ -454,10 +445,6 @@ MediaManager::~MediaManager() {
     _videoChannel->SetInterface(nullptr);
 
     _audioDeviceModule = nullptr;
-
-#ifdef WEBRTC_WIN
-    _comInitializer = nullptr;
-#endif // WEBRTC_WIN
 }
 
 void MediaManager::setIsConnected(bool isConnected) {

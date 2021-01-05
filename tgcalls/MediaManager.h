@@ -7,10 +7,6 @@
 #include "api/transport/field_trial_based_config.h"
 #include "pc/rtp_sender.h"
 
-#ifdef WEBRTC_WIN
-#include "rtc_base/win/scoped_com_initializer.h"
-#endif // WEBRTC_WIN
-
 #include "Instance.h"
 #include "Message.h"
 #include "VideoCaptureInterface.h"
@@ -52,6 +48,7 @@ public:
 		std::function<void(Message &&)> sendTransportMessage,
         std::function<void(int)> signalBarsUpdated,
         std::function<void(float)> audioLevelUpdated,
+		std::function<rtc::scoped_refptr<webrtc::AudioDeviceModule>(webrtc::TaskQueueFactory*)> createAudioDeviceModule,
         bool enableHighBitrateVideo,
         std::vector<std::string> preferredCodecs);
 	~MediaManager();
@@ -126,14 +123,11 @@ private:
 	std::unique_ptr<webrtc::RtcEventLogNull> _eventLog;
 	std::unique_ptr<webrtc::TaskQueueFactory> _taskQueueFactory;
 
-#ifdef WEBRTC_WIN
-	std::unique_ptr<webrtc::ScopedCOMInitializer> _comInitializer;
-#endif // WEBRTC_WIN
-
 	std::function<void(Message &&)> _sendSignalingMessage;
 	std::function<void(Message &&)> _sendTransportMessage;
     std::function<void(int)> _signalBarsUpdated;
     std::function<void(float)> _audioLevelUpdated;
+	std::function<rtc::scoped_refptr<webrtc::AudioDeviceModule>(webrtc::TaskQueueFactory*)> _createAudioDeviceModule;
 
 	SSRC _ssrcAudio;
 	SSRC _ssrcVideo;

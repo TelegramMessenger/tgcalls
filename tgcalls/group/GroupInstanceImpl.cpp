@@ -24,10 +24,6 @@
 #include "common_audio/vad/include/webrtc_vad.h"
 #include "modules/audio_processing/agc2/vad_with_level.h"
 
-#ifdef WEBRTC_WIN
-#include "rtc_base/win/scoped_com_initializer.h"
-#endif // WEBRTC_WIN
-
 #include "ThreadLocalObject.h"
 #include "Manager.h"
 #include "NetworkManager.h"
@@ -1049,7 +1045,8 @@ public:
     _networkStateUpdated(descriptor.networkStateUpdated),
     _audioLevelsUpdated(descriptor.audioLevelsUpdated),
     _initialInputDeviceId(descriptor.initialInputDeviceId),
-    _initialOutputDeviceId(descriptor.initialOutputDeviceId) {
+    _initialOutputDeviceId(descriptor.initialOutputDeviceId),
+    _createAudioDeviceModule(descriptor.createAudioDeviceModule) {
 		auto generator = std::mt19937(std::random_device()());
 		auto distribution = std::uniform_int_distribution<uint32_t>();
 		do {
@@ -1090,30 +1087,26 @@ public:
             return false;
         }
         _adm_thread->Invoke<void>(RTC_FROM_HERE, [&] {
-            const auto check = [&](webrtc::AudioDeviceModule::AudioLayer layer) {
-                auto result = webrtc::AudioDeviceModule::Create(
+            const auto create = [&](webrtc::AudioDeviceModule::AudioLayer layer) {
+                return webrtc::AudioDeviceModule::Create(
                     layer,
                     dependencies.task_queue_factory.get());
-                return (result && (result->Init() == 0)) ? result : nullptr;
             };
-#ifdef WEBRTC_WIN
-			if (!_comInitializer) {
-				_comInitializer = std::make_unique<webrtc::ScopedCOMInitializer>(
-					webrtc::ScopedCOMInitializer::kMTA);
-			}
-            if (auto result = webrtc::CreateWindowsCoreAudioAudioDeviceModule(dependencies.task_queue_factory.get())) {
-                if (result->Init() == 0) {
-                    _adm_use_withAudioDeviceModule = new rtc::RefCountedObject<WrappedAudioDeviceModule>(result);
-                    return;
+			const auto finalize = [&](const rtc::scoped_refptr<webrtc::AudioDeviceModule> &result) {
+				_adm_use_withAudioDeviceModule = new rtc::RefCountedObject<WrappedAudioDeviceModule>(result);
+			};
+            const auto check = [&](const rtc::scoped_refptr<webrtc::AudioDeviceModule> &result) {
+                if (!result || result->Init() != 0) {
+                    return false;
                 }
-            }
-#endif // WEBRTC_WIN
-            if (auto result = check(webrtc::AudioDeviceModule::kPlatformDefaultAudio)) {
-                _adm_use_withAudioDeviceModule = new rtc::RefCountedObject<WrappedAudioDeviceModule>(result);
-#ifdef WEBRTC_LINUX
-            } else if (auto result = check(webrtc::AudioDeviceModule::kLinuxAlsaAudio)) {
-                _adm_use_withAudioDeviceModule = new rtc::RefCountedObject<WrappedAudioDeviceModule>(result);
-#endif // WEBRTC_LINUX
+                finalize(result);
+                return true;
+            };
+            if (_createAudioDeviceModule
+                && check(_createAudioDeviceModule(dependencies.task_queue_factory.get()))) {
+                return;
+            } else if (check(create(webrtc::AudioDeviceModule::kPlatformDefaultAudio))) {
+                return;
             }
         });
         return (_adm_use_withAudioDeviceModule != nullptr);
@@ -1124,10 +1117,6 @@ public:
 		}
         _adm_thread->Invoke<void>(RTC_FROM_HERE, [&] {
             _adm_use_withAudioDeviceModule = nullptr;
-
-#ifdef WEBRTC_WIN
-            _comInitializer = nullptr;
-#endif // WEBRTC_WIN
         });
     }
 
@@ -1219,12 +1208,12 @@ public:
         webrtc::AudioProcessing *apm = builder.Create();
 
         webrtc::AudioProcessing::Config audioConfig;
-        webrtc::AudioProcessing::Config::NoiseSuppression noiseSuppression;
-        noiseSuppression.enabled = true;
-        noiseSuppression.level = webrtc::AudioProcessing::Config::NoiseSuppression::kHigh;
-        audioConfig.noise_suppression = noiseSuppression;
+		webrtc::AudioProcessing::Config::NoiseSuppression noiseSuppression;
+		noiseSuppression.enabled = true;
+		noiseSuppression.level = webrtc::AudioProcessing::Config::NoiseSuppression::kHigh;
+		audioConfig.noise_suppression = noiseSuppression;
 
-        audioConfig.high_pass_filter.enabled = true;
+		audioConfig.high_pass_filter.enabled = true;
 
         apm->ApplyConfig(audioConfig);
 
@@ -2012,12 +2001,9 @@ private:
     rtc::scoped_refptr<webrtc::AudioTrackInterface> _localAudioTrack;
     rtc::scoped_refptr<webrtc::RtpSenderInterface> _localAudioTrackSender;
 
+    std::function<rtc::scoped_refptr<webrtc::AudioDeviceModule>(webrtc::TaskQueueFactory*)> _createAudioDeviceModule;
     rtc::Thread *_adm_thread = nullptr;
     rtc::scoped_refptr<webrtc::AudioDeviceModule> _adm_use_withAudioDeviceModule;
-
-#ifdef WEBRTC_WIN
-    std::unique_ptr<webrtc::ScopedCOMInitializer> _comInitializer;
-#endif // WEBRTC_WIN
 
     std::map<uint32_t, rtc::scoped_refptr<webrtc::AudioTrackInterface>> _audioTracks;
     std::map<uint32_t, std::shared_ptr<AudioTrackSinkInterfaceImpl>> _audioTrackSinks;
