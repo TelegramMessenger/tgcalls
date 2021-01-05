@@ -189,7 +189,7 @@ private:
     
     _metalView = [VideoMetalView createMetalView:self.bounds];
     _metalView.delegate = self;
-    _metalView.contentMode = UIViewContentModeScaleAspectFill;
+    _metalView.contentMode = UIViewContentModeScaleToFill;
     [self addSubview:_metalView];
     _videoFrameSize = CGSizeZero;
 }

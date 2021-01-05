@@ -136,7 +136,7 @@ public:
     void setAudioOutputDevice(std::string id);
     void setAudioInputDevice(std::string id);
     
-    void setIncomingVideoOutput(uint32_t ssrc, std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
+    void addIncomingVideoOutput(uint32_t ssrc, std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
     
     void setVolume(uint32_t ssrc, double volume);
     void setFullSizeVideoSsrc(uint32_t ssrc);

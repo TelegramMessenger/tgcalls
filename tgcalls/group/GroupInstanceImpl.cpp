@@ -559,8 +559,8 @@ static std::string createSdp(uint32_t sessionId, GroupJoinResponsePayload const 
                 appendSdp(sdp, "a=rtcp-mux");
                 appendSdp(sdp, "a=rtcp-rsize");
                 appendSdp(sdp, "a=extmap:1 urn:ietf:params:rtp-hdrext:ssrc-audio-level");
-                appendSdp(sdp, "a=extmap:3 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time");
-                appendSdp(sdp, "a=extmap:5 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01");
+                appendSdp(sdp, "a=extmap:2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time");
+                appendSdp(sdp, "a=extmap:3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01");
                 
                 bool addSsrcs = false;
                 if (stream.isRemoved) {
@@ -665,7 +665,7 @@ static std::string createSdp(uint32_t sessionId, GroupJoinResponsePayload const 
                         
                         if (!hasBitrate) {
                             parameters.push_back(std::make_pair("x-google-max-bitrate", "1200"));
-                            parameters.push_back(std::make_pair("x-google-start-bitrate", "300"));
+                            //parameters.push_back(std::make_pair("x-google-start-bitrate", "300"));
                         }
                     }
                     
@@ -1463,24 +1463,41 @@ public:
     }
 
     virtual void OnFrame(const webrtc::VideoFrame& frame) override {
-        if (_impl) {
-            _impl->OnFrame(frame);
+        _lastFrame = frame;
+        for (int i = (int)(_sinks.size()) - 1; i >= 0; i--) {
+            auto strong = _sinks[i].lock();
+            if (!strong) {
+                _sinks.erase(_sinks.begin() + i);
+            } else {
+                strong->OnFrame(frame);
+            }
         }
     }
 
     virtual void OnDiscardedFrame() override {
-        if (_impl) {
-            _impl->OnDiscardedFrame();
+        for (int i = (int)(_sinks.size()) - 1; i >= 0; i--) {
+            auto strong = _sinks[i].lock();
+            if (!strong) {
+                _sinks.erase(_sinks.begin() + i);
+            } else {
+                strong->OnDiscardedFrame();
+            }
         }
     }
 
-    void setSink(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> impl) {
-        _impl = impl;
+    void addSink(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> impl) {
+        _sinks.push_back(impl);
+        if (_lastFrame) {
+            auto strong = impl.lock();
+            if (strong) {
+                strong->OnFrame(_lastFrame.value());
+            }
+        }
     }
 
 private:
-    std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _impl;
-
+    std::vector<std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>> _sinks;
+    absl::optional<webrtc::VideoFrame> _lastFrame;
 };
 
 } // namespace
@@ -1961,13 +1978,13 @@ public:
 #endif
     }
     
-    void setIncomingVideoOutput(uint32_t ssrc, std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+    void addIncomingVideoOutput(uint32_t ssrc, std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
         auto current = _remoteVideoTrackSinks.find(ssrc);
         if (current != _remoteVideoTrackSinks.end()) {
-            current->second->setSink(sink);
+            current->second->addSink(sink);
         } else {
             std::unique_ptr<CustomVideoSinkInterfaceProxyImpl> sinkProxy(new CustomVideoSinkInterfaceProxyImpl());
-            sinkProxy->setSink(sink);
+            sinkProxy->addSink(sink);
             _remoteVideoTrackSinks[ssrc] = std::move(sinkProxy);
         }
     }
@@ -2050,26 +2067,25 @@ public:
         generatedSsrcStringStream << _mainStreamAudioSsrc;
         auto generatedSsrcString = generatedSsrcStringStream.str();
         
-        bool isAudio = false;
-        bool isVideo = false;
         bool hasVideo = false;
+        std::string currentMid;
         int insertVideoLinesAtIndex = 0;
         for (auto &line : lines) {
             auto adjustedLine = line;
             
-            if (adjustedLine.find("m=audio") == 0) {
-                isAudio = true;
-                isVideo = false;
-            } else if (adjustedLine.find("m=video") == 0) {
-                isAudio = false;
-                isVideo = true;
-            } else if (adjustedLine.find("m=application") == 0) {
-                insertVideoLinesAtIndex = (int)resultSdp.size();
-                isAudio = false;
-                isVideo = false;
+            if (adjustedLine.find("m=") == 0) {
+                currentMid = "";
+            }
+            if (adjustedLine.find("a=mid:") == 0) {
+                currentMid = adjustedLine;
+                currentMid.replace(0, std::string("a=mid:").size(), "");
             }
             
-            if (isAudio) {
+            if (adjustedLine.find("m=application") == 0) {
+                insertVideoLinesAtIndex = (int)resultSdp.size();
+            }
+            
+            if (currentMid == "0") {
                 if (adjustedLine.find("a=ssrc:") == 0) {
                     int startIndex = 7;
                     int i = startIndex;
@@ -2082,19 +2098,21 @@ public:
                     if (i >= startIndex) {
                         adjustedLine.replace(startIndex, i - startIndex, generatedSsrcString);
                     }
-                } else if (adjustedLine.find("a=rtcp-fb:") == 0) {
-                    adjustedLine.clear();
                 }
-            } else if (isVideo) {
+            } else if (currentMid == "1") {
                 if (adjustedLine.find("a=ssrc:") == 0 || adjustedLine.find("a=ssrc-group:") == 0) {
                     hasVideo = true;
                     adjustedLine.clear();
                 }
             }
             
+            if (adjustedLine.find("a=candidate") == 0) {
+                adjustedLine.clear();
+            }
+            
             if (adjustedLine.size() != 0) {
                 appendSdp(resultSdp, adjustedLine);
-                if (isVideo) {
+                if (currentMid == "1") {
                     insertVideoLinesAtIndex = (int)resultSdp.size();
                 }
             }
@@ -2109,7 +2127,7 @@ public:
             sim.semantics = "SIM";
             sim.ssrcs.push_back(_mainStreamAudioSsrc + ssrcDistance + 0);
             sim.ssrcs.push_back(_mainStreamAudioSsrc + ssrcDistance + 2);
-            sim.ssrcs.push_back(_mainStreamAudioSsrc + ssrcDistance + 4);
+            //sim.ssrcs.push_back(_mainStreamAudioSsrc + ssrcDistance + 4);
             videoSourceGroups.push_back(sim);
             
             GroupJoinPayloadVideoSourceGroup fid0;
@@ -2128,7 +2146,7 @@ public:
             fid2.semantics = "FID";
             fid2.ssrcs.push_back(_mainStreamAudioSsrc + ssrcDistance + 4);
             fid2.ssrcs.push_back(_mainStreamAudioSsrc + ssrcDistance + 5);
-            videoSourceGroups.push_back(fid2);
+            //videoSourceGroups.push_back(fid2);
             
             std::string streamId = "video0";
             
@@ -2307,9 +2325,9 @@ public:
         
         bool updated = false;
         for (auto &ssrc : addedSsrcs) {
-            if (setVideoConstraint(ssrc, false, false)) {
+            /*if (setVideoConstraint(ssrc, false, false)) {
                 updated = true;
-            }
+            }*/
         }
         if (updated) {
             updateRemoteVideoConstaints();
@@ -2800,9 +2818,6 @@ public:
         if (!_localDataChannelIsOpen) {
             return;
         }
-#if !TARGET_OS_SIMULATOR
-        return;
-#endif
         
         std::vector<uint32_t> keys;
         for (auto &it : _videoConstraints) {
@@ -2810,21 +2825,19 @@ public:
         }
         std::sort(keys.begin(), keys.end());
         
+        std::string pinnedEndpoint;
+        
         std::ostringstream string;
         string << "{" << "\n";
         string << " \"colibriClass\": \"ReceiverVideoConstraintsChangedEvent\"," << "\n";
         string << " \"videoConstraints\": [" << "\n";
+        bool isFirst = true;
         for (size_t i = 0; i < keys.size(); i++) {
             auto it = _videoConstraints.find(keys[i]);
             int idealHeight = 720;
             if (!it->second) {
                 idealHeight = 180;
             }
-            /*if (_debugQualityValue) {
-                idealHeight = 720;
-            } else {
-                idealHeight = 180;
-            }*/
             
             std::string endpointId;
             for (auto &participant : _allOtherParticipants) {
@@ -2841,13 +2854,17 @@ public:
                 continue;
             }
             
+            if (isFirst) {
+                isFirst = false;
+            } else {
+                if (i != 0) {
+                    string << ",";
+                }
+            }
             string << "    {\n";
             string << "      \"id\": \"" << endpointId << "\",\n";
             string << "      \"idealHeight\": " << idealHeight << "\n";
             string << "    }";
-            if (i != keys.size() - 1) {
-                string << ",";
-            }
             string << "\n";
         }
         string << " ]" << "\n";
@@ -2858,6 +2875,21 @@ public:
         
         webrtc::DataBuffer buffer(result, false);
         _localDataChannel->Send(buffer);
+        
+        /*if (pinnedEndpoint.size() != 0) {
+            std::ostringstream string;
+            string << "{" << "\n";
+            string << " \"colibriClass\": \"PinnedEndpointChangedEvent\"," << "\n";
+            string << " \"pinnedEndpoint\": \"" << pinnedEndpoint << "\"" << "\n";
+            string << "}";
+            
+            std::string result = string.str();
+            
+            RTC_LOG(LS_INFO) << "DataChannel send message: " << result;
+            
+            webrtc::DataBuffer buffer(result, false);
+            _localDataChannel->Send(buffer);
+        }*/
     }
 
 private:
@@ -3005,9 +3037,9 @@ void GroupInstanceImpl::setAudioOutputDevice(std::string id) {
     });
 }
 
-void GroupInstanceImpl::setIncomingVideoOutput(uint32_t ssrc, std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+void GroupInstanceImpl::addIncomingVideoOutput(uint32_t ssrc, std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
     _manager->perform(RTC_FROM_HERE, [ssrc, sink](GroupInstanceManager *manager) {
-        manager->setIncomingVideoOutput(ssrc, sink);
+        manager->addIncomingVideoOutput(ssrc, sink);
     });
 }
 
