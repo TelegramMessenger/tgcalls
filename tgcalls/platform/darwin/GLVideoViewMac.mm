@@ -86,7 +86,7 @@ static CGSize aspectFilled(CGSize from, CGSize to) {
     return NSMakeSize(ceil(to.width * scale), ceil(to.height * scale));
 }
 static CGSize aspectFitted(CGSize from, CGSize to) {
-    CGFloat scale = MAX(from.width / MAX(1.0, to.width), from.height / MAX(1.0, to.height));
+    CGFloat scale = MIN(from.width / MAX(1.0, to.width), from.height / MAX(1.0, to.height));
     return NSMakeSize(ceil(to.width * scale), ceil(to.height * scale));
 }
 
@@ -400,8 +400,10 @@ static CVReturn OnDisplayLinkFired(CVDisplayLinkRef displayLink,
         
         NSSize size = _currentSize;
         NSSize frameSize = self.frame.size;
-        if ( self.glView.layer.contentsGravity == kCAGravityResizeAspectFill) {
+        if ( [self.glView.layer.contentsGravity isEqualToString:kCAGravityResizeAspectFill]) {
             size = aspectFitted(frameSize, _currentSize);
+        } else if ([self.glView.layer.contentsGravity isEqualToString:kCAGravityResizeAspect]) {
+            size = aspectFilled(_currentSize, frameSize);
         } else {
             size = aspectFilled(frameSize, _currentSize);
         }
