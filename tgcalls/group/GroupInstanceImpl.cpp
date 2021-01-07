@@ -1315,7 +1315,8 @@ public:
             for (auto &it : _peerConnection->GetTransceivers()) {
                 if (it->media_type() == cricket::MediaType::MEDIA_TYPE_AUDIO) {
                     if (_localAudioTrackSender.get() == it->sender().get()) {
-                        it->SetDirection(webrtc::RtpTransceiverDirection::kRecvOnly);
+                        const auto error = it->SetDirectionWithError(webrtc::RtpTransceiverDirection::kRecvOnly);
+                        (void)error;
                     }
 
                     break;
@@ -1881,7 +1882,8 @@ public:
                 if (_localAudioTrackSender.get() == it->sender().get()) {
                     if (isMuted) {
                         /*if (it->direction() == webrtc::RtpTransceiverDirection::kSendRecv) {
-                            it->SetDirection(webrtc::RtpTransceiverDirection::kRecvOnly);
+                            const auto error = it->SetDirectionWithError(webrtc::RtpTransceiverDirection::kRecvOnly);
+                            (void)error;
 
                             applyLocalSdp();
 
@@ -1889,7 +1891,8 @@ public:
                         }*/
                     } else {
                         if (it->direction() == webrtc::RtpTransceiverDirection::kRecvOnly) {
-                            it->SetDirection(webrtc::RtpTransceiverDirection::kSendRecv);
+                            const auto error = it->SetDirectionWithError(webrtc::RtpTransceiverDirection::kSendRecv);
+                            (void)error;
 
                             applyLocalSdp();
 
