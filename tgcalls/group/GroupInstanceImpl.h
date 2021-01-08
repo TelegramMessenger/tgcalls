@@ -46,6 +46,7 @@ struct GroupInstanceDescriptor {
     bool debugIgnoreMissingSsrcs = false;
     std::shared_ptr<VideoCaptureInterface> videoCapture;
     std::function<void(std::vector<uint32_t> const &)> incomingVideoSourcesUpdated;
+    std::function<void(std::vector<uint32_t> const &)> participantDescriptionsRequired;
 };
 
 struct GroupJoinPayloadFingerprint {
@@ -133,6 +134,7 @@ public:
     void removeSsrcs(std::vector<uint32_t> ssrcs);
 
     void setIsMuted(bool isMuted);
+    void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture, std::function<void(GroupJoinPayload)> completion);
     void setAudioOutputDevice(std::string id);
     void setAudioInputDevice(std::string id);
     
