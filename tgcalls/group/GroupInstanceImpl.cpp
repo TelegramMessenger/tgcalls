@@ -791,7 +791,7 @@ static std::string parseJoinResponseIntoSdp(uint32_t sessionId, GroupJoinPayload
     mainStream.isVideo = false;
     bundleStreams.push_back(mainStream);
     
-    if (dataChannelMid.has_value()) {
+    if (dataChannelMid.has_value() && dataChannelMid.value() == "1") {
         StreamSpec dataStream;
         dataStream.mLine = dataChannelMid.value();
         dataStream.isMain = false;
@@ -820,6 +820,19 @@ static std::string parseJoinResponseIntoSdp(uint32_t sessionId, GroupJoinPayload
             mainVideoStream.isRemoved = joinPayload.videoSourceGroups.size() == 0;
             bundleStreams.push_back(mainVideoStream);
         }
+    }
+    
+    if (dataChannelMid.has_value() && dataChannelMid.value() == "2") {
+        StreamSpec dataStream;
+        dataStream.mLine = dataChannelMid.value();
+        dataStream.isMain = false;
+        dataStream.isOutgoing = true;
+        dataStream.streamId = 0;
+        dataStream.ssrc = 0;
+        dataStream.isRemoved = false;
+        dataStream.isData = true;
+        dataStream.isVideo = false;
+        bundleStreams.push_back(dataStream);
     }
 
     for (auto &participant : allOtherParticipants) {
@@ -938,17 +951,39 @@ public:
 
 private:
     void handleMessage(const std::string &message) {
-        const std::string pattern = "Failed to demux RTP packet: PT=111 SSRC=";
+        const std::string pattern = "Failed to demux RTP packet:";
+        const std::string ssrcPattern = "SSRC=";
         auto index = message.find(pattern);
         if (index != std::string::npos) {
+            index = message.find(ssrcPattern);
+            if (index != std::string::npos) {
+                std::string string = message;
+                string.erase(0, index + ssrcPattern.size());
+                
+                std::istringstream stream(string);
+                uint32_t ssrc = 0;
+                stream >> ssrc;
+                if (ssrc != 0) {
+                    _onMissingSsrc(ssrc);
+                }
+            }
+            return;
+        }
+        
+        const std::string pattern2 = "receive_rtp_config_ lookup failed for ssrc ";
+        index = message.find(pattern2);
+        if (index != std::string::npos) {
             std::string string = message;
-            string.erase(0, index + pattern.size());
+            string.erase(0, index + pattern2.size());
+            
             std::istringstream stream(string);
             uint32_t ssrc = 0;
             stream >> ssrc;
             if (ssrc != 0) {
                 _onMissingSsrc(ssrc);
             }
+            
+            return;
         }
     }
     
@@ -1675,11 +1710,13 @@ public:
 
         webrtc::field_trial::InitFieldTrialsFromString(
             //"WebRTC-Audio-SendSideBwe/Enabled/"
-            "WebRTC-Audio-Allocation/min:6kbps,max:32kbps/"
+            "WebRTC-Audio-Allocation/min:32kbps,max:32kbps/"
             "WebRTC-Audio-OpusMinPacketLossRate/Enabled-1/"
             //"WebRTC-FlexFEC-03/Enabled/"
             //"WebRTC-FlexFEC-03-Advertised/Enabled/"
             "WebRTC-PcFactoryDefaultBitrates/min:6kbps,start:32kbps,max:32kbps/"
+            "WebRTC-Video-DiscardPacketsWithUnknownSsrc/Enabled/"
+            "WebRTC-Video-BufferPacketsWithUnknownSsrc/Enabled/"
         );
 
         PlatformInterface::SharedInstance()->configurePlatformAudio();
@@ -2304,6 +2341,11 @@ public:
                         
                         if (strong->_localVideoTrackTransceiver) {
                             strong->_localVideoMid = strong->_localVideoTrackTransceiver->mid();
+                            if (strong->_localVideoMid && strong->_localVideoMid.value() == "1") {
+                                strong->_localDataChannelMid = "2";
+                            } else {
+                                strong->_localDataChannelMid = "1";
+                            }
                         } else {
                             strong->_localVideoMid.reset();
                         }
@@ -2441,6 +2483,11 @@ public:
                         
                         if (strong->_localVideoTrackTransceiver) {
                             strong->_localVideoMid = strong->_localVideoTrackTransceiver->mid();
+                            if (strong->_localVideoMid && strong->_localVideoMid.value() == "1") {
+                                strong->_localDataChannelMid = "2";
+                            } else {
+                                strong->_localDataChannelMid = "1";
+                            }
                         } else {
                             strong->_localVideoMid.reset();
                         }
@@ -2837,6 +2884,8 @@ public:
         if (_videoCapture) {
             VideoCaptureInterfaceObject *videoCaptureImpl = GetVideoCaptureAssumingSameThread(_videoCapture.get());
             
+            //_videoCapture->setPreferredAspectRatio(1280.0f / 720.0f);
+            
             _localVideoTrack = _nativeFactory->CreateVideoTrack("video0", videoCaptureImpl->source());
             _localVideoTrack->set_enabled(true);
             webrtc::RtpTransceiverInit videoInit;
@@ -2846,7 +2895,6 @@ public:
                 for (auto &it : _peerConnection->GetTransceivers()) {
                     if (it->media_type() == cricket::MediaType::MEDIA_TYPE_VIDEO) {
                         if (_localVideoTrackTransceiver->sender().get() == it->sender().get()) {
-                            _localVideoMid = _localVideoTrackTransceiver->mid();
                             it->SetDirectionWithError(webrtc::RtpTransceiverDirection::kSendOnly);
                             
                             auto capabilities = _nativeFactory->GetRtpSenderCapabilities(
