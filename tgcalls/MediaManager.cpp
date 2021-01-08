@@ -332,7 +332,7 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
 	audioSendPrameters.options.echo_cancellation = true;
 	//audioSendPrameters.options.experimental_ns = false;
 	audioSendPrameters.options.noise_suppression = true;
-	//audioSendPrameters.options.auto_gain_control = true;
+	audioSendPrameters.options.auto_gain_control = true;
 	//audioSendPrameters.options.highpass_filter = false;
 	audioSendPrameters.options.typing_detection = false;
 	//audioSendPrameters.max_bandwidth_bps = 16000;
