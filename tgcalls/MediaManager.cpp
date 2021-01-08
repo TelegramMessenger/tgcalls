@@ -209,7 +209,7 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
 
 	webrtc::field_trial::InitFieldTrialsFromString(
 		"WebRTC-Audio-SendSideBwe/Enabled/"
-		"WebRTC-Audio-Allocation/min:6kbps,max:32kbps/"
+		"WebRTC-Audio-Allocation/min:32kbps,max:32kbps/"
 		"WebRTC-Audio-OpusMinPacketLossRate/Enabled-1/"
 		"WebRTC-FlexFEC-03/Enabled/"
 		"WebRTC-FlexFEC-03-Advertised/Enabled/"
@@ -332,7 +332,7 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
 	audioSendPrameters.options.echo_cancellation = true;
 	//audioSendPrameters.options.experimental_ns = false;
 	audioSendPrameters.options.noise_suppression = true;
-	audioSendPrameters.options.auto_gain_control = true;
+	//audioSendPrameters.options.auto_gain_control = true;
 	//audioSendPrameters.options.highpass_filter = false;
 	audioSendPrameters.options.typing_detection = false;
 	//audioSendPrameters.max_bandwidth_bps = 16000;

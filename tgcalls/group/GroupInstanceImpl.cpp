@@ -1125,11 +1125,11 @@ public:
 
         webrtc::field_trial::InitFieldTrialsFromString(
             //"WebRTC-Audio-SendSideBwe/Enabled/"
-            "WebRTC-Audio-Allocation/min:6kbps,max:32kbps/"
+            "WebRTC-Audio-Allocation/min:32kbps,max:32kbps/"
             "WebRTC-Audio-OpusMinPacketLossRate/Enabled-1/"
             //"WebRTC-FlexFEC-03/Enabled/"
             //"WebRTC-FlexFEC-03-Advertised/Enabled/"
-            "WebRTC-PcFactoryDefaultBitrates/min:6kbps,start:32kbps,max:32kbps/"
+            "WebRTC-PcFactoryDefaultBitrates/min:32kbps,start:32kbps,max:32kbps/"
         );
 
         PlatformInterface::SharedInstance()->configurePlatformAudio();
