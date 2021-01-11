@@ -44,6 +44,8 @@ struct GroupInstanceDescriptor {
     std::string initialInputDeviceId;
     std::string initialOutputDeviceId;
     bool debugIgnoreMissingSsrcs = false;
+    std::shared_ptr<VideoCaptureInterface> videoCapture;
+    std::function<void(std::vector<uint32_t> const &)> incomingVideoSourcesUpdated;
 };
 
 struct GroupJoinPayloadFingerprint {
@@ -52,12 +54,43 @@ struct GroupJoinPayloadFingerprint {
     std::string fingerprint;
 };
 
+struct GroupJoinPayloadVideoSourceGroup {
+    std::vector<uint32_t> ssrcs;
+    std::string semantics;
+};
+
+struct GroupJoinPayloadVideoPayloadFeedbackType {
+    std::string type;
+    std::string subtype;
+};
+
+struct GroupJoinPayloadVideoPayloadType {
+    uint32_t id = 0;
+    std::string name;
+    uint32_t clockrate = 0;
+    uint32_t channels = 0;
+    std::vector<GroupJoinPayloadVideoPayloadFeedbackType> feedbackTypes;
+    std::vector<std::pair<std::string, std::string>> parameters;
+};
+
 struct GroupJoinPayload {
     std::string ufrag;
     std::string pwd;
     std::vector<GroupJoinPayloadFingerprint> fingerprints;
 
+    std::vector<GroupJoinPayloadVideoPayloadType> videoPayloadTypes;
+    std::vector<std::pair<uint32_t, std::string>> videoExtensionMap;
     uint32_t ssrc = 0;
+    std::vector<GroupJoinPayloadVideoSourceGroup> videoSourceGroups;
+};
+
+struct GroupParticipantDescription {
+    std::string endpointId;
+    uint32_t audioSsrc = 0;
+    std::vector<GroupJoinPayloadVideoPayloadType> videoPayloadTypes;
+    std::vector<std::pair<uint32_t, std::string>> videoExtensionMap;
+    std::vector<GroupJoinPayloadVideoSourceGroup> videoSourceGroups;
+    bool isRemoved = false;
 };
 
 struct GroupJoinResponseCandidate {
@@ -95,14 +128,18 @@ public:
     void stop();
 
     void emitJoinPayload(std::function<void(GroupJoinPayload)> completion);
-    void setJoinResponsePayload(GroupJoinResponsePayload payload);
+    void setJoinResponsePayload(GroupJoinResponsePayload payload, std::vector<tgcalls::GroupParticipantDescription> &&participants);
+    void addParticipants(std::vector<GroupParticipantDescription> &&participants);
     void removeSsrcs(std::vector<uint32_t> ssrcs);
 
     void setIsMuted(bool isMuted);
     void setAudioOutputDevice(std::string id);
     void setAudioInputDevice(std::string id);
     
+    void addIncomingVideoOutput(uint32_t ssrc, std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
+    
     void setVolume(uint32_t ssrc, double volume);
+    void setFullSizeVideoSsrc(uint32_t ssrc);
 
     struct AudioDevice {
       enum class Type {Input, Output};

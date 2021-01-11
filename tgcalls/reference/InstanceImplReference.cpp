@@ -324,7 +324,7 @@ public:
         dependencies.event_log_factory =
             std::make_unique<webrtc::RtcEventLogFactory>(dependencies.task_queue_factory.get());
         dependencies.network_controller_factory = nullptr;
-        dependencies.media_transport_factory = nullptr;
+        //dependencies.media_transport_factory = nullptr;
 
         _nativeFactory = webrtc::CreateModularPeerConnectionFactory(std::move(dependencies));
 
