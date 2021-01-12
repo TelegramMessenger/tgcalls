@@ -6,6 +6,7 @@
 #include "CodecSelectHelper.h"
 #include "Message.h"
 #include "platform/PlatformInterface.h"
+#include "StaticThreads.h"
 
 #include "api/audio_codecs/audio_decoder_factory_template.h"
 #include "api/audio_codecs/audio_encoder_factory_template.h"
@@ -33,12 +34,6 @@ constexpr uint32_t ssrcVideoOutgoing = 4;
 constexpr uint32_t ssrcVideoFecIncoming = 7;
 constexpr uint32_t ssrcVideoFecOutgoing = 8;
 
-rtc::Thread *makeWorkerThread() {
-	static std::unique_ptr<rtc::Thread> value = rtc::Thread::Create();
-	value->SetName("WebRTC-Worker", nullptr);
-	value->Start();
-	return value.get();
-}
 
 VideoCaptureInterfaceObject *GetVideoCaptureAssumingSameThread(VideoCaptureInterface *videoCapture) {
 	return videoCapture
@@ -150,11 +145,6 @@ public:
         }
     }
 };
-
-rtc::Thread *MediaManager::getWorkerThread() {
-	static rtc::Thread *value = makeWorkerThread();
-	return value;
-}
 
 MediaManager::MediaManager(
 	rtc::Thread *thread,

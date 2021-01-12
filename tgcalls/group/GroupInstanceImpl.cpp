@@ -30,6 +30,7 @@
 #include "VideoCaptureInterfaceImpl.h"
 #include "platform/PlatformInterface.h"
 #include "LogSinkImpl.h"
+#include "StaticThreads.h"
 
 #include <random>
 #include <sstream>
@@ -456,9 +457,9 @@ static std::string createSdp(uint32_t sessionId, GroupJoinResponsePayload const 
                 mLineString << "0";
             }
             if (stream.videoPayloadTypes.size() == 0) {
-                mLineString << " RTP/SAVPF 111 126";
+                mLineString << " RTP/AVPF 111 126";
             } else {
-                mLineString << " RTP/SAVPF";
+                mLineString << " RTP/AVPF";
                 for (auto &it : stream.videoPayloadTypes) {
                     mLineString << " " << it.id;
                 }
@@ -890,38 +891,6 @@ static std::string parseJoinResponseIntoSdp(uint32_t sessionId, GroupJoinPayload
     bundleStreamsState = orderedStreams;
 
     return createSdp(sessionId, payload, type, orderedStreams);
-}
-
-rtc::Thread *makeNetworkThread() {
-    static std::unique_ptr<rtc::Thread> value = rtc::Thread::CreateWithSocketServer();
-    value->SetName("WebRTC-Group-Network", nullptr);
-    value->Start();
-    return value.get();
-}
-
-rtc::Thread *getNetworkThread() {
-    static rtc::Thread *value = makeNetworkThread();
-    return value;
-}
-
-rtc::Thread *makeWorkerThread() {
-    static std::unique_ptr<rtc::Thread> value = rtc::Thread::Create();
-    value->SetName("WebRTC-Group-Worker", nullptr);
-    value->Start();
-    return value.get();
-}
-
-rtc::Thread *getWorkerThread() {
-    static rtc::Thread *value = makeWorkerThread();
-    return value;
-}
-
-rtc::Thread *getSignalingThread() {
-    return Manager::getMediaThread();
-}
-
-rtc::Thread *getMediaThread() {
-    return Manager::getMediaThread();
 }
 
 VideoCaptureInterfaceObject *GetVideoCaptureAssumingSameThread(VideoCaptureInterface *videoCapture) {
@@ -1622,7 +1591,7 @@ public:
 	}
 
 	~GroupInstanceManager() {
-        assert(getMediaThread()->IsCurrent());
+        assert(StaticThreads::getMediaThread()->IsCurrent());
 
         destroyAudioDeviceModule();
         if (_peerConnection) {
@@ -1695,7 +1664,7 @@ public:
         const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
         
         _errorParsingLogSink.reset(new ErrorParsingLogSink([weak](uint32_t ssrc) {
-            getMediaThread()->PostTask(RTC_FROM_HERE, [weak, ssrc](){
+            StaticThreads::getMediaThread()->PostTask(RTC_FROM_HERE, [weak, ssrc](){
                 auto strong = weak.lock();
                 if (!strong) {
                     return;
@@ -1722,9 +1691,9 @@ public:
         PlatformInterface::SharedInstance()->configurePlatformAudio();
 
         webrtc::PeerConnectionFactoryDependencies dependencies;
-        dependencies.network_thread = getNetworkThread();
-        dependencies.worker_thread = getWorkerThread();
-        dependencies.signaling_thread = getSignalingThread();
+        dependencies.network_thread = StaticThreads::getNetworkThread();
+        dependencies.worker_thread = StaticThreads::getWorkerThread();
+        dependencies.signaling_thread = StaticThreads::getMediaThread();
         dependencies.task_queue_factory = webrtc::CreateDefaultTaskQueueFactory();
 
         if (!createAudioDeviceModule(dependencies)) {
@@ -1765,7 +1734,7 @@ public:
 
             bool vadStatus = myVad->update((webrtc::AudioBuffer *)buffer);
 
-            getMediaThread()->PostTask(RTC_FROM_HERE, [weak, peak, peakCount, vadStatus](){
+            StaticThreads::getMediaThread()->PostTask(RTC_FROM_HERE, [weak, peak, peakCount, vadStatus](){
                 auto strong = weak.lock();
                 if (!strong) {
                     return;
@@ -1823,6 +1792,10 @@ public:
         dependencies.network_controller_factory = nullptr;
 
         _nativeFactory = webrtc::CreateModularPeerConnectionFactory(std::move(dependencies));
+        
+        webrtc::PeerConnectionFactoryInterface::Options peerConnectionOptions;
+        peerConnectionOptions.disable_encryption = true;
+        _nativeFactory->SetOptions(peerConnectionOptions);
 
         webrtc::PeerConnectionInterface::RTCConfiguration config;
         config.sdp_semantics = webrtc::SdpSemantics::kUnifiedPlan;
@@ -1831,8 +1804,8 @@ public:
         config.prioritize_most_likely_ice_candidate_pairs = true;
         config.presume_writable_when_fully_relayed = true;
         //config.audio_jitter_buffer_enable_rtx_handling = true;
-        //config.enable_rtp_data_channel = true;
-        config.enable_dtls_srtp = true;
+        config.enable_rtp_data_channel = true;
+        config.enable_dtls_srtp = false;
 
         /*webrtc::CryptoOptions cryptoOptions;
         webrtc::CryptoOptions::SFrame sframe;
@@ -1850,7 +1823,7 @@ public:
                 });*/
             },
             [weak](bool isConnected) {
-                getMediaThread()->PostTask(RTC_FROM_HERE, [weak, isConnected](){
+                StaticThreads::getMediaThread()->PostTask(RTC_FROM_HERE, [weak, isConnected](){
                     auto strong = weak.lock();
                     if (strong) {
                         strong->updateIsConnected(isConnected);
@@ -1858,7 +1831,7 @@ public:
                 });
             },
             [weak](rtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver) {
-                getMediaThread()->PostTask(RTC_FROM_HERE, [weak, transceiver](){
+                StaticThreads::getMediaThread()->PostTask(RTC_FROM_HERE, [weak, transceiver](){
                     auto strong = weak.lock();
                     if (!strong) {
                         return;
@@ -1867,7 +1840,7 @@ public:
                 });
             },
             [weak](rtc::scoped_refptr<webrtc::RtpReceiverInterface> receiver) {
-                getMediaThread()->PostTask(RTC_FROM_HERE, [weak, receiver](){
+                StaticThreads::getMediaThread()->PostTask(RTC_FROM_HERE, [weak, receiver](){
                     auto strong = weak.lock();
                     if (!strong) {
                         return;
@@ -1876,7 +1849,7 @@ public:
                 });
             },
             [weak](uint32_t ssrc) {
-                getMediaThread()->PostTask(RTC_FROM_HERE, [weak, ssrc](){
+                StaticThreads::getMediaThread()->PostTask(RTC_FROM_HERE, [weak, ssrc](){
                     auto strong = weak.lock();
                     if (!strong) {
                         return;
@@ -1912,27 +1885,32 @@ public:
             }
         }
         
-        webrtc::DataChannelInit dataChannelConfig;
-        _localDataChannel = _peerConnection->CreateDataChannel("1", &dataChannelConfig);
-        _localDataChannelMid = "1";
-        
-        _localDataChannelObserver.reset(new DataChannelObserverImpl([weak]() {
-            getMediaThread()->PostTask(RTC_FROM_HERE, [weak](){
-                auto strong = weak.lock();
-                if (!strong) {
-                    return;
-                }
-                bool isOpen = strong->_localDataChannel->state() == webrtc::DataChannelInterface::DataState::kOpen;
-                if (strong->_localDataChannelIsOpen != isOpen) {
-                    RTC_LOG(LS_INFO) << "DataChannel isOpen: " << isOpen;
-                    strong->_localDataChannelIsOpen = isOpen;
-                    if (isOpen) {
-                        strong->updateRemoteVideoConstaints();
-                    }
-                }
-            });
-        }));
-        _localDataChannel->RegisterObserver(_localDataChannelObserver.get());
+        if (_videoCapture && false) {
+            webrtc::DataChannelInit dataChannelConfig;
+            _localDataChannel = _peerConnection->CreateDataChannel("1", &dataChannelConfig);
+            
+            if (_localDataChannel) {
+                _localDataChannelMid = "1";
+                
+                _localDataChannelObserver.reset(new DataChannelObserverImpl([weak]() {
+                    StaticThreads::getMediaThread()->PostTask(RTC_FROM_HERE, [weak](){
+                        auto strong = weak.lock();
+                        if (!strong) {
+                            return;
+                        }
+                        bool isOpen = strong->_localDataChannel->state() == webrtc::DataChannelInterface::DataState::kOpen;
+                        if (strong->_localDataChannelIsOpen != isOpen) {
+                            RTC_LOG(LS_INFO) << "DataChannel isOpen: " << isOpen;
+                            strong->_localDataChannelIsOpen = isOpen;
+                            if (isOpen) {
+                                strong->updateRemoteVideoConstaints();
+                            }
+                        }
+                    });
+                }));
+                _localDataChannel->RegisterObserver(_localDataChannelObserver.get());
+            }
+        }
         
         updateVideoTrack(false, [](auto result) {});
 
@@ -1950,7 +1928,7 @@ public:
             if (adm->InitPlayout() == 0) {
                 adm->StartPlayout();
             } else {
-                getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak](){
+                StaticThreads::getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak](){
                     auto strong = weak.lock();
                     if (!strong) {
                         return;
@@ -2128,7 +2106,7 @@ public:
         if (!isConnected && _appliedOfferTimestamp > timestamp - 1000) {
             auto taskId = _isConnectedUpdateValidTaskId;
             const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
-            getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak, taskId]() {
+            StaticThreads::getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak, taskId]() {
                 auto strong = weak.lock();
                 if (!strong) {
                     return;
@@ -2318,7 +2296,7 @@ public:
         const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
         webrtc::PeerConnectionInterface::RTCOfferAnswerOptions options;
         rtc::scoped_refptr<CreateSessionDescriptionObserverImpl> observer(new rtc::RefCountedObject<CreateSessionDescriptionObserverImpl>([weak, completion](std::string sdp, std::string type) {
-            getMediaThread()->PostTask(RTC_FROM_HERE, [weak, sdp, type, completion](){
+            StaticThreads::getMediaThread()->PostTask(RTC_FROM_HERE, [weak, sdp, type, completion](){
                 auto strong = weak.lock();
                 if (!strong) {
                     return;
@@ -2341,10 +2319,12 @@ public:
                         
                         if (strong->_localVideoTrackTransceiver) {
                             strong->_localVideoMid = strong->_localVideoTrackTransceiver->mid();
-                            if (strong->_localVideoMid && strong->_localVideoMid.value() == "1") {
-                                strong->_localDataChannelMid = "2";
-                            } else {
-                                strong->_localDataChannelMid = "1";
+                            if (strong->_localDataChannel) {
+                                if (strong->_localVideoMid && strong->_localVideoMid.value() == "1") {
+                                    strong->_localDataChannelMid = "2";
+                                } else {
+                                    strong->_localDataChannelMid = "1";
+                                }
                             }
                         } else {
                             strong->_localVideoMid.reset();
@@ -2453,7 +2433,7 @@ public:
         const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
         webrtc::PeerConnectionInterface::RTCOfferAnswerOptions options;
         rtc::scoped_refptr<CreateSessionDescriptionObserverImpl> observer(new rtc::RefCountedObject<CreateSessionDescriptionObserverImpl>([weak](std::string sdp, std::string type) {
-            getMediaThread()->PostTask(RTC_FROM_HERE, [weak, sdp, type](){
+            StaticThreads::getMediaThread()->PostTask(RTC_FROM_HERE, [weak, sdp, type](){
                 auto strong = weak.lock();
                 if (!strong) {
                     return;
@@ -2483,10 +2463,12 @@ public:
                         
                         if (strong->_localVideoTrackTransceiver) {
                             strong->_localVideoMid = strong->_localVideoTrackTransceiver->mid();
-                            if (strong->_localVideoMid && strong->_localVideoMid.value() == "1") {
-                                strong->_localDataChannelMid = "2";
-                            } else {
-                                strong->_localDataChannelMid = "1";
+                            if (strong->_localDataChannel) {
+                                if (strong->_localVideoMid && strong->_localVideoMid.value() == "1") {
+                                    strong->_localDataChannelMid = "2";
+                                } else {
+                                    strong->_localDataChannelMid = "1";
+                                }
                             }
                         } else {
                             strong->_localVideoMid.reset();
@@ -2534,7 +2516,7 @@ public:
 
         const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
         rtc::scoped_refptr<SetSessionDescriptionObserverImpl> observer(new rtc::RefCountedObject<SetSessionDescriptionObserverImpl>([weak, isInitialJoinAnswer, isAnswer, completeMissingSsrcSetup]() {
-            getMediaThread()->PostTask(RTC_FROM_HERE, [weak, isInitialJoinAnswer, isAnswer, completeMissingSsrcSetup](){
+            StaticThreads::getMediaThread()->PostTask(RTC_FROM_HERE, [weak, isInitialJoinAnswer, isAnswer, completeMissingSsrcSetup](){
                 auto strong = weak.lock();
                 if (!strong) {
                     return;
@@ -2553,7 +2535,7 @@ public:
             });
         }, [weak, completeMissingSsrcSetup](webrtc::RTCError error) {
             RTC_LOG(LoggingSeverity::LS_ERROR) << "Error: " << error.message();
-            getMediaThread()->PostTask(RTC_FROM_HERE, [weak, completeMissingSsrcSetup](){
+            StaticThreads::getMediaThread()->PostTask(RTC_FROM_HERE, [weak, completeMissingSsrcSetup](){
                 auto strong = weak.lock();
                 if (!strong) {
                     return;
@@ -2569,8 +2551,8 @@ public:
 
     void beginStatsTimer(int timeoutMs) {
         const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
-        getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
-            getMediaThread()->PostTask(RTC_FROM_HERE, [weak](){
+        StaticThreads::getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
+            StaticThreads::getMediaThread()->PostTask(RTC_FROM_HERE, [weak](){
                 auto strong = weak.lock();
                 if (!strong) {
                     return;
@@ -2582,7 +2564,7 @@ public:
 
     void beginLevelsTimer(int timeoutMs) {
         const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
-        getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
+        StaticThreads::getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
             auto strong = weak.lock();
             if (!strong) {
                 return;
@@ -2609,7 +2591,7 @@ public:
     
     void beginTestQualityTimer(int timeoutMs) {
         const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
-        getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
+        StaticThreads::getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
             auto strong = weak.lock();
             if (!strong) {
                 return;
@@ -2626,7 +2608,7 @@ public:
         const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
 
         rtc::scoped_refptr<RTCStatsCollectorCallbackImpl> observer(new rtc::RefCountedObject<RTCStatsCollectorCallbackImpl>([weak](const rtc::scoped_refptr<const webrtc::RTCStatsReport> &stats) {
-            getMediaThread()->PostTask(RTC_FROM_HERE, [weak, stats](){
+            StaticThreads::getMediaThread()->PostTask(RTC_FROM_HERE, [weak, stats](){
                 auto strong = weak.lock();
                 if (!strong) {
                     return;
@@ -2664,7 +2646,7 @@ public:
                 if (_audioTrackSinks.find(ssrc) == _audioTrackSinks.end()) {
                     const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
                     std::shared_ptr<AudioTrackSinkInterfaceImpl> sink(new AudioTrackSinkInterfaceImpl([weak, ssrc](float level, bool hasSpeech) {
-                        getMediaThread()->PostTask(RTC_FROM_HERE, [weak, ssrc, level, hasSpeech]() {
+                        StaticThreads::getMediaThread()->PostTask(RTC_FROM_HERE, [weak, ssrc, level, hasSpeech]() {
                             auto strong = weak.lock();
                             if (!strong) {
                                 return;
@@ -2779,7 +2761,7 @@ public:
             applyMissingSsrcs();
         } else {
             const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
-            getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
+            StaticThreads::getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
                 auto strong = weak.lock();
                 if (!strong) {
                     return;
@@ -2827,7 +2809,7 @@ public:
 
     void beginDebugSsrcTimer(int timeout) {
         const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
-        getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
+        StaticThreads::getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
             auto strong = weak.lock();
             if (!strong) {
                 return;
@@ -2960,7 +2942,7 @@ public:
 
         webrtc::PeerConnectionInterface::RTCOfferAnswerOptions options;
         rtc::scoped_refptr<CreateSessionDescriptionObserverImpl> observer(new rtc::RefCountedObject<CreateSessionDescriptionObserverImpl>([weak, completeMissingSsrcSetup](std::string sdp, std::string type) {
-            getMediaThread()->PostTask(RTC_FROM_HERE, [weak, sdp, type, completeMissingSsrcSetup](){
+            StaticThreads::getMediaThread()->PostTask(RTC_FROM_HERE, [weak, sdp, type, completeMissingSsrcSetup](){
                 auto strong = weak.lock();
                 if (!strong) {
                     return;
@@ -3188,7 +3170,7 @@ GroupInstanceImpl::GroupInstanceImpl(GroupInstanceDescriptor &&descriptor)
 		rtc::LogMessage::AddLogToStream(_logSink.get(), rtc::LS_INFO);
 	}
 
-	_manager.reset(new ThreadLocalObject<GroupInstanceManager>(getMediaThread(), [descriptor = std::move(descriptor)]() mutable {
+	_manager.reset(new ThreadLocalObject<GroupInstanceManager>(StaticThreads::getMediaThread(), [descriptor = std::move(descriptor)]() mutable {
 		return new GroupInstanceManager(std::move(descriptor));
 	}));
 	_manager->perform(RTC_FROM_HERE, [](GroupInstanceManager *manager) {
@@ -3204,7 +3186,7 @@ GroupInstanceImpl::~GroupInstanceImpl() {
 
     // Wait until _manager is destroyed, otherwise there is a race condition
     // in destruction of PeerConnection on media thread and network thread.
-    getMediaThread()->Invoke<void>(RTC_FROM_HERE, [] {});
+    StaticThreads::getMediaThread()->Invoke<void>(RTC_FROM_HERE, [] {});
 }
 
 void GroupInstanceImpl::stop() {
