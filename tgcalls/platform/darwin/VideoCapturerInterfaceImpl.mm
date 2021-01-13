@@ -37,6 +37,7 @@
 @interface VideoCapturerInterfaceImplSourceDescription : NSObject
 
 @property (nonatomic, readonly) bool isFrontCamera;
+@property (nonatomic, readonly) bool keepLandscape;
 @property (nonatomic, readonly) NSString *deviceId;
 @property (nonatomic, strong, readonly, nullable) AVCaptureDevice *device;
 @property (nonatomic, strong, readonly, nullable) AVCaptureDeviceFormat *format;
@@ -45,10 +46,11 @@
 
 @implementation VideoCapturerInterfaceImplSourceDescription
 
-- (instancetype)initWithIsFrontCamera:(bool)isFrontCamera deviceId:(NSString *)deviceId device:(AVCaptureDevice * _Nullable)device format:(AVCaptureDeviceFormat * _Nullable)format {
+- (instancetype)initWithIsFrontCamera:(bool)isFrontCamera keepLandscape:(bool)keepLandscape deviceId:(NSString *)deviceId device:(AVCaptureDevice * _Nullable)device format:(AVCaptureDeviceFormat * _Nullable)format {
     self = [super init];
     if (self != nil) {
         _isFrontCamera = isFrontCamera;
+        _keepLandscape = keepLandscape;
         _deviceId = deviceId;
         _device = device;
         _format = format;
@@ -74,7 +76,7 @@
     AVCaptureDevice *selectedCamera = nil;
 
 #ifdef WEBRTC_IOS
-    bool useFrontCamera = ![deviceId isEqualToString:@"back"];
+    bool useFrontCamera = ![deviceId hasPrefix:@"back"];
     AVCaptureDevice *frontCamera = nil;
     AVCaptureDevice *backCamera = nil;
     for (AVCaptureDevice *device in [VideoCameraCapturer captureDevices]) {
@@ -171,20 +173,18 @@
 }
 
 + (VideoCapturerInterfaceImplSourceDescription *)selectCapturerDescriptionWithDeviceId:(NSString *)deviceId {
-    
     if ([deviceId hasPrefix:@"desktop_capturer_"]) {
-        return [[VideoCapturerInterfaceImplSourceDescription alloc] initWithIsFrontCamera:false deviceId: deviceId device: nil format: nil];
+        return [[VideoCapturerInterfaceImplSourceDescription alloc] initWithIsFrontCamera:false keepLandscape:true deviceId: deviceId device: nil format: nil];
     }
-    
     AVCaptureDevice *selectedCamera = [VideoCapturerInterfaceImplReference selectCapturerDeviceWithDeviceId:deviceId];
     
     if (selectedCamera == nil) {
-        return [[VideoCapturerInterfaceImplSourceDescription alloc] initWithIsFrontCamera:![deviceId isEqualToString:@"back"] deviceId: deviceId device: nil format: nil];
+        return [[VideoCapturerInterfaceImplSourceDescription alloc] initWithIsFrontCamera:![deviceId hasPrefix:@"back"] keepLandscape:[deviceId containsString:@"landscape"] deviceId: deviceId device: nil format: nil];
     }
 
     AVCaptureDeviceFormat *bestFormat = [VideoCapturerInterfaceImplReference selectCaptureDeviceFormatForDevice:selectedCamera];
     
-    return [[VideoCapturerInterfaceImplSourceDescription alloc] initWithIsFrontCamera:![deviceId isEqualToString:@"back"] deviceId: deviceId device:selectedCamera format:bestFormat];
+    return [[VideoCapturerInterfaceImplSourceDescription alloc] initWithIsFrontCamera:![deviceId hasPrefix:@"back"] keepLandscape:[deviceId containsString:@"landscape"] deviceId:deviceId device:selectedCamera format:bestFormat];
 }
 
 - (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source sourceDescription:(VideoCapturerInterfaceImplSourceDescription *)sourceDescription isActiveUpdated:(void (^)(bool))isActiveUpdated orientationUpdated:(void (^)(bool))orientationUpdated {
@@ -193,7 +193,7 @@
         assert([NSThread isMainThread]);
         
     #ifdef WEBRTC_IOS
-        _videoCapturer = [[VideoCameraCapturer alloc] initWithSource:source useFrontCamera:sourceDescription.isFrontCamera isActiveUpdated:isActiveUpdated orientationUpdated:orientationUpdated];
+        _videoCapturer = [[VideoCameraCapturer alloc] initWithSource:source useFrontCamera:sourceDescription.isFrontCamera keepLandscape:sourceDescription.keepLandscape isActiveUpdated:isActiveUpdated orientationUpdated:orientationUpdated];
         [_videoCapturer startCaptureWithDevice:sourceDescription.device format:sourceDescription.format fps:30];
     #else
         

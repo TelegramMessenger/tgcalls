@@ -95,6 +95,23 @@ static std::vector<uint32_t> splitSsrcList(std::string const &line) {
     return result;
 }
 
+static std::vector<std::string> splitBundleMLines(std::string const &line) {
+    std::vector<std::string> result;
+
+    std::istringstream sdpStream(line);
+
+    std::string s;
+    while (std::getline(sdpStream, s, ' ')) {
+        if (s.size() == 0) {
+            continue;
+        }
+        
+        result.push_back(s);
+    }
+
+    return result;
+}
+
 static std::vector<std::string> getLines(std::vector<std::string> const &lines, std::string prefix) {
     std::vector<std::string> result;
 
@@ -346,6 +363,7 @@ static absl::optional<GroupJoinPayload> parseSdpIntoJoinPayload(std::string cons
 struct StreamSpec {
     bool isMain = false;
     bool isOutgoing = false;
+    std::string mLine;
     uint32_t streamId = 0;
     uint32_t ssrc = 0;
     std::vector<GroupJoinPayloadVideoSourceGroup> videoSourceGroups;
@@ -353,6 +371,7 @@ struct StreamSpec {
     std::vector<std::pair<uint32_t, std::string>> videoExtensionMap;
     bool isRemoved = false;
     bool isData = false;
+    bool isVideo = false;
 };
 
 static void appendSdp(std::vector<std::string> &lines, std::string const &line, int index = -1) {
@@ -387,21 +406,7 @@ static std::string createSdp(uint32_t sessionId, GroupJoinResponsePayload const 
     bundleString << "a=group:BUNDLE";
     for (auto &stream : bundleStreams) {
         bundleString << " ";
-        if (stream.isOutgoing) {
-            if (stream.isData) {
-                bundleString << "2";
-            } else if (stream.videoPayloadTypes.size() == 0) {
-                bundleString << "0";
-            } else {
-                bundleString << "1";
-            }
-        } else if (stream.videoPayloadTypes.size() == 0) {
-            bundleString << "audio";
-            bundleString << stream.streamId;
-        } else {
-            bundleString << "video";
-            bundleString << stream.streamId;
-        }
+        bundleString << stream.mLine;
     }
     appendSdp(sdp, bundleString.str());
 
@@ -409,22 +414,7 @@ static std::string createSdp(uint32_t sessionId, GroupJoinResponsePayload const 
 
     for (auto &stream : bundleStreams) {
         std::ostringstream streamMidString;
-        if (stream.isOutgoing) {
-            if (stream.isData) {
-                streamMidString << "2";
-            }
-            else if (stream.videoPayloadTypes.size() == 0) {
-                streamMidString << "0";
-            } else {
-                streamMidString << "1";
-            }
-        } else if (stream.videoPayloadTypes.size() == 0) {
-            streamMidString << "audio";
-            streamMidString << stream.streamId;
-        } else {
-            streamMidString << "video";
-            streamMidString << stream.streamId;
-        }
+        streamMidString << "a=mid:" << stream.mLine;
         
         if (stream.isData) {
             appendSdp(sdp, "m=application 9 UDP/DTLS/SCTP webrtc-datachannel");
@@ -450,15 +440,15 @@ static std::string createSdp(uint32_t sessionId, GroupJoinResponsePayload const 
                 appendSdp(sdp, "a=setup:passive");
             }
             
-            appendSdp(sdp, "a=mid:2");
+            appendSdp(sdp, streamMidString.str());
             appendSdp(sdp, "a=sctp-port:5000");
             appendSdp(sdp, "a=max-message-size:262144");
         } else {
             std::ostringstream mLineString;
-            if (stream.videoPayloadTypes.size() == 0) {
-                mLineString << "m=audio ";
-            } else {
+            if (stream.isVideo) {
                 mLineString << "m=video ";
+            } else {
+                mLineString << "m=audio ";
             }
             if (stream.isMain) {
                 mLineString << "1";
@@ -480,10 +470,7 @@ static std::string createSdp(uint32_t sessionId, GroupJoinResponsePayload const 
                 appendSdp(sdp, "c=IN IP4 0.0.0.0");
             }
 
-            std::ostringstream mLineMidString;
-            mLineMidString << "a=mid:";
-            mLineMidString << streamMidString.str();
-            appendSdp(sdp, mLineMidString.str());
+            appendSdp(sdp, streamMidString.str());
             
             std::ostringstream ufragString;
             ufragString << "a=ice-ufrag:";
@@ -551,7 +538,7 @@ static std::string createSdp(uint32_t sessionId, GroupJoinResponsePayload const 
                 }
             }
 
-            if (stream.videoPayloadTypes.size() == 0) {
+            if (!stream.isVideo) {
                 appendSdp(sdp, "a=rtpmap:111 opus/48000/2");
                 appendSdp(sdp, "a=rtpmap:126 telephone-event/8000");
                 appendSdp(sdp, "a=fmtp:111 minptime=10; useinbandfec=1");
@@ -790,56 +777,84 @@ static std::string createSdp(uint32_t sessionId, GroupJoinResponsePayload const 
     return result.str();
 }
 
-static std::string parseJoinResponseIntoSdp(uint32_t sessionId, GroupJoinPayload const &joinPayload, GroupJoinResponsePayload const &payload, SdpType type, std::vector<GroupParticipantDescription> const &allOtherParticipants, bool hasDataChannel) {
+static std::string parseJoinResponseIntoSdp(uint32_t sessionId, GroupJoinPayload const &joinPayload, GroupJoinResponsePayload const &payload, SdpType type, std::vector<GroupParticipantDescription> const &allOtherParticipants, absl::optional<std::string> localVideoMid, absl::optional<std::string> dataChannelMid, std::vector<StreamSpec> &bundleStreamsState) {
 
     std::vector<StreamSpec> bundleStreams;
 
     StreamSpec mainStream;
+    mainStream.mLine = "0";
     mainStream.isMain = true;
     mainStream.isOutgoing = true;
     mainStream.streamId = 0;
     mainStream.ssrc = joinPayload.ssrc;
     mainStream.isRemoved = false;
+    mainStream.isVideo = false;
     bundleStreams.push_back(mainStream);
     
-    if (joinPayload.videoSourceGroups.size() != 0) {
-        StreamSpec mainVideoStream;
-        mainVideoStream.isMain = false;
-        mainVideoStream.isOutgoing = true;
-        mainVideoStream.streamId = joinPayload.videoSourceGroups[0].ssrcs[0];
-        mainVideoStream.ssrc = joinPayload.videoSourceGroups[0].ssrcs[0];
-        mainVideoStream.videoSourceGroups = joinPayload.videoSourceGroups;
-        mainVideoStream.videoPayloadTypes = joinPayload.videoPayloadTypes;
-        mainVideoStream.videoExtensionMap = joinPayload.videoExtensionMap;
-        
-        mainVideoStream.isRemoved = false;
-        bundleStreams.push_back(mainVideoStream);
+    if (dataChannelMid.has_value() && dataChannelMid.value() == "1") {
+        StreamSpec dataStream;
+        dataStream.mLine = dataChannelMid.value();
+        dataStream.isMain = false;
+        dataStream.isOutgoing = true;
+        dataStream.streamId = 0;
+        dataStream.ssrc = 0;
+        dataStream.isRemoved = false;
+        dataStream.isData = true;
+        dataStream.isVideo = false;
+        bundleStreams.push_back(dataStream);
+    }
     
-        if (hasDataChannel) {
-            StreamSpec dataStream;
-            dataStream.isMain = false;
-            dataStream.isOutgoing = true;
-            dataStream.streamId = 0;
-            dataStream.ssrc = 0;
-            dataStream.isRemoved = false;
-            dataStream.isData = true;
-            bundleStreams.push_back(dataStream);
+    if (localVideoMid.has_value()) {
+        if (joinPayload.videoSourceGroups.size() != 0) {
+            StreamSpec mainVideoStream;
+            mainVideoStream.mLine = localVideoMid.value();
+            mainVideoStream.isMain = false;
+            mainVideoStream.isOutgoing = true;
+            mainVideoStream.isVideo = true;
+            mainVideoStream.streamId = joinPayload.videoSourceGroups[0].ssrcs[0];
+            mainVideoStream.ssrc = joinPayload.videoSourceGroups[0].ssrcs[0];
+            mainVideoStream.videoSourceGroups = joinPayload.videoSourceGroups;
+            mainVideoStream.videoPayloadTypes = joinPayload.videoPayloadTypes;
+            mainVideoStream.videoExtensionMap = joinPayload.videoExtensionMap;
+            
+            mainVideoStream.isRemoved = joinPayload.videoSourceGroups.size() == 0;
+            bundleStreams.push_back(mainVideoStream);
         }
+    }
+    
+    if (dataChannelMid.has_value() && dataChannelMid.value() == "2") {
+        StreamSpec dataStream;
+        dataStream.mLine = dataChannelMid.value();
+        dataStream.isMain = false;
+        dataStream.isOutgoing = true;
+        dataStream.streamId = 0;
+        dataStream.ssrc = 0;
+        dataStream.isRemoved = false;
+        dataStream.isData = true;
+        dataStream.isVideo = false;
+        bundleStreams.push_back(dataStream);
     }
 
     for (auto &participant : allOtherParticipants) {
         StreamSpec audioStream;
         audioStream.isMain = false;
         
+        std::ostringstream audioMLine;
+        audioMLine << "audio" << participant.audioSsrc;
+        audioStream.mLine = audioMLine.str();
         audioStream.ssrc = participant.audioSsrc;
         audioStream.isRemoved = participant.isRemoved;
         audioStream.streamId = participant.audioSsrc;
         bundleStreams.push_back(audioStream);
         
-        if (participant.videoPayloadTypes.size() != 0) {
+        if (participant.videoPayloadTypes.size() != 0 && participant.videoSourceGroups.size() != 0 ) {
             StreamSpec videoStream;
             videoStream.isMain = false;
             
+            std::ostringstream videoMLine;
+            videoMLine << "video" << participant.audioSsrc;
+            videoStream.mLine = videoMLine.str();
+            videoStream.isVideo = true;
             videoStream.ssrc = participant.videoSourceGroups[0].ssrcs[0];
             videoStream.isRemoved = participant.isRemoved;
             videoStream.streamId = participant.audioSsrc;
@@ -850,8 +865,31 @@ static std::string parseJoinResponseIntoSdp(uint32_t sessionId, GroupJoinPayload
             bundleStreams.push_back(videoStream);
         }
     }
+    
+    std::vector<StreamSpec> orderedStreams;
+    for (auto const &oldStream : bundleStreamsState) {
+        bool found = false;
+        for (int i = 0; i < (int)bundleStreams.size(); i++) {
+            if (bundleStreams[i].mLine == oldStream.mLine) {
+                found = true;
+                orderedStreams.push_back(bundleStreams[i]);
+                bundleStreams.erase(bundleStreams.begin() + i);
+                break;
+            }
+        }
+        if (!found) {
+            StreamSpec copyStream = oldStream;
+            copyStream.isRemoved = true;
+            orderedStreams.push_back(copyStream);
+        }
+    }
+    for (const auto &it : bundleStreams) {
+        orderedStreams.push_back(it);
+    }
+    
+    bundleStreamsState = orderedStreams;
 
-    return createSdp(sessionId, payload, type, bundleStreams);
+    return createSdp(sessionId, payload, type, orderedStreams);
 }
 
 rtc::Thread *makeNetworkThread() {
@@ -891,6 +929,68 @@ VideoCaptureInterfaceObject *GetVideoCaptureAssumingSameThread(VideoCaptureInter
         ? static_cast<VideoCaptureInterfaceImpl*>(videoCapture)->object()->getSyncAssumingSameThread()
         : nullptr;
 }
+
+class ErrorParsingLogSink final : public rtc::LogSink {
+public:
+    ErrorParsingLogSink(std::function<void(uint32_t)> onMissingSsrc) :
+    _onMissingSsrc(onMissingSsrc) {
+        
+    }
+
+    void OnLogMessage(const std::string &msg, rtc::LoggingSeverity severity, const char *tag) override {
+        handleMessage(msg);
+    }
+    
+    void OnLogMessage(const std::string &message, rtc::LoggingSeverity severity) override {
+        handleMessage(message);
+    }
+    
+    void OnLogMessage(const std::string &message) override {
+        handleMessage(message);
+    }
+
+private:
+    void handleMessage(const std::string &message) {
+        const std::string pattern = "Failed to demux RTP packet:";
+        const std::string ssrcPattern = "SSRC=";
+        auto index = message.find(pattern);
+        if (index != std::string::npos) {
+            index = message.find(ssrcPattern);
+            if (index != std::string::npos) {
+                std::string string = message;
+                string.erase(0, index + ssrcPattern.size());
+                
+                std::istringstream stream(string);
+                uint32_t ssrc = 0;
+                stream >> ssrc;
+                if (ssrc != 0) {
+                    _onMissingSsrc(ssrc);
+                }
+            }
+            return;
+        }
+        
+        const std::string pattern2 = "receive_rtp_config_ lookup failed for ssrc ";
+        index = message.find(pattern2);
+        if (index != std::string::npos) {
+            std::string string = message;
+            string.erase(0, index + pattern2.size());
+            
+            std::istringstream stream(string);
+            uint32_t ssrc = 0;
+            stream >> ssrc;
+            if (ssrc != 0) {
+                _onMissingSsrc(ssrc);
+            }
+            
+            return;
+        }
+    }
+    
+private:
+    std::function<void(uint32_t)> _onMissingSsrc;
+
+};
 
 class PeerConnectionObserverImpl : public webrtc::PeerConnectionObserver {
 private:
@@ -1510,6 +1610,7 @@ public:
     _networkStateUpdated(descriptor.networkStateUpdated),
     _audioLevelsUpdated(descriptor.audioLevelsUpdated),
     _incomingVideoSourcesUpdated(descriptor.incomingVideoSourcesUpdated),
+    _participantDescriptionsRequired(descriptor.participantDescriptionsRequired),
     _initialInputDeviceId(descriptor.initialInputDeviceId),
     _initialOutputDeviceId(descriptor.initialOutputDeviceId),
     _videoCapture(descriptor.videoCapture) {
@@ -1526,6 +1627,10 @@ public:
         destroyAudioDeviceModule();
         if (_peerConnection) {
             _peerConnection->Close();
+        }
+        
+        if (_errorParsingLogSink) {
+            rtc::LogMessage::RemoveLogToStream(_errorParsingLogSink.get());
         }
 	}
 
@@ -1588,14 +1693,30 @@ public:
 
 	void start() {
         const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
+        
+        _errorParsingLogSink.reset(new ErrorParsingLogSink([weak](uint32_t ssrc) {
+            getMediaThread()->PostTask(RTC_FROM_HERE, [weak, ssrc](){
+                auto strong = weak.lock();
+                if (!strong) {
+                    return;
+                }
+                
+                std::vector<uint32_t> ssrcs;
+                ssrcs.push_back(ssrc);
+                strong->_participantDescriptionsRequired(ssrcs);
+            });
+        }));
+        rtc::LogMessage::AddLogToStream(_errorParsingLogSink.get(), rtc::LS_WARNING);
 
         webrtc::field_trial::InitFieldTrialsFromString(
             //"WebRTC-Audio-SendSideBwe/Enabled/"
-            "WebRTC-Audio-Allocation/min:6kbps,max:32kbps/"
+            "WebRTC-Audio-Allocation/min:32kbps,max:32kbps/"
             "WebRTC-Audio-OpusMinPacketLossRate/Enabled-1/"
             //"WebRTC-FlexFEC-03/Enabled/"
             //"WebRTC-FlexFEC-03-Advertised/Enabled/"
             "WebRTC-PcFactoryDefaultBitrates/min:6kbps,start:32kbps,max:32kbps/"
+            "WebRTC-Video-DiscardPacketsWithUnknownSsrc/Enabled/"
+            "WebRTC-Video-BufferPacketsWithUnknownSsrc/Enabled/"
         );
 
         PlatformInterface::SharedInstance()->configurePlatformAudio();
@@ -1791,63 +1912,29 @@ public:
             }
         }
         
-        if (_videoCapture) {
-            VideoCaptureInterfaceObject *videoCaptureImpl = GetVideoCaptureAssumingSameThread(_videoCapture.get());
-            
-            _localVideoTrack = _nativeFactory->CreateVideoTrack("video0", videoCaptureImpl->source());
-            _localVideoTrack->set_enabled(true);
-            webrtc::RtpTransceiverInit videoInit;
-            auto addedVideoTrack = _peerConnection->AddTransceiver(_localVideoTrack, videoInit);
-            if (addedVideoTrack.ok()) {
-                for (auto &it : _peerConnection->GetTransceivers()) {
-                    if (it->media_type() == cricket::MediaType::MEDIA_TYPE_VIDEO) {
-                        if (addedVideoTrack.value()->sender().get() == it->sender().get()) {
-                            it->SetDirectionWithError(webrtc::RtpTransceiverDirection::kSendOnly);
-                            
-                            auto capabilities = _nativeFactory->GetRtpSenderCapabilities(
-                                cricket::MediaType::MEDIA_TYPE_VIDEO);
-
-                            std::vector<webrtc::RtpCodecCapability> codecs;
-                            bool hasVP8 = false;
-                            for (auto &codec : capabilities.codecs) {
-                                if (codec.name == cricket::kVp8CodecName) {
-                                    if (!hasVP8) {
-                                        codecs.insert(codecs.begin(), codec);
-                                        hasVP8 = true;
-                                    }
-                                } else if (codec.name == cricket::kRtxCodecName) {
-                                    codecs.push_back(codec);
-                                }
-                            }
-                            it->SetCodecPreferences(codecs);
-
-                            break;
-                        }
+        webrtc::DataChannelInit dataChannelConfig;
+        _localDataChannel = _peerConnection->CreateDataChannel("1", &dataChannelConfig);
+        _localDataChannelMid = "1";
+        
+        _localDataChannelObserver.reset(new DataChannelObserverImpl([weak]() {
+            getMediaThread()->PostTask(RTC_FROM_HERE, [weak](){
+                auto strong = weak.lock();
+                if (!strong) {
+                    return;
+                }
+                bool isOpen = strong->_localDataChannel->state() == webrtc::DataChannelInterface::DataState::kOpen;
+                if (strong->_localDataChannelIsOpen != isOpen) {
+                    RTC_LOG(LS_INFO) << "DataChannel isOpen: " << isOpen;
+                    strong->_localDataChannelIsOpen = isOpen;
+                    if (isOpen) {
+                        strong->updateRemoteVideoConstaints();
                     }
                 }
-            }
+            });
+        }));
+        _localDataChannel->RegisterObserver(_localDataChannelObserver.get());
         
-            webrtc::DataChannelInit dataChannelConfig;
-            _localDataChannel = _peerConnection->CreateDataChannel("2", &dataChannelConfig);
-            
-            _localDataChannelObserver.reset(new DataChannelObserverImpl([weak]() {
-                getMediaThread()->PostTask(RTC_FROM_HERE, [weak](){
-                    auto strong = weak.lock();
-                    if (!strong) {
-                        return;
-                    }
-                    bool isOpen = strong->_localDataChannel->state() == webrtc::DataChannelInterface::DataState::kOpen;
-                    if (strong->_localDataChannelIsOpen != isOpen) {
-                        RTC_LOG(LS_INFO) << "DataChannel isOpen: " << isOpen;
-                        strong->_localDataChannelIsOpen = isOpen;
-                        if (isOpen) {
-                            strong->updateRemoteVideoConstaints();
-                        }
-                    }
-                });
-            }));
-            _localDataChannel->RegisterObserver(_localDataChannelObserver.get());
-        }
+        updateVideoTrack(false, [](auto result) {});
 
         setAudioInputDevice(_initialInputDeviceId);
         setAudioOutputDevice(_initialOutputDeviceId);
@@ -2067,11 +2154,26 @@ public:
         generatedSsrcStringStream << _mainStreamAudioSsrc;
         auto generatedSsrcString = generatedSsrcStringStream.str();
         
+        auto bundleLines = getLines(lines, "a=group:BUNDLE ");
+        std::vector<std::string> bundleMLines;
+        if (bundleLines.size() != 0) {
+            bundleMLines = splitBundleMLines(bundleLines[0]);
+        }
+        
         bool hasVideo = false;
         std::string currentMid;
         int insertVideoLinesAtIndex = 0;
         for (auto &line : lines) {
             auto adjustedLine = line;
+            
+            if (adjustedLine.find("a=group:BUNDLE ") == 0) {
+                std::ostringstream bundleString;
+                bundleString << "a=group:BUNDLE";
+                for (auto &mLine : bundleMLines) {
+                    bundleString << " " << mLine;
+                }
+                adjustedLine = bundleString.str();
+            }
             
             if (adjustedLine.find("m=") == 0) {
                 currentMid = "";
@@ -2127,8 +2229,8 @@ public:
             sim.semantics = "SIM";
             sim.ssrcs.push_back(_mainStreamAudioSsrc + ssrcDistance + 0);
             sim.ssrcs.push_back(_mainStreamAudioSsrc + ssrcDistance + 2);
-            //sim.ssrcs.push_back(_mainStreamAudioSsrc + ssrcDistance + 4);
-            //videoSourceGroups.push_back(sim);
+            sim.ssrcs.push_back(_mainStreamAudioSsrc + ssrcDistance + 4);
+            videoSourceGroups.push_back(sim);
             
             GroupJoinPayloadVideoSourceGroup fid0;
             fid0.semantics = "FID";
@@ -2140,13 +2242,13 @@ public:
             fid1.semantics = "FID";
             fid1.ssrcs.push_back(_mainStreamAudioSsrc + ssrcDistance + 2);
             fid1.ssrcs.push_back(_mainStreamAudioSsrc + ssrcDistance + 3);
-            //videoSourceGroups.push_back(fid1);
+            videoSourceGroups.push_back(fid1);
             
             GroupJoinPayloadVideoSourceGroup fid2;
             fid2.semantics = "FID";
             fid2.ssrcs.push_back(_mainStreamAudioSsrc + ssrcDistance + 4);
             fid2.ssrcs.push_back(_mainStreamAudioSsrc + ssrcDistance + 5);
-            //videoSourceGroups.push_back(fid2);
+            videoSourceGroups.push_back(fid2);
             
             std::string streamId = "video0";
             
@@ -2236,6 +2338,18 @@ public:
                         if (!strong) {
                             return;
                         }
+                        
+                        if (strong->_localVideoTrackTransceiver) {
+                            strong->_localVideoMid = strong->_localVideoTrackTransceiver->mid();
+                            if (strong->_localVideoMid && strong->_localVideoMid.value() == "1") {
+                                strong->_localDataChannelMid = "2";
+                            } else {
+                                strong->_localDataChannelMid = "1";
+                            }
+                        } else {
+                            strong->_localVideoMid.reset();
+                        }
+                        
                         auto payload = parseSdpIntoJoinPayload(adjustedSdp);
                         if (payload) {
                             payload->ssrc = strong->_mainStreamAudioSsrc;
@@ -2258,7 +2372,8 @@ public:
             return;
         }
         _joinResponsePayload = payload;
-        auto sdp = parseJoinResponseIntoSdp(_sessionId, _joinPayload.value(), payload, SdpType::kSdpTypeJoinAnswer, _allOtherParticipants, _localDataChannel != nullptr);
+        
+        auto sdp = parseJoinResponseIntoSdp(_sessionId, _joinPayload.value(), payload, SdpType::kSdpTypeJoinAnswer, _allOtherParticipants, _localVideoMid, _localDataChannelMid, _bundleStreamsState);
         setOfferSdp(sdp, true, true, false);
         
         addParticipantsInternal(std::move(participants), false);
@@ -2285,7 +2400,7 @@ public:
         }
         
         if (updated) {
-            auto sdp = parseJoinResponseIntoSdp(_sessionId, _joinPayload.value(), _joinResponsePayload.value(), SdpType::kSdpTypeRemoteOffer, _allOtherParticipants, _localDataChannel != nullptr);
+            auto sdp = parseJoinResponseIntoSdp(_sessionId, _joinPayload.value(), _joinResponsePayload.value(), SdpType::kSdpTypeRemoteOffer, _allOtherParticipants, _localVideoMid, _localDataChannelMid, _bundleStreamsState);
             setOfferSdp(sdp, false, false, false);
         }
     }
@@ -2320,7 +2435,7 @@ public:
             }
         }
 
-        auto sdp = parseJoinResponseIntoSdp(_sessionId, _joinPayload.value(), _joinResponsePayload.value(), SdpType::kSdpTypeRemoteOffer, _allOtherParticipants, _localDataChannel != nullptr);
+        auto sdp = parseJoinResponseIntoSdp(_sessionId, _joinPayload.value(), _joinResponsePayload.value(), SdpType::kSdpTypeRemoteOffer, _allOtherParticipants, _localVideoMid, _localDataChannelMid, _bundleStreamsState);
         setOfferSdp(sdp, false, false, completeMissingSsrcSetup);
         
         bool updated = false;
@@ -2365,8 +2480,19 @@ public:
                         if (!strong->_joinResponsePayload) {
                             return;
                         }
+                        
+                        if (strong->_localVideoTrackTransceiver) {
+                            strong->_localVideoMid = strong->_localVideoTrackTransceiver->mid();
+                            if (strong->_localVideoMid && strong->_localVideoMid.value() == "1") {
+                                strong->_localDataChannelMid = "2";
+                            } else {
+                                strong->_localDataChannelMid = "1";
+                            }
+                        } else {
+                            strong->_localVideoMid.reset();
+                        }
 
-                        auto sdp = parseJoinResponseIntoSdp(strong->_sessionId, strong->_joinPayload.value(), strong->_joinResponsePayload.value(), SdpType::kSdpTypeJoinAnswer, strong->_allOtherParticipants, strong->_localDataChannel != nullptr);
+                        auto sdp = parseJoinResponseIntoSdp(strong->_sessionId, strong->_joinPayload.value(), strong->_joinResponsePayload.value(), SdpType::kSdpTypeJoinAnswer, strong->_allOtherParticipants, strong->_localVideoMid, strong->_localDataChannelMid, strong->_bundleStreamsState);
                         strong->setOfferSdp(sdp, false, true, false);
                     }, [](webrtc::RTCError error) {
                     }));
@@ -2380,13 +2506,18 @@ public:
     }
 
     void setOfferSdp(std::string const &offerSdp, bool isInitialJoinAnswer, bool isAnswer, bool completeMissingSsrcSetup) {
-        if (!isAnswer && _appliedRemoteRescription == offerSdp) {
+        if (!isAnswer && _appliedRemoteDescription == offerSdp) {
             if (completeMissingSsrcSetup) {
                 completeProcessingMissingSsrcs();
             }
             return;
         }
-        _appliedRemoteRescription = offerSdp;
+        
+        if (_appliedRemoteDescription.size() != 0) {
+            _appliedOfferTimestamp = rtc::TimeMillis();
+        }
+        
+        _appliedRemoteDescription = offerSdp;
 
         RTC_LOG(LoggingSeverity::WARNING) << "----- setOfferSdp " << (isAnswer ? "answer" : "offer") << " -----";
         RTC_LOG(LoggingSeverity::WARNING) << offerSdp;
@@ -2399,10 +2530,6 @@ public:
                 completeProcessingMissingSsrcs();
             }
             return;
-        }
-
-        if (!isAnswer) {
-            _appliedOfferTimestamp = rtc::TimeMillis();
         }
 
         const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
@@ -2746,6 +2873,87 @@ public:
 
         RTC_LOG(LoggingSeverity::WARNING) << "setIsMuted: " << isMuted;
     }
+    
+    void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture, std::function<void(GroupJoinPayload)> completion) {
+        _videoCapture = videoCapture;
+        
+        updateVideoTrack(true, completion);
+    }
+    
+    void updateVideoTrack(bool applyNow, std::function<void(GroupJoinPayload)> completion) {
+        if (_videoCapture) {
+            VideoCaptureInterfaceObject *videoCaptureImpl = GetVideoCaptureAssumingSameThread(_videoCapture.get());
+            
+            //_videoCapture->setPreferredAspectRatio(1280.0f / 720.0f);
+            
+            _localVideoTrack = _nativeFactory->CreateVideoTrack("video0", videoCaptureImpl->source());
+            _localVideoTrack->set_enabled(true);
+            webrtc::RtpTransceiverInit videoInit;
+            auto addedTransceiver = _peerConnection->AddTransceiver(_localVideoTrack, videoInit);
+            if (addedTransceiver.ok()) {
+                _localVideoTrackTransceiver = addedTransceiver.value();
+                for (auto &it : _peerConnection->GetTransceivers()) {
+                    if (it->media_type() == cricket::MediaType::MEDIA_TYPE_VIDEO) {
+                        if (_localVideoTrackTransceiver->sender().get() == it->sender().get()) {
+                            it->SetDirectionWithError(webrtc::RtpTransceiverDirection::kSendOnly);
+                            
+                            auto capabilities = _nativeFactory->GetRtpSenderCapabilities(
+                                cricket::MediaType::MEDIA_TYPE_VIDEO);
+
+                            std::vector<webrtc::RtpCodecCapability> codecs;
+                            bool hasVP8 = false;
+                            for (auto &codec : capabilities.codecs) {
+                                if (codec.name == cricket::kVp8CodecName) {
+                                    if (!hasVP8) {
+                                        codecs.insert(codecs.begin(), codec);
+                                        hasVP8 = true;
+                                    }
+                                } else if (codec.name == cricket::kRtxCodecName) {
+                                    codecs.push_back(codec);
+                                }
+                            }
+                            it->SetCodecPreferences(codecs);
+
+                            break;
+                        }
+                    }
+                }
+            }
+        } else if (_localVideoTrack && _localVideoTrackTransceiver) {
+            _localVideoTrack->set_enabled(false);
+            _localVideoTrackTransceiver->SetDirectionWithError(webrtc::RtpTransceiverDirection::kInactive);
+            for (auto &it : _peerConnection->GetTransceivers()) {
+                if (it.get() == _localVideoTrackTransceiver.get()) {
+                    _peerConnection->RemoveTrack(it->sender());
+                    break;
+                }
+            }
+            _localVideoTrack = nullptr;
+            _localVideoTrackTransceiver = nullptr;
+        }
+        
+        if (applyNow) {
+            const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
+            emitJoinPayload([weak, completion](auto result) {
+                auto strong = weak.lock();
+                if (!strong) {
+                    return;
+                }
+                
+                if (!strong->_joinPayload) {
+                    return;
+                }
+                if (!strong->_joinResponsePayload) {
+                    return;
+                }
+
+                auto sdp = parseJoinResponseIntoSdp(strong->_sessionId, strong->_joinPayload.value(), strong->_joinResponsePayload.value(), SdpType::kSdpTypeJoinAnswer, strong->_allOtherParticipants, strong->_localVideoMid, strong->_localDataChannelMid, strong->_bundleStreamsState);
+                strong->setOfferSdp(sdp, false, true, false);
+                
+                completion(result);
+            });
+        }
+    }
 
     void emitAnswer(bool completeMissingSsrcSetup) {
         const auto weak = std::weak_ptr<GroupInstanceManager>(shared_from_this());
@@ -2902,6 +3110,7 @@ private:
     std::function<void(bool)> _networkStateUpdated;
     std::function<void(GroupLevelsUpdate const &)> _audioLevelsUpdated;
     std::function<void(std::vector<uint32_t> const &)> _incomingVideoSourcesUpdated;
+    std::function<void(std::vector<uint32_t> const &)> _participantDescriptionsRequired;
     
     int32_t _myAudioLevelPeakCount = 0;
     float _myAudioLevelPeak = 0;
@@ -2929,7 +3138,7 @@ private:
     bool _isProcessingMissingSsrcs = false;
     std::set<uint32_t> _missingSsrcQueue;
 
-    std::string _appliedRemoteRescription;
+    std::string _appliedRemoteDescription;
 
     rtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> _nativeFactory;
     std::unique_ptr<PeerConnectionObserverImpl> _observer;
@@ -2939,10 +3148,16 @@ private:
     rtc::scoped_refptr<webrtc::RtpSenderInterface> _localAudioTrackSender;
     
     rtc::scoped_refptr<webrtc::VideoTrackInterface> _localVideoTrack;
+    rtc::scoped_refptr<webrtc::RtpTransceiverInterface> _localVideoTrackTransceiver;
     
     rtc::scoped_refptr<webrtc::DataChannelInterface> _localDataChannel;
+    absl::optional<std::string> _localDataChannelMid;
     std::unique_ptr<DataChannelObserverImpl> _localDataChannelObserver;
     bool _localDataChannelIsOpen = false;
+    
+    absl::optional<std::string> _localVideoMid;
+    
+    std::vector<StreamSpec> _bundleStreamsState;
 
     rtc::Thread *_adm_thread = nullptr;
     rtc::scoped_refptr<webrtc::AudioDeviceModule> _adm_use_withAudioDeviceModule;
@@ -2961,15 +3176,17 @@ private:
     std::map<uint32_t, std::unique_ptr<CustomVideoSinkInterfaceProxyImpl>> _remoteVideoTrackSinks;
     
     std::shared_ptr<VideoCaptureInterface> _videoCapture;
+    
+    std::unique_ptr<ErrorParsingLogSink> _errorParsingLogSink;
 };
 
 GroupInstanceImpl::GroupInstanceImpl(GroupInstanceDescriptor &&descriptor)
 : _logSink(std::make_unique<LogSinkImpl>(descriptor.config.logPath)) {
     rtc::LogMessage::LogToDebug(rtc::LS_INFO);
     rtc::LogMessage::SetLogToStderr(true);
-//    if (_logSink) {
-//		rtc::LogMessage::AddLogToStream(_logSink.get(), rtc::LS_INFO);
-//	}
+    if (_logSink) {
+		rtc::LogMessage::AddLogToStream(_logSink.get(), rtc::LS_INFO);
+	}
 
 	_manager.reset(new ThreadLocalObject<GroupInstanceManager>(getMediaThread(), [descriptor = std::move(descriptor)]() mutable {
 		return new GroupInstanceManager(std::move(descriptor));
@@ -3023,6 +3240,12 @@ void GroupInstanceImpl::addParticipants(std::vector<GroupParticipantDescription>
 void GroupInstanceImpl::setIsMuted(bool isMuted) {
     _manager->perform(RTC_FROM_HERE, [isMuted](GroupInstanceManager *manager) {
         manager->setIsMuted(isMuted);
+    });
+}
+
+void GroupInstanceImpl::setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture, std::function<void(GroupJoinPayload)> completion) {
+    _manager->perform(RTC_FROM_HERE, [videoCapture, completion = std::move(completion)](GroupInstanceManager *manager) mutable {
+        manager->setVideoCapture(videoCapture, completion);
     });
 }
 
