@@ -614,6 +614,7 @@ private:
 struct SsrcMappingInfo {
     uint32_t ssrc = 0;
     bool isVideo = false;
+    std::string endpointId;
 };
 
 class MissingSsrcPacketBuffer {
@@ -673,7 +674,7 @@ public:
         } while (!_outgoingAudioSsrc);
         
         uint32_t outgoingVideoSsrcBase = _outgoingAudioSsrc + 1;
-        int numVideoSimulcastLayers = 1;
+        int numVideoSimulcastLayers = 3;
         for (int layerIndex = 0; layerIndex < numVideoSimulcastLayers; layerIndex++) {
             _outgoingVideoSsrcs.simulcastLayers.push_back(VideoSsrcs::SimulcastLayer(outgoingVideoSsrcBase + layerIndex * 2 + 0, outgoingVideoSsrcBase + layerIndex * 2 + 1));
         }
@@ -730,6 +731,19 @@ public:
                     StaticThreads::getMediaThread()->PostTask(RTC_FROM_HERE, [weak, message]() mutable {
                         if (const auto strong = weak.lock()) {
                             strong->receivePacket(message);
+                        }
+                    });
+                },
+                [=](bool isDataChannelOpen) {
+                    StaticThreads::getMediaThread()->PostTask(RTC_FROM_HERE, [weak, isDataChannelOpen]() mutable {
+                        if (const auto strong = weak.lock()) {
+                            strong->updateIsDataChannelOpen(isDataChannelOpen);
+                        }
+                    });
+                },
+                [=](std::string const &message) {
+                    StaticThreads::getMediaThread()->PostTask(RTC_FROM_HERE, [weak, message]() mutable {
+                        if (const auto strong = weak.lock()) {
                         }
                     });
                 });
@@ -791,18 +805,12 @@ public:
 
         _outgoingAudioChannel.reset(_mediaEngine->voice().CreateMediaChannel(_call.get(), cricket::MediaConfig(), audioOptions, webrtc::CryptoOptions::NoGcm()));
 
-        const uint32_t opusClockrate = 48000;
-        const uint16_t opusSdpPayload = 111;
-        const char *opusSdpName = "opus";
-        const uint8_t opusSdpChannels = 2;
-        const uint32_t opusSdpBitrate = 0;
-
         const uint8_t opusMinBitrateKbps = 32;
         const uint8_t opusMaxBitrateKbps = 32;
         const uint8_t opusStartBitrateKbps = 32;
         const uint8_t opusPTimeMs = 120;
 
-        cricket::AudioCodec opusCodec(opusSdpPayload, opusSdpName, opusClockrate, opusSdpBitrate, opusSdpChannels);
+        cricket::AudioCodec opusCodec(111, "opus", 48000, 0, 2);
         opusCodec.AddFeedbackParam(cricket::FeedbackParam(cricket::kRtcpFbParamTransportCc));
         opusCodec.SetParam(cricket::kCodecParamMinBitrate, opusMinBitrateKbps);
         opusCodec.SetParam(cricket::kCodecParamStartBitrate, opusStartBitrateKbps);
@@ -1071,6 +1079,17 @@ public:
         }
     }
     
+    void updateIsDataChannelOpen(bool isDataChannelOpen) {
+        if (_isDataChannelOpen == isDataChannelOpen) {
+            return;
+        }
+        _isDataChannelOpen = isDataChannelOpen;
+        
+        if (_isDataChannelOpen) {
+            maybeUpdateRemoteVideoConstaints();
+        }
+    }
+    
     void receivePacket(rtc::CopyOnWriteBuffer const &packet) {
         webrtc::RtpUtility::RtpHeaderParser rtpParser(packet.data(), packet.size());
         
@@ -1084,7 +1103,7 @@ public:
             _call->Receiver()->DeliverPacket(webrtc::MediaType::ANY, packet, -1);
         } else {
             if (!rtpParser.Parse(&header)) {
-                RTC_LOG(LS_INFO) << "Could not parse rtp header";
+                // Probably a data channel message
                 return;
             }
             
@@ -1161,6 +1180,72 @@ public:
                 }
             }
         }
+    }
+    
+    void maybeUpdateRemoteVideoConstaints() {
+        if (!_isDataChannelOpen) {
+            return;
+        }
+        
+        std::vector<std::string> endpointIds;
+        for (const auto &incomingVideoChannel : _incomingVideoChannels) {
+            auto ssrcMapping = _ssrcMapping.find(incomingVideoChannel.first);
+            if (ssrcMapping != _ssrcMapping.end()) {
+                if (std::find(endpointIds.begin(), endpointIds.end(), ssrcMapping->second.endpointId) == endpointIds.end()) {
+                    endpointIds.push_back(ssrcMapping->second.endpointId);
+                }
+            }
+        }
+        std::sort(endpointIds.begin(), endpointIds.end());
+        
+        std::string pinnedEndpoint;
+        
+        std::ostringstream string;
+        string << "{" << "\n";
+        string << " \"colibriClass\": \"ReceiverVideoConstraintsChangedEvent\"," << "\n";
+        string << " \"videoConstraints\": [" << "\n";
+        bool isFirst = true;
+        for (size_t i = 0; i < endpointIds.size(); i++) {
+            int idealHeight = 180;
+            if (_currentHighQualityVideoEndpointId == endpointIds[i]) {
+                idealHeight = 720;
+            }
+            
+            if (isFirst) {
+                isFirst = false;
+            } else {
+                if (i != 0) {
+                    string << ",";
+                }
+            }
+            string << "    {\n";
+            string << "      \"id\": \"" << endpointIds[i] << "\",\n";
+            string << "      \"idealHeight\": " << idealHeight << "\n";
+            string << "    }";
+            string << "\n";
+        }
+        string << " ]" << "\n";
+        string << "}";
+        
+        std::string result = string.str();
+        _networkManager->perform(RTC_FROM_HERE, [result = std::move(result)](GroupNetworkManager *networkManager) {
+            networkManager->sendDataChannelMessage(result);
+        });
+        
+        /*if (pinnedEndpoint.size() != 0) {
+            std::ostringstream string;
+            string << "{" << "\n";
+            string << " \"colibriClass\": \"PinnedEndpointChangedEvent\"," << "\n";
+            string << " \"pinnedEndpoint\": \"" << pinnedEndpoint << "\"" << "\n";
+            string << "}";
+            
+            std::string result = string.str();
+            
+            RTC_LOG(LS_INFO) << "DataChannel send message: " << result;
+            
+            webrtc::DataBuffer buffer(result, false);
+            _localDataChannel->Send(buffer);
+        }*/
     }
     
     void emitJoinPayload(std::function<void(GroupJoinPayload)> completion) {
@@ -1248,7 +1333,7 @@ public:
             }
             
             if (_incomingAudioChannels.find(participant.audioSsrc) == _incomingAudioChannels.end()) {
-                addIncomingAudioChannel(participant.audioSsrc);
+                addIncomingAudioChannel(participant.endpointId, participant.audioSsrc);
             }
             if (participant.videoPayloadTypes.size() != 0 && participant.videoSourceGroups.size() != 0) {
                 if (_incomingVideoChannels.find(participant.audioSsrc) == _incomingVideoChannels.end()) {
@@ -1299,7 +1384,7 @@ public:
         }
     }
     
-    void addIncomingAudioChannel(uint32_t ssrc) {
+    void addIncomingAudioChannel(std::string const &endpointId, uint32_t ssrc) {
         if (_incomingAudioChannels.find(ssrc) != _incomingAudioChannels.end()) {
             return;
         }
@@ -1349,6 +1434,7 @@ public:
         SsrcMappingInfo mapping;
         mapping.ssrc = ssrc;
         mapping.isVideo = false;
+        mapping.endpointId = endpointId;
         _ssrcMapping.insert(std::make_pair(ssrc, mapping));
         
         if (_isConnected) {
@@ -1407,6 +1493,7 @@ public:
                     SsrcMappingInfo mapping;
                     mapping.ssrc = participant.audioSsrc;
                     mapping.isVideo = true;
+                    mapping.endpointId = participant.endpointId;
                     _ssrcMapping.insert(std::make_pair(ssrc, mapping));
                 }
             }
@@ -1441,6 +1528,18 @@ public:
         auto it = _incomingAudioChannels.find(ssrc);
         if (it != _incomingAudioChannels.end()) {
             it->second->setVolume(volume);
+        }
+    }
+    
+    void setFullSizeVideoSsrc(uint32_t ssrc) {
+        auto ssrcMapping = _ssrcMapping.find(ssrc);
+        std::string currentHighQualityVideoEndpointId;
+        if (ssrcMapping != _ssrcMapping.end()) {
+            currentHighQualityVideoEndpointId = ssrcMapping->second.endpointId;
+        }
+        if (_currentHighQualityVideoEndpointId != currentHighQualityVideoEndpointId) {
+            _currentHighQualityVideoEndpointId = currentHighQualityVideoEndpointId;
+            maybeUpdateRemoteVideoConstaints();
         }
     }
     
@@ -1484,6 +1583,9 @@ private:
     webrtc::LocalAudioSinkAdapter _audioSource;
     rtc::scoped_refptr<webrtc::AudioDeviceModule> _audioDeviceModule;
     
+    std::unique_ptr<cricket::SctpTransportFactory> _sctpTransportFactory;
+    std::unique_ptr<cricket::SctpTransportInternal> _sctpTransport;
+    
     std::unique_ptr<cricket::VoiceMediaChannel> _outgoingAudioChannel;
     uint32_t _outgoingAudioSsrc = 0;
     std::unique_ptr<NetworkInterfaceImpl> _outgoingAudioInterface;
@@ -1509,13 +1611,16 @@ private:
     std::map<uint32_t, std::unique_ptr<IncomingAudioChannel>> _incomingAudioChannels;
     std::map<uint32_t, std::unique_ptr<IncomingVideoChannel>> _incomingVideoChannels;
     
+    std::string _currentHighQualityVideoEndpointId;
+    
     bool _isConnected = false;
+    bool _isDataChannelOpen = false;
 };
 
 GroupInstanceCustomImpl::GroupInstanceCustomImpl(GroupInstanceDescriptor &&descriptor) :
     _logSink(std::make_unique<LogSinkImpl>(descriptor.config.logPath)) {
     rtc::LogMessage::LogToDebug(rtc::LS_INFO);
-    rtc::LogMessage::SetLogToStderr(true);
+    rtc::LogMessage::SetLogToStderr(false);
     if (_logSink) {
         rtc::LogMessage::AddLogToStream(_logSink.get(), rtc::LS_INFO);
     }
@@ -1601,7 +1706,9 @@ void GroupInstanceCustomImpl::setVolume(uint32_t ssrc, double volume) {
 }
 
 void GroupInstanceCustomImpl::setFullSizeVideoSsrc(uint32_t ssrc) {
-    
+    _internal->perform(RTC_FROM_HERE, [ssrc](GroupInstanceCustomInternal *internal) {
+        internal->setFullSizeVideoSsrc(ssrc);
+    });
 }
 
 } // namespace tgcalls
