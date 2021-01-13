@@ -121,7 +121,39 @@ struct GroupJoinResponsePayload {
 template <typename T>
 class ThreadLocalObject;
 
-class GroupInstanceImpl final {
+class GroupInstanceInterface {
+protected:
+    GroupInstanceInterface() = default;
+    
+public:
+    virtual ~GroupInstanceInterface() = default;
+
+    virtual void stop() = 0;
+
+    virtual void emitJoinPayload(std::function<void(GroupJoinPayload)> completion) = 0;
+    virtual void setJoinResponsePayload(GroupJoinResponsePayload payload, std::vector<tgcalls::GroupParticipantDescription> &&participants) = 0;
+    virtual void addParticipants(std::vector<GroupParticipantDescription> &&participants) = 0;
+    virtual void removeSsrcs(std::vector<uint32_t> ssrcs) = 0;
+
+    virtual void setIsMuted(bool isMuted) = 0;
+    virtual void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture, std::function<void(GroupJoinPayload)> completion) = 0;
+    virtual void setAudioOutputDevice(std::string id) = 0;
+    virtual void setAudioInputDevice(std::string id) = 0;
+    
+    virtual void addIncomingVideoOutput(uint32_t ssrc, std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) = 0;
+    
+    virtual void setVolume(uint32_t ssrc, double volume) = 0;
+    virtual void setFullSizeVideoSsrc(uint32_t ssrc) = 0;
+
+    struct AudioDevice {
+      enum class Type {Input, Output};
+      std::string name;
+      std::string guid;
+    };
+
+};
+
+class GroupInstanceImpl final : public GroupInstanceInterface {
 public:
 	explicit GroupInstanceImpl(GroupInstanceDescriptor &&descriptor);
 	~GroupInstanceImpl();
@@ -143,12 +175,7 @@ public:
     void setVolume(uint32_t ssrc, double volume);
     void setFullSizeVideoSsrc(uint32_t ssrc);
 
-    struct AudioDevice {
-      enum class Type {Input, Output};
-      std::string name;
-      std::string guid;
-    };
-    static std::vector<AudioDevice> getAudioDevices(AudioDevice::Type type);
+    static std::vector<GroupInstanceInterface::AudioDevice> getAudioDevices(GroupInstanceInterface::AudioDevice::Type type);
 private:
 	std::unique_ptr<ThreadLocalObject<GroupInstanceManager>> _manager;
 	std::unique_ptr<LogSinkImpl> _logSink;

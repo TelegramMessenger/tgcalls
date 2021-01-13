@@ -8,35 +8,38 @@
 #include <map>
 
 #include "../Instance.h"
-
-namespace webrtc {
-class AudioDeviceModule;
-class TaskQueueFactory;
-}
+#include "GroupInstanceImpl.h"
 
 namespace tgcalls {
 
 class LogSinkImpl;
-class GroupInstanceCustomManager;
+class GroupInstanceCustomInternal;
 
-struct GroupInstanceCustomDescriptor {
-    std::function<void(std::vector<uint8_t> const &)> sendPacket;
-};
-
-template <typename T>
-class ThreadLocalObject;
-
-class GroupInstanceCustomImpl final {
+class GroupInstanceCustomImpl final : public GroupInstanceInterface {
 public:
-    explicit GroupInstanceCustomImpl(GroupInstanceCustomDescriptor &&descriptor);
+    explicit GroupInstanceCustomImpl(GroupInstanceDescriptor &&descriptor);
     ~GroupInstanceCustomImpl();
 
     void stop();
 
-    void receivePacket(std::vector<uint8_t> &&data);
+    void emitJoinPayload(std::function<void(GroupJoinPayload)> completion);
+    void setJoinResponsePayload(GroupJoinResponsePayload payload, std::vector<tgcalls::GroupParticipantDescription> &&participants);
+    void addParticipants(std::vector<GroupParticipantDescription> &&participants);
+    void removeSsrcs(std::vector<uint32_t> ssrcs);
+
+    void setIsMuted(bool isMuted);
+    void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture, std::function<void(GroupJoinPayload)> completion);
+    void setAudioOutputDevice(std::string id);
+    void setAudioInputDevice(std::string id);
+    
+    void addIncomingVideoOutput(uint32_t ssrc, std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
+    
+    void setVolume(uint32_t ssrc, double volume);
+    void setFullSizeVideoSsrc(uint32_t ssrc);
 
 private:
-    std::unique_ptr<ThreadLocalObject<GroupInstanceCustomManager>> _manager;
+    std::unique_ptr<ThreadLocalObject<GroupInstanceCustomInternal>> _internal;
+    std::unique_ptr<LogSinkImpl> _logSink;
 
 };
 
