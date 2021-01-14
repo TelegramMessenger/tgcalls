@@ -303,6 +303,10 @@ void GroupNetworkManager::sendDataChannelMessage(std::string const &message) {
     _dataChannelInterface->sendDataChannelMessage(message);
 }
 
+rtc::PacketTransportInternal *GroupNetworkManager::getTransportChannel() {
+    return _transportChannel.get();
+}
+
 void GroupNetworkManager::checkConnectionTimeout() {
     const auto weak = std::weak_ptr<GroupNetworkManager>(shared_from_this());
     StaticThreads::getNetworkThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {

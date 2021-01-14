@@ -58,6 +58,8 @@ public:
     
     void sendMessage(rtc::CopyOnWriteBuffer const &message);
     void sendDataChannelMessage(std::string const &message);
+    
+    rtc::PacketTransportInternal *getTransportChannel();
 
 private:
     void checkConnectionTimeout();
