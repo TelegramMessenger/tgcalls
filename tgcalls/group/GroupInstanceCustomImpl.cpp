@@ -1160,21 +1160,26 @@ public:
         if (rtpParameters.encodings.size() == 3) {
             for (int i = 0; i < (int)rtpParameters.encodings.size(); i++) {
                 if (i == 0) {
+                    rtpParameters.encodings[i].min_bitrate_bps = 50000;
                     rtpParameters.encodings[i].max_bitrate_bps = 100000;
                     rtpParameters.encodings[i].scale_resolution_down_by = 4.0;
                 } else if (i == 1) {
+                    rtpParameters.encodings[i].max_bitrate_bps = 150000;
                     rtpParameters.encodings[i].max_bitrate_bps = 200000;
                     rtpParameters.encodings[i].scale_resolution_down_by = 2.0;
                 } else if (i == 2) {
+                    rtpParameters.encodings[i].min_bitrate_bps = 300000;
                     rtpParameters.encodings[i].max_bitrate_bps = 800000;
                 }
             }
         } else if (rtpParameters.encodings.size() == 2) {
             for (int i = 0; i < (int)rtpParameters.encodings.size(); i++) {
                 if (i == 0) {
+                    rtpParameters.encodings[i].min_bitrate_bps = 50000;
                     rtpParameters.encodings[i].max_bitrate_bps = 100000;
                     rtpParameters.encodings[i].scale_resolution_down_by = 4.0;
                 } else if (i == 1) {
+                    rtpParameters.encodings[i].min_bitrate_bps = 200000;
                     rtpParameters.encodings[i].max_bitrate_bps = 800000;
                 }
             }
