@@ -818,10 +818,10 @@ public:
         _channelManager->DestroyVideoChannel(_outgoingVideoChannel);
         _outgoingVideoChannel = nullptr;
         
-        StaticThreads::getNetworkThread()->Invoke<void>(RTC_FROM_HERE, [this]() {
+        /*StaticThreads::getNetworkThread()->Invoke<void>(RTC_FROM_HERE, [this]() {
             _rtpTransport->SetRtpPacketTransport(nullptr);
         });
-        _rtpTransport.reset();
+        _rtpTransport.reset();*/
         
         _channelManager = nullptr;
     }
@@ -940,12 +940,13 @@ public:
         
         _uniqueRandomIdGenerator.reset(new rtc::UniqueRandomIdGenerator());
         
-        _rtpTransport.reset(new WrappedRtpTransport(true));
+        //_rtpTransport.reset(new WrappedRtpTransport(true));
         StaticThreads::getNetworkThread()->Invoke<void>(RTC_FROM_HERE, [this]() {
-            _rtpTransport->SetRtpPacketTransport(_networkManager->getSyncAssumingSameThread()->getTransportChannel());
+            _rtpTransport = _networkManager->getSyncAssumingSameThread()->getRtpTransport();
+            //_rtpTransport->SetRtpPacketTransport(_networkManager->getSyncAssumingSameThread()->getTransportChannel());
         });
         
-        _outgoingAudioChannel = _channelManager->CreateVoiceChannel(_call.get(), cricket::MediaConfig(), _rtpTransport.get(), StaticThreads::getMediaThread(), "0", false, webrtc::CryptoOptions::NoGcm(), _uniqueRandomIdGenerator.get(), audioOptions);
+        _outgoingAudioChannel = _channelManager->CreateVoiceChannel(_call.get(), cricket::MediaConfig(), _rtpTransport, StaticThreads::getMediaThread(), "0", false, webrtc::CryptoOptions::NoGcm(), _uniqueRandomIdGenerator.get(), audioOptions);
 
         const uint8_t opusMinBitrateKbps = 32;
         const uint8_t opusMaxBitrateKbps = 32;
@@ -990,7 +991,7 @@ public:
         
         _videoBitrateAllocatorFactory = webrtc::CreateBuiltinVideoBitrateAllocatorFactory();
         
-        _outgoingVideoChannel = _channelManager->CreateVideoChannel(_call.get(), cricket::MediaConfig(), _rtpTransport.get(), StaticThreads::getMediaThread(), "1", false, webrtc::CryptoOptions::NoGcm(), _uniqueRandomIdGenerator.get(), cricket::VideoOptions(), _videoBitrateAllocatorFactory.get());
+        _outgoingVideoChannel = _channelManager->CreateVideoChannel(_call.get(), cricket::MediaConfig(), _rtpTransport, StaticThreads::getMediaThread(), "1", false, webrtc::CryptoOptions::NoGcm(), _uniqueRandomIdGenerator.get(), cricket::VideoOptions(), _videoBitrateAllocatorFactory.get());
         
         configureSendVideo();
         
@@ -1311,12 +1312,6 @@ public:
             if (it == _ssrcMapping.end()) {
                 maybeReportUnknownSsrc(header.ssrc);
                 _missingPacketBuffer.add(header.ssrc, packet);
-            } else {
-                if (it->second.isVideo) {
-                    //_call->Receiver()->DeliverPacket(webrtc::MediaType::VIDEO, packet, -1);
-                } else {
-                    //_call->Receiver()->DeliverPacket(webrtc::MediaType::AUDIO, packet, -1);
-                }
             }
         }
     }
@@ -1369,7 +1364,7 @@ public:
             if (it != _ssrcMapping.end()) {
                 for (const auto &packet : packets) {
                     StaticThreads::getNetworkThread()->Invoke<void>(RTC_FROM_HERE, [this, packet]() {
-                        _rtpTransport->DemuxPacketInternal(packet, -1);
+                        //_rtpTransport->DemuxPacketInternal(packet, -1);
                     });
                 }
             }
@@ -1456,6 +1451,15 @@ public:
             payload.ufrag = localIceParameters.ufrag;
             payload.pwd = localIceParameters.pwd;
             
+            auto localFingerprint = networkManager->getLocalFingerprint();
+            if (localFingerprint) {
+                GroupJoinPayloadFingerprint serializedFingerprint;
+                serializedFingerprint.hash = localFingerprint->algorithm;
+                serializedFingerprint.fingerprint = localFingerprint->GetRfc4572Fingerprint();
+                serializedFingerprint.setup = "active";
+                payload.fingerprints.push_back(std::move(serializedFingerprint));
+            }
+            
             completion(payload);
         });
     }
@@ -1495,6 +1499,38 @@ public:
         //emitJoinPayload(completion);
     }
     
+    /*static bool ParseFingerprintAttribute(
+        const std::string& line,
+        std::unique_ptr<rtc::SSLFingerprint>* fingerprint,
+        SdpParseError* error) {
+      std::vector<std::string> fields;
+      rtc::split(line.substr(kLinePrefixLength), kSdpDelimiterSpaceChar, &fields);
+      const size_t expected_fields = 2;
+      if (fields.size() != expected_fields) {
+        return ParseFailedExpectFieldNum(line, expected_fields, error);
+      }
+
+      // The first field here is "fingerprint:<hash>.
+      std::string algorithm;
+      if (!GetValue(fields[0], kAttributeFingerprint, &algorithm, error)) {
+        return false;
+      }
+
+      // Downcase the algorithm. Note that we don't need to downcase the
+      // fingerprint because hex_decode can handle upper-case.
+      absl::c_transform(algorithm, algorithm.begin(), ::tolower);
+
+      // The second field is the digest value. De-hexify it.
+      *fingerprint =
+          rtc::SSLFingerprint::CreateUniqueFromRfc4572(algorithm, fields[1]);
+      if (!*fingerprint) {
+        return ParseFailed(line, "Failed to create fingerprint from the digest.",
+                           error);
+      }
+
+      return true;
+    }*/
+    
     void setJoinResponsePayload(GroupJoinResponsePayload payload, std::vector<tgcalls::GroupParticipantDescription> &&participants) {
         RTC_LOG(LS_INFO) << formatTimestampMillis(rtc::TimeMillis()) << ": " << "setJoinResponsePayload";
         
@@ -1523,7 +1559,12 @@ public:
                 iceCandidates.push_back(parsedCandidate);
             }
             
-            networkManager->setRemoteParams(remoteIceParameters, iceCandidates);
+            std::unique_ptr<rtc::SSLFingerprint> fingerprint;
+            if (payload.fingerprints.size() != 0) {
+                fingerprint = std::move(rtc::SSLFingerprint::CreateUniqueFromRfc4572(payload.fingerprints[0].hash, payload.fingerprints[0].fingerprint));
+            }
+            
+            networkManager->setRemoteParams(remoteIceParameters, iceCandidates, fingerprint.get());
         });
         
         addParticipants(std::move(participants));
@@ -1597,7 +1638,7 @@ public:
         std::unique_ptr<IncomingAudioChannel> channel(new IncomingAudioChannel(
             _channelManager.get(),
             _call.get(),
-            _rtpTransport.get(),
+            _rtpTransport,
             _uniqueRandomIdGenerator.get(),
             ssrc,
             [weak, ssrc = ssrc](AudioSinkImpl::Update update) {
@@ -1642,7 +1683,7 @@ public:
         std::unique_ptr<IncomingVideoChannel> channel(new IncomingVideoChannel(
             _channelManager.get(),
             _call.get(),
-            _rtpTransport.get(),
+            _rtpTransport,
             _uniqueRandomIdGenerator.get(),
             _availableVideoFormats,
             participant
@@ -1762,7 +1803,8 @@ private:
     std::vector<GroupJoinPayloadVideoSourceGroup> _videoSourceGroups;
     
     std::unique_ptr<rtc::UniqueRandomIdGenerator> _uniqueRandomIdGenerator;
-    std::unique_ptr<WrappedRtpTransport> _rtpTransport;
+    //std::unique_ptr<WrappedRtpTransport> _rtpTransport;
+    webrtc::RtpTransport *_rtpTransport = nullptr;
     std::unique_ptr<cricket::ChannelManager> _channelManager;
     
     std::unique_ptr<webrtc::VideoBitrateAllocatorFactory> _videoBitrateAllocatorFactory;

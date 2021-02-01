@@ -25,11 +25,14 @@ namespace cricket {
 class BasicPortAllocator;
 class P2PTransportChannel;
 class IceTransportInternal;
+class DtlsTransport;
 } // namespace cricket
 
 namespace webrtc {
 class BasicAsyncResolverFactory;
 class TurnCustomizer;
+class DtlsSrtpTransport;
+class RtpTransport;
 } // namespace webrtc
 
 namespace tgcalls {
@@ -54,20 +57,27 @@ public:
     void start();
     
     PeerIceParameters getLocalIceParameters();
-    void setRemoteParams(PeerIceParameters const &remoteIceParameters, std::vector<cricket::Candidate> const &iceCandidates);
+    std::unique_ptr<rtc::SSLFingerprint> getLocalFingerprint();
+    void setRemoteParams(PeerIceParameters const &remoteIceParameters, std::vector<cricket::Candidate> const &iceCandidates, rtc::SSLFingerprint *fingerprint);
     
-    void sendMessage(rtc::CopyOnWriteBuffer const &message);
     void sendDataChannelMessage(std::string const &message);
     
-    rtc::PacketTransportInternal *getTransportChannel();
+    webrtc::RtpTransport *getRtpTransport();
 
 private:
     void checkConnectionTimeout();
     void candidateGathered(cricket::IceTransportInternal *transport, const cricket::Candidate &candidate);
     void candidateGatheringState(cricket::IceTransportInternal *transport);
+    void OnTransportWritableState_n(rtc::PacketTransportInternal *transport);
+    void OnTransportReceivingState_n(rtc::PacketTransportInternal *transport);
+    void OnDtlsHandshakeError(rtc::SSLHandshakeError error);
     void transportStateChanged(cricket::IceTransportInternal *transport);
     void transportReadyToSend(cricket::IceTransportInternal *transport);
     void transportPacketReceived(rtc::PacketTransportInternal *transport, const char *bytes, size_t size, const int64_t &timestamp, int unused);
+    void DtlsStateChanged();
+    void DtlsReadyToSend(bool DtlsReadyToSend);
+    void UpdateAggregateStates_n();
+    void UnresolvedRtpPacketReceived(rtc::CopyOnWriteBuffer *packet, int64_t packet_time_us);
     
     void sctpReadyToSendData();
     void sctpDataReceived(const cricket::ReceiveDataParams& params, const rtc::CopyOnWriteBuffer& buffer);
@@ -83,6 +93,8 @@ private:
     std::unique_ptr<cricket::BasicPortAllocator> _portAllocator;
     std::unique_ptr<webrtc::BasicAsyncResolverFactory> _asyncResolverFactory;
     std::unique_ptr<cricket::P2PTransportChannel> _transportChannel;
+    std::unique_ptr<cricket::DtlsTransport> _dtlsTransport;
+    std::unique_ptr<webrtc::DtlsSrtpTransport> _dtlsSrtpTransport;
     
     std::unique_ptr<SctpDataChannelProviderInterfaceImpl> _dataChannelInterface;
 
