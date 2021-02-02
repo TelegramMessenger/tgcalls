@@ -39,7 +39,7 @@ public:
 class SctpDataChannelProviderInterfaceImpl : public sigslot::has_slots<>, public webrtc::SctpDataChannelProviderInterface, public webrtc::DataChannelObserver {
 public:
     SctpDataChannelProviderInterfaceImpl(
-        cricket::P2PTransportChannel *transportChannel,
+        cricket::DtlsTransport *transportChannel,
         std::function<void(bool)> onStateChanged,
         std::function<void(std::string const &)> onMessageReceived
     ) :
@@ -189,10 +189,12 @@ private:
 GroupNetworkManager::GroupNetworkManager(
     std::function<void(const State &)> stateUpdated,
     std::function<void(rtc::CopyOnWriteBuffer const &)> transportMessageReceived,
+    std::function<void(rtc::CopyOnWriteBuffer const &, int64_t)> rtcpPacketReceived,
     std::function<void(bool)> dataChannelStateUpdated,
     std::function<void(std::string const &)> dataChannelMessageReceived) :
 _stateUpdated(std::move(stateUpdated)),
 _transportMessageReceived(std::move(transportMessageReceived)),
+_rtcpPacketReceived(std::move(rtcpPacketReceived)),
 _dataChannelStateUpdated(dataChannelStateUpdated),
 _dataChannelMessageReceived(dataChannelMessageReceived),
 _localIceParameters(rtc::CreateRandomString(cricket::ICE_UFRAG_LENGTH), rtc::CreateRandomString(cricket::ICE_PWD_LENGTH)) {
@@ -204,6 +206,8 @@ GroupNetworkManager::~GroupNetworkManager() {
     
     RTC_LOG(LS_INFO) << "GroupNetworkManager::~GroupNetworkManager()";
 
+    _dtlsSrtpTransport.reset();
+    _dtlsTransport.reset();
     _dataChannelInterface.reset();
     _transportChannel.reset();
     _asyncResolverFactory.reset();
@@ -283,9 +287,10 @@ void GroupNetworkManager::start() {
     _dtlsSrtpTransport->SignalDtlsStateChange.connect(this, &GroupNetworkManager::DtlsStateChanged);
     _dtlsSrtpTransport->SignalReadyToSend.connect(this, &GroupNetworkManager::DtlsReadyToSend);
     _dtlsSrtpTransport->SignalUnresolvedRtpPacketReceived.connect(this, &GroupNetworkManager::UnresolvedRtpPacketReceived);
+    _dtlsSrtpTransport->SignalRtcpPacketReceived.connect(this, &GroupNetworkManager::OnRtcpPacketReceived_n);
     
-    /*const auto weak = std::weak_ptr<GroupNetworkManager>(shared_from_this());
-    _dataChannelInterface.reset(new SctpDataChannelProviderInterfaceImpl(_transportChannel.get(), [weak](bool state) {
+    const auto weak = std::weak_ptr<GroupNetworkManager>(shared_from_this());
+    _dataChannelInterface.reset(new SctpDataChannelProviderInterfaceImpl(_dtlsTransport.get(), [weak](bool state) {
         assert(StaticThreads::getNetworkThread()->IsCurrent());
         const auto strong = weak.lock();
         if (!strong) {
@@ -299,7 +304,7 @@ void GroupNetworkManager::start() {
             return;
         }
         strong->_dataChannelMessageReceived(message);
-    }));*/
+    }));
 }
 
 PeerIceParameters GroupNetworkManager::getLocalIceParameters() {
@@ -311,7 +316,7 @@ std::unique_ptr<rtc::SSLFingerprint> GroupNetworkManager::getLocalFingerprint() 
     if (!certificate) {
         return nullptr;
     }
-    return std::move(rtc::SSLFingerprint::CreateFromCertificate(*certificate));
+    return rtc::SSLFingerprint::CreateFromCertificate(*certificate);
 }
 
 void GroupNetworkManager::setRemoteParams(PeerIceParameters const &remoteIceParameters, std::vector<cricket::Candidate> const &iceCandidates, rtc::SSLFingerprint *fingerprint) {
@@ -335,7 +340,9 @@ void GroupNetworkManager::setRemoteParams(PeerIceParameters const &remoteIcePara
 }
 
 void GroupNetworkManager::sendDataChannelMessage(std::string const &message) {
-    //_dataChannelInterface->sendDataChannelMessage(message);
+    if (_dataChannelInterface) {
+        _dataChannelInterface->sendDataChannelMessage(message);
+    }
 }
 
 webrtc::RtpTransport *GroupNetworkManager::getRtpTransport() {
@@ -440,6 +447,12 @@ void GroupNetworkManager::transportPacketReceived(rtc::PacketTransportInternal *
 void GroupNetworkManager::UnresolvedRtpPacketReceived(rtc::CopyOnWriteBuffer *packet, int64_t packet_time_us) {
     if (_transportMessageReceived) {
         _transportMessageReceived(*packet);
+    }
+}
+
+void GroupNetworkManager::OnRtcpPacketReceived_n(rtc::CopyOnWriteBuffer *packet, int64_t packet_time_us) {
+    if (_rtcpPacketReceived) {
+        _rtcpPacketReceived(*packet, packet_time_us);
     }
 }
 

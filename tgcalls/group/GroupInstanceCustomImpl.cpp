@@ -865,6 +865,13 @@ public:
                         }
                     });
                 },
+                [=](rtc::CopyOnWriteBuffer const &message, int64_t timestamp) {
+                    StaticThreads::getMediaThread()->PostTask(RTC_FROM_HERE, [weak, message, timestamp]() mutable {
+                        if (const auto strong = weak.lock()) {
+                            strong->receiveRtcpPacket(message, timestamp);
+                        }
+                    });
+                },
                 [=](bool isDataChannelOpen) {
                     StaticThreads::getMediaThread()->PostTask(RTC_FROM_HERE, [weak, isDataChannelOpen]() mutable {
                         if (const auto strong = weak.lock()) {
@@ -1314,6 +1321,10 @@ public:
                 _missingPacketBuffer.add(header.ssrc, packet);
             }
         }
+    }
+    
+    void receiveRtcpPacket(rtc::CopyOnWriteBuffer const &packet, int64_t timestamp) {
+        _call->Receiver()->DeliverPacket(webrtc::MediaType::ANY, packet, timestamp);
     }
     
     void maybeReportUnknownSsrc(uint32_t ssrc) {
