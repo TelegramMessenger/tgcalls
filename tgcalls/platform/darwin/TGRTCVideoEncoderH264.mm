@@ -784,8 +784,7 @@ static NSUInteger GetMaxSampleRate(const webrtc::H264::ProfileLevelId &profile_l
 
   __block std::unique_ptr<rtc::Buffer> buffer = std::make_unique<rtc::Buffer>();
   {
-    bool result =
-        webrtc::H264CMSampleBufferToAnnexBBuffer(sampleBuffer, isKeyframe, buffer.get());
+	bool result = webrtc::H264CMSampleBufferToAnnexBBuffer(sampleBuffer, isKeyframe, buffer.get());
     if (!result) {
       return;
     }

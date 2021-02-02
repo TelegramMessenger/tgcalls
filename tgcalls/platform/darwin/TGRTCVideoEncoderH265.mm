@@ -562,8 +562,7 @@ void compressionOutputCallback(void* encoder,
   // TODO(tkchin): Allocate buffers through a pool.
   std::unique_ptr<rtc::Buffer> buffer(new rtc::Buffer());
   {
-    bool result = webrtc::H265CMSampleBufferToAnnexBBuffer(sampleBuffer, isKeyframe,
-                                                   buffer.get());
+	bool result = webrtc::H265CMSampleBufferToAnnexBBuffer(sampleBuffer, isKeyframe, buffer.get());
     if (!result) {
       RTC_LOG(LS_ERROR) << "Failed to convert sample buffer.";
       return;

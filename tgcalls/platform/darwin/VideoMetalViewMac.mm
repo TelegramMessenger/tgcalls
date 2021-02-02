@@ -87,14 +87,14 @@ private:
 @implementation VideoMetalView
 
 + (bool)isSupported {
-    return [VideoMetalView isMetalAvailable];
+    return false;
 }
 
 - (instancetype)initWithFrame:(CGRect)frameRect {
     self = [super initWithFrame:frameRect];
     if (self) {
         [self configure];
-        
+        _lastFrameTimeNs = INT32_MAX;
         _currentSize = CGSizeZero;
         
         __weak VideoMetalView *weakSelf = self;

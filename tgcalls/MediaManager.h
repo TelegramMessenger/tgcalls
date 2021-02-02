@@ -7,6 +7,10 @@
 #include "api/transport/field_trial_based_config.h"
 #include "pc/rtp_sender.h"
 
+#ifdef WEBRTC_WIN
+#include "rtc_base/win/scoped_com_initializer.h"
+#endif // WEBRTC_WIN
+
 #include "Instance.h"
 #include "Message.h"
 #include "VideoCaptureInterface.h"
@@ -100,7 +104,7 @@ private:
     void configureSendingVideoIfNeeded();
 	void checkIsSendingVideoChanged(bool wasSending);
 	bool videoCodecsNegotiated() const;
-    
+
     int getMaxVideoBitrate() const;
     int getMaxAudioBitrate() const;
     void adjustBitratePreferences(bool resetStartBitrate);
@@ -122,6 +126,10 @@ private:
 	std::unique_ptr<webrtc::RtcEventLogNull> _eventLog;
 	std::unique_ptr<webrtc::TaskQueueFactory> _taskQueueFactory;
 
+#ifdef WEBRTC_WIN
+	std::unique_ptr<webrtc::ScopedCOMInitializer> _comInitializer;
+#endif // WEBRTC_WIN
+
 	std::function<void(Message &&)> _sendSignalingMessage;
 	std::function<void(Message &&)> _sendTransportMessage;
     std::function<void(int)> _signalBarsUpdated;
@@ -130,7 +138,7 @@ private:
 	SSRC _ssrcAudio;
 	SSRC _ssrcVideo;
 	bool _enableFlexfec = true;
-    
+
     ProtocolVersion _protocolVersion;
 
 	bool _isConnected = false;
@@ -160,7 +168,7 @@ private:
     bool _enableHighBitrateVideo = false;
     bool _isLowCostNetwork = false;
     bool _isDataSavingActive = false;
-    
+
     float _currentAudioLevel = 0.0f;
     float _currentMyAudioLevel = 0.0f;
     int _myAudioLevelPeakCount = 0;
@@ -168,7 +176,7 @@ private:
 
 	std::unique_ptr<MediaManager::NetworkInterfaceImpl> _audioNetworkInterface;
 	std::unique_ptr<MediaManager::NetworkInterfaceImpl> _videoNetworkInterface;
-    
+
     std::vector<CallStatsBitrateRecord> _bitrateRecords;
 };
 

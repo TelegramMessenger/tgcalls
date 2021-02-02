@@ -848,7 +848,7 @@ static std::string parseJoinResponseIntoSdp(uint32_t sessionId, GroupJoinPayload
         audioStream.streamId = participant.audioSsrc;
         bundleStreams.push_back(audioStream);
         
-        if (participant.videoPayloadTypes.size() != 0) {
+        if (participant.videoPayloadTypes.size() != 0 && participant.videoSourceGroups.size() != 0 ) {
             StreamSpec videoStream;
             videoStream.isMain = false;
             
@@ -3165,7 +3165,7 @@ private:
 GroupInstanceImpl::GroupInstanceImpl(GroupInstanceDescriptor &&descriptor)
 : _logSink(std::make_unique<LogSinkImpl>(descriptor.config.logPath)) {
     rtc::LogMessage::LogToDebug(rtc::LS_INFO);
-    rtc::LogMessage::SetLogToStderr(false);
+    rtc::LogMessage::SetLogToStderr(true);
     if (_logSink) {
 		rtc::LogMessage::AddLogToStream(_logSink.get(), rtc::LS_INFO);
 	}
