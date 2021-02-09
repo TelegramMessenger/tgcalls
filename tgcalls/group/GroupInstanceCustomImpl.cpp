@@ -449,6 +449,8 @@ public:
     _ssrc(ssrc),
     _channelManager(channelManager),
     _call(call) {
+        _creationTimestamp = rtc::TimeMillis();
+        
         cricket::AudioOptions audioOptions;
         audioOptions.echo_cancellation = true;
         audioOptions.noise_suppression = true;
@@ -523,6 +525,14 @@ public:
         _audioChannel->media_channel()->SetOutputVolume(_ssrc, value);
     }
     
+    void updateActivity() {
+        _activityTimestamp = rtc::TimeMillis();
+    }
+    
+    int64_t getActivity() {
+        return _activityTimestamp;
+    }
+    
 private:
     void OnSentPacket_w(const rtc::SentPacket& sent_packet) {
         _call->OnSentPacket(sent_packet);
@@ -535,6 +545,8 @@ private:
     // Memory is managed externally
     cricket::ChannelManager *_channelManager = nullptr;
     webrtc::Call *_call = nullptr;
+    int64_t _creationTimestamp = 0;
+    int64_t _activityTimestamp = 0;
 };
 
 class IncomingVideoChannel : public sigslot::has_slots<> {
@@ -858,10 +870,10 @@ public:
                         strong->setIsConnected(mappedState);
                     });
                 },
-                [=](rtc::CopyOnWriteBuffer const &message) {
-                    StaticThreads::getMediaThread()->PostTask(RTC_FROM_HERE, [weak, message]() mutable {
+                [=](rtc::CopyOnWriteBuffer const &message, bool isUnresolved) {
+                    StaticThreads::getMediaThread()->PostTask(RTC_FROM_HERE, [weak, message, isUnresolved]() mutable {
                         if (const auto strong = weak.lock()) {
-                            strong->receivePacket(message);
+                            strong->receivePacket(message, isUnresolved);
                         }
                     });
                 },
@@ -1287,7 +1299,7 @@ public:
         }
     }
     
-    void receivePacket(rtc::CopyOnWriteBuffer const &packet) {
+    void receivePacket(rtc::CopyOnWriteBuffer const &packet, bool isUnresolved) {
         if (packet.size() >= 4) {
             if (packet.data()[0] == 0x13 && packet.data()[1] == 0x88 && packet.data()[2] == 0x13 && packet.data()[3] == 0x88) {
                 // SCTP packet header (source port 5000, destination port 5000)
@@ -1317,8 +1329,33 @@ public:
             
             auto it = _ssrcMapping.find(header.ssrc);
             if (it == _ssrcMapping.end()) {
-                maybeReportUnknownSsrc(header.ssrc);
-                _missingPacketBuffer.add(header.ssrc, packet);
+                /*if (header.payloadType == 111) {
+                    if (_incomingAudioChannels.size() > 3) {
+                        auto timestamp = rtc::TimeMillis();
+                        for (const auto &it : _incomingAudioChannels) {
+                            auto activity = it.second->getActivity();
+                            if (activity < timestamp - 300) {
+                                removeSsrcs({ it.first });
+                                
+                                maybeReportUnknownSsrc(header.ssrc);
+                                _missingPacketBuffer.add(header.ssrc, packet);
+                                
+                                break;
+                            }
+                        }
+                    } else {
+                        maybeReportUnknownSsrc(header.ssrc);
+                        _missingPacketBuffer.add(header.ssrc, packet);
+                    }
+                } else */{
+                    maybeReportUnknownSsrc(header.ssrc);
+                    _missingPacketBuffer.add(header.ssrc, packet);
+                }
+            } else {
+                const auto it = _incomingAudioChannels.find(header.ssrc);
+                if (it != _incomingAudioChannels.end()) {
+                    it->second->updateActivity();
+                }
             }
         }
     }
@@ -1431,21 +1468,6 @@ public:
         _networkManager->perform(RTC_FROM_HERE, [result = std::move(result)](GroupNetworkManager *networkManager) {
             networkManager->sendDataChannelMessage(result);
         });
-        
-        /*if (pinnedEndpoint.size() != 0) {
-            std::ostringstream string;
-            string << "{" << "\n";
-            string << " \"colibriClass\": \"PinnedEndpointChangedEvent\"," << "\n";
-            string << " \"pinnedEndpoint\": \"" << pinnedEndpoint << "\"" << "\n";
-            string << "}";
-            
-            std::string result = string.str();
-            
-            RTC_LOG(LS_INFO) << "DataChannel send message: " << result;
-            
-            webrtc::DataBuffer buffer(result, false);
-            _localDataChannel->Send(buffer);
-        }*/
     }
     
     void emitJoinPayload(std::function<void(GroupJoinPayload)> completion) {
@@ -1510,38 +1532,6 @@ public:
         //emitJoinPayload(completion);
     }
     
-    /*static bool ParseFingerprintAttribute(
-        const std::string& line,
-        std::unique_ptr<rtc::SSLFingerprint>* fingerprint,
-        SdpParseError* error) {
-      std::vector<std::string> fields;
-      rtc::split(line.substr(kLinePrefixLength), kSdpDelimiterSpaceChar, &fields);
-      const size_t expected_fields = 2;
-      if (fields.size() != expected_fields) {
-        return ParseFailedExpectFieldNum(line, expected_fields, error);
-      }
-
-      // The first field here is "fingerprint:<hash>.
-      std::string algorithm;
-      if (!GetValue(fields[0], kAttributeFingerprint, &algorithm, error)) {
-        return false;
-      }
-
-      // Downcase the algorithm. Note that we don't need to downcase the
-      // fingerprint because hex_decode can handle upper-case.
-      absl::c_transform(algorithm, algorithm.begin(), ::tolower);
-
-      // The second field is the digest value. De-hexify it.
-      *fingerprint =
-          rtc::SSLFingerprint::CreateUniqueFromRfc4572(algorithm, fields[1]);
-      if (!*fingerprint) {
-        return ParseFailed(line, "Failed to create fingerprint from the digest.",
-                           error);
-      }
-
-      return true;
-    }*/
-    
     void setJoinResponsePayload(GroupJoinResponsePayload payload, std::vector<tgcalls::GroupParticipantDescription> &&participants) {
         RTC_LOG(LS_INFO) << formatTimestampMillis(rtc::TimeMillis()) << ": " << "setJoinResponsePayload";
         
@@ -1572,7 +1562,7 @@ public:
             
             std::unique_ptr<rtc::SSLFingerprint> fingerprint;
             if (payload.fingerprints.size() != 0) {
-                fingerprint = std::move(rtc::SSLFingerprint::CreateUniqueFromRfc4572(payload.fingerprints[0].hash, payload.fingerprints[0].fingerprint));
+                fingerprint = rtc::SSLFingerprint::CreateUniqueFromRfc4572(payload.fingerprints[0].hash, payload.fingerprints[0].fingerprint);
             }
             
             networkManager->setRemoteParams(remoteIceParameters, iceCandidates, fingerprint.get());
