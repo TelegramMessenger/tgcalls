@@ -1,6 +1,11 @@
 #ifndef TGCALLS_GROUP_NETWORK_MANAGER_H
 #define TGCALLS_GROUP_NETWORK_MANAGER_H
 
+#ifdef WEBRTC_WIN
+// Compiler errors in conflicting Windows headers if not included here.
+#include <winsock2.h>
+#endif // WEBRTC_WIN
+
 #include "rtc_base/copy_on_write_buffer.h"
 #include "rtc_base/third_party/sigslot/sigslot.h"
 #include "api/candidate.h"
@@ -56,13 +61,13 @@ public:
     ~GroupNetworkManager();
 
     void start();
-    
+
     PeerIceParameters getLocalIceParameters();
     std::unique_ptr<rtc::SSLFingerprint> getLocalFingerprint();
     void setRemoteParams(PeerIceParameters const &remoteIceParameters, std::vector<cricket::Candidate> const &iceCandidates, rtc::SSLFingerprint *fingerprint);
-    
+
     void sendDataChannelMessage(std::string const &message);
-    
+
     webrtc::RtpTransport *getRtpTransport();
 
 private:
@@ -80,7 +85,7 @@ private:
     void UpdateAggregateStates_n();
     void RtpPacketReceived_n(rtc::CopyOnWriteBuffer *packet, int64_t packet_time_us, bool isUnresolved);
     void OnRtcpPacketReceived_n(rtc::CopyOnWriteBuffer *packet, int64_t packet_time_us);
-    
+
     void sctpReadyToSendData();
     void sctpDataReceived(const cricket::ReceiveDataParams& params, const rtc::CopyOnWriteBuffer& buffer);
 
@@ -98,12 +103,12 @@ private:
     std::unique_ptr<cricket::P2PTransportChannel> _transportChannel;
     std::unique_ptr<cricket::DtlsTransport> _dtlsTransport;
     std::unique_ptr<webrtc::DtlsSrtpTransport> _dtlsSrtpTransport;
-    
+
     std::unique_ptr<SctpDataChannelProviderInterfaceImpl> _dataChannelInterface;
 
     PeerIceParameters _localIceParameters;
     absl::optional<PeerIceParameters> _remoteIceParameters;
-    
+
     bool _isConnected = false;
     int64_t _lastNetworkActivityMs = 0;
 };
