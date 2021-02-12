@@ -49,7 +49,7 @@ public:
 
     GroupNetworkManager(
         std::function<void(const State &)> stateUpdated,
-        std::function<void(rtc::CopyOnWriteBuffer const &)> transportMessageReceived,
+        std::function<void(rtc::CopyOnWriteBuffer const &, bool)> transportMessageReceived,
         std::function<void(rtc::CopyOnWriteBuffer const &, int64_t)> rtcpPacketReceived,
         std::function<void(bool)> dataChannelStateUpdated,
         std::function<void(std::string const &)> dataChannelMessageReceived);
@@ -78,14 +78,14 @@ private:
     void DtlsStateChanged();
     void DtlsReadyToSend(bool DtlsReadyToSend);
     void UpdateAggregateStates_n();
-    void UnresolvedRtpPacketReceived(rtc::CopyOnWriteBuffer *packet, int64_t packet_time_us);
+    void RtpPacketReceived_n(rtc::CopyOnWriteBuffer *packet, int64_t packet_time_us, bool isUnresolved);
     void OnRtcpPacketReceived_n(rtc::CopyOnWriteBuffer *packet, int64_t packet_time_us);
     
     void sctpReadyToSendData();
     void sctpDataReceived(const cricket::ReceiveDataParams& params, const rtc::CopyOnWriteBuffer& buffer);
 
     std::function<void(const GroupNetworkManager::State &)> _stateUpdated;
-    std::function<void(rtc::CopyOnWriteBuffer const &)> _transportMessageReceived;
+    std::function<void(rtc::CopyOnWriteBuffer const &, bool)> _transportMessageReceived;
     std::function<void(rtc::CopyOnWriteBuffer const &, int64_t)> _rtcpPacketReceived;
     std::function<void(bool)> _dataChannelStateUpdated;
     std::function<void(std::string const &)> _dataChannelMessageReceived;

@@ -188,7 +188,7 @@ private:
 
 GroupNetworkManager::GroupNetworkManager(
     std::function<void(const State &)> stateUpdated,
-    std::function<void(rtc::CopyOnWriteBuffer const &)> transportMessageReceived,
+    std::function<void(rtc::CopyOnWriteBuffer const &, bool)> transportMessageReceived,
     std::function<void(rtc::CopyOnWriteBuffer const &, int64_t)> rtcpPacketReceived,
     std::function<void(bool)> dataChannelStateUpdated,
     std::function<void(std::string const &)> dataChannelMessageReceived) :
@@ -286,7 +286,7 @@ void GroupNetworkManager::start() {
     _dtlsSrtpTransport->SetActiveResetSrtpParams(false);
     _dtlsSrtpTransport->SignalDtlsStateChange.connect(this, &GroupNetworkManager::DtlsStateChanged);
     _dtlsSrtpTransport->SignalReadyToSend.connect(this, &GroupNetworkManager::DtlsReadyToSend);
-    _dtlsSrtpTransport->SignalUnresolvedRtpPacketReceived.connect(this, &GroupNetworkManager::UnresolvedRtpPacketReceived);
+    _dtlsSrtpTransport->SignalRtpPacketReceived.connect(this, &GroupNetworkManager::RtpPacketReceived_n);
     _dtlsSrtpTransport->SignalRtcpPacketReceived.connect(this, &GroupNetworkManager::OnRtcpPacketReceived_n);
     
     const auto weak = std::weak_ptr<GroupNetworkManager>(shared_from_this());
@@ -436,17 +436,11 @@ void GroupNetworkManager::transportPacketReceived(rtc::PacketTransportInternal *
     assert(StaticThreads::getNetworkThread()->IsCurrent());
     
     _lastNetworkActivityMs = rtc::TimeMillis();
-
-    if (_transportMessageReceived) {
-        rtc::CopyOnWriteBuffer buffer;
-        buffer.AppendData(bytes, size);
-        //_transportMessageReceived(buffer);
-    }
 }
 
-void GroupNetworkManager::UnresolvedRtpPacketReceived(rtc::CopyOnWriteBuffer *packet, int64_t packet_time_us) {
+void GroupNetworkManager::RtpPacketReceived_n(rtc::CopyOnWriteBuffer *packet, int64_t packet_time_us, bool isUnresolved) {
     if (_transportMessageReceived) {
-        _transportMessageReceived(*packet);
+        _transportMessageReceived(*packet, isUnresolved);
     }
 }
 
