@@ -796,6 +796,7 @@ public:
     _videoCapture(descriptor.videoCapture),
     _eventLog(std::make_unique<webrtc::RtcEventLogNull>()),
     _taskQueueFactory(webrtc::CreateDefaultTaskQueueFactory()),
+	_createAudioDeviceModule(descriptor.createAudioDeviceModule),
     _missingPacketBuffer(100) {
         assert(StaticThreads::getMediaThread()->IsCurrent());
 
@@ -1753,20 +1754,20 @@ public:
 
 private:
     rtc::scoped_refptr<webrtc::AudioDeviceModule> createAudioDeviceModule() {
-        const auto check = [&](webrtc::AudioDeviceModule::AudioLayer layer) {
-            auto result = webrtc::AudioDeviceModule::Create(
-                layer,
-                _taskQueueFactory.get());
-            return (result && (result->Init() == 0)) ? result : nullptr;
-        };
-        if (auto result = check(webrtc::AudioDeviceModule::kPlatformDefaultAudio)) {
-            return result;
-    #ifdef WEBRTC_LINUX
-        } else if (auto result = check(webrtc::AudioDeviceModule::kLinuxAlsaAudio)) {
-            return result;
-    #endif // WEBRTC_LINUX
-        }
-        return nullptr;
+		const auto create = [&](webrtc::AudioDeviceModule::AudioLayer layer) {
+			return webrtc::AudioDeviceModule::Create(
+				layer,
+				_taskQueueFactory.get());
+		};
+		const auto check = [&](const rtc::scoped_refptr<webrtc::AudioDeviceModule> &result) {
+			return (result && result->Init() == 0) ? result : nullptr;
+		};
+		if (_createAudioDeviceModule) {
+			if (const auto result = check(_createAudioDeviceModule(_taskQueueFactory.get()))) {
+				return result;
+			}
+		}
+		return check(create(webrtc::AudioDeviceModule::kPlatformDefaultAudio));
     }
 
 private:
@@ -1790,6 +1791,7 @@ private:
     webrtc::FieldTrialBasedConfig _fieldTrials;
     webrtc::LocalAudioSinkAdapter _audioSource;
     rtc::scoped_refptr<webrtc::AudioDeviceModule> _audioDeviceModule;
+	std::function<rtc::scoped_refptr<webrtc::AudioDeviceModule>(webrtc::TaskQueueFactory*)> _createAudioDeviceModule;
 
     std::unique_ptr<cricket::SctpTransportFactory> _sctpTransportFactory;
     std::unique_ptr<cricket::SctpTransportInternal> _sctpTransport;
