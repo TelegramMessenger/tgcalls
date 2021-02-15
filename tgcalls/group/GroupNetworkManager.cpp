@@ -186,6 +186,13 @@ private:
 
 };
 
+webrtc::CryptoOptions GroupNetworkManager::getDefaulCryptoOptions() {
+    auto options = webrtc::CryptoOptions();
+    options.srtp.enable_aes128_sha1_80_crypto_cipher = false;
+    options.srtp.enable_gcm_crypto_suites = true;
+    return options;
+}
+
 GroupNetworkManager::GroupNetworkManager(
     std::function<void(const State &)> stateUpdated,
     std::function<void(rtc::CopyOnWriteBuffer const &, bool)> transportMessageReceived,
@@ -265,7 +272,7 @@ void GroupNetworkManager::start() {
 
     _transportChannel->SetRemoteIceMode(cricket::ICEMODE_LITE);
 
-    webrtc::CryptoOptions cryptoOptions = webrtc::CryptoOptions::NoGcm();
+    webrtc::CryptoOptions cryptoOptions = GroupNetworkManager::getDefaulCryptoOptions();
     _dtlsTransport.reset(new cricket::DtlsTransport(_transportChannel.get(), cryptoOptions, nullptr));
 
     _dtlsTransport->SignalWritableState.connect(

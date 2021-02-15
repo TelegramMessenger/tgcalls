@@ -51,6 +51,8 @@ public:
         bool isReadyToSendData = false;
         bool isFailed = false;
     };
+    
+    static webrtc::CryptoOptions getDefaulCryptoOptions();
 
     GroupNetworkManager(
         std::function<void(const State &)> stateUpdated,

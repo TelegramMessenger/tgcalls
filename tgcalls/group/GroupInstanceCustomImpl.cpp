@@ -459,7 +459,7 @@ public:
 
         std::string streamId = std::string("stream") + uint32ToString(ssrc);
 
-        _audioChannel = _channelManager->CreateVoiceChannel(call, cricket::MediaConfig(), rtpTransport, StaticThreads::getMediaThread(), std::string("audio") + uint32ToString(ssrc), false, webrtc::CryptoOptions::NoGcm(), randomIdGenerator, audioOptions);
+        _audioChannel = _channelManager->CreateVoiceChannel(call, cricket::MediaConfig(), rtpTransport, StaticThreads::getMediaThread(), std::string("audio") + uint32ToString(ssrc), false, GroupNetworkManager::getDefaulCryptoOptions(), randomIdGenerator, audioOptions);
 
         const uint8_t opusMinBitrateKbps = 32;
         const uint8_t opusMaxBitrateKbps = 32;
@@ -567,7 +567,7 @@ public:
 
         _videoBitrateAllocatorFactory = webrtc::CreateBuiltinVideoBitrateAllocatorFactory();
 
-        _videoChannel = _channelManager->CreateVideoChannel(call, cricket::MediaConfig(), rtpTransport, StaticThreads::getMediaThread(), std::string("video") + uint32ToString(description.audioSsrc), false, webrtc::CryptoOptions::NoGcm(), randomIdGenerator, cricket::VideoOptions(), _videoBitrateAllocatorFactory.get());
+        _videoChannel = _channelManager->CreateVideoChannel(call, cricket::MediaConfig(), rtpTransport, StaticThreads::getMediaThread(), std::string("video") + uint32ToString(description.audioSsrc), false, GroupNetworkManager::getDefaulCryptoOptions(), randomIdGenerator, cricket::VideoOptions(), _videoBitrateAllocatorFactory.get());
 
         auto payloadTypes = assignPayloadTypes(availableVideoFormats);
         if (!payloadTypes.has_value()) {
@@ -639,7 +639,7 @@ public:
         _videoChannel->Enable(true);
 
         /*cricket::VideoOptions videoOptions;
-        _videoChannel.reset(mediaEngine->video().CreateMediaChannel(call, cricket::MediaConfig(), videoOptions, webrtc::CryptoOptions::NoGcm(), _videoBitrateAllocatorFactory.get()));
+        _videoChannel.reset(mediaEngine->video().CreateMediaChannel(call, cricket::MediaConfig(), videoOptions, GroupNetworkManager::getDefaulCryptoOptions(), _videoBitrateAllocatorFactory.get()));
 
         _videoInterface.reset(new NetworkInterfaceImpl([sendPacket = std::move(sendPacket)](rtc::CopyOnWriteBuffer const *buffer, rtc::SentPacket sentPacket) {
             std::vector<uint8_t> data;
@@ -967,7 +967,7 @@ public:
             //_rtpTransport->SetRtpPacketTransport(_networkManager->getSyncAssumingSameThread()->getTransportChannel());
         });
 
-        _outgoingAudioChannel = _channelManager->CreateVoiceChannel(_call.get(), cricket::MediaConfig(), _rtpTransport, StaticThreads::getMediaThread(), "0", false, webrtc::CryptoOptions::NoGcm(), _uniqueRandomIdGenerator.get(), audioOptions);
+        _outgoingAudioChannel = _channelManager->CreateVoiceChannel(_call.get(), cricket::MediaConfig(), _rtpTransport, StaticThreads::getMediaThread(), "0", false, GroupNetworkManager::getDefaulCryptoOptions(), _uniqueRandomIdGenerator.get(), audioOptions);
 
         const uint8_t opusMinBitrateKbps = 32;
         const uint8_t opusMaxBitrateKbps = 32;
@@ -1012,7 +1012,7 @@ public:
 
         _videoBitrateAllocatorFactory = webrtc::CreateBuiltinVideoBitrateAllocatorFactory();
 
-        _outgoingVideoChannel = _channelManager->CreateVideoChannel(_call.get(), cricket::MediaConfig(), _rtpTransport, StaticThreads::getMediaThread(), "1", false, webrtc::CryptoOptions::NoGcm(), _uniqueRandomIdGenerator.get(), cricket::VideoOptions(), _videoBitrateAllocatorFactory.get());
+        _outgoingVideoChannel = _channelManager->CreateVideoChannel(_call.get(), cricket::MediaConfig(), _rtpTransport, StaticThreads::getMediaThread(), "1", false, GroupNetworkManager::getDefaulCryptoOptions(), _uniqueRandomIdGenerator.get(), cricket::VideoOptions(), _videoBitrateAllocatorFactory.get());
 
         configureSendVideo();
 
