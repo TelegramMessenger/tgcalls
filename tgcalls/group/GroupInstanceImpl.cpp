@@ -171,6 +171,7 @@ static std::string createSdp(uint32_t sessionId, GroupJoinResponsePayload const 
     appendSdp(sdp, sessionIdString.str());
 
     appendSdp(sdp, "s=-");
+    appendSdp(sdp, "i=Telegram session");
     appendSdp(sdp, "t=0 0");
 
     std::ostringstream bundleString;
