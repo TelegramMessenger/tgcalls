@@ -339,8 +339,8 @@ static CVReturn OnDisplayLinkFired(CVDisplayLinkRef displayLink,
         
         _glView = [[OpenGLVideoView alloc] initWithFrame:frame pixelFormat:format shader:shader];
         _glView.wantsLayer = YES;
-//        self.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
-//        _glView.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
+        self.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
+        _glView.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
 
         [self addSubview:_glView];
         
@@ -402,9 +402,9 @@ static CVReturn OnDisplayLinkFired(CVDisplayLinkRef displayLink,
         NSSize size = _currentSize;
         NSSize frameSize = self.frame.size;
         if ( [self.glView.layer.contentsGravity isEqualToString:kCAGravityResizeAspectFill]) {
-            size = aspectFitted(frameSize, _currentSize);
+            size = aspectFilled(frameSize, _currentSize);
         } else if ([self.glView.layer.contentsGravity isEqualToString:kCAGravityResizeAspect]) {
-            size = aspectFilled(_currentSize, frameSize);
+            size = aspectFitted(_currentSize, frameSize);
         } else {
             size = aspectFilled(frameSize, _currentSize);
         }
