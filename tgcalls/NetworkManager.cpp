@@ -129,7 +129,13 @@ void NetworkManager::start() {
     
     _portAllocator.reset(new cricket::BasicPortAllocator(_networkManager.get(), _socketFactory.get(), _turnCustomizer.get(), nullptr));
 
-    uint32_t flags = 0;
+    uint32_t flags = _portAllocator->flags();
+    
+    flags |=
+        cricket::PORTALLOCATOR_ENABLE_SHARED_SOCKET |
+        cricket::PORTALLOCATOR_ENABLE_IPV6 |
+        cricket::PORTALLOCATOR_ENABLE_IPV6_ON_WIFI;
+    
     if (!_enableTCP) {
         flags |= cricket::PORTALLOCATOR_DISABLE_TCP;
     }
@@ -150,7 +156,7 @@ void NetworkManager::start() {
         _portAllocator->set_proxy("t/1.0", proxyInfo);
     }
     
-    _portAllocator->set_flags(_portAllocator->flags() | flags);
+    _portAllocator->set_flags(flags);
     _portAllocator->Initialize();
 
     cricket::ServerAddresses stunServers;
