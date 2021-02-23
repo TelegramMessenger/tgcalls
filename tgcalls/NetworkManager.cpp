@@ -147,6 +147,8 @@ void NetworkManager::start() {
         _portAllocator->SetCandidateFilter(candidateFilter);
     }
     
+    _portAllocator->set_step_delay(cricket::kMinimumStepDelay);
+    
     if (_proxy) {
         rtc::ProxyInfo proxyInfo;
         proxyInfo.type = rtc::ProxyType::PROXY_SOCKS5;
