@@ -1348,8 +1348,9 @@ public:
                     } else {
                         maybeReportUnknownSsrc(header.ssrc);
                         _missingPacketBuffer.add(header.ssrc, packet);
-                    }
-                } else */{
+                    }*/
+                
+                if (isUnresolved) {
                     maybeReportUnknownSsrc(header.ssrc);
                     _missingPacketBuffer.add(header.ssrc, packet);
                 }
