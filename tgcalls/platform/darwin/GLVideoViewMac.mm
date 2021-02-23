@@ -155,6 +155,14 @@ static CVReturn OnDisplayLinkFired(CVDisplayLinkRef displayLink,
     return self;
 }
 
+-(BOOL)mouseDownCanMoveWindow {
+    if (self.frame.size.width >= self.window.frame.size.width) {
+        return YES;
+    } else {
+        return NO;
+    }
+}
+
 - (void)reshape {
     [super reshape];
     NSRect frame = [self frame];
@@ -339,8 +347,8 @@ static CVReturn OnDisplayLinkFired(CVDisplayLinkRef displayLink,
         
         _glView = [[OpenGLVideoView alloc] initWithFrame:frame pixelFormat:format shader:shader];
         _glView.wantsLayer = YES;
-        self.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
-        _glView.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
+//        self.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
+//        _glView.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
 
         [self addSubview:_glView];
         
