@@ -412,7 +412,7 @@ static CVReturn OnDisplayLinkFired(CVDisplayLinkRef displayLink,
         if ( [self.glView.layer.contentsGravity isEqualToString:kCAGravityResizeAspectFill]) {
             size = aspectFilled(frameSize, _currentSize);
         } else if ([self.glView.layer.contentsGravity isEqualToString:kCAGravityResizeAspect]) {
-            size = aspectFitted(_currentSize, frameSize);
+            size = aspectFitted(frameSize, _currentSize);
         } else {
             size = aspectFilled(frameSize, _currentSize);
         }
