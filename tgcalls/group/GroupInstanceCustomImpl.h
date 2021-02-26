@@ -15,6 +15,11 @@ namespace tgcalls {
 class LogSinkImpl;
 class GroupInstanceCustomInternal;
 
+struct BroadcastPacket {
+    int numSamples = 0;
+    std::vector<uint8_t> data;
+};
+
 class GroupInstanceCustomImpl final : public GroupInstanceInterface {
 public:
     explicit GroupInstanceCustomImpl(GroupInstanceDescriptor &&descriptor);
@@ -36,6 +41,8 @@ public:
     
     void setVolume(uint32_t ssrc, double volume);
     void setFullSizeVideoSsrc(uint32_t ssrc);
+    
+    void addBroadcastPackets(std::vector<BroadcastPacket> &&packets);
 
 private:
     std::unique_ptr<ThreadLocalObject<GroupInstanceCustomInternal>> _internal;

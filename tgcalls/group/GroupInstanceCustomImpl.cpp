@@ -28,6 +28,7 @@
 #include "modules/audio_processing/agc2/vad_with_level.h"
 #include "pc/channel_manager.h"
 #include "media/base/rtp_data_engine.h"
+#include "audio/audio_state.h"
 
 #include "ThreadLocalObject.h"
 #include "Manager.h"
@@ -755,33 +756,86 @@ private:
 
 };
 
-class WrappedRtpTransport : public webrtc::RtpTransport {
+class MergedAudioSourceImpl : public webrtc::AudioMixer::Source {
 public:
-    WrappedRtpTransport(bool rtcp_mux_enabled) :
-    webrtc::RtpTransport(rtcp_mux_enabled){
+    MergedAudioSourceImpl() {
+    }
+    
+    virtual webrtc::AudioMixer::Source::AudioFrameInfo GetAudioFrameWithInfo(int sample_rate_hz, webrtc::AudioFrame *audio_frame) override {
+        audio_frame->Reset();
+        
+        const int numSamples = sample_rate_hz * 10 / 1000;
+        const int totalSampleBytes = sizeof(int16_t) * numSamples;
+        int16_t *sourceSampleData = (int16_t *)malloc(totalSampleBytes);
+        memset(sourceSampleData, 0, sizeof(int16_t) * numSamples);
+        
+        webrtc::StreamConfig tempFrameConfig(48000, 1);
+        _mutex.Lock();
+        
+        int availableSamples = (int)(_data.size() / 2);
+        if (_isPaused) {
+            if (availableSamples >= _resumeAtSampleCount) {
+                _isPaused = false;
+            }
+        } else {
+            if (availableSamples < _pauseAtSampleCount) {
+                _isPaused = true;
+            }
+        }
+        
+        if (!_isPaused) {
+            if (_data.size() != 0) {
+                int copyCount = std::min((int)_data.size(), totalSampleBytes);
+                memcpy(sourceSampleData, _data.data(), copyCount);
+                _data.erase(_data.begin(), _data.begin() + copyCount);
+            }
+        }
+        
+        _mutex.Unlock();
+        
+        webrtc::AudioBuffer buffer(48000, 1, sample_rate_hz, 1, sample_rate_hz, 1);
+        webrtc::StreamConfig config(sample_rate_hz, 1);
+        
+        int16_t *destinationSampleData = (int16_t *)malloc(totalSampleBytes);
+        
+        buffer.CopyFrom(sourceSampleData, tempFrameConfig);
+        buffer.CopyTo(config, destinationSampleData);
+        
+        audio_frame->UpdateFrame(0, destinationSampleData, numSamples, sample_rate_hz, webrtc::AudioFrame::kNormalSpeech, webrtc::AudioFrame::kVadActive, 1);
+        
+        free(destinationSampleData);
+        free(sourceSampleData);
+        
+        return webrtc::AudioMixer::Source::AudioFrameInfo::kNormal;
     }
 
-    virtual ~WrappedRtpTransport() {
-
+    virtual int Ssrc() const override {
+        return 100000;
+    }
+    virtual int PreferredSampleRate() const override {
+        return 48000;
     }
 
-    bool IsSrtpActive() const override {
-        return true;
+    virtual ~MergedAudioSourceImpl() {
     }
-
-    bool SendRtpPacket(rtc::CopyOnWriteBuffer* packet, const rtc::PacketOptions& options, int flags) override {
-        // Ignore flags as raw packet transport does not support them
-        return webrtc::RtpTransport::SendRtpPacket(packet, options, 0);
+    
+    void addData(std::vector<BroadcastPacket> const &packets) {
+        _mutex.Lock();
+        int lastDelay = (int)(_data.size());
+        for (const auto &it : packets) {
+            _data.resize(_data.size() + it.data.size());
+            memcpy(_data.data() + _data.size() - it.data.size(), it.data.data(), it.data.size());
+        }
+        RTC_LOG(LS_INFO) << "Added packets, have " << _data.size() / 2 << " samples, delay " << lastDelay;
+        _mutex.Unlock();
     }
-
-    bool SendRtcpPacket(rtc::CopyOnWriteBuffer* packet, const rtc::PacketOptions& options, int flags) override {
-        // Ignore flags as raw packet transport does not support them
-        return webrtc::RtpTransport::SendRtcpPacket(packet, options, 0);
-    }
-
-    void DemuxPacketInternal(rtc::CopyOnWriteBuffer packet, int64_t packet_time_us) {
-        DemuxPacket(packet, packet_time_us);
-    }
+    
+private:
+    webrtc::Mutex _mutex;
+    std::vector<uint8_t> _data;
+    bool _isPaused = true;
+    int _pauseAtSampleCount = 48000 / 2;
+    int _resumeAtSampleCount = 2 * 48000;
 };
 
 } // namespace
@@ -943,13 +997,16 @@ public:
         _channelManager.reset(new cricket::ChannelManager(std::move(mediaEngine), std::make_unique<cricket::RtpDataEngine>(), StaticThreads::getMediaThread(), StaticThreads::getNetworkThread()));
         _channelManager->Init();
 
-        //_mediaEngine->Init();
-
         webrtc::Call::Config callConfig(_eventLog.get());
         callConfig.task_queue_factory = _taskQueueFactory.get();
         callConfig.trials = &_fieldTrials;
         callConfig.audio_state = _channelManager->media_engine()->voice().GetAudioState();
         _call.reset(webrtc::Call::Create(callConfig));
+        
+        _customAudioSource.reset(new MergedAudioSourceImpl());
+        
+        auto audioState = (webrtc::internal::AudioState *)(_channelManager->media_engine()->voice().GetAudioState().get());
+        audioState->GetAudioMixer()->AddSource(_customAudioSource.get());
 
         cricket::AudioOptions audioOptions;
         audioOptions.echo_cancellation = true;
@@ -961,10 +1018,8 @@ public:
 
         _uniqueRandomIdGenerator.reset(new rtc::UniqueRandomIdGenerator());
 
-        //_rtpTransport.reset(new WrappedRtpTransport(true));
         StaticThreads::getNetworkThread()->Invoke<void>(RTC_FROM_HERE, [this]() {
             _rtpTransport = _networkManager->getSyncAssumingSameThread()->getRtpTransport();
-            //_rtpTransport->SetRtpPacketTransport(_networkManager->getSyncAssumingSameThread()->getTransportChannel());
         });
 
         _outgoingAudioChannel = _channelManager->CreateVoiceChannel(_call.get(), cricket::MediaConfig(), _rtpTransport, StaticThreads::getMediaThread(), "0", false, GroupNetworkManager::getDefaulCryptoOptions(), _uniqueRandomIdGenerator.get(), audioOptions);
@@ -1026,6 +1081,8 @@ public:
         }
 
         adjustBitratePreferences(true);
+        
+        addIncomingAudioChannel("__dummy", 100000);
     }
 
     void stop() {
@@ -1063,6 +1120,69 @@ public:
 
             strong->beginLevelsTimer(50);
         }, timeoutMs);
+    }
+    
+    void commitBroadcastPackets() {
+        for (int i = 0; i < 50; i++) {
+            if (_broadcastPackets.size() == 0) {
+                break;
+            }
+            auto packetData = _broadcastPackets[0];
+            _broadcastPackets.erase(_broadcastPackets.begin());
+            
+            webrtc::RtpPacket packet;
+            
+            packet.SetMarker(false);
+            packet.SetPayloadType(111);
+            
+            packet.SetSequenceNumber(_broadcastSeq);
+            _broadcastSeq++;
+            
+            packet.SetTimestamp(_broadcastTimestamp);
+            _broadcastTimestamp += packetData.numSamples;
+            
+            packet.SetSsrc(100000);
+            
+            uint8_t *payload = packet.SetPayloadSize(packetData.data.size());
+            memcpy(payload, packetData.data.data(), packetData.data.size());
+            
+            auto buffer = packet.Buffer();
+            _call->Receiver()->DeliverPacket(webrtc::MediaType::AUDIO, buffer, -1);
+        }
+    }
+    
+    void beginTestStreamingTimer(int timeoutMs) {
+        const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
+        StaticThreads::getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
+            auto strong = weak.lock();
+            if (!strong) {
+                return;
+            }
+
+            strong->commitBroadcastPackets();
+
+            strong->beginTestStreamingTimer(1000);
+        }, timeoutMs);
+    }
+    
+    uint16_t _broadcastSeq = 0;
+    uint32_t _broadcastTimestamp = 0;
+    std::vector<BroadcastPacket> _broadcastPackets;
+    
+    void addBroadcastPackets(std::vector<BroadcastPacket> &&packets) {
+        /*auto generator = std::mt19937(std::random_device()());
+        auto distribution = std::uniform_int_distribution<uint32_t>();
+        do {
+            _broadcastTimestamp = distribution(generator);
+        } while (!_broadcastTimestamp);
+        
+        _broadcastSeq = 39000;
+        _broadcastTimestamp = 100000;
+        
+        _broadcastPackets = std::move(packets);
+        beginTestStreamingTimer(0);*/
+        
+        _customAudioSource->addData(packets);
     }
 
     void configureSendVideo() {
@@ -1808,7 +1928,6 @@ private:
     std::vector<GroupJoinPayloadVideoSourceGroup> _videoSourceGroups;
 
     std::unique_ptr<rtc::UniqueRandomIdGenerator> _uniqueRandomIdGenerator;
-    //std::unique_ptr<WrappedRtpTransport> _rtpTransport;
     webrtc::RtpTransport *_rtpTransport = nullptr;
     std::unique_ptr<cricket::ChannelManager> _channelManager;
 
@@ -1831,6 +1950,8 @@ private:
 
     bool _isConnected = false;
     bool _isDataChannelOpen = false;
+    
+    std::unique_ptr<MergedAudioSourceImpl> _customAudioSource;
 };
 
 GroupInstanceCustomImpl::GroupInstanceCustomImpl(GroupInstanceDescriptor &&descriptor) :
@@ -1886,6 +2007,12 @@ void GroupInstanceCustomImpl::addParticipants(std::vector<GroupParticipantDescri
 void GroupInstanceCustomImpl::removeSsrcs(std::vector<uint32_t> ssrcs) {
     _internal->perform(RTC_FROM_HERE, [ssrcs = std::move(ssrcs)](GroupInstanceCustomInternal *internal) mutable {
         internal->removeSsrcs(ssrcs);
+    });
+}
+
+void GroupInstanceCustomImpl::addBroadcastPackets(std::vector<BroadcastPacket> &&packets) {
+    _internal->perform(RTC_FROM_HERE, [packets = std::move(packets)](GroupInstanceCustomInternal *internal) mutable {
+        internal->addBroadcastPackets(std::move(packets));
     });
 }
 
