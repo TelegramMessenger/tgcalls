@@ -42,6 +42,16 @@ struct GroupLevelsUpdate {
     std::vector<GroupLevelUpdate> updates;
 };
 
+struct BroadcastPart {
+    int32_t timestamp = 0;
+    std::vector<uint8_t> oggData;
+};
+
+class BroadcastPartTask {
+public:
+    virtual void cancel() = 0;
+};
+
 struct GroupInstanceDescriptor {
     GroupConfig config;
     std::function<void(bool)> networkStateUpdated;
@@ -53,6 +63,9 @@ struct GroupInstanceDescriptor {
     std::shared_ptr<VideoCaptureInterface> videoCapture;
     std::function<void(std::vector<uint32_t> const &)> incomingVideoSourcesUpdated;
     std::function<void(std::vector<uint32_t> const &)> participantDescriptionsRequired;
+    std::function<void(std::vector<uint8_t> &, std::vector<uint8_t> const &)> externalDecodeOgg;
+    std::function<BroadcastPartTask(int32_t)> requestBroadcastPart;
+    bool disableIncomingChannels = false;
 };
 
 struct GroupJoinPayloadFingerprint {
