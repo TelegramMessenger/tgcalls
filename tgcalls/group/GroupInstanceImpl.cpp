@@ -1795,7 +1795,7 @@ public:
         _nativeFactory = webrtc::CreateModularPeerConnectionFactory(std::move(dependencies));
 
         webrtc::PeerConnectionFactoryInterface::Options peerConnectionOptions;
-        peerConnectionOptions.disable_encryption = true;
+        peerConnectionOptions.disable_encryption = false;
         _nativeFactory->SetOptions(peerConnectionOptions);
 
         webrtc::PeerConnectionInterface::RTCConfiguration config;
@@ -1806,7 +1806,7 @@ public:
         config.presume_writable_when_fully_relayed = true;
         //config.audio_jitter_buffer_enable_rtx_handling = true;
         config.enable_rtp_data_channel = true;
-        config.enable_dtls_srtp = false;
+        config.enable_dtls_srtp = true;
 
         /*webrtc::CryptoOptions cryptoOptions;
         webrtc::CryptoOptions::SFrame sframe;
