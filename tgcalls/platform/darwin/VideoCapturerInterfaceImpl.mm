@@ -106,7 +106,7 @@
                 }
             }
         }
-        if (selectedCamera == nil && (![deviceId isEqualToString:@""] && ![deviceId hasPrefix:@"desktop_capturer_"])) {
+        if (selectedCamera == nil) {
             for (int i = 0; i < devices.count; i++) {
                 if (devices[i].isConnected && !devices[i].isSuspended) {
                     selectedCamera = devices[i];
