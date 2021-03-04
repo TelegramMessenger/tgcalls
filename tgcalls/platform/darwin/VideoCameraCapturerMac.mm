@@ -639,7 +639,6 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
              @"updateDeviceCaptureFormat must be called on the capture queue.");
     @try {
         _currentDevice.activeFormat = format;
-        _currentDevice.activeVideoMinFrameDuration = CMTimeMake(1, (int32_t)fps);
     } @catch (NSException *exception) {
         RTCLogError(@"Failed to set active format!\n User info:%@", exception.userInfo);
         return;
