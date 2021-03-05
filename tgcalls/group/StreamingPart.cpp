@@ -75,7 +75,7 @@ static std::vector<ChannelUpdate> parseChannelUpdates(std::string const &data, i
 
 }
 
-absl::optional<StreamingPart> StreamingPart::parse(std::vector<uint8_t> const &data, std::function<void(std::vector<uint8_t> &, std::vector<uint8_t> const &)> externalDecode) {
+absl::optional<StreamingPart> StreamingPart::parse(std::vector<uint8_t> const &data) {
     int error = OPUS_OK;
     OggOpusFile *opusFile = op_open_memory(data.data(), data.size(), &error);
     if (opusFile == nullptr || error != OPUS_OK) {
@@ -152,7 +152,7 @@ absl::optional<StreamingPart> StreamingPart::parse(std::vector<uint8_t> const &d
             }
             
             for (const auto &update : channelUpdates) {
-                if (update.frameIndex == frameIndex) {
+                if (update.frameIndex == frameIndex || update.frameIndex == frameIndex + 1) {
                     currentChannelIdToSsrcMapping.insert(std::make_pair(update.ssrc, update.id));
                 }
             }
@@ -181,7 +181,7 @@ absl::optional<StreamingPart> StreamingPart::parse(std::vector<uint8_t> const &d
                 }
             }
             
-            frameIndex++;
+            frameIndex += 2;
         } else {
             break;
         }

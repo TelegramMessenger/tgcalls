@@ -21,6 +21,8 @@ public:
     ~GroupInstanceCustomImpl();
 
     void stop();
+    
+    void setConnectionMode(GroupConnectionMode connectionMode);
 
     void emitJoinPayload(std::function<void(GroupJoinPayload)> completion);
     void setJoinResponsePayload(GroupJoinResponsePayload payload, std::vector<tgcalls::GroupParticipantDescription> &&participants);
@@ -36,8 +38,6 @@ public:
     
     void setVolume(uint32_t ssrc, double volume);
     void setFullSizeVideoSsrc(uint32_t ssrc);
-    
-    void addBroadcastParts(std::vector<BroadcastPart> &&parts);
 
 private:
     std::unique_ptr<ThreadLocalObject<GroupInstanceCustomInternal>> _internal;

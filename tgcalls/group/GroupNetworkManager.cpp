@@ -203,9 +203,26 @@ _stateUpdated(std::move(stateUpdated)),
 _transportMessageReceived(std::move(transportMessageReceived)),
 _rtcpPacketReceived(std::move(rtcpPacketReceived)),
 _dataChannelStateUpdated(dataChannelStateUpdated),
-_dataChannelMessageReceived(dataChannelMessageReceived),
-_localIceParameters(rtc::CreateRandomString(cricket::ICE_UFRAG_LENGTH), rtc::CreateRandomString(cricket::ICE_PWD_LENGTH)) {
+_dataChannelMessageReceived(dataChannelMessageReceived) {
     assert(StaticThreads::getNetworkThread()->IsCurrent());
+    
+    _localIceParameters = PeerIceParameters(rtc::CreateRandomString(cricket::ICE_UFRAG_LENGTH), rtc::CreateRandomString(cricket::ICE_PWD_LENGTH));
+    
+    _localCertificate = rtc::RTCCertificateGenerator::GenerateCertificate(rtc::KeyParams(rtc::KT_ECDSA), absl::nullopt);
+    
+    _socketFactory.reset(new rtc::BasicPacketSocketFactory(StaticThreads::getNetworkThread()));
+    _networkManager = std::make_unique<rtc::BasicNetworkManager>();
+    _asyncResolverFactory = std::make_unique<webrtc::BasicAsyncResolverFactory>();
+    
+    _dtlsSrtpTransport = std::make_unique<webrtc::DtlsSrtpTransport>(true);
+    _dtlsSrtpTransport->SetDtlsTransports(nullptr, nullptr);
+    _dtlsSrtpTransport->SetActiveResetSrtpParams(false);
+    _dtlsSrtpTransport->SignalDtlsStateChange.connect(this, &GroupNetworkManager::DtlsStateChanged);
+    _dtlsSrtpTransport->SignalReadyToSend.connect(this, &GroupNetworkManager::DtlsReadyToSend);
+    _dtlsSrtpTransport->SignalRtpPacketReceived.connect(this, &GroupNetworkManager::RtpPacketReceived_n);
+    _dtlsSrtpTransport->SignalRtcpPacketReceived.connect(this, &GroupNetworkManager::OnRtcpPacketReceived_n);
+    
+    resetDtlsSrtpTransport();
 }
 
 GroupNetworkManager::~GroupNetworkManager() {
@@ -223,28 +240,13 @@ GroupNetworkManager::~GroupNetworkManager() {
     _socketFactory.reset();
 }
 
-void GroupNetworkManager::start() {
-    _socketFactory.reset(new rtc::BasicPacketSocketFactory(StaticThreads::getNetworkThread()));
-
-    _networkManager = std::make_unique<rtc::BasicNetworkManager>();
-
-    /*if (_enableStunMarking) {
-        _turnCustomizer.reset(new TurnCustomizerImpl());
-    }*/
-
+void GroupNetworkManager::resetDtlsSrtpTransport() {
     _portAllocator.reset(new cricket::BasicPortAllocator(_networkManager.get(), _socketFactory.get(), _turnCustomizer.get(), nullptr));
-
-    uint32_t flags = 0;
-
-    _portAllocator->set_flags(_portAllocator->flags() | flags);
+    _portAllocator->set_flags(_portAllocator->flags());
     _portAllocator->Initialize();
 
-    cricket::ServerAddresses stunServers;
-    std::vector<cricket::RelayServerConfig> turnServers;
+    _portAllocator->SetConfiguration({}, {}, 2, webrtc::NO_PRUNE, _turnCustomizer.get());
 
-    _portAllocator->SetConfiguration(stunServers, turnServers, 2, webrtc::NO_PRUNE, _turnCustomizer.get());
-
-    _asyncResolverFactory = std::make_unique<webrtc::BasicAsyncResolverFactory>();
     _transportChannel.reset(new cricket::P2PTransportChannel("transport", 0, _portAllocator.get(), _asyncResolverFactory.get(), nullptr));
 
     cricket::IceConfig iceConfig;
@@ -262,15 +264,10 @@ void GroupNetworkManager::start() {
     _transportChannel->SetIceParameters(localIceParameters);
     const bool isOutgoing = false;
     _transportChannel->SetIceRole(isOutgoing ? cricket::ICEROLE_CONTROLLING : cricket::ICEROLE_CONTROLLED);
+    _transportChannel->SetRemoteIceMode(cricket::ICEMODE_LITE);
 
-    //_transportChannel->SignalCandidateGathered.connect(this, &GroupNetworkManager::candidateGathered);
-    //_transportChannel->SignalGatheringState.connect(this, &GroupNetworkManager::candidateGatheringState);
     _transportChannel->SignalIceTransportStateChanged.connect(this, &GroupNetworkManager::transportStateChanged);
     _transportChannel->SignalReadPacket.connect(this, &GroupNetworkManager::transportPacketReceived);
-
-    _transportChannel->MaybeStartGathering();
-
-    _transportChannel->SetRemoteIceMode(cricket::ICEMODE_LITE);
 
     webrtc::CryptoOptions cryptoOptions = GroupNetworkManager::getDefaulCryptoOptions();
     _dtlsTransport.reset(new cricket::DtlsTransport(_transportChannel.get(), cryptoOptions, nullptr));
@@ -282,21 +279,16 @@ void GroupNetworkManager::start() {
     _dtlsTransport->SignalDtlsHandshakeError.connect(
         this, &GroupNetworkManager::OnDtlsHandshakeError);
 
-    rtc::KeyType keyType = rtc::KT_ECDSA;
-    auto localCertificate = rtc::RTCCertificateGenerator::GenerateCertificate(rtc::KeyParams(keyType), absl::nullopt);
-
     _dtlsTransport->SetDtlsRole(rtc::SSLRole::SSL_CLIENT);
-    _dtlsTransport->SetLocalCertificate(localCertificate);
-
-    _dtlsSrtpTransport = std::make_unique<webrtc::DtlsSrtpTransport>(true);
+    _dtlsTransport->SetLocalCertificate(_localCertificate);
+    
     _dtlsSrtpTransport->SetDtlsTransports(_dtlsTransport.get(), nullptr);
-    _dtlsSrtpTransport->SetActiveResetSrtpParams(false);
-    _dtlsSrtpTransport->SignalDtlsStateChange.connect(this, &GroupNetworkManager::DtlsStateChanged);
-    _dtlsSrtpTransport->SignalReadyToSend.connect(this, &GroupNetworkManager::DtlsReadyToSend);
-    _dtlsSrtpTransport->SignalRtpPacketReceived.connect(this, &GroupNetworkManager::RtpPacketReceived_n);
-    _dtlsSrtpTransport->SignalRtcpPacketReceived.connect(this, &GroupNetworkManager::OnRtcpPacketReceived_n);
+}
 
-    const auto weak = std::weak_ptr<GroupNetworkManager>(shared_from_this());
+void GroupNetworkManager::start() {
+    _transportChannel->MaybeStartGathering();
+
+    /*const auto weak = std::weak_ptr<GroupNetworkManager>(shared_from_this());
     _dataChannelInterface.reset(new SctpDataChannelProviderInterfaceImpl(_dtlsTransport.get(), [weak](bool state) {
         assert(StaticThreads::getNetworkThread()->IsCurrent());
         const auto strong = weak.lock();
@@ -311,7 +303,29 @@ void GroupNetworkManager::start() {
             return;
         }
         strong->_dataChannelMessageReceived(message);
-    }));
+    }));*/
+}
+
+void GroupNetworkManager::stop() {
+    _transportChannel->SignalIceTransportStateChanged.disconnect(this);
+    _transportChannel->SignalReadPacket.disconnect(this);
+    
+    _dtlsTransport->SignalWritableState.disconnect(this);
+    _dtlsTransport->SignalReceivingState.disconnect(this);
+    _dtlsTransport->SignalDtlsHandshakeError.disconnect(this);
+    
+    _dtlsSrtpTransport->SetDtlsTransports(nullptr, nullptr);
+    
+    _dataChannelInterface.reset();
+    _dtlsTransport.reset();
+    _transportChannel.reset();
+    _portAllocator.reset();
+    
+    _localIceParameters = PeerIceParameters(rtc::CreateRandomString(cricket::ICE_UFRAG_LENGTH), rtc::CreateRandomString(cricket::ICE_PWD_LENGTH));
+    
+    _localCertificate = rtc::RTCCertificateGenerator::GenerateCertificate(rtc::KeyParams(rtc::KT_ECDSA), absl::nullopt);
+    
+    resetDtlsSrtpTransport();
 }
 
 PeerIceParameters GroupNetworkManager::getLocalIceParameters() {
@@ -319,7 +333,7 @@ PeerIceParameters GroupNetworkManager::getLocalIceParameters() {
 }
 
 std::unique_ptr<rtc::SSLFingerprint> GroupNetworkManager::getLocalFingerprint() {
-    auto certificate = _dtlsTransport->GetLocalCertificate();
+    auto certificate = _localCertificate;
     if (!certificate) {
         return nullptr;
     }

@@ -63,6 +63,7 @@ public:
     ~GroupNetworkManager();
 
     void start();
+    void stop();
 
     PeerIceParameters getLocalIceParameters();
     std::unique_ptr<rtc::SSLFingerprint> getLocalFingerprint();
@@ -73,6 +74,7 @@ public:
     webrtc::RtpTransport *getRtpTransport();
 
 private:
+    void resetDtlsSrtpTransport();
     void checkConnectionTimeout();
     void candidateGathered(cricket::IceTransportInternal *transport, const cricket::Candidate &candidate);
     void candidateGatheringState(cricket::IceTransportInternal *transport);
@@ -108,6 +110,7 @@ private:
 
     std::unique_ptr<SctpDataChannelProviderInterfaceImpl> _dataChannelInterface;
 
+    rtc::scoped_refptr<rtc::RTCCertificate> _localCertificate;
     PeerIceParameters _localIceParameters;
     absl::optional<PeerIceParameters> _remoteIceParameters;
 

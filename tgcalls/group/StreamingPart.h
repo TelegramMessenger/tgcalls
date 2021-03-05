@@ -13,7 +13,7 @@ public:
         std::vector<uint8_t> pcmData;
     };
     
-    static absl::optional<StreamingPart> parse(std::vector<uint8_t> const &data, std::function<void(std::vector<uint8_t> &, std::vector<uint8_t> const &)> externalDecode);
+    static absl::optional<StreamingPart> parse(std::vector<uint8_t> const &data);
     
 public:
     std::vector<StreamingPartChannel> channels;

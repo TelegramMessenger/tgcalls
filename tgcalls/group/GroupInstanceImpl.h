@@ -42,14 +42,30 @@ struct GroupLevelsUpdate {
     std::vector<GroupLevelUpdate> updates;
 };
 
+class BroadcastPartTask {
+public:
+    virtual ~BroadcastPartTask() = default;
+    
+    virtual void cancel() = 0;
+};
+
 struct BroadcastPart {
+    enum class Status {
+        Success,
+        NotReady,
+        TooOld
+    };
+    
     int32_t timestamp = 0;
+    double responseTimestamp = 0;
+    Status status = Status::NotReady;
     std::vector<uint8_t> oggData;
 };
 
-class BroadcastPartTask {
-public:
-    virtual void cancel() = 0;
+enum class GroupConnectionMode {
+    GroupConnectionModeNone,
+    GroupConnectionModeRtc,
+    GroupConnectionModeBroadcast
 };
 
 struct GroupInstanceDescriptor {
@@ -63,9 +79,7 @@ struct GroupInstanceDescriptor {
     std::shared_ptr<VideoCaptureInterface> videoCapture;
     std::function<void(std::vector<uint32_t> const &)> incomingVideoSourcesUpdated;
     std::function<void(std::vector<uint32_t> const &)> participantDescriptionsRequired;
-    std::function<void(std::vector<uint8_t> &, std::vector<uint8_t> const &)> externalDecodeOgg;
-    std::function<BroadcastPartTask(int32_t)> requestBroadcastPart;
-    bool disableIncomingChannels = false;
+    std::function<std::shared_ptr<BroadcastPartTask>(int32_t, std::function<void(BroadcastPart &&)>)> requestBroadcastPart;
 };
 
 struct GroupJoinPayloadFingerprint {
@@ -148,6 +162,8 @@ public:
     virtual ~GroupInstanceInterface() = default;
 
     virtual void stop() = 0;
+    
+    virtual void setConnectionMode(GroupConnectionMode connectionMode) = 0;
 
     virtual void emitJoinPayload(std::function<void(GroupJoinPayload)> completion) = 0;
     virtual void setJoinResponsePayload(GroupJoinResponsePayload payload, std::vector<tgcalls::GroupParticipantDescription> &&participants) = 0;
@@ -169,35 +185,6 @@ public:
       std::string name;
       std::string guid;
     };
-
-};
-
-class GroupInstanceImpl final : public GroupInstanceInterface {
-public:
-	explicit GroupInstanceImpl(GroupInstanceDescriptor &&descriptor);
-	~GroupInstanceImpl();
-
-    void stop();
-
-    void emitJoinPayload(std::function<void(GroupJoinPayload)> completion);
-    void setJoinResponsePayload(GroupJoinResponsePayload payload, std::vector<tgcalls::GroupParticipantDescription> &&participants);
-    void addParticipants(std::vector<GroupParticipantDescription> &&participants);
-    void removeSsrcs(std::vector<uint32_t> ssrcs);
-
-    void setIsMuted(bool isMuted);
-    void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture, std::function<void(GroupJoinPayload)> completion);
-    void setAudioOutputDevice(std::string id);
-    void setAudioInputDevice(std::string id);
-
-    void addIncomingVideoOutput(uint32_t ssrc, std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
-
-    void setVolume(uint32_t ssrc, double volume);
-    void setFullSizeVideoSsrc(uint32_t ssrc);
-
-    static std::vector<GroupInstanceInterface::AudioDevice> getAudioDevices(GroupInstanceInterface::AudioDevice::Type type);
-private:
-	std::unique_ptr<ThreadLocalObject<GroupInstanceManager>> _manager;
-	std::unique_ptr<LogSinkImpl> _logSink;
 
 };
 
