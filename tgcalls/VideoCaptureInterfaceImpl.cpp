@@ -31,6 +31,7 @@ void VideoCaptureInterfaceObject::switchToDevice(std::string deviceId) {
     }
 	if (_videoSource) {
         //this should outlive the capturer
+        _videoCapturer = NULL;
 		_videoCapturer = PlatformInterface::SharedInstance()->makeVideoCapturer(_videoSource, deviceId, [this](VideoState state) {
 			if (this->_stateUpdated) {
 				this->_stateUpdated(state);
