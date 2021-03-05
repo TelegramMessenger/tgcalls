@@ -223,7 +223,9 @@
 - (void)dealloc {
     assert([NSThread isMainThread]);
 
+#if TARGET_OS_OSX
     [_videoCapturer stop];
+#endif
 }
 
 - (void)setIsEnabled:(bool)isEnabled {
