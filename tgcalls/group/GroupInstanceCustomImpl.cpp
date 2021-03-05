@@ -1404,6 +1404,8 @@ public:
         }
         
         if (_isEffectivelyConnected != isEffectivelyConnected) {
+            _isEffectivelyConnected = isEffectivelyConnected;
+            
             if (isEffectivelyConnected) {
                 _call->SignalChannelNetworkState(webrtc::MediaType::AUDIO, webrtc::kNetworkUp);
                 _call->SignalChannelNetworkState(webrtc::MediaType::VIDEO, webrtc::kNetworkUp);
