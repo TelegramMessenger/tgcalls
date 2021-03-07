@@ -6,6 +6,8 @@
 
 namespace tgcalls {
 
+class StreamingPartInternal;
+
 class StreamingPart {
 public:
     struct StreamingPartChannel {
@@ -17,6 +19,9 @@ public:
     
 public:
     std::vector<StreamingPartChannel> channels;
+    
+private:
+    StreamingPartInternal *_internal = nullptr;
 };
 
 }
