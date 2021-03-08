@@ -1,6 +1,5 @@
 #include "StreamingPart.h"
 
-#include <opusfile/opusfile.h>
 #include "rtc_base/logging.h"
 #include "rtc_base/third_party/base64/base64.h"
 
