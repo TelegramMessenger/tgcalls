@@ -80,7 +80,7 @@ public:
     AVIOContextImpl(std::vector<uint8_t> &&fileData) :
     _fileData(std::move(fileData)) {
         _buffer.resize(4 * 1024);
-        _context = avio_alloc_context(_buffer.data(), _buffer.size(), 0, this, &AVIOContextImpl::read, NULL, &AVIOContextImpl::seek);
+        _context = avio_alloc_context(_buffer.data(), (int)_buffer.size(), 0, this, &AVIOContextImpl::read, NULL, &AVIOContextImpl::seek);
     }
 
     ~AVIOContextImpl() {
@@ -141,13 +141,6 @@ class StreamingPartInternal {
 public:
     StreamingPartInternal(std::vector<uint8_t> &&fileData) :
     _avIoContext(std::move(fileData)) {
-#ifdef DEBUG
-    av_log_set_level(AV_LOG_ERROR);
-#else
-    av_log_set_level(AV_LOG_QUIET);
-#endif
-    av_register_all();
-        
         int ret = 0;
         
         _frame = av_frame_alloc();
