@@ -133,6 +133,11 @@ private:
 
 }
 
+struct ReadPcmResult {
+    int numSamples = 0;
+    int numChannels = 0;
+};
+
 class StreamingPartInternal {
 public:
     StreamingPartInternal(std::vector<uint8_t> &&fileData) :
@@ -150,24 +155,28 @@ public:
         
         AVInputFormat *inputFormat = av_find_input_format("ogg");
         if (!inputFormat) {
+            _didReadToEnd = true;
             return;
         }
         
         _inputFormatContext = avformat_alloc_context();
         if (!_inputFormatContext) {
+            _didReadToEnd = true;
             return;
         }
         
         _inputFormatContext->pb = _avIoContext.getContext();
         
         if ((ret = avformat_open_input(&_inputFormatContext, "", inputFormat, nullptr)) < 0) {
+            _didReadToEnd = true;
             return;
         }
         
         if ((ret = avformat_find_stream_info(_inputFormatContext, nullptr)) < 0) {
+            _didReadToEnd = true;
+            
             avformat_close_input(&_inputFormatContext);
             _inputFormatContext = nullptr;
-            
             return;
         }
         
@@ -181,6 +190,23 @@ public:
             }
             audioCodecParameters = inCodecpar;
             
+            _durationInMilliseconds = (int)((inStream->duration + inStream->first_dts) * 1000 / 48000);
+            
+            if (inStream->metadata) {
+                AVDictionaryEntry *entry = av_dict_get(inStream->metadata, "TG_META", nullptr, 0);
+                if (entry && entry->value) {
+                    std::string result;
+                    size_t data_used = 0;
+                    std::string sourceBase64 = (const char *)entry->value;
+                    rtc::Base64::Decode(sourceBase64, rtc::Base64::DO_LAX, &result, &data_used);
+                    
+                    if (result.size() != 0) {
+                        int offset = 0;
+                        _channelUpdates = parseChannelUpdates(result, offset);
+                    }
+                }
+            }
+            
             break;
         }
         
@@ -190,11 +216,17 @@ public:
                 _codecContext = avcodec_alloc_context3(codec);
                 ret = avcodec_parameters_to_context(_codecContext, audioCodecParameters);
                 if (ret < 0) {
+                    _didReadToEnd = true;
+                    
                     avcodec_free_context(&_codecContext);
                     _codecContext = nullptr;
                 } else {
+                    _channelCount = _codecContext->channels;
+                    
                     ret = avcodec_open2(_codecContext, codec, nullptr);
                     if (ret < 0) {
+                        _didReadToEnd = true;
+                        
                         avcodec_free_context(&_codecContext);
                         _codecContext = nullptr;
                     }
@@ -208,6 +240,7 @@ public:
             av_frame_unref(_frame);
         }
         if (_codecContext) {
+            avcodec_close(_codecContext);
             avcodec_free_context(&_codecContext);
         }
         if (_inputFormatContext) {
@@ -215,27 +248,52 @@ public:
         }
     }
     
-    int readPcm(std::vector<uint8_t> &outPcm) {
-        int outPcmOffset = 0;
+    ReadPcmResult readPcm(std::vector<int16_t> &outPcm) {
+        int outPcmSampleOffset = 0;
+        ReadPcmResult result;
         
-        while (!_didReadToEnd && outPcmOffset < outPcm.size()) {
-            if (_pcmBufferOffset >= _pcmBufferSize) {
+        int readSamples = (int)outPcm.size() / _channelCount;
+        
+        result.numChannels = _channelCount;
+        
+        while (outPcmSampleOffset < readSamples) {
+            if (_pcmBufferSampleOffset >= _pcmBufferSampleSize) {
                 fillPcmBuffer();
+                
+                if (_pcmBufferSampleOffset >= _pcmBufferSampleSize) {
+                    break;
+                }
             }
             
-            int readFromPcmBuffer = std::min(_pcmBufferSize - _pcmBufferOffset, ((int)outPcm.size()) - outPcmOffset);
-            if (readFromPcmBuffer != 0) {
-                memcpy(outPcm.data() + outPcmOffset, _pcmBuffer.data() + _pcmBufferOffset, readFromPcmBuffer);
-                _pcmBufferOffset += readFromPcmBuffer;
-                outPcmOffset += readFromPcmBuffer;
+            int readFromPcmBufferSamples = std::min(_pcmBufferSampleSize - _pcmBufferSampleOffset, readSamples - outPcmSampleOffset);
+            if (readFromPcmBufferSamples != 0) {
+                std::copy(_pcmBuffer.begin() + _pcmBufferSampleOffset * _channelCount, _pcmBuffer.begin() + _pcmBufferSampleOffset * _channelCount + readFromPcmBufferSamples * _channelCount, outPcm.begin() + outPcmSampleOffset * _channelCount);
+                _pcmBufferSampleOffset += readFromPcmBufferSamples;
+                outPcmSampleOffset += readFromPcmBufferSamples;
+                result.numSamples += readFromPcmBufferSamples;
             }
         }
         
-        return outPcmOffset;
+        return result;
+    }
+    
+    int getDurationInMilliseconds() {
+        return _durationInMilliseconds;
+    }
+    
+    int getChannelCount() {
+        return _channelCount;
+    }
+    
+    std::vector<ChannelUpdate> const &getChannelUpdates() {
+        return _channelUpdates;
     }
     
 private:
     void fillPcmBuffer() {
+        _pcmBufferSampleSize = 0;
+        _pcmBufferSampleOffset = 0;
+        
         if (_didReadToEnd) {
             return;
         }
@@ -268,21 +326,23 @@ private:
             return;
         }
         
-        while (ret >= 0) {
-            ret = avcodec_receive_frame(_codecContext, _frame);
-            if (ret != 0) {
-                _didReadToEnd = true;
-                return;
-            }
-            
-            if (_pcmBuffer.size() < _frame->nb_samples * bytesPerSample * _frame->channels) {
-                _pcmBuffer.resize(_frame->nb_samples * bytesPerSample * _frame->channels);
-            }
-            
-            memcpy(_pcmBuffer.data(), _frame->data[0], _frame->nb_samples * bytesPerSample * _frame->channels);
-            _pcmBufferSize = _frame->nb_samples * bytesPerSample * _frame->channels;
-            _pcmBufferOffset = 0;
+        ret = avcodec_receive_frame(_codecContext, _frame);
+        if (ret != 0) {
+            _didReadToEnd = true;
+            return;
         }
+        if (_frame->channels != _channelCount) {
+            _didReadToEnd = true;
+            return;
+        }
+        
+        if (_pcmBuffer.size() < _frame->nb_samples * _frame->channels) {
+            _pcmBuffer.resize(_frame->nb_samples * _frame->channels);
+        }
+        
+        memcpy(_pcmBuffer.data(), _frame->data[0], _frame->nb_samples * 2 * _frame->channels);
+        _pcmBufferSampleSize = _frame->nb_samples;
+        _pcmBufferSampleOffset = 0;
     }
     
 private:
@@ -295,137 +355,124 @@ private:
     
     bool _didReadToEnd = false;
     
-    std::vector<uint8_t> _pcmBuffer;
-    int _pcmBufferOffset = 0;
-    int _pcmBufferSize = 0;
+    int _durationInMilliseconds = 0;
+    int _channelCount = 0;
+    
+    std::vector<ChannelUpdate> _channelUpdates;
+    
+    std::vector<int16_t> _pcmBuffer;
+    int _pcmBufferSampleOffset = 0;
+    int _pcmBufferSampleSize = 0;
 };
 
-absl::optional<StreamingPart> StreamingPart::parse(std::vector<uint8_t> const &data) {
-    /*std::vector<uint8_t> dataCopy = data;
-    StreamingPartInternal test(std::move(dataCopy));
-    std::vector<uint8_t> testOutPcm;
-    testOutPcm.resize(48000);
-    test.readPcm(testOutPcm);*/
-    
-    int error = OPUS_OK;
-    OggOpusFile *opusFile = op_open_memory(data.data(), data.size(), &error);
-    if (opusFile == nullptr || error != OPUS_OK) {
-        if (opusFile) {
-            op_free(opusFile);
+class StreamingPartState {
+public:
+    StreamingPartState(std::vector<uint8_t> &&data) :
+    _parsedPart(std::move(data)) {
+        if (_parsedPart.getChannelUpdates().size() == 0) {
+            _didReadToEnd = true;
+            return;
         }
-        return {};
-    }
-    
-    auto opusHead = op_head(opusFile, 0);
-    
-    std::vector<ChannelUpdate> channelUpdates;
-    
-    auto tags = op_tags(opusFile, 0);
-    if (tags && tags->comments != 0) {
-        for (int i = 0; i < tags->comments; i++) {
-            std::string comment = std::string(tags->user_comments[i], tags->comment_lengths[i]);
-            
-            if (comment.find("tg_meta=", 0) == 0) {
-                comment.replace(0, 8, "");
-                std::string result;
-                size_t data_used = 0;
-                rtc::Base64::Decode(comment, rtc::Base64::DO_LAX, &result, &data_used);
-                
-                if (result.size() != 0) {
-                    int offset = 0;
-                    channelUpdates = parseChannelUpdates(result, offset);
-                }
-            }
+        
+        _remainingMilliseconds = _parsedPart.getDurationInMilliseconds();
+        _pcm10ms.resize(480 * _parsedPart.getChannelCount());
+        
+        for (const auto &it : _parsedPart.getChannelUpdates()) {
+            _allSsrcs.insert(it.ssrc);
         }
     }
     
-    StreamingPart results;
-    std::set<uint32_t> allSsrcs;
-    
-    if (channelUpdates.size() == 0) {
-        return results;
+    ~StreamingPartState() {
     }
     
-    for (const auto &it : channelUpdates) {
-        allSsrcs.insert(it.ssrc);
+    int getRemainingMilliseconds() const {
+        return _remainingMilliseconds;
     }
     
-    for (const auto ssrc : allSsrcs) {
-        StreamingPartChannel emptyPart;
-        emptyPart.ssrc = ssrc;
-        results.channels.push_back(emptyPart);
-    }
-    
-    float *interleavedChannelBuffer = (float *)malloc(5670 * opusHead->channel_count);
-    float **separatedChannelBuffer = (float **)malloc(sizeof(float *) * opusHead->channel_count);
-    for (int i = 0; i < opusHead->channel_count; i++) {
-        separatedChannelBuffer[i] = (float *)malloc(5670);
-    }
-    
-    std::map<uint32_t, int> currentChannelIdToSsrcMapping;
-    
-    for (const auto &update : channelUpdates) {
-        if (currentChannelIdToSsrcMapping.find(update.ssrc) == currentChannelIdToSsrcMapping.end()) {
-            currentChannelIdToSsrcMapping.insert(std::make_pair(update.ssrc, update.id));
+    std::vector<StreamingPart::StreamingPartChannel> get10msPerChannel() {
+        if (_didReadToEnd) {
+            return {};
         }
-    }
-    
-    int frameIndex = 0;
-    while (true) {
-        int readResult = op_read_float(opusFile, interleavedChannelBuffer, 5760, NULL);
-        if (readResult > 0) {
-            int readBytesPerChannel = readResult * 2;
-            
-            for (int i = 0; i < readResult; i++) {
-                for (int j = 0; j < opusHead->channel_count; j++) {
-                    separatedChannelBuffer[j][i] = interleavedChannelBuffer[i * opusHead->channel_count + j];
-                }
+        
+        for (const auto &update : _parsedPart.getChannelUpdates()) {
+            if (update.frameIndex == _frameIndex) {
+                _currentChannelIdToSsrcMapping.insert(std::make_pair(update.ssrc, update.id));
             }
+        }
+        
+        auto readResult = _parsedPart.readPcm(_pcm10ms);
+        if (readResult.numSamples <= 0) {
+            _didReadToEnd = true;
+            return {};
+        }
+        
+        std::vector<StreamingPart::StreamingPartChannel> resultChannels;
+        for (const auto ssrc : _allSsrcs) {
+            StreamingPart::StreamingPartChannel emptyPart;
+            emptyPart.ssrc = ssrc;
+            resultChannels.push_back(emptyPart);
+        }
+        
+        for (auto &channel : resultChannels) {
+            auto it = _currentChannelIdToSsrcMapping.find(channel.ssrc);
             
-            for (const auto &update : channelUpdates) {
-                if (update.frameIndex == frameIndex || update.frameIndex == frameIndex + 1) {
-                    currentChannelIdToSsrcMapping.insert(std::make_pair(update.ssrc, update.id));
-                }
+            int sourceChannelIndex = -1;
+            if (it != _currentChannelIdToSsrcMapping.end()) {
+                sourceChannelIndex = it->second;
             }
-            
-            for (int i = 0; i < results.channels.size(); i++) {
-                auto it = currentChannelIdToSsrcMapping.find(results.channels[i].ssrc);
-                
-                int sourceChannelIndex = -1;
-                if (it != currentChannelIdToSsrcMapping.end()) {
-                    sourceChannelIndex = it->second;
-                }
-                
-                int samplesOffset = (int)(results.channels[i].pcmData.size());
-                
-                results.channels[i].pcmData.resize(results.channels[i].pcmData.size() + readBytesPerChannel);
-                int16_t *samples = (int16_t *)(results.channels[i].pcmData.data() + samplesOffset);
 
-                if (sourceChannelIndex != -1) {
-                    for (int j = 0; j < readResult; j++) {
-                        samples[j] = (int16_t)(separatedChannelBuffer[sourceChannelIndex][j] * INT16_MAX);
-                    }
-                } else {
-                    for (int j = 0; j < readResult; j++) {
-                        samples[j] = 0;
-                    }
+            if (sourceChannelIndex != -1) {
+                for (int j = 0; j < readResult.numSamples; j++) {
+                    channel.pcmData.push_back(_pcm10ms[sourceChannelIndex + j * readResult.numChannels]);
+                }
+            } else {
+                for (int j = 0; j < readResult.numSamples; j++) {
+                    channel.pcmData.push_back(0);
                 }
             }
-            
-            frameIndex += 2;
-        } else {
-            break;
         }
+        
+        _remainingMilliseconds -= 10;
+        if (_remainingMilliseconds < 0) {
+            _remainingMilliseconds = 0;
+        }
+        _frameIndex++;
+        
+        return resultChannels;
     }
     
-    free(interleavedChannelBuffer);
-    for (int i = 0; i < opusHead->channel_count; i++) {
-        free(separatedChannelBuffer[i]);
-    }
-    free(separatedChannelBuffer);
-    op_free(opusFile);
+private:
+    StreamingPartInternal _parsedPart;
+    std::set<uint32_t> _allSsrcs;
     
-    return results;
+    std::vector<int16_t> _pcm10ms;
+    std::map<uint32_t, int> _currentChannelIdToSsrcMapping;
+    int _frameIndex = 0;
+    int _remainingMilliseconds = 0;
+    
+    bool _didReadToEnd = false;
+};
+
+StreamingPart::StreamingPart(std::vector<uint8_t> &&data) {
+    _state = new StreamingPartState(std::move(data));
+}
+
+StreamingPart::~StreamingPart() {
+    if (_state) {
+        delete _state;
+    }
+}
+
+int StreamingPart::getRemainingMilliseconds() const {
+    RTC_CHECK(_state);
+    
+    return _state->getRemainingMilliseconds();
+}
+
+std::vector<StreamingPart::StreamingPartChannel> StreamingPart::get10msPerChannel() {
+    RTC_CHECK(_state);
+    
+    return _state->get10msPerChannel();
 }
 
 }

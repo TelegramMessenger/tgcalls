@@ -6,22 +6,31 @@
 
 namespace tgcalls {
 
-class StreamingPartInternal;
+class StreamingPartState;
 
 class StreamingPart {
 public:
     struct StreamingPartChannel {
         uint32_t ssrc = 0;
-        std::vector<uint8_t> pcmData;
+        std::vector<int16_t> pcmData;
     };
     
-    static absl::optional<StreamingPart> parse(std::vector<uint8_t> const &data);
+    explicit StreamingPart(std::vector<uint8_t> &&data);
+    ~StreamingPart();
     
-public:
-    std::vector<StreamingPartChannel> channels;
+    StreamingPart(const StreamingPart&) = delete;
+    StreamingPart(StreamingPart&& other) {
+        _state = other._state;
+        other._state = nullptr;
+    }
+    StreamingPart& operator=(const StreamingPart&) = delete;
+    StreamingPart& operator=(StreamingPart&&) = delete;
+    
+    int getRemainingMilliseconds() const;
+    std::vector<StreamingPartChannel> get10msPerChannel();
     
 private:
-    StreamingPartInternal *_internal = nullptr;
+    StreamingPartState *_state = nullptr;
 };
 
 }

@@ -741,8 +741,12 @@ private:
 struct DecodedBroadcastPart {
     struct DecodedBroadcastPartChannel {
         uint32_t ssrc = 0;
-        std::vector<uint8_t> pcmData;
+        std::vector<int16_t> pcmData;
     };
+    
+    DecodedBroadcastPart(int numSamples_, std::vector<DecodedBroadcastPartChannel> &&_channels) :
+        numSamples(numSamples_), channels(std::move(_channels)) {
+    }
     
     int numSamples = 0;
     std::vector<DecodedBroadcastPartChannel> channels;
@@ -920,6 +924,10 @@ public:
         }
 
         adjustBitratePreferences(true);
+        
+        addIncomingAudioChannel("_dummy", ChannelId(1), true);
+        
+        beginNetworkStatusTimer(0);
     }
     
     void createOutgoingAudioChannel() {
@@ -1022,49 +1030,83 @@ public:
         }, timeoutMs);
     }
     
-    void commitBroadcastPackets() {
-        for (const auto &it : _sourceBroadcastParts) {
-            auto streamingParts = StreamingPart::parse(it.oggData);
-            
-            if (!streamingParts || streamingParts->channels.size() == 0) {
-                continue;
+    void beginNetworkStatusTimer(int delayMs) {
+        const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
+        StaticThreads::getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
+            auto strong = weak.lock();
+            if (!strong) {
+                return;
             }
             
-            int totalNumSamples = (int)(streamingParts->channels[0].pcmData.size() / 2);
-            
-            int step = 960 * 2;
-            
-            for (int offset = 0; offset < totalNumSamples * 2; offset += step) {
-                int partSize = std::min(totalNumSamples * 2 - offset, step);
-                
-                DecodedBroadcastPart decodedPart;
-                decodedPart.numSamples = partSize / 2;
-                
-                for (auto &it : streamingParts->channels) {
-                    DecodedBroadcastPart::DecodedBroadcastPartChannel channel;
-                    channel.ssrc = it.ssrc;
-                    channel.pcmData.resize(partSize);
-                    memcpy(channel.pcmData.data(), it.pcmData.data() + offset, partSize);
-                    decodedPart.channels.push_back(channel);
-                }
-                
-                _decodedBroadcastParts.push_back(std::move(decodedPart));
+            if (strong->_connectionMode == GroupConnectionMode::GroupConnectionModeBroadcast) {
+                strong->updateBroadcastNetworkStatus();
             }
-        }
-        _sourceBroadcastParts.clear();
         
-        int commitCount = 1;
-        if (_decodedBroadcastParts.size() > 50) {
-            commitCount += _decodedBroadcastParts.size() / 50;
+            strong->beginNetworkStatusTimer(500);
+        }, delayMs);
+    }
+    
+    void updateBroadcastNetworkStatus() {
+        auto timestamp = rtc::TimeMillis();
+        
+        bool isBroadcastConnected = true;
+        if (_lastBroadcastPartReceivedTimestamp < timestamp - 3000) {
+            isBroadcastConnected = false;
         }
-        for (int i = 0; i < commitCount; i++) {
-            if (_decodedBroadcastParts.size() == 0) {
+        if (isBroadcastConnected != _isBroadcastConnected) {
+            _isBroadcastConnected = isBroadcastConnected;
+            updateIsConnected();
+        }
+    }
+    
+    absl::optional<DecodedBroadcastPart> getNextBroadcastPart() {
+        while (true) {
+            if (_sourceBroadcastParts.size() != 0) {
+                auto readChannels = _sourceBroadcastParts[0]->get10msPerChannel();
+                if (readChannels.size() == 0 || readChannels[0].pcmData.size() == 0) {
+                    _sourceBroadcastParts.erase(_sourceBroadcastParts.begin());
+                } else {
+                    std::vector<DecodedBroadcastPart::DecodedBroadcastPartChannel> channels;
+                    
+                    int numSamples = (int)readChannels[0].pcmData.size();
+                    
+                    for (auto &readChannel : readChannels) {
+                        DecodedBroadcastPart::DecodedBroadcastPartChannel channel;
+                        channel.ssrc = readChannel.ssrc;
+                        channel.pcmData = std::move(readChannel.pcmData);
+                        channels.push_back(channel);
+                    }
+                    
+                    absl::optional<DecodedBroadcastPart> decodedPart;
+                    decodedPart.emplace(numSamples, std::move(channels));
+                    
+                    return decodedPart;
+                }
+            } else {
+                return absl::nullopt;
+            }
+        }
+        
+        return absl::nullopt;
+    }
+    
+    void commitBroadcastPackets() {
+        int numMillisecondsInQueue = 0;
+        for (const auto &part : _sourceBroadcastParts) {
+            numMillisecondsInQueue += part->getRemainingMilliseconds();
+        }
+        
+        int commitMilliseconds = 20;
+        if (numMillisecondsInQueue > 1000) {
+            commitMilliseconds = numMillisecondsInQueue - 1000;
+        }
+        for (int msIndex = 0; msIndex < commitMilliseconds; msIndex += 10) {
+            auto packetData = getNextBroadcastPart();
+            if (!packetData) {
                 break;
             }
-            auto packetData = _decodedBroadcastParts[0];
-            _decodedBroadcastParts.erase(_decodedBroadcastParts.begin());
             
-            for (const auto &decodedChannel : packetData.channels) {
+            for (const auto &decodedChannel : packetData->channels) {
                 if (decodedChannel.ssrc == _outgoingAudioSsrc) {
                     continue;
                 }
@@ -1076,7 +1118,7 @@ public:
                     addIncomingAudioChannel(os.str(), channelSsrc, true);
                 }
                 
-                webrtc::RtpPacket packet(nullptr, 12 + decodedChannel.pcmData.size());
+                webrtc::RtpPacket packet(nullptr, 12 + decodedChannel.pcmData.size() * 2);
                 
                 packet.SetMarker(false);
                 packet.SetPayloadType(112);
@@ -1098,10 +1140,10 @@ public:
                 
                 packet.SetSsrc(channelSsrc.networkSsrc);
                 
-                uint8_t *payload = packet.SetPayloadSize(decodedChannel.pcmData.size());
-                memcpy(payload, decodedChannel.pcmData.data(), decodedChannel.pcmData.size());
+                uint8_t *payload = packet.SetPayloadSize(decodedChannel.pcmData.size() * 2);
+                memcpy(payload, decodedChannel.pcmData.data(), decodedChannel.pcmData.size() * 2);
                 
-                for (int i = 0; i < decodedChannel.pcmData.size(); i += 2) {
+                for (int i = 0; i < decodedChannel.pcmData.size() * 2; i += 2) {
                     auto temp = payload[i];
                     payload[i] = payload[i + 1];
                     payload[i + 1] = temp;
@@ -1111,13 +1153,13 @@ public:
                 _call->Receiver()->DeliverPacket(webrtc::MediaType::AUDIO, buffer, -1);
             }
             
-            _broadcastTimestamp += packetData.numSamples;
+            _broadcastTimestamp += packetData->numSamples;
         }
     }
     
     void requestNextBroadcastPart() {
         const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
-        _currentRequestedBroadcastTask = _requestBroadcastPart(_nextBroadcastTimestamp, [weak](BroadcastPart &&part) {
+        _currentRequestedBroadcastTask = _requestBroadcastPart(_nextBroadcastTimestampMilliseconds, _broadcastPartDurationMilliseconds, [weak](BroadcastPart &&part) {
             StaticThreads::getMediaThread()->PostTask(RTC_FROM_HERE, [weak, part = std::move(part)]() mutable {
                 auto strong = weak.lock();
                 if (!strong) {
@@ -1148,22 +1190,29 @@ public:
             return;
         }
         
+        int64_t responseTimestampMilliseconds = (int64_t)(part.responseTimestamp * 1000.0);
+        
+        int64_t responseTimestampBoundary = (responseTimestampMilliseconds / _broadcastPartDurationMilliseconds) * _broadcastPartDurationMilliseconds;
+        
         switch (part.status) {
             case BroadcastPart::Status::Success: {
-                if (std::abs((int32_t)(part.responseTimestamp) - part.timestamp) > 2) {
-                    _nextBroadcastTimestamp = std::max(part.timestamp + 1,(int32_t)(part.responseTimestamp));
+                _lastBroadcastPartReceivedTimestamp = rtc::TimeMillis();
+                updateBroadcastNetworkStatus();
+                
+                if (std::abs((int64_t)(part.responseTimestamp * 1000.0) - part.timestampMilliseconds) > 2000) {
+                    _nextBroadcastTimestampMilliseconds = std::max(part.timestampMilliseconds + _broadcastPartDurationMilliseconds, responseTimestampBoundary);
                 } else {
-                    _nextBroadcastTimestamp = part.timestamp + 1;
+                    _nextBroadcastTimestampMilliseconds = part.timestampMilliseconds + _broadcastPartDurationMilliseconds;
                 }
-                _sourceBroadcastParts.push_back(std::move(part));
+                _sourceBroadcastParts.emplace_back(new StreamingPart(std::move(part.oggData)));
                 break;
             }
             case BroadcastPart::Status::NotReady: {
-                _nextBroadcastTimestamp = part.timestamp;
+                _nextBroadcastTimestampMilliseconds = part.timestampMilliseconds;
                 break;
             }
-            case BroadcastPart::Status::TooOld: {
-                _nextBroadcastTimestamp = (int32_t)(part.responseTimestamp);
+            case BroadcastPart::Status::ResyncNeeded: {
+                _nextBroadcastTimestampMilliseconds = responseTimestampBoundary;
                 break;
             }
             default: {
@@ -1172,7 +1221,12 @@ public:
             }
         }
         
-        requestNextBroadcastPartWithDelay(500);
+        int64_t nextDelay = _nextBroadcastTimestampMilliseconds - responseTimestampMilliseconds;
+        int clippedDelay = std::max((int)nextDelay, 100);
+        
+        //RTC_LOG(LS_INFO) << "requestNextBroadcastPartWithDelay(" << clippedDelay << ") (from " << nextDelay << ")";
+        
+        requestNextBroadcastPartWithDelay(clippedDelay);
     }
     
     void beginBroadcastPartsDecodeTimer(int timeoutMs) {
@@ -1192,18 +1246,6 @@ public:
             strong->beginBroadcastPartsDecodeTimer(20);
         }, timeoutMs);
     }
-    
-    std::vector<BroadcastPart> _sourceBroadcastParts;
-    
-    std::map<uint32_t, uint16_t> _broadcastSeqBySsrc;
-    uint32_t _broadcastTimestamp = 0;
-    std::vector<DecodedBroadcastPart> _decodedBroadcastParts;
-    
-    int32_t _nextBroadcastTimestamp = 0;
-    std::shared_ptr<BroadcastPartTask> _currentRequestedBroadcastTask;
-    int32_t _currentRequestedBroadcastTimestamp = 0;
-    
-    bool _isBroadcastActive = false;
 
     void configureSendVideo() {
         if (!_outgoingVideoChannel) {
@@ -1398,7 +1440,7 @@ public:
                 break;
             }
             case GroupConnectionMode::GroupConnectionModeBroadcast: {
-                isEffectivelyConnected = true;
+                isEffectivelyConnected = _isBroadcastConnected;
                 break;
             }
         }
@@ -1635,6 +1677,8 @@ public:
             }
             case GroupConnectionMode::GroupConnectionModeBroadcast: {
                 _broadcastTimestamp = 100001;
+                
+                _isBroadcastConnected = false;
                 
                 beginBroadcastPartsDecodeTimer(0);
                 requestNextBroadcastPart();
@@ -1955,7 +1999,7 @@ private:
     std::function<void(GroupLevelsUpdate const &)> _audioLevelsUpdated;
     std::function<void(std::vector<uint32_t> const &)> _incomingVideoSourcesUpdated;
     std::function<void(std::vector<uint32_t> const &)> _participantDescriptionsRequired;
-    std::function<std::shared_ptr<BroadcastPartTask>(int32_t, std::function<void(BroadcastPart &&)>)> _requestBroadcastPart;
+    std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, std::function<void(BroadcastPart &&)>)> _requestBroadcastPart;
     std::shared_ptr<VideoCaptureInterface> _videoCapture;
     bool _disableIncomingChannels = false;
 
@@ -1974,9 +2018,6 @@ private:
     webrtc::LocalAudioSinkAdapter _audioSource;
     rtc::scoped_refptr<webrtc::AudioDeviceModule> _audioDeviceModule;
 	std::function<rtc::scoped_refptr<webrtc::AudioDeviceModule>(webrtc::TaskQueueFactory*)> _createAudioDeviceModule;
-
-    std::unique_ptr<cricket::SctpTransportFactory> _sctpTransportFactory;
-    std::unique_ptr<cricket::SctpTransportInternal> _sctpTransport;
 
     // _outgoingAudioChannel memory is managed by _channelManager
     cricket::VoiceChannel *_outgoingAudioChannel = nullptr;
@@ -2009,8 +2050,18 @@ private:
     std::map<uint32_t, std::unique_ptr<IncomingVideoChannel>> _incomingVideoChannels;
 
     std::string _currentHighQualityVideoEndpointId;
+    
+    int64_t _broadcastPartDurationMilliseconds = 500;
+    std::vector<std::unique_ptr<StreamingPart>> _sourceBroadcastParts;
+    std::map<uint32_t, uint16_t> _broadcastSeqBySsrc;
+    uint32_t _broadcastTimestamp = 0;
+    int64_t _nextBroadcastTimestampMilliseconds = 0;
+    std::shared_ptr<BroadcastPartTask> _currentRequestedBroadcastTask;
+    int64_t _currentRequestedBroadcastTimestampMilliseconds = 0;
+    int64_t _lastBroadcastPartReceivedTimestamp = 0;
 
     bool _isRtcConnected = false;
+    bool _isBroadcastConnected = false;
     bool _isDataChannelOpen = false;
     bool _isEffectivelyConnected = false;
 };

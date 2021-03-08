@@ -53,10 +53,10 @@ struct BroadcastPart {
     enum class Status {
         Success,
         NotReady,
-        TooOld
+        ResyncNeeded
     };
     
-    int32_t timestamp = 0;
+    int64_t timestampMilliseconds = 0;
     double responseTimestamp = 0;
     Status status = Status::NotReady;
     std::vector<uint8_t> oggData;
@@ -79,7 +79,7 @@ struct GroupInstanceDescriptor {
     std::shared_ptr<VideoCaptureInterface> videoCapture;
     std::function<void(std::vector<uint32_t> const &)> incomingVideoSourcesUpdated;
     std::function<void(std::vector<uint32_t> const &)> participantDescriptionsRequired;
-    std::function<std::shared_ptr<BroadcastPartTask>(int32_t, std::function<void(BroadcastPart &&)>)> requestBroadcastPart;
+    std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, std::function<void(BroadcastPart &&)>)> requestBroadcastPart;
 };
 
 struct GroupJoinPayloadFingerprint {
