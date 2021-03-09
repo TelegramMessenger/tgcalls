@@ -22,7 +22,7 @@ public:
 
     void stop();
     
-    void setConnectionMode(GroupConnectionMode connectionMode);
+    void setConnectionMode(GroupConnectionMode connectionMode, bool keepBroadcastIfWasEnabled);
 
     void emitJoinPayload(std::function<void(GroupJoinPayload)> completion);
     void setJoinResponsePayload(GroupJoinResponsePayload payload, std::vector<tgcalls::GroupParticipantDescription> &&participants);

@@ -68,9 +68,14 @@ enum class GroupConnectionMode {
     GroupConnectionModeBroadcast
 };
 
+struct GroupNetworkState {
+    bool isConnected = false;
+    bool isTransitioningFromBroadcastToRtc = false;
+};
+
 struct GroupInstanceDescriptor {
     GroupConfig config;
-    std::function<void(bool)> networkStateUpdated;
+    std::function<void(GroupNetworkState)> networkStateUpdated;
     std::function<void(GroupLevelsUpdate const &)> audioLevelsUpdated;
     std::string initialInputDeviceId;
     std::string initialOutputDeviceId;
@@ -163,7 +168,7 @@ public:
 
     virtual void stop() = 0;
     
-    virtual void setConnectionMode(GroupConnectionMode connectionMode) = 0;
+    virtual void setConnectionMode(GroupConnectionMode connectionMode, bool keepBroadcastIfWasEnabled) = 0;
 
     virtual void emitJoinPayload(std::function<void(GroupJoinPayload)> completion) = 0;
     virtual void setJoinResponsePayload(GroupJoinResponsePayload payload, std::vector<tgcalls::GroupParticipantDescription> &&participants) = 0;

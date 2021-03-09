@@ -1038,7 +1038,7 @@ public:
                 return;
             }
             
-            if (strong->_connectionMode == GroupConnectionMode::GroupConnectionModeBroadcast) {
+            if (strong->_connectionMode == GroupConnectionMode::GroupConnectionModeBroadcast || strong->_broadcastEnabledUntilRtcIsConnectedAtTimestamp) {
                 strong->updateBroadcastNetworkStatus();
             }
         
@@ -1053,6 +1053,19 @@ public:
         if (_lastBroadcastPartReceivedTimestamp < timestamp - 3000) {
             isBroadcastConnected = false;
         }
+
+        if (_broadcastEnabledUntilRtcIsConnectedAtTimestamp) {
+            auto timestamp = rtc::TimeMillis();
+            if (std::abs(timestamp - _broadcastEnabledUntilRtcIsConnectedAtTimestamp.value()) > 3000) {
+                _broadcastEnabledUntilRtcIsConnectedAtTimestamp = absl::nullopt;
+                if (_currentRequestedBroadcastTask) {
+                    _currentRequestedBroadcastTask->cancel();
+                    _currentRequestedBroadcastTask.reset();
+                }
+                isBroadcastConnected = false;
+            }
+        }
+
         if (isBroadcastConnected != _isBroadcastConnected) {
             _isBroadcastConnected = isBroadcastConnected;
             updateIsConnected();
@@ -1186,7 +1199,7 @@ public:
     void onReceivedNextBroadcastPart(BroadcastPart &&part) {
         _currentRequestedBroadcastTask.reset();
         
-        if (_connectionMode != GroupConnectionMode::GroupConnectionModeBroadcast) {
+        if (_connectionMode != GroupConnectionMode::GroupConnectionModeBroadcast && !_broadcastEnabledUntilRtcIsConnectedAtTimestamp) {
             return;
         }
         
@@ -1237,7 +1250,7 @@ public:
                 return;
             }
             
-            if (strong->_connectionMode != GroupConnectionMode::GroupConnectionModeBroadcast) {
+            if (strong->_connectionMode != GroupConnectionMode::GroupConnectionModeBroadcast && !strong->_broadcastEnabledUntilRtcIsConnectedAtTimestamp) {
                 return;
             }
 
@@ -1424,19 +1437,36 @@ public:
         _isRtcConnected = isConnected;
 
         RTC_LOG(LS_INFO) << formatTimestampMillis(rtc::TimeMillis()) << ": " << "setIsRtcConnected: " << _isRtcConnected;
+
+        if (_broadcastEnabledUntilRtcIsConnectedAtTimestamp) {
+            _broadcastEnabledUntilRtcIsConnectedAtTimestamp = absl::nullopt;
+            if (_currentRequestedBroadcastTask) {
+                _currentRequestedBroadcastTask->cancel();
+                _currentRequestedBroadcastTask.reset();
+            }
+        }
         
         updateIsConnected();
     }
     
     void updateIsConnected() {
         bool isEffectivelyConnected = false;
+        bool isTransitioningFromBroadcastToRtc = false;
         switch (_connectionMode) {
             case GroupConnectionMode::GroupConnectionModeNone: {
                 isEffectivelyConnected = false;
+                if (_broadcastEnabledUntilRtcIsConnectedAtTimestamp && _isBroadcastConnected) {
+                    isEffectivelyConnected = true;
+                    isTransitioningFromBroadcastToRtc = true;
+                }
                 break;
             }
             case GroupConnectionMode::GroupConnectionModeRtc: {
                 isEffectivelyConnected = _isRtcConnected;
+                if (_broadcastEnabledUntilRtcIsConnectedAtTimestamp && _isBroadcastConnected) {
+                    isEffectivelyConnected = true;
+                    isTransitioningFromBroadcastToRtc = true;
+                }
                 break;
             }
             case GroupConnectionMode::GroupConnectionModeBroadcast: {
@@ -1444,11 +1474,15 @@ public:
                 break;
             }
         }
+
+        GroupNetworkState effectiveNetworkState;
+        effectiveNetworkState.isConnected = isEffectivelyConnected;
+        effectiveNetworkState.isTransitioningFromBroadcastToRtc = isTransitioningFromBroadcastToRtc;
         
-        if (_isEffectivelyConnected != isEffectivelyConnected) {
-            _isEffectivelyConnected = isEffectivelyConnected;
+        if (_effectiveNetworkState.isConnected != effectiveNetworkState.isConnected || _effectiveNetworkState.isTransitioningFromBroadcastToRtc != effectiveNetworkState.isTransitioningFromBroadcastToRtc) {
+            _effectiveNetworkState = effectiveNetworkState;
             
-            if (isEffectivelyConnected) {
+            if (_effectiveNetworkState.isConnected) {
                 _call->SignalChannelNetworkState(webrtc::MediaType::AUDIO, webrtc::kNetworkUp);
                 _call->SignalChannelNetworkState(webrtc::MediaType::VIDEO, webrtc::kNetworkUp);
             } else {
@@ -1457,7 +1491,7 @@ public:
             }
             
             if (_networkStateUpdated) {
-                _networkStateUpdated(isEffectivelyConnected);
+                _networkStateUpdated(_effectiveNetworkState);
             }
         }
     }
@@ -1627,15 +1661,15 @@ public:
         });
     }
     
-    void setConnectionMode(GroupConnectionMode connectionMode) {
+    void setConnectionMode(GroupConnectionMode connectionMode, bool keepBroadcastIfWasEnabled) {
         if (_connectionMode != connectionMode) {
             GroupConnectionMode previousMode = _connectionMode;
             _connectionMode = connectionMode;
-            onConnectionModeUpdated(previousMode);
+            onConnectionModeUpdated(previousMode, keepBroadcastIfWasEnabled);
         }
     }
     
-    void onConnectionModeUpdated(GroupConnectionMode previousMode) {
+    void onConnectionModeUpdated(GroupConnectionMode previousMode, bool keepBroadcastIfWasEnabled) {
         RTC_CHECK(_connectionMode != previousMode);
         
         if (previousMode == GroupConnectionMode::GroupConnectionModeRtc) {
@@ -1643,9 +1677,13 @@ public:
                 networkManager->stop();
             });
         } else if (previousMode == GroupConnectionMode::GroupConnectionModeBroadcast) {
-            if (_currentRequestedBroadcastTask) {
-                _currentRequestedBroadcastTask->cancel();
-                _currentRequestedBroadcastTask.reset();
+            if (keepBroadcastIfWasEnabled) {
+                _broadcastEnabledUntilRtcIsConnectedAtTimestamp = rtc::TimeMillis();
+            } else {
+                if (_currentRequestedBroadcastTask) {
+                    _currentRequestedBroadcastTask->cancel();
+                    _currentRequestedBroadcastTask.reset();
+                }
             }
         }
         
@@ -1995,7 +2033,7 @@ private:
 private:
     GroupConnectionMode _connectionMode = GroupConnectionMode::GroupConnectionModeNone;
     
-    std::function<void(bool)> _networkStateUpdated;
+    std::function<void(GroupNetworkState)> _networkStateUpdated;
     std::function<void(GroupLevelsUpdate const &)> _audioLevelsUpdated;
     std::function<void(std::vector<uint32_t> const &)> _incomingVideoSourcesUpdated;
     std::function<void(std::vector<uint32_t> const &)> _participantDescriptionsRequired;
@@ -2057,13 +2095,13 @@ private:
     uint32_t _broadcastTimestamp = 0;
     int64_t _nextBroadcastTimestampMilliseconds = 0;
     std::shared_ptr<BroadcastPartTask> _currentRequestedBroadcastTask;
-    int64_t _currentRequestedBroadcastTimestampMilliseconds = 0;
     int64_t _lastBroadcastPartReceivedTimestamp = 0;
 
     bool _isRtcConnected = false;
     bool _isBroadcastConnected = false;
+    absl::optional<int64_t> _broadcastEnabledUntilRtcIsConnectedAtTimestamp;
     bool _isDataChannelOpen = false;
-    bool _isEffectivelyConnected = false;
+    GroupNetworkState _effectiveNetworkState;
 };
 
 GroupInstanceCustomImpl::GroupInstanceCustomImpl(GroupInstanceDescriptor &&descriptor) :
@@ -2098,9 +2136,9 @@ void GroupInstanceCustomImpl::stop() {
     });
 }
 
-void GroupInstanceCustomImpl::setConnectionMode(GroupConnectionMode connectionMode) {
-    _internal->perform(RTC_FROM_HERE, [connectionMode](GroupInstanceCustomInternal *internal) {
-        internal->setConnectionMode(connectionMode);
+void GroupInstanceCustomImpl::setConnectionMode(GroupConnectionMode connectionMode, bool keepBroadcastIfWasEnabled) {
+    _internal->perform(RTC_FROM_HERE, [connectionMode, keepBroadcastIfWasEnabled](GroupInstanceCustomInternal *internal) {
+        internal->setConnectionMode(connectionMode, keepBroadcastIfWasEnabled);
     });
 }
 
