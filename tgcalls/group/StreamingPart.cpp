@@ -397,12 +397,12 @@ class StreamingPartState {
     struct ChannelMapping {
         uint32_t ssrc = 0;
         int channelIndex = 0;
-        
+
         ChannelMapping(uint32_t ssrc_, int channelIndex_) :
             ssrc(ssrc_), channelIndex(channelIndex_) {
         }
     };
-    
+
 public:
     StreamingPartState(std::vector<uint8_t> &&data) :
     _parsedPart(std::move(data)) {
@@ -483,16 +483,19 @@ private:
         }
         return absl::nullopt;
     }
-    
+
     void updateCurrentMapping(uint32_t ssrc, int channelIndex) {
         for (int i = (int)_currentChannelMapping.size() - 1; i >= 0; i--) {
-            if (_currentChannelMapping[i].ssrc == ssrc || _currentChannelMapping[i].channelIndex == channelIndex) {
+            const auto &entry = _currentChannelMapping[i];
+            if (entry.ssrc == ssrc && entry.channelIndex == channelIndex) {
+                return;
+            } else if (entry.ssrc == ssrc || entry.channelIndex == channelIndex) {
                 _currentChannelMapping.erase(_currentChannelMapping.begin() + i);
             }
         }
         _currentChannelMapping.emplace_back(ssrc, channelIndex);
     }
-    
+
 private:
     StreamingPartInternal _parsedPart;
     std::set<uint32_t> _allSsrcs;
