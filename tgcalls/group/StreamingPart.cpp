@@ -394,6 +394,15 @@ private:
 };
 
 class StreamingPartState {
+    struct ChannelMapping {
+        uint32_t ssrc = 0;
+        int channelIndex = 0;
+        
+        ChannelMapping(uint32_t ssrc_, int channelIndex_) :
+            ssrc(ssrc_), channelIndex(channelIndex_) {
+        }
+    };
+    
 public:
     StreamingPartState(std::vector<uint8_t> &&data) :
     _parsedPart(std::move(data)) {
@@ -424,7 +433,7 @@ public:
 
         for (const auto &update : _parsedPart.getChannelUpdates()) {
             if (update.frameIndex == _frameIndex) {
-                _currentChannelIdToSsrcMapping.insert(std::make_pair(update.ssrc, update.id));
+                updateCurrentMapping(update.ssrc, update.id);
             }
         }
 
@@ -442,14 +451,10 @@ public:
         }
 
         for (auto &channel : resultChannels) {
-            auto it = _currentChannelIdToSsrcMapping.find(channel.ssrc);
+            auto mappedChannelIndex = getCurrentMappedChannelIndex(channel.ssrc);
 
-            int sourceChannelIndex = -1;
-            if (it != _currentChannelIdToSsrcMapping.end()) {
-                sourceChannelIndex = it->second;
-            }
-
-            if (sourceChannelIndex != -1) {
+            if (mappedChannelIndex) {
+                int sourceChannelIndex = mappedChannelIndex.value();
                 for (int j = 0; j < readResult.numSamples; j++) {
                     channel.pcmData.push_back(_pcm10ms[sourceChannelIndex + j * readResult.numChannels]);
                 }
@@ -470,11 +475,30 @@ public:
     }
 
 private:
+    absl::optional<int> getCurrentMappedChannelIndex(uint32_t ssrc) {
+        for (const auto &it : _currentChannelMapping) {
+            if (it.ssrc == ssrc) {
+                return it.channelIndex;
+            }
+        }
+        return absl::nullopt;
+    }
+    
+    void updateCurrentMapping(uint32_t ssrc, int channelIndex) {
+        for (int i = (int)_currentChannelMapping.size() - 1; i >= 0; i--) {
+            if (_currentChannelMapping[i].ssrc == ssrc || _currentChannelMapping[i].channelIndex == channelIndex) {
+                _currentChannelMapping.erase(_currentChannelMapping.begin() + i);
+            }
+        }
+        _currentChannelMapping.emplace_back(ssrc, channelIndex);
+    }
+    
+private:
     StreamingPartInternal _parsedPart;
     std::set<uint32_t> _allSsrcs;
 
     std::vector<int16_t> _pcm10ms;
-    std::map<uint32_t, int> _currentChannelIdToSsrcMapping;
+    std::vector<ChannelMapping> _currentChannelMapping;
     int _frameIndex = 0;
     int _remainingMilliseconds = 0;
 
