@@ -509,7 +509,9 @@ private:
 };
 
 StreamingPart::StreamingPart(std::vector<uint8_t> &&data) {
-    _state = new StreamingPartState(std::move(data));
+    if (!data.empty()) {
+        _state = new StreamingPartState(std::move(data));
+    }
 }
 
 StreamingPart::~StreamingPart() {
@@ -519,15 +521,13 @@ StreamingPart::~StreamingPart() {
 }
 
 int StreamingPart::getRemainingMilliseconds() const {
-    RTC_CHECK(_state);
-
-    return _state->getRemainingMilliseconds();
+    return _state ? _state->getRemainingMilliseconds() : 0;
 }
 
 std::vector<StreamingPart::StreamingPartChannel> StreamingPart::get10msPerChannel() {
-    RTC_CHECK(_state);
-
-    return _state->get10msPerChannel();
+    return _state
+        ? _state->get10msPerChannel()
+        : std::vector<StreamingPart::StreamingPartChannel>();
 }
 
 }
