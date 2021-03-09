@@ -313,7 +313,7 @@ private:
         }
         
         int bytesPerSample = av_get_bytes_per_sample(_codecContext->sample_fmt);
-        if (bytesPerSample != 2) {
+        if (bytesPerSample != 2 && bytesPerSample != 4) {
             _didReadToEnd = true;
             return;
         }
@@ -323,7 +323,7 @@ private:
             _didReadToEnd = true;
             return;
         }
-        if (_frame->channels != _channelCount) {
+        if (_frame->channels != _channelCount || _frame->channels > 8) {
             _didReadToEnd = true;
             return;
         }
@@ -332,7 +332,23 @@ private:
             _pcmBuffer.resize(_frame->nb_samples * _frame->channels);
         }
         
-        memcpy(_pcmBuffer.data(), _frame->data[0], _frame->nb_samples * 2 * _frame->channels);
+        if (_codecContext->sample_fmt == AV_SAMPLE_FMT_S16) {
+            memcpy(_pcmBuffer.data(), _frame->data[0], _frame->nb_samples * 2 * _frame->channels);
+        } else if (_codecContext->sample_fmt == AV_SAMPLE_FMT_FLT) {
+            float *floatData = (float *)&_frame->data[0];
+            for (int i = 0; i < _frame->nb_samples * _frame->channels; i++) {
+                _pcmBuffer[i] = (int16_t)(floatData[i] * INT16_MAX);
+            }
+        } else if (_codecContext->sample_fmt == AV_SAMPLE_FMT_FLTP) {
+            for (int i = 0; i < _frame->nb_samples * _frame->channels; i++) {
+                int channelIndex = i % _frame->channels;
+                float *floatChannel = (float *)&_frame->data[channelIndex][0];
+                _pcmBuffer[i] = (int16_t)(floatChannel[i / _frame->channels] * INT16_MAX);
+            }
+        } else {
+            RTC_FATAL() << "Unexpected sample_fmt";
+        }
+        
         _pcmBufferSampleSize = _frame->nb_samples;
         _pcmBufferSampleOffset = 0;
     }
