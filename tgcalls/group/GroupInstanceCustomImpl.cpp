@@ -1113,6 +1113,9 @@ public:
         if (numMillisecondsInQueue > 1000) {
             commitMilliseconds = numMillisecondsInQueue - 1000;
         }
+
+        std::set<ChannelId> channelsWithActivity;
+
         for (int msIndex = 0; msIndex < commitMilliseconds; msIndex += 10) {
             auto packetData = getNextBroadcastPart();
             if (!packetData) {
@@ -1164,6 +1167,15 @@ public:
                 
                 auto buffer = packet.Buffer();
                 _call->Receiver()->DeliverPacket(webrtc::MediaType::AUDIO, buffer, -1);
+
+                channelsWithActivity.insert(ChannelId(channelSsrc));
+            }
+
+            for (const auto channelId : channelsWithActivity) {
+                const auto it = _incomingAudioChannels.find(channelId);
+                if (it != _incomingAudioChannels.end()) {
+                    it->second->updateActivity();
+                }
             }
             
             _broadcastTimestamp += packetData->numSamples;
@@ -1891,6 +1903,26 @@ public:
     void addIncomingAudioChannel(std::string const &endpointId, ChannelId ssrc, bool isRawPcm = false) {
         if (_incomingAudioChannels.find(ssrc) != _incomingAudioChannels.end()) {
             return;
+        }
+
+        if (_incomingAudioChannels.size() > 5) {
+            int64_t minActivity = INT64_MAX;
+            ChannelId minActivityChannelId(0, 0);
+
+            for (const auto &it : _incomingAudioChannels) {
+                auto activity = it.second->getActivity();
+                if (activity < minActivity) {
+                    minActivity = activity;
+                    minActivityChannelId = it.first;
+                }
+            }
+
+            if (minActivityChannelId.networkSsrc != 0) {
+                const auto it = _incomingAudioChannels.find(minActivityChannelId);
+                if (it != _incomingAudioChannels.end()) {
+                    _incomingAudioChannels.erase(it);
+                }
+            }
         }
 
         const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
