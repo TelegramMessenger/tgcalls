@@ -26,6 +26,7 @@ class GroupInstanceManager;
 class AudioFrame;
 
 struct GroupConfig {
+    bool need_log{true};
     FilePath logPath;
 };
 
