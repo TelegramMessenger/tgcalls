@@ -35,6 +35,7 @@
 #include "modules/audio_coding/neteq/default_neteq_factory.h"
 #include "modules/audio_coding/include/audio_coding_module.h"
 
+#include "AudioFrame.h"
 #include "ThreadLocalObject.h"
 #include "Manager.h"
 #include "NetworkManager.h"
@@ -195,6 +196,37 @@ struct VideoSsrcs {
     }
 };
 
+struct ChannelId {
+  uint32_t networkSsrc = 0;
+  uint32_t actualSsrc = 0;
+
+  ChannelId(uint32_t networkSsrc_, uint32_t actualSsrc_) :
+      networkSsrc(networkSsrc_),
+      actualSsrc(actualSsrc_) {
+  }
+
+  explicit ChannelId(uint32_t networkSsrc_) :
+      networkSsrc(networkSsrc_),
+      actualSsrc(networkSsrc_) {
+  }
+
+  bool operator <(const ChannelId& rhs) const {
+    if (networkSsrc != rhs.networkSsrc) {
+      return networkSsrc < rhs.networkSsrc;
+    }
+    return actualSsrc < rhs.actualSsrc;
+  }
+
+  std::string name() {
+    if (networkSsrc == actualSsrc) {
+      return uint32ToString(networkSsrc);
+    } else {
+      return uint32ToString(networkSsrc) + "to" + uint32ToString(actualSsrc);
+    }
+  }
+};
+
+
 class NetworkInterfaceImpl : public cricket::MediaChannel::NetworkInterface {
 public:
     NetworkInterfaceImpl(std::function<void(rtc::CopyOnWriteBuffer const *, rtc::SentPacket)> sendPacket) :
@@ -278,15 +310,27 @@ public:
     };
 
 public:
-    AudioSinkImpl(std::function<void(Update)> update) :
-    _update(update) {
+    AudioSinkImpl(std::function<void(Update)> update,
+        ChannelId channel_id, std::function<void(uint32_t, const AudioFrame &)> onAudioFrame) :
+    _update(update), _channel_id(channel_id), _onAudioFrame(std::move(onAudioFrame)) {
     }
 
     virtual ~AudioSinkImpl() {
     }
 
     virtual void OnData(const Data& audio) override {
-        if (audio.channels == 1) {
+      if (_onAudioFrame) {
+        AudioFrame frame;
+        frame.audio_samples = audio.data;
+        frame.num_samples = audio.samples_per_channel;
+        frame.bytes_per_sample = 2;
+        frame.num_channels = audio.channels;
+        frame.samples_per_sec = audio.sample_rate;
+        frame.elapsed_time_ms = 0;
+        frame.ntp_time_ms = 0;
+        _onAudioFrame(_channel_id.actualSsrc, frame);
+      }
+      if (audio.channels == 1) {
             const int16_t *samples = (const int16_t *)audio.data;
             int numberOfSamplesInFrame = (int)audio.samples_per_channel;
 
@@ -318,8 +362,10 @@ public:
 
 private:
     std::function<void(Update)> _update;
+    ChannelId _channel_id;
+    std::function<void(uint32_t, const AudioFrame &)> _onAudioFrame;
 
-    int _peakCount = 0;
+  int _peakCount = 0;
     uint16_t _peak = 0;
 
     CombinedVad _vad;
@@ -436,37 +482,6 @@ public:
 
     virtual ~AudioCaptureAnalyzer() = default;
 };
-
-struct ChannelId {
-    uint32_t networkSsrc = 0;
-    uint32_t actualSsrc = 0;
-    
-    ChannelId(uint32_t networkSsrc_, uint32_t actualSsrc_) :
-        networkSsrc(networkSsrc_),
-        actualSsrc(actualSsrc_) {
-    }
-    
-    explicit ChannelId(uint32_t networkSsrc_) :
-        networkSsrc(networkSsrc_),
-        actualSsrc(networkSsrc_) {
-    }
-    
-    bool operator <(const ChannelId& rhs) const {
-        if (networkSsrc != rhs.networkSsrc) {
-            return networkSsrc < rhs.networkSsrc;
-        }
-        return actualSsrc < rhs.actualSsrc;
-    }
-    
-    std::string name() {
-        if (networkSsrc == actualSsrc) {
-            return uint32ToString(networkSsrc);
-        } else {
-            return uint32ToString(networkSsrc) + "to" + uint32ToString(actualSsrc);
-        }
-    }
-};
-
 class IncomingAudioChannel : public sigslot::has_slots<> {
 public:
     IncomingAudioChannel(
@@ -476,7 +491,9 @@ public:
         rtc::UniqueRandomIdGenerator *randomIdGenerator,
         bool isRawPcm,
         ChannelId ssrc,
-        std::function<void(AudioSinkImpl::Update)> &&onAudioLevelUpdated) :
+        std::function<void(AudioSinkImpl::Update)> &&onAudioLevelUpdated,
+        std::function<void(uint32_t, const AudioFrame &)> onAudioFrame,
+        Threads &threads) :
     _ssrc(ssrc),
     _channelManager(channelManager),
     _call(call) {
@@ -490,7 +507,7 @@ public:
 
         std::string streamId = std::string("stream") + ssrc.name();
 
-        _audioChannel = _channelManager->CreateVoiceChannel(call, cricket::MediaConfig(), rtpTransport, StaticThreads::getMediaThread(), std::string("audio") + uint32ToString(ssrc.networkSsrc), false, GroupNetworkManager::getDefaulCryptoOptions(), randomIdGenerator, audioOptions);
+        _audioChannel = _channelManager->CreateVoiceChannel(call, cricket::MediaConfig(), rtpTransport, threads.getMediaThread(), std::string("audio") + uint32ToString(ssrc.networkSsrc), false, GroupNetworkManager::getDefaulCryptoOptions(), randomIdGenerator, audioOptions);
 
         const uint8_t opusMinBitrateKbps = 32;
         const uint8_t opusMaxBitrateKbps = 32;
@@ -540,7 +557,7 @@ public:
 
         std::unique_ptr<AudioSinkImpl> audioLevelSink(new AudioSinkImpl([onAudioLevelUpdated = std::move(onAudioLevelUpdated)](AudioSinkImpl::Update update) {
             onAudioLevelUpdated(update);
-        }));
+        }, _ssrc, std::move(onAudioFrame)));
         _audioChannel->media_channel()->SetRawAudioSink(ssrc.networkSsrc, std::move(audioLevelSink));
 
         _audioChannel->SignalSentPacket().connect(this, &IncomingAudioChannel::OnSentPacket_w);
@@ -592,7 +609,8 @@ public:
         webrtc::RtpTransport *rtpTransport,
         rtc::UniqueRandomIdGenerator *randomIdGenerator,
         std::vector<webrtc::SdpVideoFormat> const &availableVideoFormats,
-        GroupParticipantDescription const &description) :
+        GroupParticipantDescription const &description,
+        Threads &threads) :
     _channelManager(channelManager),
     _call(call) {
         _videoSink.reset(new VideoSinkImpl());
@@ -601,7 +619,7 @@ public:
 
         _videoBitrateAllocatorFactory = webrtc::CreateBuiltinVideoBitrateAllocatorFactory();
 
-        _videoChannel = _channelManager->CreateVideoChannel(call, cricket::MediaConfig(), rtpTransport, StaticThreads::getMediaThread(), std::string("video") + uint32ToString(description.audioSsrc), false, GroupNetworkManager::getDefaulCryptoOptions(), randomIdGenerator, cricket::VideoOptions(), _videoBitrateAllocatorFactory.get());
+        _videoChannel = _channelManager->CreateVideoChannel(call, cricket::MediaConfig(), rtpTransport, threads.getMediaThread(), std::string("video") + uint32ToString(description.audioSsrc), false, GroupNetworkManager::getDefaulCryptoOptions(), randomIdGenerator, cricket::VideoOptions(), _videoBitrateAllocatorFactory.get());
 
         auto payloadTypes = assignPayloadTypes(availableVideoFormats);
         if (!payloadTypes.has_value()) {
@@ -756,9 +774,11 @@ struct DecodedBroadcastPart {
 
 class GroupInstanceCustomInternal : public sigslot::has_slots<>, public std::enable_shared_from_this<GroupInstanceCustomInternal> {
 public:
-    GroupInstanceCustomInternal(GroupInstanceDescriptor &&descriptor) :
+    GroupInstanceCustomInternal(GroupInstanceDescriptor &&descriptor, std::shared_ptr<Threads> threads) :
+    _threads(std::move(threads)),
     _networkStateUpdated(descriptor.networkStateUpdated),
     _audioLevelsUpdated(descriptor.audioLevelsUpdated),
+    _onAudioFrame(descriptor.onAudioFrame),
     _incomingVideoSourcesUpdated(descriptor.incomingVideoSourcesUpdated),
     _participantDescriptionsRequired(descriptor.participantDescriptionsRequired),
     _requestBroadcastPart(descriptor.requestBroadcastPart),
@@ -767,7 +787,7 @@ public:
     _taskQueueFactory(webrtc::CreateDefaultTaskQueueFactory()),
 	_createAudioDeviceModule(descriptor.createAudioDeviceModule),
     _missingPacketBuffer(100) {
-        assert(StaticThreads::getMediaThread()->IsCurrent());
+        assert(_threads->getMediaThread()->IsCurrent());
 
         auto generator = std::mt19937(std::random_device()());
         auto distribution = std::uniform_int_distribution<uint32_t>();
@@ -810,10 +830,10 @@ public:
             "WebRTC-Audio-OpusMinPacketLossRate/Enabled-1/"
         );
 
-        _networkManager.reset(new ThreadLocalObject<GroupNetworkManager>(StaticThreads::getNetworkThread(), [weak] () mutable {
+        _networkManager.reset(new ThreadLocalObject<GroupNetworkManager>(_threads->getNetworkThread(), [weak, threads = _threads] () mutable {
             return new GroupNetworkManager(
                 [=](const GroupNetworkManager::State &state) {
-                    StaticThreads::getMediaThread()->PostTask(RTC_FROM_HERE, [=] {
+                    threads->getMediaThread()->PostTask(RTC_FROM_HERE, [=] {
                         const auto strong = weak.lock();
                         if (!strong) {
                             return;
@@ -822,32 +842,32 @@ public:
                     });
                 },
                 [=](rtc::CopyOnWriteBuffer const &message, bool isUnresolved) {
-                    StaticThreads::getMediaThread()->PostTask(RTC_FROM_HERE, [weak, message, isUnresolved]() mutable {
+                    threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, message, isUnresolved]() mutable {
                         if (const auto strong = weak.lock()) {
                             strong->receivePacket(message, isUnresolved);
                         }
                     });
                 },
                 [=](rtc::CopyOnWriteBuffer const &message, int64_t timestamp) {
-                    StaticThreads::getMediaThread()->PostTask(RTC_FROM_HERE, [weak, message, timestamp]() mutable {
+                    threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, message, timestamp]() mutable {
                         if (const auto strong = weak.lock()) {
                             strong->receiveRtcpPacket(message, timestamp);
                         }
                     });
                 },
                 [=](bool isDataChannelOpen) {
-                    StaticThreads::getMediaThread()->PostTask(RTC_FROM_HERE, [weak, isDataChannelOpen]() mutable {
+                    threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, isDataChannelOpen]() mutable {
                         if (const auto strong = weak.lock()) {
                             strong->updateIsDataChannelOpen(isDataChannelOpen);
                         }
                     });
                 },
                 [=](std::string const &message) {
-                    StaticThreads::getMediaThread()->PostTask(RTC_FROM_HERE, [weak, message]() mutable {
+                    threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, message]() mutable {
                         if (const auto strong = weak.lock()) {
                         }
                     });
-                });
+                }, threads);
         }));
 
         PlatformInterface::SharedInstance()->configurePlatformAudio();
@@ -860,8 +880,8 @@ public:
         mediaDeps.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory();
         mediaDeps.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactory();
 
-        auto analyzer = new AudioCaptureAnalyzer([weak](GroupLevelValue const &level) {
-            StaticThreads::getMediaThread()->PostTask(RTC_FROM_HERE, [weak, level](){
+        auto analyzer = new AudioCaptureAnalyzer([weak, threads = _threads](GroupLevelValue const &level) {
+            threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, level](){
                 auto strong = weak.lock();
                 if (!strong) {
                     return;
@@ -885,7 +905,7 @@ public:
 
         std::unique_ptr<cricket::MediaEngineInterface> mediaEngine = cricket::CreateMediaEngine(std::move(mediaDeps));
 
-        _channelManager.reset(new cricket::ChannelManager(std::move(mediaEngine), std::make_unique<cricket::RtpDataEngine>(), StaticThreads::getMediaThread(), StaticThreads::getNetworkThread()));
+        _channelManager.reset(new cricket::ChannelManager(std::move(mediaEngine), std::make_unique<cricket::RtpDataEngine>(), _threads->getMediaThread(), _threads->getNetworkThread()));
         _channelManager->Init();
 
         webrtc::Call::Config callConfig(_eventLog.get());
@@ -896,13 +916,13 @@ public:
 
         _uniqueRandomIdGenerator.reset(new rtc::UniqueRandomIdGenerator());
 
-        StaticThreads::getNetworkThread()->Invoke<void>(RTC_FROM_HERE, [this]() {
+        _threads->getNetworkThread()->Invoke<void>(RTC_FROM_HERE, [this]() {
             _rtpTransport = _networkManager->getSyncAssumingSameThread()->getRtpTransport();
         });
 
         _videoBitrateAllocatorFactory = webrtc::CreateBuiltinVideoBitrateAllocatorFactory();
 
-        //_outgoingVideoChannel = _channelManager->CreateVideoChannel(_call.get(), cricket::MediaConfig(), _rtpTransport, StaticThreads::getMediaThread(), "1", false, GroupNetworkManager::getDefaulCryptoOptions(), _uniqueRandomIdGenerator.get(), cricket::VideoOptions(), _videoBitrateAllocatorFactory.get());
+        //_outgoingVideoChannel = _channelManager->CreateVideoChannel(_call.get(), cricket::MediaConfig(), _rtpTransport, _threads->getMediaThread(), "1", false, GroupNetworkManager::getDefaulCryptoOptions(), _uniqueRandomIdGenerator.get(), cricket::VideoOptions(), _videoBitrateAllocatorFactory.get());
 
         configureSendVideo();
 
@@ -949,7 +969,7 @@ public:
         std::vector<std::string> streamIds;
         streamIds.push_back("1");
         
-        _outgoingAudioChannel = _channelManager->CreateVoiceChannel(_call.get(), cricket::MediaConfig(), _rtpTransport, StaticThreads::getMediaThread(), "0", false, GroupNetworkManager::getDefaulCryptoOptions(), _uniqueRandomIdGenerator.get(), audioOptions);
+        _outgoingAudioChannel = _channelManager->CreateVoiceChannel(_call.get(), cricket::MediaConfig(), _rtpTransport, _threads->getMediaThread(), "0", false, GroupNetworkManager::getDefaulCryptoOptions(), _uniqueRandomIdGenerator.get(), audioOptions);
 
         const uint8_t opusMinBitrateKbps = 32;
         const uint8_t opusMaxBitrateKbps = 32;
@@ -998,7 +1018,7 @@ public:
 
     void beginLevelsTimer(int timeoutMs) {
         const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
-        StaticThreads::getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
+        _threads->getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
             auto strong = weak.lock();
             if (!strong) {
                 return;
@@ -1038,7 +1058,7 @@ public:
     
     void beginNetworkStatusTimer(int delayMs) {
         const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
-        StaticThreads::getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
+        _threads->getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
             auto strong = weak.lock();
             if (!strong) {
                 return;
@@ -1190,8 +1210,8 @@ public:
     
     void requestNextBroadcastPart() {
         const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
-        _currentRequestedBroadcastTask = _requestBroadcastPart(_nextBroadcastTimestampMilliseconds, _broadcastPartDurationMilliseconds, [weak](BroadcastPart &&part) {
-            StaticThreads::getMediaThread()->PostTask(RTC_FROM_HERE, [weak, part = std::move(part)]() mutable {
+        _currentRequestedBroadcastTask = _requestBroadcastPart(_nextBroadcastTimestampMilliseconds, _broadcastPartDurationMilliseconds, [weak, threads = _threads](BroadcastPart &&part) {
+            threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, part = std::move(part)]() mutable {
                 auto strong = weak.lock();
                 if (!strong) {
                     return;
@@ -1204,7 +1224,7 @@ public:
     
     void requestNextBroadcastPartWithDelay(int timeoutMs) {
         const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
-        StaticThreads::getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
+        _threads->getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
             auto strong = weak.lock();
             if (!strong) {
                 return;
@@ -1262,7 +1282,7 @@ public:
     
     void beginBroadcastPartsDecodeTimer(int timeoutMs) {
         const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
-        StaticThreads::getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
+        _threads->getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
             auto strong = weak.lock();
             if (!strong) {
                 return;
@@ -1585,7 +1605,7 @@ public:
                 _isUnknownSsrcsScheduled = true;
 
                 const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
-                StaticThreads::getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
+                _threads->getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
                     auto strong = weak.lock();
                     if (!strong) {
                         return;
@@ -1599,18 +1619,26 @@ public:
     }
 
     void doReportPendingUnknownSsrcs() {
-        if (_participantDescriptionsRequired) {
-            std::vector<uint32_t> ssrcs;
-            for (auto ssrc : _pendingUnknownSsrcs) {
-                ssrcs.push_back(ssrc);
-            }
-            _pendingUnknownSsrcs.clear();
+      std::vector<uint32_t> ssrcs;
+      for (auto ssrc : _pendingUnknownSsrcs) {
+        ssrcs.push_back(ssrc);
+      }
+      _pendingUnknownSsrcs.clear();
 
-            if (ssrcs.size() != 0) {
-                _lastUnknownSsrcsReport = rtc::TimeMillis();
-                _participantDescriptionsRequired(ssrcs);
-            }
+      if (ssrcs.size() != 0) {
+        _lastUnknownSsrcsReport = rtc::TimeMillis();
+        if (_participantDescriptionsRequired) {
+          _participantDescriptionsRequired(ssrcs);
+        } else {
+          std::vector<GroupParticipantDescription> participants;
+          for (auto ssrc : ssrcs) {
+             GroupParticipantDescription description;
+             description.audioSsrc = ssrc;
+             participants.push_back(std::move(description));
+          }
+          addParticipants(std::move(participants));
         }
+      }
     }
 
     void maybeDeliverBufferedPackets(uint32_t ssrc) {
@@ -1620,7 +1648,7 @@ public:
             auto it = _ssrcMapping.find(ssrc);
             if (it != _ssrcMapping.end()) {
                 for (const auto &packet : packets) {
-                    StaticThreads::getNetworkThread()->Invoke<void>(RTC_FROM_HERE, [this, packet]() {
+                    _threads->getNetworkThread()->Invoke<void>(RTC_FROM_HERE, [this, packet]() {
                         _rtpTransport->DemuxPacketInternal(packet, -1);
                     });
                 }
@@ -1944,8 +1972,8 @@ public:
             _uniqueRandomIdGenerator.get(),
             isRawPcm,
             ssrc,
-            [weak, ssrc = ssrc](AudioSinkImpl::Update update) {
-                StaticThreads::getMediaThread()->PostTask(RTC_FROM_HERE, [weak, ssrc, update]() {
+            [weak, ssrc = ssrc, threads = _threads](AudioSinkImpl::Update update) {
+                threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, ssrc, update]() {
                     auto strong = weak.lock();
                     if (!strong) {
                         return;
@@ -1955,7 +1983,9 @@ public:
                     mappedUpdate.voice = update.hasSpeech;
                     strong->_audioLevels[ssrc] = mappedUpdate;
                 });
-            }
+            },
+            _onAudioFrame,
+            *_threads
         ));
         
         auto volume = _volumeBySsrc.find(ssrc.actualSsrc);
@@ -1987,7 +2017,8 @@ public:
             _rtpTransport,
             _uniqueRandomIdGenerator.get(),
             _availableVideoFormats,
-            participant
+            participant,
+            *_threads
         ));
         _incomingVideoChannels.insert(std::make_pair(participant.audioSsrc, std::move(channel)));
 
@@ -2073,10 +2104,12 @@ private:
     }
 
 private:
+    std::shared_ptr<Threads> _threads;
     GroupConnectionMode _connectionMode = GroupConnectionMode::GroupConnectionModeNone;
     
     std::function<void(GroupNetworkState)> _networkStateUpdated;
     std::function<void(GroupLevelsUpdate const &)> _audioLevelsUpdated;
+    std::function<void(uint32_t, const AudioFrame &)> _onAudioFrame;
     std::function<void(std::vector<uint32_t> const &)> _incomingVideoSourcesUpdated;
     std::function<void(std::vector<uint32_t> const &)> _participantDescriptionsRequired;
     std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, std::function<void(BroadcastPart &&)>)> _requestBroadcastPart;
@@ -2146,16 +2179,19 @@ private:
     GroupNetworkState _effectiveNetworkState;
 };
 
-GroupInstanceCustomImpl::GroupInstanceCustomImpl(GroupInstanceDescriptor &&descriptor) :
-    _logSink(std::make_unique<LogSinkImpl>(descriptor.config.logPath)) {
+GroupInstanceCustomImpl::GroupInstanceCustomImpl(GroupInstanceDescriptor &&descriptor) {
+    if (descriptor.config.need_log) {
+      _logSink = std::make_unique<LogSinkImpl>(descriptor.config.logPath);
+    }
     rtc::LogMessage::LogToDebug(rtc::LS_INFO);
     rtc::LogMessage::SetLogToStderr(false);
     if (_logSink) {
         rtc::LogMessage::AddLogToStream(_logSink.get(), rtc::LS_INFO);
     }
 
-    _internal.reset(new ThreadLocalObject<GroupInstanceCustomInternal>(StaticThreads::getMediaThread(), [descriptor = std::move(descriptor)]() mutable {
-        return new GroupInstanceCustomInternal(std::move(descriptor));
+    _threads = descriptor.threads;
+    _internal.reset(new ThreadLocalObject<GroupInstanceCustomInternal>(_threads->getMediaThread(), [descriptor = std::move(descriptor), threads = _threads]() mutable {
+        return new GroupInstanceCustomInternal(std::move(descriptor), threads);
     }));
     _internal->perform(RTC_FROM_HERE, [](GroupInstanceCustomInternal *internal) {
         internal->start();
@@ -2169,7 +2205,7 @@ GroupInstanceCustomImpl::~GroupInstanceCustomImpl() {
     _internal.reset();
 
     // Wait until _internal is destroyed
-    StaticThreads::getMediaThread()->Invoke<void>(RTC_FROM_HERE, [] {});
+    _threads->getMediaThread()->Invoke<void>(RTC_FROM_HERE, [] {});
 }
 
 void GroupInstanceCustomImpl::stop() {

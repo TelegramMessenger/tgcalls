@@ -44,6 +44,7 @@ namespace tgcalls {
 
 struct Message;
 class SctpDataChannelProviderInterfaceImpl;
+class Threads;
 
 class GroupNetworkManager : public sigslot::has_slots<>, public std::enable_shared_from_this<GroupNetworkManager> {
 public:
@@ -59,7 +60,8 @@ public:
         std::function<void(rtc::CopyOnWriteBuffer const &, bool)> transportMessageReceived,
         std::function<void(rtc::CopyOnWriteBuffer const &, int64_t)> rtcpPacketReceived,
         std::function<void(bool)> dataChannelStateUpdated,
-        std::function<void(std::string const &)> dataChannelMessageReceived);
+        std::function<void(std::string const &)> dataChannelMessageReceived,
+        std::shared_ptr<Threads> threads);
     ~GroupNetworkManager();
 
     void start();
@@ -93,6 +95,7 @@ private:
     void sctpReadyToSendData();
     void sctpDataReceived(const cricket::ReceiveDataParams& params, const rtc::CopyOnWriteBuffer& buffer);
 
+    std::shared_ptr<Threads> _threads;
     std::function<void(const GroupNetworkManager::State &)> _stateUpdated;
     std::function<void(rtc::CopyOnWriteBuffer const &, bool)> _transportMessageReceived;
     std::function<void(rtc::CopyOnWriteBuffer const &, int64_t)> _rtcpPacketReceived;

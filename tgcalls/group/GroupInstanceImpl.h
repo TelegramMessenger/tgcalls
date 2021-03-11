@@ -9,6 +9,8 @@
 
 #include "../Instance.h"
 
+#include "StaticThreads.h"
+
 namespace webrtc {
 class AudioDeviceModule;
 class TaskQueueFactory;
@@ -23,8 +25,10 @@ namespace tgcalls {
 
 class LogSinkImpl;
 class GroupInstanceManager;
+class AudioFrame;
 
 struct GroupConfig {
+    bool need_log{true};
     FilePath logPath;
 };
 
@@ -74,9 +78,11 @@ struct GroupNetworkState {
 };
 
 struct GroupInstanceDescriptor {
+    std::shared_ptr<Threads> threads;
     GroupConfig config;
     std::function<void(GroupNetworkState)> networkStateUpdated;
     std::function<void(GroupLevelsUpdate const &)> audioLevelsUpdated;
+    std::function<void(uint32_t, const AudioFrame &)> onAudioFrame;
     std::string initialInputDeviceId;
     std::string initialOutputDeviceId;
     bool debugIgnoreMissingSsrcs = false;

@@ -14,6 +14,7 @@ namespace tgcalls {
 
 class LogSinkImpl;
 class GroupInstanceCustomInternal;
+class Threads;
 
 class GroupInstanceCustomImpl final : public GroupInstanceInterface {
 public:
@@ -40,6 +41,7 @@ public:
     void setFullSizeVideoSsrc(uint32_t ssrc);
 
 private:
+    std::shared_ptr<Threads> _threads;
     std::unique_ptr<ThreadLocalObject<GroupInstanceCustomInternal>> _internal;
     std::unique_ptr<LogSinkImpl> _logSink;
 
