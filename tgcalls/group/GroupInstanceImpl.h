@@ -23,6 +23,7 @@ namespace tgcalls {
 
 class LogSinkImpl;
 class GroupInstanceManager;
+class AudioFrame;
 
 struct GroupConfig {
     FilePath logPath;
@@ -77,6 +78,7 @@ struct GroupInstanceDescriptor {
     GroupConfig config;
     std::function<void(GroupNetworkState)> networkStateUpdated;
     std::function<void(GroupLevelsUpdate const &)> audioLevelsUpdated;
+    std::function<void(uint32_t, const AudioFrame &)> onAudioFrame;
     std::string initialInputDeviceId;
     std::string initialOutputDeviceId;
     bool debugIgnoreMissingSsrcs = false;
