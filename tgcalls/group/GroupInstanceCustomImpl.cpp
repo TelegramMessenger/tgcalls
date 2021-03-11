@@ -2179,7 +2179,7 @@ GroupInstanceCustomImpl::GroupInstanceCustomImpl(GroupInstanceDescriptor &&descr
         rtc::LogMessage::AddLogToStream(_logSink.get(), rtc::LS_INFO);
     }
 
-    _threads = Threads::getThreads();
+    _threads = descriptor.threads;
     _internal.reset(new ThreadLocalObject<GroupInstanceCustomInternal>(_threads->getMediaThread(), [descriptor = std::move(descriptor), threads = _threads]() mutable {
         return new GroupInstanceCustomInternal(std::move(descriptor), threads);
     }));

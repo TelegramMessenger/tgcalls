@@ -9,6 +9,8 @@
 
 #include "../Instance.h"
 
+#include "StaticThreads.h"
+
 namespace webrtc {
 class AudioDeviceModule;
 class TaskQueueFactory;
@@ -76,6 +78,7 @@ struct GroupNetworkState {
 };
 
 struct GroupInstanceDescriptor {
+    std::shared_ptr<Threads> threads;
     GroupConfig config;
     std::function<void(GroupNetworkState)> networkStateUpdated;
     std::function<void(GroupLevelsUpdate const &)> audioLevelsUpdated;
