@@ -294,15 +294,15 @@ void GroupNetworkManager::start() {
     _transportChannel->MaybeStartGathering();
 
     /*const auto weak = std::weak_ptr<GroupNetworkManager>(shared_from_this());
-    _dataChannelInterface.reset(new SctpDataChannelProviderInterfaceImpl(_dtlsTransport.get(), [weak](bool state) {
-        assert(StaticThreads::getNetworkThread()->IsCurrent());
+    _dataChannelInterface.reset(new SctpDataChannelProviderInterfaceImpl(_dtlsTransport.get(), [weak, threads = _threads](bool state) {
+        assert(threads->getNetworkThread()->IsCurrent());
         const auto strong = weak.lock();
         if (!strong) {
             return;
         }
         strong->_dataChannelStateUpdated(state);
-    }, [weak](std::string const &message) {
-        assert(StaticThreads::getNetworkThread()->IsCurrent());
+    }, [weak, threads = _threads[](std::string const &message) {
+        assert(threads->getNetworkThread()->IsCurrent());
         const auto strong = weak.lock();
         if (!strong) {
             return;

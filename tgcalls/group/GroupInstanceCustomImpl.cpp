@@ -928,7 +928,7 @@ public:
 
         _videoBitrateAllocatorFactory = webrtc::CreateBuiltinVideoBitrateAllocatorFactory();
 
-        //_outgoingVideoChannel = _channelManager->CreateVideoChannel(_call.get(), cricket::MediaConfig(), _rtpTransport, StaticThreads::getMediaThread(), "1", false, GroupNetworkManager::getDefaulCryptoOptions(), _uniqueRandomIdGenerator.get(), cricket::VideoOptions(), _videoBitrateAllocatorFactory.get());
+        //_outgoingVideoChannel = _channelManager->CreateVideoChannel(_call.get(), cricket::MediaConfig(), _rtpTransport, _threads->getMediaThread(), "1", false, GroupNetworkManager::getDefaulCryptoOptions(), _uniqueRandomIdGenerator.get(), cricket::VideoOptions(), _videoBitrateAllocatorFactory.get());
 
         configureSendVideo();
 
@@ -1613,18 +1613,26 @@ public:
     }
 
     void doReportPendingUnknownSsrcs() {
-        if (_participantDescriptionsRequired) {
-            std::vector<uint32_t> ssrcs;
-            for (auto ssrc : _pendingUnknownSsrcs) {
-                ssrcs.push_back(ssrc);
-            }
-            _pendingUnknownSsrcs.clear();
+      std::vector<uint32_t> ssrcs;
+      for (auto ssrc : _pendingUnknownSsrcs) {
+        ssrcs.push_back(ssrc);
+      }
+      _pendingUnknownSsrcs.clear();
 
-            if (ssrcs.size() != 0) {
-                _lastUnknownSsrcsReport = rtc::TimeMillis();
-                _participantDescriptionsRequired(ssrcs);
-            }
+      if (ssrcs.size() != 0) {
+        _lastUnknownSsrcsReport = rtc::TimeMillis();
+        if (_participantDescriptionsRequired) {
+          _participantDescriptionsRequired(ssrcs);
+        } else {
+          std::vector<GroupParticipantDescription> participants;
+          for (auto ssrc : ssrcs) {
+             GroupParticipantDescription description;
+             description.audioSsrc = ssrc;
+             participants.push_back(std::move(description));
+          }
+          addParticipants(std::move(participants));
         }
+      }
     }
 
     void maybeDeliverBufferedPackets(uint32_t ssrc) {
@@ -1634,7 +1642,7 @@ public:
             auto it = _ssrcMapping.find(ssrc);
             if (it != _ssrcMapping.end()) {
                 for (const auto &packet : packets) {
-                    StaticThreads::getNetworkThread()->Invoke<void>(RTC_FROM_HERE, [this, packet]() {
+                    _threads->getNetworkThread()->Invoke<void>(RTC_FROM_HERE, [this, packet]() {
                         _rtpTransport->DemuxPacketInternal(packet, -1);
                     });
                 }
