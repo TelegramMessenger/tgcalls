@@ -789,11 +789,7 @@ public:
         _incomingAudioChannels.clear();
         _incomingVideoChannels.clear();
 
-        _outgoingAudioChannel->SignalSentPacket().disconnect(this);
-        _outgoingAudioChannel->media_channel()->SetAudioSend(_outgoingAudioSsrc, false, nullptr, &_audioSource);
-        _outgoingAudioChannel->Enable(false);
-        _channelManager->DestroyVoiceChannel(_outgoingAudioChannel);
-        _outgoingAudioChannel = nullptr;
+        destroyOutgoingAudioChannel();
 
         if (_outgoingVideoChannel) {
             _outgoingVideoChannel->SignalSentPacket().disconnect(this);
@@ -903,8 +899,6 @@ public:
         StaticThreads::getNetworkThread()->Invoke<void>(RTC_FROM_HERE, [this]() {
             _rtpTransport = _networkManager->getSyncAssumingSameThread()->getRtpTransport();
         });
-        
-        createOutgoingAudioChannel();
 
         _videoBitrateAllocatorFactory = webrtc::CreateBuiltinVideoBitrateAllocatorFactory();
 
@@ -928,6 +922,18 @@ public:
         addIncomingAudioChannel("_dummy", ChannelId(1), true);
         
         beginNetworkStatusTimer(0);
+    }
+
+    void destroyOutgoingAudioChannel() {
+        if (!_outgoingAudioChannel) {
+            return;
+        }
+
+        _outgoingAudioChannel->SignalSentPacket().disconnect(this);
+        _outgoingAudioChannel->media_channel()->SetAudioSend(_outgoingAudioSsrc, false, nullptr, &_audioSource);
+        _outgoingAudioChannel->Enable(false);
+        _channelManager->DestroyVoiceChannel(_outgoingAudioChannel);
+        _outgoingAudioChannel = nullptr;
     }
     
     void createOutgoingAudioChannel() {
@@ -1700,19 +1706,17 @@ public:
         }
         
         if (_connectionMode == GroupConnectionMode::GroupConnectionModeNone) {
-            _outgoingAudioChannel->SignalSentPacket().disconnect(this);
-            _outgoingAudioChannel->media_channel()->SetAudioSend(_outgoingAudioSsrc, false, nullptr, &_audioSource);
-            _outgoingAudioChannel->Enable(false);
-            _channelManager->DestroyVoiceChannel(_outgoingAudioChannel);
-            _outgoingAudioChannel = nullptr;
+            destroyOutgoingAudioChannel();
             
             auto generator = std::mt19937(std::random_device()());
             auto distribution = std::uniform_int_distribution<uint32_t>();
             do {
                 _outgoingAudioSsrc = distribution(generator) & 0x7fffffffU;
             } while (!_outgoingAudioSsrc);
-            
-            createOutgoingAudioChannel();
+
+            if (!_isMuted) {
+                createOutgoingAudioChannel();
+            }
         }
         
         switch (_connectionMode) {
@@ -1887,6 +1891,12 @@ public:
     }
     
     void onUpdatedIsMuted() {
+        if (!_isMuted) {
+            if (!_outgoingAudioChannel) {
+                createOutgoingAudioChannel();
+            }
+        }
+
         if (_outgoingAudioChannel) {
             _outgoingAudioChannel->Enable(!_isMuted);
             _outgoingAudioChannel->media_channel()->SetAudioSend(_outgoingAudioSsrc, _isRtcConnected && !_isMuted, nullptr, &_audioSource);
