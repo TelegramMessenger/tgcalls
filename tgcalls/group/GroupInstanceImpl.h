@@ -25,7 +25,7 @@ namespace tgcalls {
 
 class LogSinkImpl;
 class GroupInstanceManager;
-class AudioFrame;
+struct AudioFrame;
 
 struct GroupConfig {
     bool need_log{true};
