@@ -1795,7 +1795,7 @@ public:
                 GroupJoinPayloadFingerprint serializedFingerprint;
                 serializedFingerprint.hash = localFingerprint->algorithm;
                 serializedFingerprint.fingerprint = localFingerprint->GetRfc4572Fingerprint();
-                serializedFingerprint.setup = "active";
+                serializedFingerprint.setup = "passive";
                 payload.fingerprints.push_back(std::move(serializedFingerprint));
             }
 
