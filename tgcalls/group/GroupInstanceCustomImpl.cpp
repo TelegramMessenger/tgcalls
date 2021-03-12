@@ -756,6 +756,16 @@ private:
 
 };
 
+class RequestedBroadcastPart {
+public:
+    int64_t timestamp = 0;
+    std::shared_ptr<BroadcastPartTask> task;
+
+    explicit RequestedBroadcastPart(int64_t timestamp_, std::shared_ptr<BroadcastPartTask> task_) :
+        timestamp(timestamp_), task(task_) {
+    }
+};
+
 struct DecodedBroadcastPart {
     struct DecodedBroadcastPartChannel {
         uint32_t ssrc = 0;
@@ -1084,9 +1094,11 @@ public:
             auto timestamp = rtc::TimeMillis();
             if (std::abs(timestamp - _broadcastEnabledUntilRtcIsConnectedAtTimestamp.value()) > 3000) {
                 _broadcastEnabledUntilRtcIsConnectedAtTimestamp = absl::nullopt;
-                if (_currentRequestedBroadcastTask) {
-                    _currentRequestedBroadcastTask->cancel();
-                    _currentRequestedBroadcastTask.reset();
+                if (_currentRequestedBroadcastPart) {
+                    if (_currentRequestedBroadcastPart->task) {
+                        _currentRequestedBroadcastPart->task->cancel();
+                    }
+                    _currentRequestedBroadcastPart.reset();
                 }
                 isBroadcastConnected = false;
             }
@@ -1210,16 +1222,25 @@ public:
     
     void requestNextBroadcastPart() {
         const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
-        _currentRequestedBroadcastTask = _requestBroadcastPart(_nextBroadcastTimestampMilliseconds, _broadcastPartDurationMilliseconds, [weak, threads = _threads](BroadcastPart &&part) {
-            threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, part = std::move(part)]() mutable {
+        auto requestedPartId = _nextBroadcastTimestampMilliseconds;
+        auto task = _requestBroadcastPart(requestedPartId, _broadcastPartDurationMilliseconds, [weak, threads = _threads, requestedPartId](BroadcastPart &&part) {
+            threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, part = std::move(part), requestedPartId]() mutable {
                 auto strong = weak.lock();
                 if (!strong) {
                     return;
                 }
-                
-                strong->onReceivedNextBroadcastPart(std::move(part));
+                if (strong->_currentRequestedBroadcastPart && strong->_currentRequestedBroadcastPart->timestamp == requestedPartId) {
+                    strong->onReceivedNextBroadcastPart(std::move(part));
+                }
             });
         });
+        if (_currentRequestedBroadcastPart) {
+            if (_currentRequestedBroadcastPart->task) {
+                _currentRequestedBroadcastPart->task->cancel();
+            }
+            _currentRequestedBroadcastPart.reset();
+        }
+        _currentRequestedBroadcastPart.emplace(requestedPartId, task);
     }
     
     void requestNextBroadcastPartWithDelay(int timeoutMs) {
@@ -1235,7 +1256,7 @@ public:
     }
     
     void onReceivedNextBroadcastPart(BroadcastPart &&part) {
-        _currentRequestedBroadcastTask.reset();
+        _currentRequestedBroadcastPart.reset();
         
         if (_connectionMode != GroupConnectionMode::GroupConnectionModeBroadcast && !_broadcastEnabledUntilRtcIsConnectedAtTimestamp) {
             return;
@@ -1478,9 +1499,11 @@ public:
 
         if (_broadcastEnabledUntilRtcIsConnectedAtTimestamp) {
             _broadcastEnabledUntilRtcIsConnectedAtTimestamp = absl::nullopt;
-            if (_currentRequestedBroadcastTask) {
-                _currentRequestedBroadcastTask->cancel();
-                _currentRequestedBroadcastTask.reset();
+            if (_currentRequestedBroadcastPart) {
+                if (_currentRequestedBroadcastPart->task) {
+                    _currentRequestedBroadcastPart->task->cancel();
+                }
+                _currentRequestedBroadcastPart.reset();
             }
         }
         
@@ -1726,9 +1749,11 @@ public:
             if (keepBroadcastIfWasEnabled) {
                 _broadcastEnabledUntilRtcIsConnectedAtTimestamp = rtc::TimeMillis();
             } else {
-                if (_currentRequestedBroadcastTask) {
-                    _currentRequestedBroadcastTask->cancel();
-                    _currentRequestedBroadcastTask.reset();
+                if (_currentRequestedBroadcastPart) {
+                    if (_currentRequestedBroadcastPart->task) {
+                        _currentRequestedBroadcastPart->task->cancel();
+                    }
+                    _currentRequestedBroadcastPart.reset();
                 }
             }
         }
@@ -2169,7 +2194,7 @@ private:
     std::map<uint32_t, uint16_t> _broadcastSeqBySsrc;
     uint32_t _broadcastTimestamp = 0;
     int64_t _nextBroadcastTimestampMilliseconds = 0;
-    std::shared_ptr<BroadcastPartTask> _currentRequestedBroadcastTask;
+    absl::optional<RequestedBroadcastPart> _currentRequestedBroadcastPart;
     int64_t _lastBroadcastPartReceivedTimestamp = 0;
 
     bool _isRtcConnected = false;
