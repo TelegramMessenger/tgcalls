@@ -9,7 +9,7 @@
 
 #include "../Instance.h"
 
-#include "StaticThreads.h"
+#include "../StaticThreads.h"
 
 namespace webrtc {
 class AudioDeviceModule;
@@ -49,7 +49,7 @@ struct GroupLevelsUpdate {
 class BroadcastPartTask {
 public:
     virtual ~BroadcastPartTask() = default;
-    
+
     virtual void cancel() = 0;
 };
 
@@ -59,7 +59,7 @@ struct BroadcastPart {
         NotReady,
         ResyncNeeded
     };
-    
+
     int64_t timestampMilliseconds = 0;
     double responseTimestamp = 0;
     Status status = Status::NotReady;
@@ -173,7 +173,7 @@ public:
     virtual ~GroupInstanceInterface() = default;
 
     virtual void stop() = 0;
-    
+
     virtual void setConnectionMode(GroupConnectionMode connectionMode, bool keepBroadcastIfWasEnabled) = 0;
 
     virtual void emitJoinPayload(std::function<void(GroupJoinPayload)> completion) = 0;
