@@ -2060,7 +2060,7 @@ public:
             return;
         }
         
-        _volumeBySsrc.insert(std::make_pair(ssrc, volume));
+        _volumeBySsrc[ssrc] = volume;
         
         auto it = _incomingAudioChannels.find(ChannelId(ssrc));
         if (it != _incomingAudioChannels.end()) {
