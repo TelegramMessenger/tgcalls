@@ -912,7 +912,7 @@ public:
         callConfig.task_queue_factory = _taskQueueFactory.get();
         callConfig.trials = &_fieldTrials;
         callConfig.audio_state = _channelManager->media_engine()->voice().GetAudioState();
-        _call.reset(webrtc::Call::Create(callConfig));
+        _call.reset(webrtc::Call::Create(callConfig, _threads->getSharedModuleThread()));
 
         _uniqueRandomIdGenerator.reset(new rtc::UniqueRandomIdGenerator());
 
