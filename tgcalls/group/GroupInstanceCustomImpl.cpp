@@ -783,6 +783,7 @@ public:
     _participantDescriptionsRequired(descriptor.participantDescriptionsRequired),
     _requestBroadcastPart(descriptor.requestBroadcastPart),
     _videoCapture(descriptor.videoCapture),
+    _useDummyChannel(descriptor.useDummyChannel),
     _eventLog(std::make_unique<webrtc::RtcEventLogNull>()),
     _taskQueueFactory(webrtc::CreateDefaultTaskQueueFactory()),
 	_createAudioDeviceModule(descriptor.createAudioDeviceModule),
@@ -939,9 +940,11 @@ public:
         }
 
         adjustBitratePreferences(true);
-        
+
+      if (_useDummyChannel) {
         addIncomingAudioChannel("_dummy", ChannelId(1), true);
-        
+      }
+
         beginNetworkStatusTimer(0);
     }
 
@@ -2116,6 +2119,7 @@ private:
     std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, std::function<void(BroadcastPart &&)>)> _requestBroadcastPart;
     std::shared_ptr<VideoCaptureInterface> _videoCapture;
     bool _disableIncomingChannels = false;
+    bool _useDummyChannel{true};
 
     int64_t _lastUnknownSsrcsReport = 0;
     std::set<uint32_t> _pendingUnknownSsrcs;
