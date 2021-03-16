@@ -284,7 +284,7 @@ void GroupNetworkManager::resetDtlsSrtpTransport() {
     _dtlsTransport->SignalDtlsHandshakeError.connect(
         this, &GroupNetworkManager::OnDtlsHandshakeError);
 
-    _dtlsTransport->SetDtlsRole(rtc::SSLRole::SSL_CLIENT);
+    _dtlsTransport->SetDtlsRole(rtc::SSLRole::SSL_SERVER);
     _dtlsTransport->SetLocalCertificate(_localCertificate);
     
     _dtlsSrtpTransport->SetDtlsTransports(_dtlsTransport.get(), nullptr);

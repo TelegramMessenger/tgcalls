@@ -25,7 +25,9 @@
 
 #ifndef WEBRTC_IOS
 #import "VideoCameraCapturerMac.h"
+#ifndef WEBRTC_APP_TDESKTOP
 #import "DesktopSharingCapturer.h"
+#endif // WEBRTC_APP_TDESKTOP
 #else
 #import "VideoCameraCapturer.h"
 #endif
@@ -197,11 +199,12 @@
     if (self != nil) {
         assert([NSThread isMainThread]);
         
-    #ifdef WEBRTC_IOS
+#ifdef WEBRTC_IOS
         _videoCapturer = [[VideoCameraCapturer alloc] initWithSource:source useFrontCamera:sourceDescription.isFrontCamera keepLandscape:sourceDescription.keepLandscape isActiveUpdated:isActiveUpdated orientationUpdated:orientationUpdated];
         [_videoCapturer startCaptureWithDevice:sourceDescription.device format:sourceDescription.format fps:30];
-    #else
+#else
         
+#ifndef WEBRTC_APP_TDESKTOP
         if([sourceDescription.deviceId hasPrefix:@"desktop_capturer_"]) {
             DesktopSharingCapturer *sharing = [[DesktopSharingCapturer alloc] initWithSource:source capturerKey:sourceDescription.deviceId];
             _videoCapturer = sharing;
@@ -210,11 +213,14 @@
             [camera setupCaptureWithDevice:sourceDescription.device format:sourceDescription.format fps:30];
             _videoCapturer = camera;
         }
-        
-        
+#else // WEBRTC_APP_TDESKTOP
+        VideoCameraCapturer *camera = [[VideoCameraCapturer alloc] initWithSource:source isActiveUpdated:isActiveUpdated];
+        [camera setupCaptureWithDevice:sourceDescription.device format:sourceDescription.format fps:30];
+        _videoCapturer = camera;
+#endif // WEBRTC_APP_TDESKTOP
         
         [_videoCapturer start];
-    #endif
+#endif
 
     }
     return self;
