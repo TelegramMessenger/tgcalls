@@ -794,6 +794,7 @@ public:
     _participantDescriptionsRequired(descriptor.participantDescriptionsRequired),
     _requestBroadcastPart(descriptor.requestBroadcastPart),
     _videoCapture(descriptor.videoCapture),
+    _disableIncomingChannels(descriptor.disableIncomingChannels),
     _useDummyChannel(descriptor.useDummyChannel),
     _eventLog(std::make_unique<webrtc::RtcEventLogNull>()),
     _taskQueueFactory(webrtc::CreateDefaultTaskQueueFactory()),
