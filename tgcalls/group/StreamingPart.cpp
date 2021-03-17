@@ -291,7 +291,12 @@ public:
 
 private:
     static int16_t sampleFloatToInt16(float sample) {
-       return static_cast<int16_t>(std::clamp(sample, -1.0f, 1.0f) * std::numeric_limits<int16_t>::max());
+        if (sample < -1.0) {
+            sample = -1.0;
+        } else if (sample > 1.0) {
+            sample = 1.0;
+        }
+        return static_cast<int16_t>(sample * std::numeric_limits<int16_t>::max());
     }
 
     void fillPcmBuffer() {
