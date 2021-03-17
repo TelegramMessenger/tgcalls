@@ -2,8 +2,6 @@
 
 #include "rtc_base/logging.h"
 #include "rtc_base/third_party/base64/base64.h"
-#include <algorithm>
-#include <limits>
 
 extern "C" {
 #include <libavutil/timestamp.h>
@@ -291,7 +289,7 @@ public:
 
 private:
     static int16_t sampleFloatToInt16(float sample) {
-       return static_cast<int16_t>(std::clamp(sample, -1.0f, 1.0f) * std::numeric_limits<int16_t>::max());
+      return av_clip_int16 (static_cast<int32_t>(lrint(sample*32767)));
     }
 
     void fillPcmBuffer() {
