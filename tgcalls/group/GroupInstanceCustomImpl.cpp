@@ -2343,5 +2343,35 @@ void GroupInstanceCustomImpl::setFullSizeVideoSsrc(uint32_t ssrc) {
         internal->setFullSizeVideoSsrc(ssrc);
     });
 }
+std::vector<GroupInstanceInterface::AudioDevice> GroupInstanceInterface::getAudioDevices(AudioDevice::Type type) {
+  auto result = std::vector<AudioDevice>();
+#ifdef WEBRTC_LINUX //Not needed for ios, and some crl::sync stuff is needed for windows
+  const auto resolve = [&] {
+    const auto queueFactory = webrtc::CreateDefaultTaskQueueFactory();
+    const auto info = webrtc::AudioDeviceModule::Create(
+        webrtc::AudioDeviceModule::kPlatformDefaultAudio,
+        queueFactory.get());
+    if (!info || info->Init() < 0) {
+      return;
+    }
+    const auto count = type == AudioDevice::Type::Input ? info->RecordingDevices() : info->PlayoutDevices();
+    if (count <= 0) {
+      return;
+    }
+    for (auto i = int16_t(); i != count; ++i) {
+      char name[webrtc::kAdmMaxDeviceNameSize + 1] = { 0 };
+      char id[webrtc::kAdmMaxGuidSize + 1] = { 0 };
+      if (type == AudioDevice::Type::Input) {
+        info->RecordingDeviceName(i, name, id);
+      } else {
+        info->PlayoutDeviceName(i, name, id);
+      }
+      result.push_back({ id, name });
+    }
+  };
+  resolve();
+#endif
+  return result;
+}
 
 } // namespace tgcalls
