@@ -1633,22 +1633,24 @@ public:
 
             _pendingUnknownSsrcs.insert(ssrc);
 
-            auto timestamp = rtc::TimeMillis();
-            if (_lastUnknownSsrcsReport < timestamp - 100) {
-                doReportPendingUnknownSsrcs();
-            } else if (!_isUnknownSsrcsScheduled) {
-                _isUnknownSsrcsScheduled = true;
+            if (!_isUnknownSsrcsScheduled) {
+                auto timestamp = rtc::TimeMillis();
+                if (_lastUnknownSsrcsReport < timestamp - 100) {
+                    doReportPendingUnknownSsrcs();
+                } else {
+                    _isUnknownSsrcsScheduled = true;
 
-                const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
-                _threads->getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
-                    auto strong = weak.lock();
-                    if (!strong) {
-                        return;
-                    }
+                    const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
+                    _threads->getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
+                        auto strong = weak.lock();
+                        if (!strong) {
+                            return;
+                        }
 
-                    strong->_isUnknownSsrcsScheduled = false;
-                    strong->doReportPendingUnknownSsrcs();
-                }, 100);
+                        strong->_isUnknownSsrcsScheduled = false;
+                        strong->doReportPendingUnknownSsrcs();
+                    }, 100);
+                }
             }
         }
     }
@@ -1923,6 +1925,8 @@ public:
                 continue;
             }
 
+            _reportedUnknownSsrcs.erase(participant.audioSsrc);
+
             if (_incomingAudioChannels.find(ChannelId(participant.audioSsrc)) == _incomingAudioChannels.end()) {
                 addIncomingAudioChannel(participant.endpointId, ChannelId(participant.audioSsrc));
             }
@@ -2008,6 +2012,14 @@ public:
                 const auto it = _incomingAudioChannels.find(minActivityChannelId);
                 if (it != _incomingAudioChannels.end()) {
                     _incomingAudioChannels.erase(it);
+                }
+                auto reportedIt = _reportedUnknownSsrcs.find(minActivityChannelId.actualSsrc);
+                if (reportedIt != _reportedUnknownSsrcs.end()) {
+                    _reportedUnknownSsrcs.erase(reportedIt);
+                }
+                auto mappingIt = _ssrcMapping.find(minActivityChannelId.actualSsrc);
+                if (mappingIt != _ssrcMapping.end()) {
+                    _ssrcMapping.erase(mappingIt);
                 }
             }
         }

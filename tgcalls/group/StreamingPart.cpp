@@ -98,9 +98,11 @@ public:
         if (bytesToRead > 0) {
             memcpy(buffer, instance->_fileData.data() + instance->_fileReadPosition, bytesToRead);
             instance->_fileReadPosition += bytesToRead;
-        }
 
-        return bytesToRead;
+            return bytesToRead;
+        } else {
+            return AVERROR_EOF;
+        }
     }
 
     static int64_t seek(void *opaque, int64_t offset, int whence) {
@@ -173,6 +175,7 @@ public:
         }
 
         AVCodecParameters *audioCodecParameters = nullptr;
+        AVStream *audioStream = nullptr;
         for (int i = 0; i < _inputFormatContext->nb_streams; i++) {
             AVStream *inStream = _inputFormatContext->streams[i];
 
@@ -181,6 +184,7 @@ public:
                 continue;
             }
             audioCodecParameters = inCodecpar;
+            audioStream = inStream;
 
             _durationInMilliseconds = (int)((inStream->duration + inStream->first_dts) * 1000 / 48000);
 
@@ -202,7 +206,7 @@ public:
             break;
         }
 
-        if (audioCodecParameters) {
+        if (audioCodecParameters && audioStream) {
             AVCodec *codec = avcodec_find_decoder(audioCodecParameters->codec_id);
             if (codec) {
                 _codecContext = avcodec_alloc_context3(codec);
@@ -213,6 +217,8 @@ public:
                     avcodec_free_context(&_codecContext);
                     _codecContext = nullptr;
                 } else {
+                    _codecContext->pkt_timebase = audioStream->time_base;
+
                     _channelCount = _codecContext->channels;
 
                     ret = avcodec_open2(_codecContext, codec, nullptr);
