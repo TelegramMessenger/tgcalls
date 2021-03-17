@@ -2,6 +2,8 @@
 
 #include "rtc_base/logging.h"
 #include "rtc_base/third_party/base64/base64.h"
+#include <algorithm>
+#include <limits>
 
 extern "C" {
 #include <libavutil/timestamp.h>
@@ -288,6 +290,10 @@ public:
     }
 
 private:
+    static int16_t sampleFloatToInt16(float sample) {
+       return static_cast<int16_t>(std::clamp(sample, -1.0f, 1.0f) * std::numeric_limits<int16_t>::max());
+    }
+
     void fillPcmBuffer() {
         _pcmBufferSampleSize = 0;
         _pcmBufferSampleOffset = 0;
@@ -356,7 +362,7 @@ private:
         case AV_SAMPLE_FMT_FLT: {
 			float *floatData = (float *)&_frame->data[0];
 			for (int i = 0; i < _frame->nb_samples * _frame->channels; i++) {
-				_pcmBuffer[i] = (int16_t)(floatData[i] * INT16_MAX);
+				_pcmBuffer[i] = sampleFloatToInt16(floatData[i]);
 			}
         } break;
 
@@ -365,7 +371,7 @@ private:
 			for (int sample = 0; sample < _frame->nb_samples; ++sample) {
 				for (int channel = 0; channel < _frame->channels; ++channel) {
 					float *floatChannel = (float*)_frame->data[channel];
-					*to++ = (int16_t)(floatChannel[sample] * INT16_MAX);
+					*to++ = sampleFloatToInt16(floatChannel[sample]);
 				}
 			}
         } break;
