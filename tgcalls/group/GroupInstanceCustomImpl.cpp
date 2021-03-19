@@ -54,6 +54,8 @@ namespace tgcalls {
 
 namespace {
 
+static_assert(!RTC_DCHECK_IS_ON);
+
 static int stringToInt(std::string const &string) {
     std::stringstream stringStream(string);
     int value = 0;
