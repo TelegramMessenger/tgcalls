@@ -331,7 +331,7 @@ public:
         frame.ntp_time_ms = 0;
         _onAudioFrame(_channel_id.actualSsrc, frame);
       }
-      if (audio.channels == 1) {
+      if (_update && audio.channels == 1) {
             const int16_t *samples = (const int16_t *)audio.data;
             int numberOfSamplesInFrame = (int)audio.samples_per_channel;
 
@@ -556,9 +556,7 @@ public:
         outgoingAudioDescription.reset();
         incomingAudioDescription.reset();
 
-        std::unique_ptr<AudioSinkImpl> audioLevelSink(new AudioSinkImpl([onAudioLevelUpdated = std::move(onAudioLevelUpdated)](AudioSinkImpl::Update update) {
-            onAudioLevelUpdated(update);
-        }, _ssrc, std::move(onAudioFrame)));
+        std::unique_ptr<AudioSinkImpl> audioLevelSink(new AudioSinkImpl(onAudioLevelUpdated, _ssrc, std::move(onAudioFrame)));
         _audioChannel->media_channel()->SetRawAudioSink(ssrc.networkSsrc, std::move(audioLevelSink));
 
         _audioChannel->SignalSentPacket().connect(this, &IncomingAudioChannel::OnSentPacket_w);
@@ -897,20 +895,22 @@ public:
         mediaDeps.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory();
         mediaDeps.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactory();
 
-        auto analyzer = new AudioCaptureAnalyzer([weak, threads = _threads](GroupLevelValue const &level) {
-            threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, level](){
-                auto strong = weak.lock();
-                if (!strong) {
-                    return;
-                }
-                strong->_myAudioLevel = level;
+        if (_audioLevelsUpdated) {
+            auto analyzer = new AudioCaptureAnalyzer([weak, threads = _threads](GroupLevelValue const &level) {
+                threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, level](){
+                    auto strong = weak.lock();
+                    if (!strong) {
+                        return;
+                    }
+                    strong->_myAudioLevel = level;
+                });
             });
-        });
 
-        webrtc::AudioProcessingBuilder builder;
-        builder.SetCaptureAnalyzer(std::unique_ptr<AudioCaptureAnalyzer>(analyzer));
+            webrtc::AudioProcessingBuilder builder;
+            builder.SetCaptureAnalyzer(std::unique_ptr<AudioCaptureAnalyzer>(analyzer));
 
-        mediaDeps.audio_processing = builder.Create();
+            mediaDeps.audio_processing = builder.Create();
+        }
 
         _audioDeviceModule = createAudioDeviceModule();
         if (!_audioDeviceModule) {
@@ -951,7 +951,9 @@ public:
             _outgoingVideoChannel->UpdateRtpTransport(nullptr);
         }
 
-        beginLevelsTimer(50);
+        if (_audioLevelsUpdated) {
+            beginLevelsTimer(50);
+        }
 
         if (_videoCapture) {
             setVideoCapture(_videoCapture, [](GroupJoinPayload) {}, true);
@@ -2026,25 +2028,30 @@ public:
 
         const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
 
+        std::function<void(AudioSinkImpl::Update)> onAudioSinkUpdate;
+        if (_audioLevelsUpdated) {
+          onAudioSinkUpdate = [weak, ssrc = ssrc, threads = _threads](AudioSinkImpl::Update update) {
+            threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, ssrc, update]() {
+              auto strong = weak.lock();
+              if (!strong) {
+                return;
+              }
+              GroupLevelValue mappedUpdate;
+              mappedUpdate.level = update.level;
+              mappedUpdate.voice = update.hasSpeech;
+              strong->_audioLevels[ssrc] = mappedUpdate;
+            });
+          };
+        }
+
         std::unique_ptr<IncomingAudioChannel> channel(new IncomingAudioChannel(
-            _channelManager.get(),
+          _channelManager.get(),
             _call.get(),
             _rtpTransport,
             _uniqueRandomIdGenerator.get(),
             isRawPcm,
             ssrc,
-            [weak, ssrc = ssrc, threads = _threads](AudioSinkImpl::Update update) {
-                threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, ssrc, update]() {
-                    auto strong = weak.lock();
-                    if (!strong) {
-                        return;
-                    }
-                    GroupLevelValue mappedUpdate;
-                    mappedUpdate.level = update.level;
-                    mappedUpdate.voice = update.hasSpeech;
-                    strong->_audioLevels[ssrc] = mappedUpdate;
-                });
-            },
+            std::move(onAudioSinkUpdate),
             _onAudioFrame,
             *_threads
         ));
@@ -2348,6 +2355,36 @@ void GroupInstanceCustomImpl::setFullSizeVideoSsrc(uint32_t ssrc) {
     _internal->perform(RTC_FROM_HERE, [ssrc](GroupInstanceCustomInternal *internal) {
         internal->setFullSizeVideoSsrc(ssrc);
     });
+}
+std::vector<GroupInstanceInterface::AudioDevice> GroupInstanceInterface::getAudioDevices(AudioDevice::Type type) {
+  auto result = std::vector<AudioDevice>();
+#ifdef WEBRTC_LINUX //Not needed for ios, and some crl::sync stuff is needed for windows
+  const auto resolve = [&] {
+    const auto queueFactory = webrtc::CreateDefaultTaskQueueFactory();
+    const auto info = webrtc::AudioDeviceModule::Create(
+        webrtc::AudioDeviceModule::kPlatformDefaultAudio,
+        queueFactory.get());
+    if (!info || info->Init() < 0) {
+      return;
+    }
+    const auto count = type == AudioDevice::Type::Input ? info->RecordingDevices() : info->PlayoutDevices();
+    if (count <= 0) {
+      return;
+    }
+    for (auto i = int16_t(); i != count; ++i) {
+      char name[webrtc::kAdmMaxDeviceNameSize + 1] = { 0 };
+      char id[webrtc::kAdmMaxGuidSize + 1] = { 0 };
+      if (type == AudioDevice::Type::Input) {
+        info->RecordingDeviceName(i, name, id);
+      } else {
+        info->PlayoutDeviceName(i, name, id);
+      }
+      result.push_back({ id, name });
+    }
+  };
+  resolve();
+#endif
+  return result;
 }
 
 } // namespace tgcalls
