@@ -842,7 +842,7 @@ public:
         webrtc::field_trial::InitFieldTrialsFromString(
             "WebRTC-Audio-Allocation/min:32kbps,max:32kbps/"
             "WebRTC-Audio-OpusMinPacketLossRate/Enabled-1/"
-            "WebRTC-TaskQueuePacer/Enabled/"
+//            "WebRTC-TaskQueuePacer/Enabled/"
         );
 
         _networkManager.reset(new ThreadLocalObject<GroupNetworkManager>(_threads->getNetworkThread(), [weak, threads = _threads] () mutable {
@@ -932,7 +932,8 @@ public:
         callConfig.task_queue_factory = _taskQueueFactory.get();
         callConfig.trials = &_fieldTrials;
         callConfig.audio_state = _channelManager->media_engine()->voice().GetAudioState();
-        _call.reset(webrtc::Call::Create(callConfig, _threads->getSharedModuleThread()));
+        //_call.reset(webrtc::Call::Create(callConfig, _threads->getSharedModuleThread()));
+        _call.reset(webrtc::Call::Create(callConfig));
 
         _uniqueRandomIdGenerator.reset(new rtc::UniqueRandomIdGenerator());
 
