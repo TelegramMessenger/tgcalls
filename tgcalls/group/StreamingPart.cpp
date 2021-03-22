@@ -12,7 +12,6 @@ extern "C" {
 #include <string>
 #include <set>
 #include <map>
-#include <stdint.h>
 
 namespace tgcalls {
 
