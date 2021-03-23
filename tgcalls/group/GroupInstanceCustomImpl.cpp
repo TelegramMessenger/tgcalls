@@ -227,34 +227,6 @@ struct ChannelId {
   }
 };
 
-
-class NetworkInterfaceImpl : public cricket::MediaChannel::NetworkInterface {
-public:
-    NetworkInterfaceImpl(std::function<void(rtc::CopyOnWriteBuffer const *, rtc::SentPacket)> sendPacket) :
-    _sendPacket(sendPacket) {
-
-    }
-
-    bool SendPacket(rtc::CopyOnWriteBuffer *packet, const rtc::PacketOptions& options) {
-        rtc::SentPacket sentPacket(options.packet_id, rtc::TimeMillis(), options.info_signaled_after_sent);
-        _sendPacket(packet, sentPacket);
-        return true;
-    }
-
-    bool SendRtcp(rtc::CopyOnWriteBuffer *packet, const rtc::PacketOptions& options) {
-        rtc::SentPacket sentPacket(options.packet_id, rtc::TimeMillis(), options.info_signaled_after_sent);
-        _sendPacket(packet, sentPacket);
-        return true;
-    }
-
-    int SetOption(cricket::MediaChannel::NetworkInterface::SocketType, rtc::Socket::Option, int) {
-        return -1;
-    }
-
-private:
-    std::function<void(rtc::CopyOnWriteBuffer const *, rtc::SentPacket)> _sendPacket;
-};
-
 static const int kVadResultHistoryLength = 8;
 
 class CombinedVad {
@@ -803,7 +775,7 @@ public:
         } while (!_outgoingAudioSsrc);
 
         uint32_t outgoingVideoSsrcBase = _outgoingAudioSsrc + 1;
-        int numVideoSimulcastLayers = 2;
+        int numVideoSimulcastLayers = 3;
         for (int layerIndex = 0; layerIndex < numVideoSimulcastLayers; layerIndex++) {
             _outgoingVideoSsrcs.simulcastLayers.push_back(VideoSsrcs::SimulcastLayer(outgoingVideoSsrcBase + layerIndex * 2 + 0, outgoingVideoSsrcBase + layerIndex * 2 + 1));
         }
@@ -942,7 +914,7 @@ public:
 
         _videoBitrateAllocatorFactory = webrtc::CreateBuiltinVideoBitrateAllocatorFactory();
 
-        //_outgoingVideoChannel = _channelManager->CreateVideoChannel(_call.get(), cricket::MediaConfig(), _rtpTransport, _threads->getMediaThread(), "1", false, GroupNetworkManager::getDefaulCryptoOptions(), _uniqueRandomIdGenerator.get(), cricket::VideoOptions(), _videoBitrateAllocatorFactory.get());
+        _outgoingVideoChannel = _channelManager->CreateVideoChannel(_call.get(), cricket::MediaConfig(), _rtpTransport, _threads->getMediaThread(), "1", false, GroupNetworkManager::getDefaulCryptoOptions(), _uniqueRandomIdGenerator.get(), cricket::VideoOptions(), _videoBitrateAllocatorFactory.get());
 
         configureSendVideo();
 
@@ -959,13 +931,13 @@ public:
             setVideoCapture(_videoCapture, [](GroupJoinPayload) {}, true);
         }
 
-        adjustBitratePreferences(true);
-
         if (_useDummyChannel) {
             addIncomingAudioChannel("_dummy", ChannelId(1), true);
         }
 
         beginNetworkStatusTimer(0);
+
+        adjustBitratePreferences(true);
     }
 
     void destroyOutgoingAudioChannel() {
@@ -1045,6 +1017,8 @@ public:
         _outgoingAudioChannel->UpdateRtpTransport(nullptr);
 
         onUpdatedIsMuted();
+
+        adjustBitratePreferences(false);
     }
 
     void stop() {
@@ -1793,6 +1767,12 @@ public:
                 _outgoingAudioSsrc = distribution(generator) & 0x7fffffffU;
             } while (!_outgoingAudioSsrc);
 
+            uint32_t outgoingVideoSsrcBase = _outgoingAudioSsrc + 1;
+            int numVideoSimulcastLayers = 2;
+            for (int layerIndex = 0; layerIndex < numVideoSimulcastLayers; layerIndex++) {
+                _outgoingVideoSsrcs.simulcastLayers.push_back(VideoSsrcs::SimulcastLayer(outgoingVideoSsrcBase + layerIndex * 2 + 0, outgoingVideoSsrcBase + layerIndex * 2 + 1));
+            }
+
             if (!_isMuted) {
                 createOutgoingAudioChannel();
             }
@@ -1833,9 +1813,9 @@ public:
 
             payload.ssrc = outgoingAudioSsrc;
 
-            /*payload.videoPayloadTypes = videoPayloadTypes;
+            payload.videoPayloadTypes = videoPayloadTypes;
             payload.videoExtensionMap = videoExtensionMap;
-            payload.videoSourceGroups = videoSourceGroups;*/
+            payload.videoSourceGroups = videoSourceGroups;
 
             auto localIceParameters = networkManager->getLocalIceParameters();
             payload.ufrag = localIceParameters.ufrag;
@@ -2080,6 +2060,8 @@ public:
         _ssrcMapping.insert(std::make_pair(ssrc.networkSsrc, mapping));
 
         maybeDeliverBufferedPackets(ssrc.networkSsrc);
+
+        adjustBitratePreferences(false);
     }
 
     void addIncomingVideoChannel(GroupParticipantDescription const &participant) {
@@ -2120,6 +2102,8 @@ public:
         for (auto ssrc : allSsrcs) {
             maybeDeliverBufferedPackets(ssrc);
         }
+
+        adjustBitratePreferences(false);
     }
 
     void updateIncomingVideoSources() {

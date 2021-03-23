@@ -229,7 +229,9 @@
 - (void)dealloc {
     assert([NSThread isMainThread]);
 
-#if TARGET_OS_OSX
+#ifdef WEBRTC_IOS
+    [_videoCapturer stopCapture];
+#elif TARGET_OS_OSX
     [_videoCapturer stop];
 #endif
 }
