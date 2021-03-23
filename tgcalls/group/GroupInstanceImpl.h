@@ -94,6 +94,7 @@ struct GroupInstanceDescriptor {
     std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, std::function<void(BroadcastPart &&)>)> requestBroadcastPart;
     int outgoingAudioBitrateKbit{32};
     bool disableOutgoingAudioProcessing{false};
+    bool enableVideo{false};
 };
 
 struct GroupJoinPayloadFingerprint {
@@ -163,6 +164,7 @@ struct GroupJoinResponsePayload {
     std::string pwd;
     std::vector<GroupJoinPayloadFingerprint> fingerprints;
     std::vector<GroupJoinResponseCandidate> candidates;
+    uint32_t serverVideoBandwidthProbingSsrc = 0;
 };
 
 template <typename T>

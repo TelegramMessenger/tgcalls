@@ -760,6 +760,7 @@ public:
     _useDummyChannel(descriptor.useDummyChannel),
     _outgoingAudioBitrateKbit(descriptor.outgoingAudioBitrateKbit),
     _disableOutgoingAudioProcessing(descriptor.disableOutgoingAudioProcessing),
+    _enableVideo(descriptor.enableVideo),
     _eventLog(std::make_unique<webrtc::RtcEventLogNull>()),
     _taskQueueFactory(webrtc::CreateDefaultTaskQueueFactory()),
 	_createAudioDeviceModule(descriptor.createAudioDeviceModule),
@@ -787,6 +788,7 @@ public:
 
         _incomingAudioChannels.clear();
         _incomingVideoChannels.clear();
+        _serverBandwidthProbingVideoSsrc.reset();
 
         destroyOutgoingAudioChannel();
 
@@ -914,7 +916,9 @@ public:
 
         _videoBitrateAllocatorFactory = webrtc::CreateBuiltinVideoBitrateAllocatorFactory();
 
-        _outgoingVideoChannel = _channelManager->CreateVideoChannel(_call.get(), cricket::MediaConfig(), _rtpTransport, _threads->getMediaThread(), "1", false, GroupNetworkManager::getDefaulCryptoOptions(), _uniqueRandomIdGenerator.get(), cricket::VideoOptions(), _videoBitrateAllocatorFactory.get());
+        if (_enableVideo) {
+            _outgoingVideoChannel = _channelManager->CreateVideoChannel(_call.get(), cricket::MediaConfig(), _rtpTransport, _threads->getMediaThread(), "1", false, GroupNetworkManager::getDefaulCryptoOptions(), _uniqueRandomIdGenerator.get(), cricket::VideoOptions(), _videoBitrateAllocatorFactory.get());
+        }
 
         configureSendVideo();
 
@@ -1808,14 +1812,16 @@ public:
     }
 
     void emitJoinPayload(std::function<void(GroupJoinPayload)> completion) {
-        _networkManager->perform(RTC_FROM_HERE, [outgoingAudioSsrc = _outgoingAudioSsrc, videoPayloadTypes = _videoPayloadTypes, videoExtensionMap = _videoExtensionMap, videoSourceGroups = _videoSourceGroups, completion](GroupNetworkManager *networkManager) {
+        _networkManager->perform(RTC_FROM_HERE, [outgoingAudioSsrc = _outgoingAudioSsrc, videoPayloadTypes = _videoPayloadTypes, videoExtensionMap = _videoExtensionMap, videoSourceGroups = _videoSourceGroups, enableVideo = _enableVideo, completion](GroupNetworkManager *networkManager) {
             GroupJoinPayload payload;
 
             payload.ssrc = outgoingAudioSsrc;
 
-            payload.videoPayloadTypes = videoPayloadTypes;
-            payload.videoExtensionMap = videoExtensionMap;
-            payload.videoSourceGroups = videoSourceGroups;
+            if (enableVideo) {
+                payload.videoPayloadTypes = videoPayloadTypes;
+                payload.videoExtensionMap = videoExtensionMap;
+                payload.videoSourceGroups = videoSourceGroups;
+            }
 
             auto localIceParameters = networkManager->getLocalIceParameters();
             payload.ufrag = localIceParameters.ufrag;
@@ -1872,6 +1878,12 @@ public:
     void setJoinResponsePayload(GroupJoinResponsePayload payload, std::vector<tgcalls::GroupParticipantDescription> &&participants) {
         RTC_LOG(LS_INFO) << formatTimestampMillis(rtc::TimeMillis()) << ": " << "setJoinResponsePayload";
 
+        _serverBandwidthProbingVideoSsrc.reset();
+
+        if (payload.serverVideoBandwidthProbingSsrc != 0) {
+            setServerBandwidthProbingChannelSsrc(payload.serverVideoBandwidthProbingSsrc);
+        }
+
         _networkManager->perform(RTC_FROM_HERE, [payload](GroupNetworkManager *networkManager) {
             PeerIceParameters remoteIceParameters;
             remoteIceParameters.ufrag = payload.ufrag;
@@ -1906,6 +1918,64 @@ public:
         });
 
         addParticipants(std::move(participants));
+    }
+
+    void setServerBandwidthProbingChannelSsrc(uint32_t probingSsrc) {
+        RTC_CHECK(probingSsrc);
+        
+        auto payloadTypes = assignPayloadTypes(_availableVideoFormats);
+        if (payloadTypes.has_value()) {
+            GroupParticipantDescription participant;
+            GroupJoinPayloadVideoPayloadType vp8Payload;
+            vp8Payload.id = payloadTypes.value().videoCodec.id;
+            vp8Payload.name = payloadTypes.value().videoCodec.name;
+            vp8Payload.clockrate = payloadTypes.value().videoCodec.clockrate;
+            vp8Payload.channels = 0;
+
+            std::vector<GroupJoinPayloadVideoPayloadFeedbackType> vp8FeedbackTypes;
+
+            GroupJoinPayloadVideoPayloadFeedbackType fbGoogRemb;
+            fbGoogRemb.type = "goog-remb";
+            vp8FeedbackTypes.push_back(fbGoogRemb);
+
+            GroupJoinPayloadVideoPayloadFeedbackType fbTransportCc;
+            fbTransportCc.type = "transport-cc";
+            vp8FeedbackTypes.push_back(fbTransportCc);
+
+            GroupJoinPayloadVideoPayloadFeedbackType fbCcmFir;
+            fbCcmFir.type = "ccm";
+            fbCcmFir.subtype = "fir";
+            vp8FeedbackTypes.push_back(fbCcmFir);
+
+            GroupJoinPayloadVideoPayloadFeedbackType fbNack;
+            fbNack.type = "nack";
+            vp8FeedbackTypes.push_back(fbNack);
+
+            GroupJoinPayloadVideoPayloadFeedbackType fbNackPli;
+            fbNackPli.type = "nack";
+            fbNackPli.subtype = "pli";
+            vp8FeedbackTypes.push_back(fbNackPli);
+
+            vp8Payload.feedbackTypes = vp8FeedbackTypes;
+            vp8Payload.parameters = {};
+
+            participant.videoPayloadTypes.push_back(std::move(vp8Payload));
+
+            GroupJoinPayloadVideoSourceGroup sourceGroup;
+            sourceGroup.ssrcs.push_back(probingSsrc);
+            sourceGroup.semantics = "SIM";
+            participant.videoSourceGroups.push_back(std::move(sourceGroup));
+
+            _serverBandwidthProbingVideoSsrc.reset(new IncomingVideoChannel(
+                _channelManager.get(),
+                _call.get(),
+                _rtpTransport,
+                _uniqueRandomIdGenerator.get(),
+                _availableVideoFormats,
+                participant,
+                *_threads
+            ));
+        }
     }
 
     void addParticipants(std::vector<GroupParticipantDescription> &&participants) {
@@ -2180,6 +2250,7 @@ private:
     bool _useDummyChannel{true};
     int _outgoingAudioBitrateKbit{32};
     bool _disableOutgoingAudioProcessing{false};
+    bool _enableVideo{false};
 
     int64_t _lastUnknownSsrcsReport = 0;
     std::set<uint32_t> _pendingUnknownSsrcs;
@@ -2228,6 +2299,7 @@ private:
     std::map<uint32_t, double> _volumeBySsrc;
     std::map<ChannelId, std::unique_ptr<IncomingAudioChannel>> _incomingAudioChannels;
     std::map<uint32_t, std::unique_ptr<IncomingVideoChannel>> _incomingVideoChannels;
+    std::unique_ptr<IncomingVideoChannel> _serverBandwidthProbingVideoSsrc;
 
     std::string _currentHighQualityVideoEndpointId;
 
