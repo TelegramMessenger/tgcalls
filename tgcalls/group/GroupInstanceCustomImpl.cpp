@@ -615,6 +615,7 @@ public:
         outgoingAudioDescription->set_rtcp_reduced_size(true);
         outgoingAudioDescription->set_direction(webrtc::RtpTransceiverDirection::kRecvOnly);
         outgoingAudioDescription->set_codecs({ opusCodec, pcmCodec });
+        outgoingAudioDescription->set_bandwidth(1032000);
 
         auto incomingAudioDescription = std::make_unique<cricket::AudioContentDescription>();
         if (!isRawPcm) {
@@ -626,6 +627,7 @@ public:
         incomingAudioDescription->set_rtcp_reduced_size(true);
         incomingAudioDescription->set_direction(webrtc::RtpTransceiverDirection::kSendOnly);
         incomingAudioDescription->set_codecs({ opusCodec, pcmCodec });
+        incomingAudioDescription->set_bandwidth(1032000);
         cricket::StreamParams streamParams = cricket::StreamParams::CreateLegacy(ssrc.networkSsrc);
         streamParams.set_stream_ids({ streamId });
         incomingAudioDescription->AddStream(streamParams);
@@ -714,6 +716,7 @@ public:
         outgoingVideoDescription->set_rtcp_reduced_size(true);
         outgoingVideoDescription->set_direction(webrtc::RtpTransceiverDirection::kRecvOnly);
         outgoingVideoDescription->set_codecs({ payloadTypes->videoCodec, payloadTypes->rtxCodec });
+        outgoingVideoDescription->set_bandwidth(1032000);
 
         cricket::StreamParams videoRecvStreamParams;
 
@@ -753,6 +756,7 @@ public:
         incomingVideoDescription->set_rtcp_reduced_size(true);
         incomingVideoDescription->set_direction(webrtc::RtpTransceiverDirection::kSendOnly);
         incomingVideoDescription->set_codecs({ payloadTypes->videoCodec, payloadTypes->rtxCodec });
+        incomingVideoDescription->set_bandwidth(1032000);
 
         incomingVideoDescription->AddStream(videoRecvStreamParams);
 
@@ -1132,6 +1136,7 @@ public:
         outgoingAudioDescription->set_rtcp_reduced_size(true);
         outgoingAudioDescription->set_direction(webrtc::RtpTransceiverDirection::kSendOnly);
         outgoingAudioDescription->set_codecs({ opusCodec });
+        outgoingAudioDescription->set_bandwidth(1032000);
         outgoingAudioDescription->AddStream(cricket::StreamParams::CreateLegacy(_outgoingAudioSsrc));
 
         auto incomingAudioDescription = std::make_unique<cricket::AudioContentDescription>();
@@ -1142,6 +1147,7 @@ public:
         incomingAudioDescription->set_rtcp_reduced_size(true);
         incomingAudioDescription->set_direction(webrtc::RtpTransceiverDirection::kRecvOnly);
         incomingAudioDescription->set_codecs({ opusCodec });
+        incomingAudioDescription->set_bandwidth(1032000);
 
         _outgoingAudioChannel->SetPayloadTypeDemuxingEnabled(false);
         _outgoingAudioChannel->SetLocalContent(outgoingAudioDescription.get(), webrtc::SdpType::kOffer, nullptr);
@@ -1516,6 +1522,7 @@ public:
         outgoingVideoDescription->set_rtcp_reduced_size(true);
         outgoingVideoDescription->set_direction(webrtc::RtpTransceiverDirection::kSendOnly);
         outgoingVideoDescription->set_codecs({ payloadTypes->videoCodec, payloadTypes->rtxCodec });
+        outgoingVideoDescription->set_bandwidth(1032000);
 
         cricket::StreamParams videoSendStreamParams;
 
@@ -1561,6 +1568,7 @@ public:
         incomingVideoDescription->set_rtcp_reduced_size(true);
         incomingVideoDescription->set_direction(webrtc::RtpTransceiverDirection::kRecvOnly);
         incomingVideoDescription->set_codecs({ payloadTypes->videoCodec, payloadTypes->rtxCodec });
+        incomingVideoDescription->set_bandwidth(1032000);
 
         _outgoingVideoChannel->SetPayloadTypeDemuxingEnabled(false);
         _outgoingVideoChannel->SetLocalContent(outgoingVideoDescription.get(), webrtc::SdpType::kOffer, nullptr);
