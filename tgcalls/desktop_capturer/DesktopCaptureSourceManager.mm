@@ -39,7 +39,8 @@
         auto options = webrtc::DesktopCaptureOptions::CreateDefault();
         options.set_allow_iosurface(false);
         options.set_detect_updated_region(true);
-        _capturer = webrtc::DesktopCapturer::CreateWindowCapturer(webrtc::DesktopCaptureOptions::CreateDefault());
+        _capturer = webrtc::DesktopCapturer::CreateWindowCapturer(options);
+        
         _cached = [[NSMutableDictionary alloc] init];
         _isWindow = YES;
     }
@@ -50,7 +51,7 @@
         auto options = webrtc::DesktopCaptureOptions::CreateDefault();
         options.set_allow_iosurface(true);
         options.set_detect_updated_region(true);
-        _capturer = webrtc::DesktopCapturer::CreateScreenCapturer(webrtc::DesktopCaptureOptions::CreateDefault());
+        _capturer = webrtc::DesktopCapturer::CreateScreenCapturer(options);
         _cached = [[NSMutableDictionary alloc] init];
         _isWindow = NO;
     }
