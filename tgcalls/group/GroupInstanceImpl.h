@@ -95,6 +95,7 @@ struct GroupInstanceDescriptor {
     int outgoingAudioBitrateKbit{32};
     bool disableOutgoingAudioProcessing{false};
     bool enableVideo{false};
+    bool initialEnableNoiseSuppression{true};
 };
 
 struct GroupJoinPayloadFingerprint {
@@ -187,6 +188,7 @@ public:
     virtual void removeSsrcs(std::vector<uint32_t> ssrcs) = 0;
 
     virtual void setIsMuted(bool isMuted) = 0;
+    virtual void setIsNoiseSuppressionEnabled(bool isNoiseSuppressionEnabled) = 0;
     virtual void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture, std::function<void(GroupJoinPayload)> completion) = 0;
     virtual void setAudioOutputDevice(std::string id) = 0;
     virtual void setAudioInputDevice(std::string id) = 0;
