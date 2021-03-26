@@ -31,6 +31,7 @@ public:
     void removeSsrcs(std::vector<uint32_t> ssrcs);
 
     void setIsMuted(bool isMuted);
+    void setIsNoiseSuppressionEnabled(bool isNoiseSuppressionEnabled);
     void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture, std::function<void(GroupJoinPayload)> completion);
     void setAudioOutputDevice(std::string id);
     void setAudioInputDevice(std::string id);

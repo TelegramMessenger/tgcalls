@@ -50,6 +50,8 @@
 #include <sstream>
 #include <iostream>
 
+#include "rnnoise.h"
+
 namespace tgcalls {
 
 namespace {
@@ -229,28 +231,25 @@ struct ChannelId {
 
 static const int kVadResultHistoryLength = 8;
 
-class CombinedVad {
+class VadHistory {
 private:
-    webrtc::VadLevelAnalyzer _vadWithLevel;
     float _vadResultHistory[kVadResultHistoryLength];
 
 public:
-    CombinedVad() {
+    VadHistory() {
         for (int i = 0; i < kVadResultHistoryLength; i++) {
             _vadResultHistory[i] = 0.0f;
         }
     }
 
-    ~CombinedVad() {
+    ~VadHistory() {
     }
 
-    bool update(webrtc::AudioBuffer *buffer) {
-        webrtc::AudioFrameView<float> frameView(buffer->channels(), buffer->num_channels(), buffer->num_frames());
-        auto result = _vadWithLevel.AnalyzeFrame(frameView);
+    bool update(float vadProbability) {
         for (int i = 1; i < kVadResultHistoryLength; i++) {
             _vadResultHistory[i - 1] = _vadResultHistory[i];
         }
-        _vadResultHistory[kVadResultHistoryLength - 1] = result.speech_probability;
+        _vadResultHistory[kVadResultHistoryLength - 1] = vadProbability;
 
         float movingAverage = 0.0f;
         for (int i = 0; i < kVadResultHistoryLength; i++) {
@@ -264,6 +263,26 @@ public:
         }
 
         return vadResult;
+    }
+};
+
+class CombinedVad {
+private:
+    webrtc::VadLevelAnalyzer _vadWithLevel;
+    VadHistory _history;
+
+public:
+    CombinedVad() {
+    }
+
+    ~CombinedVad() {
+    }
+
+    bool update(webrtc::AudioBuffer *buffer) {
+        webrtc::AudioFrameView<float> frameView(buffer->channels(), buffer->num_channels(), buffer->num_frames());
+        auto result = _vadWithLevel.AnalyzeFrame(frameView);
+
+        return _history.update(result.speech_probability);
     }
 };
 
@@ -391,10 +410,107 @@ private:
     absl::optional<webrtc::VideoFrame> _lastFrame;
 };
 
+struct NoiseSuppressionConfiguration {
+    NoiseSuppressionConfiguration(bool isEnabled_) :
+    isEnabled(isEnabled_) {
+
+    }
+
+    bool isEnabled = false;
+};
+
+class AudioCapturePostProcessor : public webrtc::CustomProcessing {
+public:
+    AudioCapturePostProcessor(std::function<void(GroupLevelValue const &)> updated, std::shared_ptr<NoiseSuppressionConfiguration> noiseSuppressionConfiguration) :
+    _updated(updated),
+    _noiseSuppressionConfiguration(noiseSuppressionConfiguration) {
+        int frameSize = rnnoise_get_frame_size();
+        _frameSamples.resize(frameSize);
+
+        _denoiseState = rnnoise_create(nullptr);
+    }
+
+    virtual ~AudioCapturePostProcessor() {
+        if (_denoiseState) {
+            rnnoise_destroy(_denoiseState);
+        }
+    }
+
+private:
+    virtual void Initialize(int sample_rate_hz, int num_channels) override {
+    }
+
+    virtual void Process(webrtc::AudioBuffer *buffer) override {
+        if (!buffer) {
+            return;
+        }
+        if (buffer->num_channels() != 1) {
+            return;
+        }
+        if (!_denoiseState) {
+            return;
+        }
+        if (buffer->num_frames() != _frameSamples.size()) {
+            return;
+        }
+        float vadProbability = rnnoise_process_frame(_denoiseState, _frameSamples.data(), buffer->channels()[0]);
+        if (_noiseSuppressionConfiguration->isEnabled) {
+            memcpy(buffer->channels()[0], _frameSamples.data(), _frameSamples.size() * sizeof(float));
+        }
+
+        float peak = 0;
+        int peakCount = 0;
+        const float *samples = buffer->channels_const()[0];
+        for (int i = 0; i < buffer->num_frames(); i++) {
+            float sample = samples[i];
+            if (sample < 0) {
+                sample = -sample;
+            }
+            if (peak < sample) {
+                peak = sample;
+            }
+            peakCount += 1;
+        }
+
+        bool vadStatus = _history.update(vadProbability);
+
+        _peakCount += peakCount;
+        if (_peak < peak) {
+            _peak = peak;
+        }
+        if (_peakCount >= 1200) {
+            float level = _peak / 4000.0f;
+            _peak = 0;
+            _peakCount = 0;
+
+            _updated(GroupLevelValue{
+                level,
+                vadStatus,
+            });
+        }
+    }
+
+    virtual std::string ToString() const override {
+        return "CustomPostProcessing";
+    }
+
+    virtual void SetRuntimeSetting(webrtc::AudioProcessing::RuntimeSetting setting) override {
+    }
+
+private:
+    std::function<void(GroupLevelValue const &)> _updated;
+    std::shared_ptr<NoiseSuppressionConfiguration> _noiseSuppressionConfiguration;
+
+    DenoiseState *_denoiseState = nullptr;
+    std::vector<float> _frameSamples;
+    int32_t _peakCount = 0;
+    float _peak = 0;
+    VadHistory _history;
+};
+
 class AudioCaptureAnalyzer : public webrtc::CustomAudioAnalyzer {
 private:
     void Initialize(int sample_rate_hz, int num_channels) override {
-
     }
 
     void Analyze(const webrtc::AudioBuffer* buffer) override {
@@ -455,6 +571,7 @@ public:
 
     virtual ~AudioCaptureAnalyzer() = default;
 };
+
 class IncomingAudioChannel : public sigslot::has_slots<> {
 public:
     IncomingAudioChannel(
@@ -780,6 +897,8 @@ public:
         for (int layerIndex = 0; layerIndex < numVideoSimulcastLayers; layerIndex++) {
             _outgoingVideoSsrcs.simulcastLayers.push_back(VideoSsrcs::SimulcastLayer(outgoingVideoSsrcBase + layerIndex * 2 + 0, outgoingVideoSsrcBase + layerIndex * 2 + 1));
         }
+
+        _noiseSuppressionConfiguration = std::make_shared<NoiseSuppressionConfiguration>(descriptor.initialEnableNoiseSuppression);
     }
 
     ~GroupInstanceCustomInternal() {
@@ -869,7 +988,7 @@ public:
         mediaDeps.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactory();
 
         if (_audioLevelsUpdated) {
-            auto analyzer = new AudioCaptureAnalyzer([weak, threads = _threads](GroupLevelValue const &level) {
+            /*auto analyzer = std::make_unique<AudioCaptureAnalyzer>([weak, threads = _threads](GroupLevelValue const &level) {
                 threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, level](){
                     auto strong = weak.lock();
                     if (!strong) {
@@ -877,10 +996,21 @@ public:
                     }
                     strong->_myAudioLevel = level;
                 });
-            });
+            });*/
+
+            auto processor = std::make_unique<AudioCapturePostProcessor>([weak, threads = _threads](GroupLevelValue const &level) {
+                threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, level](){
+                    auto strong = weak.lock();
+                    if (!strong) {
+                        return;
+                    }
+                    strong->_myAudioLevel = level;
+                });
+            }, _noiseSuppressionConfiguration);
 
             webrtc::AudioProcessingBuilder builder;
-            builder.SetCaptureAnalyzer(std::unique_ptr<AudioCaptureAnalyzer>(analyzer));
+            builder.SetCapturePostProcessing(std::move(processor));
+            //builder.SetCaptureAnalyzer(std::move(analyzer));
 
             mediaDeps.audio_processing = builder.Create();
         }
@@ -2046,6 +2176,10 @@ public:
         }
     }
 
+    void setIsNoiseSuppressionEnabled(bool isNoiseSuppressionEnabled) {
+        _noiseSuppressionConfiguration->isEnabled = isNoiseSuppressionEnabled;
+    }
+
     void addIncomingVideoOutput(uint32_t ssrc, std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
         auto it = _incomingVideoChannels.find(ssrc);
         if (it != _incomingVideoChannels.end()) {
@@ -2293,6 +2427,7 @@ private:
     GroupLevelValue _myAudioLevel;
 
     bool _isMuted = true;
+    std::shared_ptr<NoiseSuppressionConfiguration> _noiseSuppressionConfiguration;
 
     MissingSsrcPacketBuffer _missingPacketBuffer;
     std::map<uint32_t, SsrcMappingInfo> _ssrcMapping;
@@ -2386,6 +2521,12 @@ void GroupInstanceCustomImpl::removeSsrcs(std::vector<uint32_t> ssrcs) {
 void GroupInstanceCustomImpl::setIsMuted(bool isMuted) {
     _internal->perform(RTC_FROM_HERE, [isMuted](GroupInstanceCustomInternal *internal) {
         internal->setIsMuted(isMuted);
+    });
+}
+
+void GroupInstanceCustomImpl::setIsNoiseSuppressionEnabled(bool isNoiseSuppressionEnabled) {
+    _internal->perform(RTC_FROM_HERE, [isNoiseSuppressionEnabled](GroupInstanceCustomInternal *internal) {
+        internal->setIsNoiseSuppressionEnabled(isNoiseSuppressionEnabled);
     });
 }
 
