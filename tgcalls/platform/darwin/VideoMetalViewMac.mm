@@ -87,7 +87,7 @@ private:
 @implementation VideoMetalView
 
 + (bool)isSupported {
-    return NO;//[VideoMetalView isMetalAvailable]
+    return [VideoMetalView isMetalAvailable];
 }
 
 - (instancetype)initWithFrame:(CGRect)frameRect {
@@ -180,7 +180,9 @@ private:
 }
 
 
-
+-(void)setFrameSize:(NSSize)newSize {
+    [super setFrameSize:newSize];
+}
 - (void)layout {
     [super layout];
     
@@ -321,6 +323,8 @@ private:
    
    _metalView.drawableSize = drawableSize;
    [self setNeedsLayout:YES];
+    
+    _internalAspect = _videoFrameSize.width / _videoFrameSize.height;
    //[strongSelf.delegate videoView:self didChangeVideoSize:size];
 }
 
