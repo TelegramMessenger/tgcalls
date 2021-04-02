@@ -885,6 +885,8 @@ public:
         });
 
         beginSignaling();
+
+        adjustBitratePreferences(true);
     }
 
     void sendSignalingMessage(signaling::Message const &message) {
@@ -1171,10 +1173,14 @@ public:
     }
 
     void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture) {
+        _videoCapture = videoCapture;
+        
         if (_outgoingVideoChannel) {
             _outgoingVideoChannel->setVideoCapture(videoCapture);
 
             sendMediaState();
+
+            adjustBitratePreferences(true);
         }
     }
 
@@ -1221,6 +1227,25 @@ public:
 
     void stop(std::function<void(FinalState)> completion) {
         completion({});
+    }
+
+    void adjustBitratePreferences(bool resetStartBitrate) {
+        webrtc::BitrateConstraints preferences;
+        if (_videoCapture) {
+            preferences.min_bitrate_bps = 64000;
+            if (resetStartBitrate) {
+                preferences.start_bitrate_bps = (100 + 800 + 32 + 100) * 1000;
+            }
+            preferences.max_bitrate_bps = (100 + 200 + 800 + 32 + 100) * 1000;
+        } else {
+            preferences.min_bitrate_bps = 32000;
+            if (resetStartBitrate) {
+                preferences.start_bitrate_bps = 32000;
+            }
+            preferences.max_bitrate_bps = 32000;
+        }
+
+        _call->GetTransportControllerSend()->SetSdpBitrateParameters(preferences);
     }
 
 private:
