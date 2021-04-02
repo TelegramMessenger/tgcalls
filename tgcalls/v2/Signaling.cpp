@@ -2,6 +2,8 @@
 
 #include "third-party/json11.hpp"
 
+#include "rtc_base/checks.h"
+
 #include <sstream>
 
 namespace tgcalls {
@@ -19,33 +21,6 @@ static uint32_t stringToUInt32(std::string const &string) {
     stringStream >> value;
     return value;
 }
-
-/*
- struct SsrcGroup {
-     std::vector<uint32_t> ssrcs;
-     std::string semantics;
- };
-
- struct FeedbackType {
-     std::string type;
-     std::string subtype;
- };
-
- struct PayloadType {
-     uint32_t id = 0;
-     std::string name;
-     uint32_t clockrate = 0;
-     uint32_t channels = 0;
-     std::vector<FeedbackType> feedbackTypes;
-     std::vector<std::pair<std::string, std::string>> parameters;
- };
-
- struct MediaContent {
-     uint32_t ssrc = 0;
-     std::vector<SsrcGroup> ssrcGroups;
-     std::vector<PayloadType> payloadTypes;
- };
- */
 
 json11::Json::object SsrcGroup_serialize(SsrcGroup const &ssrcGroup) {
     json11::Json::object object;
@@ -112,6 +87,29 @@ absl::optional<FeedbackType> FeedbackType_parse(json11::Json::object const &obje
     result.subtype = subtype->second.string_value();
 
     return result;
+}
+
+json11::Json::object RtpExtension_serialize(RtpExtension const &rtpExtension) {
+    json11::Json::object object;
+
+    object.insert(std::make_pair("id", json11::Json(rtpExtension.id)));
+    object.insert(std::make_pair("uri", json11::Json(rtpExtension.uri)));
+
+    return object;
+}
+
+absl::optional<RtpExtension> RtpExtension_parse(json11::Json::object const &object) {
+    const auto id = object.find("id");
+    if (id == object.end() || !id->second.is_number()) {
+        return absl::nullopt;
+    }
+
+    const auto uri = object.find("uri");
+    if (uri == object.end() || !uri->second.is_string()) {
+        return absl::nullopt;
+    }
+
+    return RtpExtension(id->second.int_value(), uri->second.string_value());
 }
 
 json11::Json::object PayloadType_serialize(PayloadType const &payloadType) {
@@ -202,11 +200,11 @@ absl::optional<PayloadType> PayloadType_parse(json11::Json::object const &object
 json11::Json::object MediaContent_serialize(MediaContent const &mediaContent) {
     json11::Json::object object;
 
-    object.insert(std::make_pair("mediaContent", json11::Json(uint32ToString(mediaContent.ssrc))));
+    object.insert(std::make_pair("ssrc", json11::Json(uint32ToString(mediaContent.ssrc))));
 
     if (mediaContent.ssrcGroups.size() != 0) {
         json11::Json::array ssrcGroups;
-        for (const auto group : mediaContent.ssrcGroups) {
+        for (const auto &group : mediaContent.ssrcGroups) {
             ssrcGroups.push_back(SsrcGroup_serialize(group));
         }
         object.insert(std::make_pair("ssrcGroups", json11::Json(std::move(ssrcGroups))));
@@ -214,11 +212,17 @@ json11::Json::object MediaContent_serialize(MediaContent const &mediaContent) {
 
     if (mediaContent.payloadTypes.size() != 0) {
         json11::Json::array payloadTypes;
-        for (const auto payloadType : mediaContent.payloadTypes) {
+        for (const auto &payloadType : mediaContent.payloadTypes) {
             payloadTypes.push_back(PayloadType_serialize(payloadType));
         }
         object.insert(std::make_pair("payloadTypes", json11::Json(std::move(payloadTypes))));
     }
+
+    json11::Json::array rtpExtensions;
+    for (const auto &rtpExtension : mediaContent.rtpExtensions) {
+        rtpExtensions.push_back(RtpExtension_serialize(rtpExtension));
+    }
+    object.insert(std::make_pair("rtpExtensions", json11::Json(std::move(rtpExtensions))));
 
     return object;
 }
@@ -237,7 +241,7 @@ absl::optional<MediaContent> MediaContent_parse(json11::Json::object const &obje
         if (!ssrcGroups->second.is_array()) {
             return absl::nullopt;
         }
-        for (const auto ssrcGroup : ssrcGroups->second.array_items()) {
+        for (const auto &ssrcGroup : ssrcGroups->second.array_items()) {
             if (!ssrcGroup.is_object()) {
                 return absl::nullopt;
             }
@@ -254,12 +258,29 @@ absl::optional<MediaContent> MediaContent_parse(json11::Json::object const &obje
         if (!payloadTypes->second.is_array()) {
             return absl::nullopt;
         }
-        for (const auto payloadType : payloadTypes->second.array_items()) {
+        for (const auto &payloadType : payloadTypes->second.array_items()) {
             if (!payloadType.is_object()) {
                 return absl::nullopt;
             }
             if (const auto parsedPayloadType = PayloadType_parse(payloadType.object_items())) {
                 result.payloadTypes.push_back(parsedPayloadType.value());
+            } else {
+                return absl::nullopt;
+            }
+        }
+    }
+
+    const auto rtpExtensions = object.find("rtpExtensions");
+    if (rtpExtensions != object.end()) {
+        if (!rtpExtensions->second.is_array()) {
+            return absl::nullopt;
+        }
+        for (const auto &rtpExtension : rtpExtensions->second.array_items()) {
+            if (!rtpExtension.is_object()) {
+                return absl::nullopt;
+            }
+            if (const auto parsedRtpExtension = RtpExtension_parse(rtpExtension.object_items())) {
+                result.rtpExtensions.push_back(parsedRtpExtension.value());
             } else {
                 return absl::nullopt;
             }
@@ -370,6 +391,32 @@ absl::optional<InitialSetupMessage> InitialSetupMessage_parse(json11::Json::obje
     return message;
 }
 
+json11::Json::object ConnectionAddress_serialize(ConnectionAddress const &connectionAddress) {
+    json11::Json::object object;
+
+    object.insert(std::make_pair("ip", json11::Json(connectionAddress.ip)));
+    object.insert(std::make_pair("port", json11::Json(connectionAddress.port)));
+
+    return object;
+}
+
+absl::optional<ConnectionAddress> ConnectionAddress_parse(json11::Json::object const &object) {
+    const auto ip = object.find("ip");
+    if (ip == object.end() || !ip->second.is_string()) {
+        return absl::nullopt;
+    }
+
+    const auto port = object.find("port");
+    if (port == object.end() || !port->second.is_number()) {
+        return absl::nullopt;
+    }
+
+    ConnectionAddress address;
+    address.ip = ip->second.string_value();
+    address.port = port->second.int_value();
+    return address;
+}
+
 std::vector<uint8_t> CandidatesMessage_serialize(const CandidatesMessage * const message) {
     json11::Json::array candidates;
     for (const auto &candidate : message->iceCandidates) {
@@ -378,8 +425,15 @@ std::vector<uint8_t> CandidatesMessage_serialize(const CandidatesMessage * const
         candidateObject.insert(std::make_pair("component", json11::Json(candidate.component)));
         candidateObject.insert(std::make_pair("protocol", json11::Json(candidate.protocol)));
 
-        candidateObject.insert(std::make_pair("port", json11::Json(candidate.port)));
-        candidateObject.insert(std::make_pair("ip", json11::Json(candidate.ip)));
+        candidateObject.insert(std::make_pair("address", json11::Json(ConnectionAddress_serialize(candidate.connectionAddress))));
+
+        if (const auto relAddress = candidate.relAddress) {
+            candidateObject.insert(std::make_pair("relAddress", json11::Json(ConnectionAddress_serialize(relAddress.value()))));
+        }
+
+        if (candidate.tcpType.size() != 0) {
+            candidateObject.insert(std::make_pair("tcpType", json11::Json(candidate.tcpType)));
+        }
 
         candidateObject.insert(std::make_pair("priority", json11::Json(uint32ToString(candidate.priority))));
 
@@ -433,17 +487,35 @@ absl::optional<CandidatesMessage> CandidatesMessage_parse(json11::Json::object c
         }
         candidate.protocol = protocol->second.string_value();
 
-        const auto port = candidateObject.object_items().find("port");
-        if (port == candidateObject.object_items().end() || !port->second.is_number()) {
+        const auto address = candidateObject.object_items().find("address");
+        if (address == candidateObject.object_items().end() || !address->second.is_object()) {
             return absl::nullopt;
         }
-        candidate.port = port->second.int_value();
+        if (const auto parsedAddress = ConnectionAddress_parse(address->second.object_items())) {
+            candidate.connectionAddress = parsedAddress.value();
+        } else {
+            return absl::nullopt;
+        }
 
-        const auto ip = candidateObject.object_items().find("ip");
-        if (ip == candidateObject.object_items().end() || !ip->second.is_string()) {
-            return absl::nullopt;
+        const auto relAddress = candidateObject.object_items().find("relAddress");
+        if (relAddress != candidateObject.object_items().end()) {
+            if (!relAddress->second.is_object()) {
+                return absl::nullopt;
+            }
+            if (const auto parsedRelAddress = ConnectionAddress_parse(relAddress->second.object_items())) {
+                candidate.relAddress = parsedRelAddress.value();
+            } else {
+                return absl::nullopt;
+            }
         }
-        candidate.ip = ip->second.string_value();
+
+        const auto tcpType = candidateObject.object_items().find("tcpType");
+        if (tcpType != candidateObject.object_items().end()) {
+            if (!tcpType->second.is_string()) {
+                return absl::nullopt;
+            }
+            candidate.tcpType = tcpType->second.string_value();
+        }
 
         const auto priority = candidateObject.object_items().find("priority");
         if (priority == candidateObject.object_items().end() || !priority->second.is_string()) {
@@ -502,11 +574,84 @@ absl::optional<CandidatesMessage> CandidatesMessage_parse(json11::Json::object c
     return message;
 }
 
+std::vector<uint8_t> MediaStateMessage_serialize(const MediaStateMessage * const message) {
+    json11::Json::object object;
+
+    object.insert(std::make_pair("@type", json11::Json("MediaState")));
+    object.insert(std::make_pair("muted", json11::Json(message->isMuted)));
+    object.insert(std::make_pair("lowBattery", json11::Json(message->isBatteryLow)));
+
+    std::string videoStateValue;
+    switch (message->videoState) {
+        case MediaStateMessage::VideoState::Inactive: {
+            videoStateValue = "inactive";
+            break;
+        }
+        case MediaStateMessage::VideoState::Suspended: {
+            videoStateValue = "suspended";
+            break;
+        }
+        case MediaStateMessage::VideoState::Active: {
+            videoStateValue = "active";
+            break;
+        }
+        default: {
+            RTC_FATAL() << "Unknown videoState";
+            break;
+        }
+    }
+    object.insert(std::make_pair("videoState", json11::Json(videoStateValue)));
+
+    auto json = json11::Json(std::move(object));
+    std::string result = json.dump();
+    return std::vector<uint8_t>(result.begin(), result.end());
+}
+
+absl::optional<MediaStateMessage> MediaStateMessage_parse(json11::Json::object const &object) {
+    MediaStateMessage message;
+
+    const auto muted = object.find("muted");
+    if (muted != object.end()) {
+        if (!muted->second.is_bool()) {
+            return absl::nullopt;
+        }
+        message.isMuted = muted->second.bool_value();
+    }
+
+    const auto lowBattery = object.find("lowBattery");
+    if (lowBattery != object.end()) {
+        if (!lowBattery->second.is_bool()) {
+            return absl::nullopt;
+        }
+        message.isBatteryLow = lowBattery->second.bool_value();
+    }
+
+    const auto videoState = object.find("videoState");
+    if (videoState != object.end()) {
+        if (!videoState->second.is_string()) {
+            return absl::nullopt;
+        }
+        if (videoState->second.string_value() == "inactive") {
+            message.videoState = MediaStateMessage::VideoState::Inactive;
+        } else if (videoState->second.string_value() == "suspended") {
+            message.videoState = MediaStateMessage::VideoState::Suspended;
+        } else if (videoState->second.string_value() == "active") {
+            message.videoState = MediaStateMessage::VideoState::Active;
+        }
+    } else {
+        message.videoState = MediaStateMessage::VideoState::Inactive;
+    }
+
+    return message;
+}
+
 std::vector<uint8_t> Message::serialize() const {
     if (const auto initialSetup = absl::get_if<InitialSetupMessage>(&data)) {
         return InitialSetupMessage_serialize(initialSetup);
-    } else if (const auto initialSetup = absl::get_if<CandidatesMessage>(&data)) {
-        return CandidatesMessage_serialize(initialSetup);
+    } else if (const auto candidates = absl::get_if<CandidatesMessage>(&data)) {
+        return CandidatesMessage_serialize(candidates);
+    } else if (const auto mediaState = absl::get_if<MediaStateMessage>(&data)) {
+        return MediaStateMessage_serialize(mediaState);
     } else {
         return {};
     }
@@ -536,6 +681,14 @@ absl::optional<Message> Message::parse(const std::vector<uint8_t> &data) {
         return message;
     } else if (type->second.string_value() == "Candidates") {
         auto parsed = CandidatesMessage_parse(json.object_items());
+        if (!parsed) {
+            return absl::nullopt;
+        }
+        Message message;
+        message.data = std::move(parsed.value());
+        return message;
+    } else if (type->second.string_value() == "MediaState") {
+        auto parsed = MediaStateMessage_parse(json.object_items());
         if (!parsed) {
             return absl::nullopt;
         }
