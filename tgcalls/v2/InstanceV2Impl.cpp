@@ -465,7 +465,10 @@ public:
     }
 
     void sendSignalingMessage(signaling::Message const &message) {
-        _signalingDataEmitted(message.serialize());
+        auto data = message.serialize();
+
+        RTC_LOG(LS_INFO) << "sendDataChannelMessage: " << std::string(data.begin(), data.end());
+        _signalingDataEmitted(data);
     }
 
     void beginSignaling() {
