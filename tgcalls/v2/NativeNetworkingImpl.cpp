@@ -315,7 +315,7 @@ void NativeNetworkingImpl::resetDtlsSrtpTransport() {
     _transportChannel.reset(new cricket::P2PTransportChannel("transport", 0, _portAllocator.get(), _asyncResolverFactory.get(), nullptr));
 
     cricket::IceConfig iceConfig;
-    iceConfig.continual_gathering_policy = cricket::GATHER_ONCE;
+    iceConfig.continual_gathering_policy = cricket::GATHER_CONTINUALLY;
     iceConfig.prioritize_most_likely_candidate_pairs = true;
     iceConfig.regather_on_failed_networks_interval = 8000;
     _transportChannel->SetIceConfig(iceConfig);
@@ -328,6 +328,7 @@ void NativeNetworkingImpl::resetDtlsSrtpTransport() {
 
     _transportChannel->SetIceParameters(localIceParameters);
     _transportChannel->SetIceRole(_isOutgoing ? cricket::ICEROLE_CONTROLLING : cricket::ICEROLE_CONTROLLED);
+    _transportChannel->SetRemoteIceMode(cricket::ICEMODE_FULL);
 
     _transportChannel->SignalCandidateGathered.connect(this, &NativeNetworkingImpl::candidateGathered);
     _transportChannel->SignalIceTransportStateChanged.connect(this, &NativeNetworkingImpl::transportStateChanged);
