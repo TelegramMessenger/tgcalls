@@ -306,12 +306,6 @@ void NativeNetworkingImpl::resetDtlsSrtpTransport() {
 
     _portAllocator->SetConfiguration(stunServers, turnServers, 2, webrtc::NO_PRUNE, _turnCustomizer.get());
 
-    _portAllocator.reset(new cricket::BasicPortAllocator(_networkManager.get(), _socketFactory.get(), _turnCustomizer.get(), nullptr));
-    _portAllocator->set_flags(_portAllocator->flags());
-    _portAllocator->Initialize();
-
-    _portAllocator->SetConfiguration({}, {}, 2, webrtc::NO_PRUNE, _turnCustomizer.get());
-
     _transportChannel.reset(new cricket::P2PTransportChannel("transport", 0, _portAllocator.get(), _asyncResolverFactory.get(), nullptr));
 
     cricket::IceConfig iceConfig;
