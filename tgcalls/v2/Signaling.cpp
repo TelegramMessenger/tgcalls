@@ -448,6 +448,8 @@ std::vector<uint8_t> CandidatesMessage_serialize(const CandidatesMessage * const
         candidateObject.insert(std::make_pair("networkId", json11::Json((int)candidate.networkId)));
         candidateObject.insert(std::make_pair("networkCost", json11::Json((int)candidate.networkCost)));
 
+        candidateObject.insert(std::make_pair("sdpString", json11::Json(candidate.sdpString)));
+
         candidates.emplace_back(std::move(candidateObject));
     }
 
@@ -564,6 +566,12 @@ absl::optional<CandidatesMessage> CandidatesMessage_parse(json11::Json::object c
             return absl::nullopt;
         }
         candidate.networkCost = networkCost->second.int_value();
+
+        const auto sdpString = candidateObject.object_items().find("sdpString");
+        if (sdpString == candidateObject.object_items().end() || !sdpString->second.is_string()) {
+            return absl::nullopt;
+        }
+        candidate.sdpString = sdpString->second.string_value();
 
         parsedCandidates.push_back(std::move(candidate));
     }

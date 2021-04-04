@@ -43,6 +43,8 @@ struct IceCandidate {
     absl::optional<ConnectionAddress> relAddress;
 
     std::string tcpType;
+
+    std::string sdpString;
 };
 
 struct SsrcGroup {

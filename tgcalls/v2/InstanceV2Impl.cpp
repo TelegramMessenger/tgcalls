@@ -32,6 +32,7 @@
 #include "modules/audio_coding/neteq/default_neteq_factory.h"
 #include "modules/audio_coding/include/audio_coding_module.h"
 #include "api/candidate.h"
+#include "api/jsep_ice_candidate.h"
 
 #include "AudioFrame.h"
 #include "ThreadLocalObject.h"
@@ -1164,6 +1165,14 @@ public:
         serializedCandidate.foundation = candidate.foundation();
         serializedCandidate.networkId = candidate.network_id();
         serializedCandidate.networkCost = candidate.network_cost();
+
+        webrtc::JsepIceCandidate iceCandidate{ std::string(), 0 };
+        iceCandidate.SetCandidate(candidate);
+        std::string serialized;
+        const auto success = iceCandidate.ToString(&serialized);
+        assert(success);
+
+        serializedCandidate.sdpString = serialized;
 
         data.iceCandidates.push_back(std::move(serializedCandidate));
 
