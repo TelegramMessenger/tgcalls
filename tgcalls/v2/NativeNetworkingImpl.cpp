@@ -422,7 +422,7 @@ void NativeNetworkingImpl::setRemoteParams(PeerIceParameters const &remoteIcePar
     } else if (sslSetup == "passive") {
         _dtlsTransport->SetDtlsRole(rtc::SSLRole::SSL_SERVER);
     } else {
-        _dtlsTransport->SetDtlsRole(_isOutgoing ? rtc::SSLRole::SSL_SERVER : rtc::SSLRole::SSL_CLIENT);
+        _dtlsTransport->SetDtlsRole(_isOutgoing ? rtc::SSLRole::SSL_CLIENT : rtc::SSLRole::SSL_SERVER);
     }
 
     if (fingerprint) {
