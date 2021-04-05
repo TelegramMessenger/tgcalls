@@ -321,7 +321,8 @@ void NativeNetworkingImpl::resetDtlsSrtpTransport() {
     );
 
     _transportChannel->SetIceParameters(localIceParameters);
-    _transportChannel->SetIceRole(_isOutgoing ? cricket::ICEROLE_CONTROLLING : cricket::ICEROLE_CONTROLLED);
+    //_transportChannel->SetIceRole(_isOutgoing ? cricket::ICEROLE_CONTROLLING : cricket::ICEROLE_CONTROLLED);
+    _transportChannel->SetIceRole(cricket::ICEROLE_CONTROLLED);
     _transportChannel->SetRemoteIceMode(cricket::ICEMODE_FULL);
 
     _transportChannel->SignalCandidateGathered.connect(this, &NativeNetworkingImpl::candidateGathered);
@@ -338,7 +339,6 @@ void NativeNetworkingImpl::resetDtlsSrtpTransport() {
     _dtlsTransport->SignalDtlsHandshakeError.connect(
         this, &NativeNetworkingImpl::OnDtlsHandshakeError);
 
-    _dtlsTransport->SetDtlsRole(_isOutgoing ? rtc::SSLRole::SSL_SERVER : rtc::SSLRole::SSL_CLIENT);
     _dtlsTransport->SetLocalCertificate(_localCertificate);
     
     _dtlsSrtpTransport->SetDtlsTransports(_dtlsTransport.get(), nullptr);
@@ -406,7 +406,7 @@ std::unique_ptr<rtc::SSLFingerprint> NativeNetworkingImpl::getLocalFingerprint()
     return rtc::SSLFingerprint::CreateFromCertificate(*certificate);
 }
 
-void NativeNetworkingImpl::setRemoteParams(PeerIceParameters const &remoteIceParameters, rtc::SSLFingerprint *fingerprint) {
+void NativeNetworkingImpl::setRemoteParams(PeerIceParameters const &remoteIceParameters, rtc::SSLFingerprint *fingerprint, std::string const &sslSetup) {
     _remoteIceParameters = remoteIceParameters;
 
     cricket::IceParameters parameters(
@@ -416,6 +416,14 @@ void NativeNetworkingImpl::setRemoteParams(PeerIceParameters const &remoteIcePar
     );
 
     _transportChannel->SetRemoteIceParameters(parameters);
+
+    if (sslSetup == "active") {
+        _dtlsTransport->SetDtlsRole(rtc::SSLRole::SSL_CLIENT);
+    } else if (sslSetup == "passive") {
+        _dtlsTransport->SetDtlsRole(rtc::SSLRole::SSL_SERVER);
+    } else {
+        _dtlsTransport->SetDtlsRole(_isOutgoing ? rtc::SSLRole::SSL_SERVER : rtc::SSLRole::SSL_CLIENT);
+    }
 
     if (fingerprint) {
         _dtlsTransport->SetRemoteFingerprint(fingerprint->algorithm, fingerprint->digest.data(), fingerprint->digest.size());

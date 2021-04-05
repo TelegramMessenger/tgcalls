@@ -49,14 +49,18 @@ absl::optional<SsrcGroup> SsrcGroup_parse(json11::Json::object const &object) {
         return absl::nullopt;
     }
     for (const auto &ssrc : ssrcs->second.array_items()) {
-        if (!ssrc.is_string()) {
+        if (ssrc.is_string()) {
+            uint32_t parsedSsrc = stringToUInt32(ssrc.string_value());
+            if (parsedSsrc == 0) {
+                return absl::nullopt;
+            }
+            result.ssrcs.push_back(parsedSsrc);
+        } else if (ssrc.is_number()) {
+            uint32_t parsedSsrc = (uint32_t)ssrc.number_value();
+            result.ssrcs.push_back(parsedSsrc);
+        } else {
             return absl::nullopt;
         }
-        uint32_t parsedSsrc = stringToUInt32(ssrc.string_value());
-        if (parsedSsrc == 0) {
-            return absl::nullopt;
-        }
-        result.ssrcs.push_back(parsedSsrc);
     }
 
     return result;
@@ -230,11 +234,17 @@ json11::Json::object MediaContent_serialize(MediaContent const &mediaContent) {
 absl::optional<MediaContent> MediaContent_parse(json11::Json::object const &object) {
     MediaContent result;
 
-    const auto type = object.find("ssrc");
-    if (type == object.end() || !type->second.is_string()) {
+    const auto ssrc = object.find("ssrc");
+    if (ssrc == object.end()) {
         return absl::nullopt;
     }
-    result.ssrc = stringToUInt32(type->second.string_value());
+    if (ssrc->second.is_string()) {
+        result.ssrc = stringToUInt32(ssrc->second.string_value());
+    } else if (ssrc->second.is_number()) {
+        result.ssrc = (uint32_t)ssrc->second.number_value();
+    } else {
+        return absl::nullopt;
+    }
 
     const auto ssrcGroups = object.find("ssrcGroups");
     if (ssrcGroups != object.end()) {
@@ -422,32 +432,6 @@ std::vector<uint8_t> CandidatesMessage_serialize(const CandidatesMessage * const
     for (const auto &candidate : message->iceCandidates) {
         json11::Json::object candidateObject;
 
-        candidateObject.insert(std::make_pair("component", json11::Json(candidate.component)));
-        candidateObject.insert(std::make_pair("protocol", json11::Json(candidate.protocol)));
-
-        candidateObject.insert(std::make_pair("address", json11::Json(ConnectionAddress_serialize(candidate.connectionAddress))));
-
-        if (const auto relAddress = candidate.relAddress) {
-            candidateObject.insert(std::make_pair("relAddress", json11::Json(ConnectionAddress_serialize(relAddress.value()))));
-        }
-
-        if (candidate.tcpType.size() != 0) {
-            candidateObject.insert(std::make_pair("tcpType", json11::Json(candidate.tcpType)));
-        }
-
-        candidateObject.insert(std::make_pair("priority", json11::Json(uint32ToString(candidate.priority))));
-
-        candidateObject.insert(std::make_pair("username", json11::Json(candidate.username)));
-        candidateObject.insert(std::make_pair("password", json11::Json(candidate.password)));
-
-        candidateObject.insert(std::make_pair("type", json11::Json(candidate.type)));
-
-        candidateObject.insert(std::make_pair("generation", json11::Json(uint32ToString(candidate.generation))));
-        candidateObject.insert(std::make_pair("foundation", json11::Json(candidate.foundation)));
-
-        candidateObject.insert(std::make_pair("networkId", json11::Json((int)candidate.networkId)));
-        candidateObject.insert(std::make_pair("networkCost", json11::Json((int)candidate.networkCost)));
-
         candidateObject.insert(std::make_pair("sdpString", json11::Json(candidate.sdpString)));
 
         candidates.emplace_back(std::move(candidateObject));
@@ -476,96 +460,6 @@ absl::optional<CandidatesMessage> CandidatesMessage_parse(json11::Json::object c
         }
 
         IceCandidate candidate;
-
-        const auto component = candidateObject.object_items().find("component");
-        if (component == candidateObject.object_items().end() || !component->second.is_number()) {
-            return absl::nullopt;
-        }
-        candidate.component = component->second.int_value();
-
-        const auto protocol = candidateObject.object_items().find("protocol");
-        if (protocol == candidateObject.object_items().end() || !protocol->second.is_string()) {
-            return absl::nullopt;
-        }
-        candidate.protocol = protocol->second.string_value();
-
-        const auto address = candidateObject.object_items().find("address");
-        if (address == candidateObject.object_items().end() || !address->second.is_object()) {
-            return absl::nullopt;
-        }
-        if (const auto parsedAddress = ConnectionAddress_parse(address->second.object_items())) {
-            candidate.connectionAddress = parsedAddress.value();
-        } else {
-            return absl::nullopt;
-        }
-
-        const auto relAddress = candidateObject.object_items().find("relAddress");
-        if (relAddress != candidateObject.object_items().end()) {
-            if (!relAddress->second.is_object()) {
-                return absl::nullopt;
-            }
-            if (const auto parsedRelAddress = ConnectionAddress_parse(relAddress->second.object_items())) {
-                candidate.relAddress = parsedRelAddress.value();
-            } else {
-                return absl::nullopt;
-            }
-        }
-
-        const auto tcpType = candidateObject.object_items().find("tcpType");
-        if (tcpType != candidateObject.object_items().end()) {
-            if (!tcpType->second.is_string()) {
-                return absl::nullopt;
-            }
-            candidate.tcpType = tcpType->second.string_value();
-        }
-
-        const auto priority = candidateObject.object_items().find("priority");
-        if (priority == candidateObject.object_items().end() || !priority->second.is_string()) {
-            return absl::nullopt;
-        }
-        candidate.priority = stringToUInt32(priority->second.string_value());
-
-        const auto username = candidateObject.object_items().find("username");
-        if (username == candidateObject.object_items().end() || !username->second.is_string()) {
-            return absl::nullopt;
-        }
-        candidate.username = username->second.string_value();
-
-        const auto password = candidateObject.object_items().find("password");
-        if (password == candidateObject.object_items().end() || !password->second.is_string()) {
-            return absl::nullopt;
-        }
-        candidate.password = password->second.string_value();
-
-        const auto type = candidateObject.object_items().find("type");
-        if (type == candidateObject.object_items().end() || !type->second.is_string()) {
-            return absl::nullopt;
-        }
-        candidate.type = type->second.string_value();
-
-        const auto generation = candidateObject.object_items().find("generation");
-        if (generation == candidateObject.object_items().end() || !generation->second.is_string()) {
-            return absl::nullopt;
-        }
-        candidate.generation = stringToUInt32(generation->second.string_value());
-
-        const auto foundation = candidateObject.object_items().find("foundation");
-        if (foundation == candidateObject.object_items().end() || !foundation->second.is_string()) {
-            return absl::nullopt;
-        }
-        candidate.foundation = foundation->second.string_value();
-
-        const auto networkId = candidateObject.object_items().find("networkId");
-        if (networkId == candidateObject.object_items().end() || !networkId->second.is_number()) {
-            return absl::nullopt;
-        }
-        candidate.networkId = networkId->second.int_value();
-
-        const auto networkCost = candidateObject.object_items().find("networkCost");
-        if (networkCost == candidateObject.object_items().end() || !networkCost->second.is_number()) {
-            return absl::nullopt;
-        }
-        candidate.networkCost = networkCost->second.int_value();
 
         const auto sdpString = candidateObject.object_items().find("sdpString");
         if (sdpString == candidateObject.object_items().end() || !sdpString->second.is_string()) {

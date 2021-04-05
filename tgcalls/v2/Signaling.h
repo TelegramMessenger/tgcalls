@@ -23,27 +23,6 @@ struct ConnectionAddress {
 };
 
 struct IceCandidate {
-    int component = 0;
-    std::string protocol;
-
-    ConnectionAddress connectionAddress;
-
-    uint32_t priority = 0;
-
-    std::string username;
-    std::string password;
-    std::string type;
-
-    uint32_t generation = 0;
-    std::string foundation;
-
-    uint16_t networkId = 0;
-    uint16_t networkCost = 0;
-
-    absl::optional<ConnectionAddress> relAddress;
-
-    std::string tcpType;
-
     std::string sdpString;
 };
 

@@ -95,7 +95,7 @@ static absl::optional<OutgoingVideoFormat> assignPayloadTypes(std::vector<webrtc
         return absl::nullopt;
     }
 
-    constexpr int kFirstDynamicPayloadType = 100;
+    constexpr int kFirstDynamicPayloadType = 120;
     constexpr int kLastDynamicPayloadType = 127;
 
     int payload_type = kFirstDynamicPayloadType;
@@ -130,7 +130,7 @@ static absl::optional<OutgoingVideoFormat> assignPayloadTypes(std::vector<webrtc
         // Add associated RTX codec for non-FEC codecs.
         if (!absl::EqualsIgnoreCase(codec.name, cricket::kUlpfecCodecName) &&
             !absl::EqualsIgnoreCase(codec.name, cricket::kFlexfecCodecName)) {
-            result.rtxCodec = cricket::VideoCodec::CreateRtxCodec(payload_type, codec.id);
+            result.rtxCodec = cricket::VideoCodec::CreateRtxCodec(124, codec.id);
 
             // Increment payload type.
             ++payload_type;
@@ -203,7 +203,7 @@ public:
         const uint8_t opusStartBitrateKbps = 32;
         const uint8_t opusPTimeMs = 60;
 
-        cricket::AudioCodec opusCodec(111, "opus", 48000, 0, 2);
+        cricket::AudioCodec opusCodec(109, "opus", 48000, 0, 2);
         opusCodec.AddFeedbackParam(cricket::FeedbackParam(cricket::kRtcpFbParamTransportCc));
         opusCodec.SetParam(cricket::kCodecParamMinBitrate, opusMinBitrateKbps);
         opusCodec.SetParam(cricket::kCodecParamStartBitrate, opusStartBitrateKbps);
@@ -641,9 +641,18 @@ public:
 
         _videoChannel = _channelManager->CreateVideoChannel(call, cricket::MediaConfig(), rtpTransport, threads->getMediaThread(), "video2", false, NativeNetworkingImpl::getDefaulCryptoOptions(), randomIdGenerator, cricket::VideoOptions(), _videoBitrateAllocatorFactory.get());
 
-        auto payloadTypes = assignPayloadTypes(availableVideoFormats);
-        if (!payloadTypes.has_value()) {
-            return;
+        std::vector<cricket::VideoCodec> videoCodecs;
+        for (const auto &payloadType : mediaContent.payloadTypes) {
+            cricket::VideoCodec codec(payloadType.id, payloadType.name);
+            for (const auto &feedbackParam : payloadType.feedbackTypes) {
+                cricket::FeedbackParam parsedFeedbackParam(feedbackParam.type, feedbackParam.subtype);
+                codec.AddFeedbackParam(parsedFeedbackParam);
+            }
+            for (const auto &parameter : payloadType.parameters) {
+                codec.SetParam(parameter.first, parameter.second);
+            }
+            codec.clockrate = payloadType.clockrate;
+            videoCodecs.push_back(codec);
         }
 
         auto outgoingVideoDescription = std::make_unique<cricket::VideoContentDescription>();
@@ -653,7 +662,7 @@ public:
         outgoingVideoDescription->set_rtcp_mux(true);
         outgoingVideoDescription->set_rtcp_reduced_size(true);
         outgoingVideoDescription->set_direction(webrtc::RtpTransceiverDirection::kRecvOnly);
-        outgoingVideoDescription->set_codecs({ payloadTypes->videoCodec, payloadTypes->rtxCodec });
+        outgoingVideoDescription->set_codecs(videoCodecs);
         outgoingVideoDescription->set_bandwidth(1032000);
 
         cricket::StreamParams videoRecvStreamParams;
@@ -683,7 +692,7 @@ public:
         incomingVideoDescription->set_rtcp_mux(true);
         incomingVideoDescription->set_rtcp_reduced_size(true);
         incomingVideoDescription->set_direction(webrtc::RtpTransceiverDirection::kSendOnly);
-        incomingVideoDescription->set_codecs({ payloadTypes->videoCodec, payloadTypes->rtxCodec });
+        incomingVideoDescription->set_codecs(videoCodecs);
         incomingVideoDescription->set_bandwidth(1032000);
 
         incomingVideoDescription->AddStream(videoRecvStreamParams);
@@ -893,7 +902,7 @@ public:
     void sendSignalingMessage(signaling::Message const &message) {
         auto data = message.serialize();
 
-        RTC_LOG(LS_INFO) << "sendDataChannelMessage: " << std::string(data.begin(), data.end());
+        RTC_LOG(LS_INFO) << "sendSignalingMessage: " << std::string(data.begin(), data.end());
         _signalingDataEmitted(data);
     }
 
@@ -904,7 +913,7 @@ public:
             auto localFingerprint = networking->getLocalFingerprint();
             std::string hash = localFingerprint->algorithm;
             std::string fingerprint = localFingerprint->GetRfc4572Fingerprint();
-            std::string setup = isOutgoing ? "passive" : "active";
+            std::string setup = isOutgoing ? "active" : "passive";
 
             auto localIceParams = networking->getLocalIceParameters();
             std::string ufrag = localIceParams.ufrag;
@@ -942,6 +951,8 @@ public:
     }
 
     void receiveSignalingData(const std::vector<uint8_t> &data) {
+        RTC_LOG(LS_INFO) << "receiveSignalingData: " << std::string(data.begin(), data.end());
+
         const auto message = signaling::Message::parse(data);
         if (!message) {
             return;
@@ -953,12 +964,14 @@ public:
             remoteIceParameters.pwd = initialSetup->pwd;
 
             std::unique_ptr<rtc::SSLFingerprint> fingerprint;
+            std::string sslSetup;
             if (initialSetup->fingerprints.size() != 0) {
                 fingerprint = rtc::SSLFingerprint::CreateUniqueFromRfc4572(initialSetup->fingerprints[0].hash, initialSetup->fingerprints[0].fingerprint);
+                sslSetup = initialSetup->fingerprints[0].setup;
             }
 
-            _networking->perform(RTC_FROM_HERE, [threads = _threads, remoteIceParameters = std::move(remoteIceParameters), fingerprint = std::move(fingerprint)](NativeNetworkingImpl *networking) {
-                networking->setRemoteParams(remoteIceParameters, fingerprint.get());
+            _networking->perform(RTC_FROM_HERE, [threads = _threads, remoteIceParameters = std::move(remoteIceParameters), fingerprint = std::move(fingerprint), sslSetup = std::move(sslSetup)](NativeNetworkingImpl *networking) {
+                networking->setRemoteParams(remoteIceParameters, fingerprint.get(), sslSetup);
             });
 
             if (const auto audio = initialSetup->audio) {
@@ -990,29 +1003,12 @@ public:
             commitPendingIceCandidates();
         } else if (const auto candidatesList = absl::get_if<signaling::CandidatesMessage>(messageData)) {
             for (const auto &candidate : candidatesList->iceCandidates) {
-                rtc::SocketAddress address(candidate.connectionAddress.ip, candidate.connectionAddress.port);
-
-                cricket::Candidate parsedCandidate(
-                    /*component=*/candidate.component,
-                    /*protocol=*/candidate.protocol,
-                    /*address=*/address,
-                    /*priority=*/candidate.priority,
-                    /*username=*/candidate.username,
-                    /*password=*/candidate.password,
-                    /*type=*/candidate.type,
-                    /*generation=*/candidate.generation,
-                    /*foundation=*/candidate.foundation,
-                    /*network_id=*/candidate.networkId,
-                    /*network_cost=*/candidate.networkCost
-                );
-
-                if (const auto relAddress = candidate.relAddress) {
-                    parsedCandidate.set_related_address(rtc::SocketAddress(relAddress->ip, relAddress->port));
+                webrtc::JsepIceCandidate parseCandidate{ std::string(), 0 };
+                if (!parseCandidate.Initialize(candidate.sdpString, nullptr)) {
+                    RTC_LOG(LS_ERROR) << "Could not parse candidate: " << candidate.sdpString;
+                    continue;
                 }
-                if (candidate.tcpType.size() != 0) {
-                    parsedCandidate.set_tcptype(candidate.tcpType);
-                }
-                _pendingIceCandidates.push_back(std::move(parsedCandidate));
+                _pendingIceCandidates.push_back(parseCandidate.candidate());
             }
 
             if (_handshakeCompleted) {
@@ -1127,47 +1123,15 @@ public:
     }
 
     void sendCandidate(const cricket::Candidate &candidate) {
+        cricket::Candidate patchedCandidate = candidate;
+        patchedCandidate.set_component(1);
+
         signaling::CandidatesMessage data;
 
         signaling::IceCandidate serializedCandidate;
 
-        serializedCandidate.component = candidate.component();
-        serializedCandidate.protocol = candidate.protocol();
-        if (candidate.address().hostname().size() != 0) {
-            serializedCandidate.connectionAddress.ip = candidate.address().hostname();
-        } else {
-            serializedCandidate.connectionAddress.ip = candidate.address().ipaddr().ToString();
-        }
-        serializedCandidate.connectionAddress.port = candidate.address().port();
-
-        std::string relAddressIp;
-        if (candidate.related_address().hostname().size() != 0) {
-            relAddressIp = candidate.related_address().hostname();
-        } else {
-            relAddressIp = candidate.related_address().ipaddr().ToString();
-        }
-        if (relAddressIp.size() != 0) {
-            signaling::ConnectionAddress relatedAddress;
-            relatedAddress.ip = relAddressIp;
-            relatedAddress.port = candidate.related_address().port();
-            serializedCandidate.relAddress = std::move(relatedAddress);
-        }
-
-        if (candidate.tcptype().size() != 0) {
-            serializedCandidate.tcpType = std::move(candidate.tcptype());
-        }
-
-        serializedCandidate.priority = candidate.priority();
-        serializedCandidate.username = candidate.username();
-        serializedCandidate.password = candidate.password();
-        serializedCandidate.type = candidate.type();
-        serializedCandidate.generation = candidate.generation();
-        serializedCandidate.foundation = candidate.foundation();
-        serializedCandidate.networkId = candidate.network_id();
-        serializedCandidate.networkCost = candidate.network_cost();
-
         webrtc::JsepIceCandidate iceCandidate{ std::string(), 0 };
-        iceCandidate.SetCandidate(candidate);
+        iceCandidate.SetCandidate(patchedCandidate);
         std::string serialized;
         const auto success = iceCandidate.ToString(&serialized);
         assert(success);
