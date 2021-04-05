@@ -54,8 +54,6 @@ namespace tgcalls {
 
 namespace {
 
-static_assert(!RTC_DCHECK_IS_ON);
-
 static int stringToInt(std::string const &string) {
     std::stringstream stringStream(string);
     int value = 0;
@@ -796,6 +794,8 @@ public:
     _videoCapture(descriptor.videoCapture),
     _disableIncomingChannels(descriptor.disableIncomingChannels),
     _useDummyChannel(descriptor.useDummyChannel),
+    _outgoingAudioBitrateKbit(descriptor.outgoingAudioBitrateKbit),
+    _disableOutgoingAudioProcessing(descriptor.disableOutgoingAudioProcessing),
     _eventLog(std::make_unique<webrtc::RtcEventLogNull>()),
     _taskQueueFactory(webrtc::CreateDefaultTaskQueueFactory()),
 	_createAudioDeviceModule(descriptor.createAudioDeviceModule),
@@ -841,11 +841,16 @@ public:
     void start() {
         const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
 
-        webrtc::field_trial::InitFieldTrialsFromString(
-            "WebRTC-Audio-Allocation/min:32kbps,max:32kbps/"
-            "WebRTC-Audio-OpusMinPacketLossRate/Enabled-1/"
-            "WebRTC-TaskQueuePacer/Enabled/"
-        );
+        std::ostringstream configString;
+        configString << "WebRTC-Audio-Allocation/";
+        configString << "min:" << _outgoingAudioBitrateKbit << "kbps" << ",";
+        configString << "max:" << _outgoingAudioBitrateKbit << "kbps" << "/";
+
+        configString << "WebRTC-Audio-OpusMinPacketLossRate/Enabled-1/";
+
+        configString << "WebRTC-TaskQueuePacer/Enabled/";
+
+        webrtc::field_trial::InitFieldTrialsFromString(configString.str().c_str());
 
         _networkManager.reset(new ThreadLocalObject<GroupNetworkManager>(_threads->getNetworkThread(), [weak, threads = _threads] () mutable {
             return new GroupNetworkManager(
@@ -988,18 +993,28 @@ public:
         }
 
         cricket::AudioOptions audioOptions;
-        audioOptions.echo_cancellation = true;
-        audioOptions.noise_suppression = true;
-        audioOptions.audio_jitter_buffer_fast_accelerate = true;
+        if (_disableOutgoingAudioProcessing) {
+            audioOptions.echo_cancellation = false;
+            audioOptions.noise_suppression = false;
+            audioOptions.auto_gain_control = false;
+            audioOptions.highpass_filter = false;
+            audioOptions.typing_detection = false;
+            audioOptions.experimental_agc = false;
+            audioOptions.experimental_ns = false;
+            audioOptions.residual_echo_detector = false;
+        } else {
+            audioOptions.echo_cancellation = true;
+            audioOptions.noise_suppression = true;
+        }
 
         std::vector<std::string> streamIds;
         streamIds.push_back("1");
 
         _outgoingAudioChannel = _channelManager->CreateVoiceChannel(_call.get(), cricket::MediaConfig(), _rtpTransport, _threads->getMediaThread(), "0", false, GroupNetworkManager::getDefaulCryptoOptions(), _uniqueRandomIdGenerator.get(), audioOptions);
 
-        const uint8_t opusMinBitrateKbps = 32;
-        const uint8_t opusMaxBitrateKbps = 32;
-        const uint8_t opusStartBitrateKbps = 32;
+        const uint8_t opusMinBitrateKbps = _outgoingAudioBitrateKbit;
+        const uint8_t opusMaxBitrateKbps = _outgoingAudioBitrateKbit;
+        const uint8_t opusStartBitrateKbps = _outgoingAudioBitrateKbit;
         const uint8_t opusPTimeMs = 120;
 
         cricket::AudioCodec opusCodec(111, "opus", 48000, 0, 2);
@@ -1225,7 +1240,7 @@ public:
                 channelsWithActivity.insert(ChannelId(channelSsrc));
             }
 
-            for (const auto channelId : channelsWithActivity) {
+            for (auto channelId : channelsWithActivity) {
                 const auto it = _incomingAudioChannels.find(channelId);
                 if (it != _incomingAudioChannels.end()) {
                     it->second->updateActivity();
@@ -2186,6 +2201,8 @@ private:
     std::shared_ptr<VideoCaptureInterface> _videoCapture;
     bool _disableIncomingChannels = false;
     bool _useDummyChannel{true};
+    int _outgoingAudioBitrateKbit{32};
+    bool _disableOutgoingAudioProcessing{false};
 
     int64_t _lastUnknownSsrcsReport = 0;
     std::set<uint32_t> _pendingUnknownSsrcs;

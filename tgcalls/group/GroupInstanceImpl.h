@@ -92,6 +92,8 @@ struct GroupInstanceDescriptor {
     std::function<void(std::vector<uint32_t> const &)> incomingVideoSourcesUpdated;
     std::function<void(std::vector<uint32_t> const &)> participantDescriptionsRequired;
     std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, std::function<void(BroadcastPart &&)>)> requestBroadcastPart;
+    int outgoingAudioBitrateKbit{32};
+    bool disableOutgoingAudioProcessing{false};
 };
 
 struct GroupJoinPayloadFingerprint {
