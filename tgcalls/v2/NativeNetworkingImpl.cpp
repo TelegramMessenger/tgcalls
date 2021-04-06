@@ -321,8 +321,7 @@ void NativeNetworkingImpl::resetDtlsSrtpTransport() {
     );
 
     _transportChannel->SetIceParameters(localIceParameters);
-    //_transportChannel->SetIceRole(_isOutgoing ? cricket::ICEROLE_CONTROLLING : cricket::ICEROLE_CONTROLLED);
-    _transportChannel->SetIceRole(cricket::ICEROLE_CONTROLLED);
+    _transportChannel->SetIceRole(_isOutgoing ? cricket::ICEROLE_CONTROLLING : cricket::ICEROLE_CONTROLLED);
     _transportChannel->SetRemoteIceMode(cricket::ICEMODE_FULL);
 
     _transportChannel->SignalCandidateGathered.connect(this, &NativeNetworkingImpl::candidateGathered);

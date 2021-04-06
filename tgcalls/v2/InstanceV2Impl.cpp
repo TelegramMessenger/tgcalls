@@ -907,6 +907,12 @@ public:
     }
 
     void beginSignaling() {
+        if (_encryptionKey.isOutgoing) {
+            sendInitialSetup();
+        }
+    }
+
+    void sendInitialSetup() {
         const auto weak = std::weak_ptr<InstanceV2ImplInternal>(shared_from_this());
 
         _networking->perform(RTC_FROM_HERE, [weak, threads = _threads, isOutgoing = _encryptionKey.isOutgoing](NativeNetworkingImpl *networking) {
@@ -997,6 +1003,10 @@ public:
                     video.value(),
                     _threads
                 ));
+            }
+
+            if (!_encryptionKey.isOutgoing) {
+                sendInitialSetup();
             }
 
             _handshakeCompleted = true;
