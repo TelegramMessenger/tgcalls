@@ -752,7 +752,8 @@ public:
     _signalingDataEmitted(descriptor.signalingDataEmitted),
     _createAudioDeviceModule(descriptor.createAudioDeviceModule),
     _eventLog(std::make_unique<webrtc::RtcEventLogNull>()),
-    _taskQueueFactory(webrtc::CreateDefaultTaskQueueFactory()) {
+    _taskQueueFactory(webrtc::CreateDefaultTaskQueueFactory()),
+    _videoCapture(descriptor.videoCapture) {
     }
 
     ~InstanceV2ImplInternal() {
@@ -893,6 +894,10 @@ public:
         _networking->perform(RTC_FROM_HERE, [](NativeNetworkingImpl *networking) {
             networking->start();
         });
+
+        if (_videoCapture) {
+            setVideoCapture(_videoCapture);
+        }
 
         beginSignaling();
 
