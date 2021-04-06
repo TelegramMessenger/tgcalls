@@ -417,9 +417,9 @@ void NativeNetworkingImpl::setRemoteParams(PeerIceParameters const &remoteIcePar
     _transportChannel->SetRemoteIceParameters(parameters);
 
     if (sslSetup == "active") {
-        _dtlsTransport->SetDtlsRole(rtc::SSLRole::SSL_CLIENT);
-    } else if (sslSetup == "passive") {
         _dtlsTransport->SetDtlsRole(rtc::SSLRole::SSL_SERVER);
+    } else if (sslSetup == "passive") {
+        _dtlsTransport->SetDtlsRole(rtc::SSLRole::SSL_CLIENT);
     } else {
         _dtlsTransport->SetDtlsRole(_isOutgoing ? rtc::SSLRole::SSL_CLIENT : rtc::SSLRole::SSL_SERVER);
     }
