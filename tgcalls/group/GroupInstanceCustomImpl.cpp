@@ -279,7 +279,18 @@ public:
     }
 
     bool update(webrtc::AudioBuffer *buffer) {
+        if (buffer->num_channels() <= 0) {
+            return _history.update(0.0f);
+        }
         webrtc::AudioFrameView<float> frameView(buffer->channels(), buffer->num_channels(), buffer->num_frames());
+        float peak = 0.0f;
+        for (const auto &x : frameView.channel(0)) {
+            peak = std::max(std::fabs(x), peak);
+        }
+        if (peak <= 0.01f) {
+            return _history.update(false);
+        }
+
         auto result = _vadWithLevel.AnalyzeFrame(frameView);
 
         return _history.update(result.speech_probability);
@@ -453,9 +464,19 @@ private:
         if (buffer->num_frames() != _frameSamples.size()) {
             return;
         }
-        float vadProbability = rnnoise_process_frame(_denoiseState, _frameSamples.data(), buffer->channels()[0]);
-        if (_noiseSuppressionConfiguration->isEnabled) {
-            memcpy(buffer->channels()[0], _frameSamples.data(), _frameSamples.size() * sizeof(float));
+
+        float sourcePeak = 0.0f;
+        float *sourceSamples = buffer->channels()[0];
+        for (int i = 0; i < _frameSamples.size(); i++) {
+            sourcePeak = std::max(std::fabs(sourceSamples[i]), sourcePeak);
+        }
+
+        float vadProbability = 0.0f;
+        if (sourcePeak >= 0.01f) {
+            vadProbability = rnnoise_process_frame(_denoiseState, _frameSamples.data(), buffer->channels()[0]);
+            if (_noiseSuppressionConfiguration->isEnabled) {
+                memcpy(buffer->channels()[0], _frameSamples.data(), _frameSamples.size() * sizeof(float));
+            }
         }
 
         float peak = 0;
@@ -694,8 +715,8 @@ public:
         GroupParticipantDescription const &description,
         Threads &threads) :
     _channelManager(channelManager),
-    _call(call),
-    _endpointId(description.endpointId) {
+    _endpointId(description.endpointId),
+    _call(call) {
         _videoSink.reset(new VideoSinkImpl());
 
         std::string streamId = std::string("stream") + uint32ToString(description.audioSsrc);
