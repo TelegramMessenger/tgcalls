@@ -14,6 +14,7 @@
 namespace webrtc {
 class AudioDeviceModule;
 class TaskQueueFactory;
+class VideoTrackSourceInterface;
 }
 
 namespace rtc {
@@ -88,7 +89,8 @@ struct GroupInstanceDescriptor {
     bool useDummyChannel{true};
     bool disableIncomingChannels{false};
     std::function<rtc::scoped_refptr<webrtc::AudioDeviceModule>(webrtc::TaskQueueFactory*)> createAudioDeviceModule;
-    std::shared_ptr<VideoCaptureInterface> videoCapture;
+    std::shared_ptr<VideoCaptureInterface> videoCapture; // deprecated
+    std::function<webrtc::VideoTrackSourceInterface*()> getVideoSource;
     std::function<void(std::vector<uint32_t> const &)> incomingVideoSourcesUpdated;
     std::function<void(std::vector<uint32_t> const &)> participantDescriptionsRequired;
     std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, std::function<void(BroadcastPart &&)>)> requestBroadcastPart;
@@ -190,6 +192,7 @@ public:
     virtual void setIsMuted(bool isMuted) = 0;
     virtual void setIsNoiseSuppressionEnabled(bool isNoiseSuppressionEnabled) = 0;
     virtual void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture, std::function<void(GroupJoinPayload)> completion) = 0;
+    virtual void setVideoSource(std::function<webrtc::VideoTrackSourceInterface*()> getVideoSource, std::function<void(GroupJoinPayload)> completion) = 0;
     virtual void setAudioOutputDevice(std::string id) = 0;
     virtual void setAudioInputDevice(std::string id) = 0;
 
