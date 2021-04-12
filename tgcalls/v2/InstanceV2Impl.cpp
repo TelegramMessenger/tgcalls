@@ -392,7 +392,7 @@ private:
     int64_t _activityTimestamp = 0;
 };
 
-class OutgoingVideoChannel : public sigslot::has_slots<> {
+class OutgoingVideoChannel : public sigslot::has_slots<>, public std::enable_shared_from_this<OutgoingVideoChannel> {
 public:
     OutgoingVideoChannel(
         std::shared_ptr<Threads> threads,
@@ -401,12 +401,15 @@ public:
         webrtc::RtpTransport *rtpTransport,
         rtc::UniqueRandomIdGenerator *randomIdGenerator,
         webrtc::VideoBitrateAllocatorFactory *videoBitrateAllocatorFactory,
+        std::function<void()> rotationUpdated,
         //std::function<void(AudioSinkImpl::Update)> &&onAudioLevelUpdated,
         //std::function<void(uint32_t, const AudioFrame &)> onAudioFrame,
         std::vector<webrtc::SdpVideoFormat> const &availableVideoFormats
     ) :
+    _threads(threads),
     _call(call),
-    _channelManager(channelManager) {
+    _channelManager(channelManager),
+    _rotationUpdated(rotationUpdated) {
         auto generator = std::mt19937(std::random_device()());
         auto distribution = std::uniform_int_distribution<uint32_t>();
         do {
@@ -545,7 +548,68 @@ public:
             _outgoingVideoChannel->Enable(true);
             auto videoCaptureImpl = GetVideoCaptureAssumingSameThread(_videoCapture.get());
             _outgoingVideoChannel->media_channel()->SetVideoSend(_mediaContent.ssrc, NULL, videoCaptureImpl->source());
+
+            const auto weak = std::weak_ptr<OutgoingVideoChannel>(shared_from_this());
+            videoCaptureImpl->setRotationUpdated([threads = _threads, weak](int angle) {
+                threads->getMediaThread()->PostTask(RTC_FROM_HERE, [=] {
+                    const auto strong = weak.lock();
+                    if (!strong) {
+                        return;
+                    }
+                    signaling::MediaStateMessage::VideoRotation videoRotation = signaling::MediaStateMessage::VideoRotation::Rotation0;
+                    switch (angle) {
+                        case 0: {
+                            videoRotation = signaling::MediaStateMessage::VideoRotation::Rotation0;
+                            break;
+                        }
+                        case 90: {
+                            videoRotation = signaling::MediaStateMessage::VideoRotation::Rotation90;
+                            break;
+                        }
+                        case 180: {
+                            videoRotation = signaling::MediaStateMessage::VideoRotation::Rotation180;
+                            break;
+                        }
+                        case 270: {
+                            videoRotation = signaling::MediaStateMessage::VideoRotation::Rotation270;
+                            break;
+                        }
+                        default: {
+                            videoRotation = signaling::MediaStateMessage::VideoRotation::Rotation0;
+                            break;
+                        }
+                    }
+                    if (strong->_videoRotation != videoRotation) {
+                        strong->_videoRotation = videoRotation;
+                        strong->_rotationUpdated();
+                    }
+                });
+            });
+
+            switch (videoCaptureImpl->getRotation()) {
+                case 0: {
+                    _videoRotation = signaling::MediaStateMessage::VideoRotation::Rotation0;
+                    break;
+                }
+                case 90: {
+                    _videoRotation = signaling::MediaStateMessage::VideoRotation::Rotation90;
+                    break;
+                }
+                case 180: {
+                    _videoRotation = signaling::MediaStateMessage::VideoRotation::Rotation180;
+                    break;
+                }
+                case 270: {
+                    _videoRotation = signaling::MediaStateMessage::VideoRotation::Rotation270;
+                    break;
+                }
+                default: {
+                    _videoRotation = signaling::MediaStateMessage::VideoRotation::Rotation0;
+                    break;
+                }
+            }
         } else {
+            _videoRotation = signaling::MediaStateMessage::VideoRotation::Rotation0;
             _outgoingVideoChannel->Enable(false);
             _outgoingVideoChannel->media_channel()->SetVideoSend(_mediaContent.ssrc, NULL, nullptr);
         }
@@ -560,19 +624,27 @@ public:
         return _videoCapture;
     }
 
+    signaling::MediaStateMessage::VideoRotation getRotation() {
+        return _videoRotation;
+    }
+
 private:
     void OnSentPacket_w(const rtc::SentPacket& sent_packet) {
         _call->OnSentPacket(sent_packet);
     }
 
 private:
+    std::shared_ptr<Threads> _threads;
     signaling::MediaContent _mediaContent;
 
     webrtc::Call *_call = nullptr;
     cricket::ChannelManager *_channelManager = nullptr;
     cricket::VideoChannel *_outgoingVideoChannel = nullptr;
 
+    std::function<void()> _rotationUpdated;
+
     std::shared_ptr<VideoCaptureInterface> _videoCapture;
+    signaling::MediaStateMessage::VideoRotation _videoRotation = signaling::MediaStateMessage::VideoRotation::Rotation0;
 };
 
 class VideoSinkImpl : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
@@ -888,6 +960,15 @@ public:
             _rtpTransport,
             _uniqueRandomIdGenerator.get(),
             _videoBitrateAllocatorFactory.get(),
+            [threads = _threads, weak]() {
+                threads->getMediaThread()->PostTask(RTC_FROM_HERE, [=] {
+                    const auto strong = weak.lock();
+                    if (!strong) {
+                        return;
+                    }
+                    strong->sendMediaState();
+                });
+            },
             _availableVideoFormats
         ));
 
@@ -924,7 +1005,12 @@ public:
             auto localFingerprint = networking->getLocalFingerprint();
             std::string hash = localFingerprint->algorithm;
             std::string fingerprint = localFingerprint->GetRfc4572Fingerprint();
-            std::string setup = isOutgoing ? "active" : "passive";
+            std::string setup;
+            if (isOutgoing) {
+                setup = "actpass";
+            } else {
+                setup = "passive";
+            }
 
             auto localIceParams = networking->getLocalIceParameters();
             std::string ufrag = localIceParams.ufrag;
@@ -1130,8 +1216,10 @@ public:
             } else{
                 data.videoState = signaling::MediaStateMessage::VideoState::Inactive;
             }
+            data.videoRotation = _outgoingVideoChannel->getRotation();
         } else {
             data.videoState = signaling::MediaStateMessage::VideoState::Inactive;
+            data.videoRotation = signaling::MediaStateMessage::VideoRotation::Rotation0;
         }
         message.data = std::move(data);
         sendDataChannelMessage(message);
@@ -1290,7 +1378,7 @@ private:
     bool _isMicrophoneMuted = false;
 
     std::vector<webrtc::SdpVideoFormat> _availableVideoFormats;
-    std::unique_ptr<OutgoingVideoChannel> _outgoingVideoChannel;
+    std::shared_ptr<OutgoingVideoChannel> _outgoingVideoChannel;
 
     bool _isBatteryLow = false;
 

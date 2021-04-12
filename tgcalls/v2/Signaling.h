@@ -80,9 +80,18 @@ struct MediaStateMessage {
         Active
     };
 
+    enum class VideoRotation {
+        Rotation0,
+        Rotation90,
+        Rotation180,
+        Rotation270
+    };
+
     bool isMuted = false;
     VideoState videoState = VideoState::Inactive;
+    VideoRotation videoRotation = VideoRotation::Rotation0;
     bool isBatteryLow = false;
+
 };
 
 struct Message {

@@ -504,6 +504,31 @@ std::vector<uint8_t> MediaStateMessage_serialize(const MediaStateMessage * const
     }
     object.insert(std::make_pair("videoState", json11::Json(videoStateValue)));
 
+    int videoRotationValue = 0;
+    switch (message->videoRotation) {
+        case MediaStateMessage::VideoRotation::Rotation0: {
+            videoRotationValue = 0;
+            break;
+        }
+        case MediaStateMessage::VideoRotation::Rotation90: {
+            videoRotationValue = 90;
+            break;
+        }
+        case MediaStateMessage::VideoRotation::Rotation180: {
+            videoRotationValue = 180;
+            break;
+        }
+        case MediaStateMessage::VideoRotation::Rotation270: {
+            videoRotationValue = 270;
+            break;
+        }
+        default: {
+            RTC_FATAL() << "Unknown videoRotation";
+            break;
+        }
+    }
+    object.insert(std::make_pair("videoRotation", json11::Json(videoRotationValue)));
+
     auto json = json11::Json(std::move(object));
     std::string result = json.dump();
     return std::vector<uint8_t>(result.begin(), result.end());
@@ -542,6 +567,26 @@ absl::optional<MediaStateMessage> MediaStateMessage_parse(json11::Json::object c
         }
     } else {
         message.videoState = MediaStateMessage::VideoState::Inactive;
+    }
+
+    const auto videoRotation = object.find("videoRotation");
+    if (videoRotation != object.end()) {
+        if (!videoRotation->second.is_number()) {
+            return absl::nullopt;
+        }
+        if (videoState->second.int_value() == 0) {
+            message.videoRotation = MediaStateMessage::VideoRotation::Rotation0;
+        } else if (videoState->second.int_value() == 90) {
+            message.videoRotation = MediaStateMessage::VideoRotation::Rotation90;
+        } else if (videoState->second.int_value() == 180) {
+            message.videoRotation = MediaStateMessage::VideoRotation::Rotation180;
+        } else if (videoState->second.int_value() == 270) {
+            message.videoRotation = MediaStateMessage::VideoRotation::Rotation270;
+        } else {
+            message.videoRotation = MediaStateMessage::VideoRotation::Rotation0;
+        }
+    } else {
+        message.videoRotation = MediaStateMessage::VideoRotation::Rotation0;
     }
 
     return message;

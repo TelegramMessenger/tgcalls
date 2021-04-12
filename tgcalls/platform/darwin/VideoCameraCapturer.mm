@@ -197,7 +197,7 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
     bool _isActiveValue;
     bool _inForegroundValue;
     
-    void (^_orientationUpdated)(bool);
+    void (^_rotationUpdated)(int);
     
     // Live on frameQueue and main thread.
     std::atomic<bool> _isPaused;
@@ -215,7 +215,7 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
 
 @implementation VideoCameraCapturer
 
-- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source useFrontCamera:(bool)useFrontCamera keepLandscape:(bool)keepLandscape isActiveUpdated:(void (^)(bool))isActiveUpdated orientationUpdated:(void (^)(bool))orientationUpdated {
+- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source useFrontCamera:(bool)useFrontCamera keepLandscape:(bool)keepLandscape isActiveUpdated:(void (^)(bool))isActiveUpdated rotationUpdated:(void (^)(int))rotationUpdated {
     self = [super init];
     if (self != nil) {
         _source = source;
@@ -225,7 +225,7 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
         _inForegroundValue = true;
         _isPaused = false;
         _isActiveUpdated = [isActiveUpdated copy];
-        _orientationUpdated = [orientationUpdated copy];
+        _rotationUpdated = [rotationUpdated copy];
         
         _warmupFrameCount = 100;
         
@@ -257,17 +257,30 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
                 break;
         }
         
-        if (_orientationUpdated) {
-            bool isLandscape = false;
+        if (_rotationUpdated) {
+            int angle = 0;
             switch (_rotation) {
-                case RTCVideoRotation_0:
-                case RTCVideoRotation_180:
-                    isLandscape = true;
+                case RTCVideoRotation_0: {
+                    angle = 0;
                     break;
-                default:
+                }
+                case RTCVideoRotation_90: {
+                    angle = 90;
                     break;
+                }
+                case RTCVideoRotation_180: {
+                    angle = 180;
+                    break;
+                }
+                case RTCVideoRotation_270: {
+                    angle = 270;
+                    break;
+                }
+                default: {
+                    break;
+                }
             }
-            _orientationUpdated(isLandscape);
+            _rotationUpdated(angle);
         }
         [center addObserver:self
                    selector:@selector(deviceOrientationDidChange:)
@@ -355,6 +368,21 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
 	dispatch_async(self.frameQueue, ^{
 		_uncroppedSink = sink;
 	});
+}
+
+- (int)getRotation {
+    switch (_rotation) {
+        case RTCVideoRotation_0:
+            return 0;
+        case RTCVideoRotation_90:
+            return 90;
+        case RTCVideoRotation_180:
+            return 180;
+        case RTCVideoRotation_270:
+            return 270;
+        default:
+            return 0;
+    }
 }
 
 - (void)setPreferredCaptureAspectRatio:(float)aspectRatio {
@@ -494,17 +522,30 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
         }
         if (_rotation != updatedRotation) {
             _rotation = updatedRotation;
-            if (_orientationUpdated) {
-                bool isLandscape = false;
+            if (_rotationUpdated) {
+                int angle = 0;
                 switch (_rotation) {
-                    case RTCVideoRotation_0:
-                    case RTCVideoRotation_180:
-                        isLandscape = true;
+                    case RTCVideoRotation_0: {
+                        angle = 0;
                         break;
-                    default:
+                    }
+                    case RTCVideoRotation_90: {
+                        angle = 90;
                         break;
+                    }
+                    case RTCVideoRotation_180: {
+                        angle = 180;
+                        break;
+                    }
+                    case RTCVideoRotation_270: {
+                        angle = 270;
+                        break;
+                    }
+                    default: {
+                        break;
+                    }
                 }
-                _orientationUpdated(isLandscape);
+                _rotationUpdated(angle);
             }
         }
     }

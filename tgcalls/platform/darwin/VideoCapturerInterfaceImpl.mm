@@ -194,13 +194,13 @@
     return [[VideoCapturerInterfaceImplSourceDescription alloc] initWithIsFrontCamera:![deviceId hasPrefix:@"back"] keepLandscape:[deviceId containsString:@"landscape"] deviceId:deviceId device:selectedCamera format:bestFormat];
 }
 
-- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source sourceDescription:(VideoCapturerInterfaceImplSourceDescription *)sourceDescription isActiveUpdated:(void (^)(bool))isActiveUpdated orientationUpdated:(void (^)(bool))orientationUpdated {
+- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source sourceDescription:(VideoCapturerInterfaceImplSourceDescription *)sourceDescription isActiveUpdated:(void (^)(bool))isActiveUpdated rotationUpdated:(void (^)(int))rotationUpdated {
     self = [super init];
     if (self != nil) {
         assert([NSThread isMainThread]);
         
 #ifdef WEBRTC_IOS
-        _videoCapturer = [[VideoCameraCapturer alloc] initWithSource:source useFrontCamera:sourceDescription.isFrontCamera keepLandscape:sourceDescription.keepLandscape isActiveUpdated:isActiveUpdated orientationUpdated:orientationUpdated];
+        _videoCapturer = [[VideoCameraCapturer alloc] initWithSource:source useFrontCamera:sourceDescription.isFrontCamera keepLandscape:sourceDescription.keepLandscape isActiveUpdated:isActiveUpdated rotationUpdated:rotationUpdated];
         [_videoCapturer startCaptureWithDevice:sourceDescription.device format:sourceDescription.format fps:30];
 #else
         
@@ -248,6 +248,10 @@
     [_videoCapturer setPreferredCaptureAspectRatio:aspectRatio];
 }
 
+- (int)getRotation {
+    return [_videoCapturer getRotation];
+}
+
 @end
 
 @implementation VideoCapturerInterfaceImplHolder
@@ -274,9 +278,11 @@ VideoCapturerInterfaceImpl::VideoCapturerInterfaceImpl(rtc::scoped_refptr<webrtc
     dispatch_async(dispatch_get_main_queue(), ^{
         VideoCapturerInterfaceImplReference *value = [[VideoCapturerInterfaceImplReference alloc] initWithSource:source sourceDescription:sourceDescription isActiveUpdated:^(bool isActive) {
             stateUpdated(isActive ? VideoState::Active : VideoState::Paused);
-        } orientationUpdated:^(bool isLandscape) {
+        } rotationUpdated:^(int angle) {
             PlatformCaptureInfo info;
+            bool isLandscape = angle == 180 || angle == 0;
             info.shouldBeAdaptedToReceiverAspectRate = !isLandscape;
+            info.rotation = angle;
             captureInfoUpdated(info);
         }];
         if (value != nil) {
@@ -322,6 +328,18 @@ void VideoCapturerInterfaceImpl::setUncroppedOutput(std::shared_ptr<rtc::VideoSi
             [reference setUncroppedSink:sink];
         }
     });
+}
+
+int VideoCapturerInterfaceImpl::getRotation() {
+    __block int value = 0;
+    VideoCapturerInterfaceImplHolder *implReference = _implReference;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        if (implReference.reference != nil) {
+            VideoCapturerInterfaceImplReference *reference = (__bridge VideoCapturerInterfaceImplReference *)implReference.reference;
+            value = [reference getRotation];
+        }
+    });
+    return value;
 }
 
 } // namespace tgcalls

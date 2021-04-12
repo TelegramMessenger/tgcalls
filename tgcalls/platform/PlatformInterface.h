@@ -16,6 +16,7 @@ class PlatformContext;
 
 struct PlatformCaptureInfo {
     bool shouldBeAdaptedToReceiverAspectRate = false;
+    int rotation = 0;
 };
 
 class PlatformInterface {

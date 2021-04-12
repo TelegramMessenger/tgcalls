@@ -25,6 +25,14 @@ webrtc::VideoTrackSourceInterface *VideoCaptureInterfaceObject::source() {
 	return _videoSource;
 }
 
+int VideoCaptureInterfaceObject::getRotation() {
+    if (_videoCapturer) {
+        return _videoCapturer->getRotation();
+    } else {
+        return 0;
+    }
+}
+
 void VideoCaptureInterfaceObject::switchToDevice(std::string deviceId) {
     if (_videoCapturer && _currentUncroppedSink) {
 		_videoCapturer->setUncroppedOutput(nullptr);
@@ -40,6 +48,9 @@ void VideoCaptureInterfaceObject::switchToDevice(std::string deviceId) {
             if (this->_shouldBeAdaptedToReceiverAspectRate != info.shouldBeAdaptedToReceiverAspectRate) {
                 this->_shouldBeAdaptedToReceiverAspectRate = info.shouldBeAdaptedToReceiverAspectRate;
                 this->updateAspectRateAdaptation();
+            }
+            if (this->_rotationUpdated) {
+                this->_rotationUpdated(info.rotation);
             }
         }, _platformContext, _videoCapturerResolution);
 	}
@@ -101,6 +112,10 @@ void VideoCaptureInterfaceObject::setOutput(std::shared_ptr<rtc::VideoSinkInterf
 
 void VideoCaptureInterfaceObject::setStateUpdated(std::function<void(VideoState)> stateUpdated) {
 	_stateUpdated = stateUpdated;
+}
+
+void VideoCaptureInterfaceObject::setRotationUpdated(std::function<void(int)> rotationUpdated) {
+    _rotationUpdated = rotationUpdated;
 }
 
 VideoCaptureInterfaceImpl::VideoCaptureInterfaceImpl(std::string deviceId,
