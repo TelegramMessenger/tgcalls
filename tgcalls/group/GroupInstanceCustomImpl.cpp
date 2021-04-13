@@ -2276,8 +2276,25 @@ GroupInstanceCustomImpl::~GroupInstanceCustomImpl() {
     }
     _internal.reset();
 
+
+    // If this is the main thread and Invoke will wrap it in an rtc::Thread,
+    // we need to wrap it ourselves and then unwrap it back.
+    //
+    // That way destructors of static sequence-checked objects, that were
+    // created in an unwrapped main thread (<=> without a task queue), like
+    // SharedModuleThread will not crash with assertion violation later.
+    const auto manager = rtc::ThreadManager::Instance();
+    const auto thread = manager ? manager->CurrentThread() : nullptr;
+    const auto wrapped = (!thread && manager && manager->IsMainThread())
+        ? rtc::Thread::Current()
+        : nullptr;
+
     // Wait until _internal is destroyed
     _threads->getMediaThread()->Invoke<void>(RTC_FROM_HERE, [] {});
+
+    if (wrapped && !wrapped->IsOwned()) {
+        wrapped->UnwrapCurrent();
+    }
 }
 
 void GroupInstanceCustomImpl::stop() {
