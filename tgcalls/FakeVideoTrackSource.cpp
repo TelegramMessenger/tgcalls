@@ -14,7 +14,6 @@ int WIDTH = 1280;
 int HEIGHT = 720;
 
 webrtc::VideoFrame genFrame(int i, int n) {
-  std::this_thread::sleep_for(std::chrono::milliseconds(30));
   int width = WIDTH;
   int height = HEIGHT;
   auto bytes_ptr = std::make_unique<std::uint8_t[]>(width * height * 3);
@@ -31,10 +30,17 @@ webrtc::VideoFrame genFrame(int i, int n) {
 
   for (int i = 0; i < height; i++) {
     for (int j = 0; j < width; j++) {
-      double sx = i * 20.0 / HEIGHT;
-      double sy = j * 20.0 / HEIGHT;
-      int x = int(floor(sx * co - sy * si));
-      int y = int(floor(sx * si + sy * co));
+      double sx = (i - height / 2) * 20.0 / HEIGHT;
+      double sy = (j  - width / 2) * 20.0 / HEIGHT;
+
+      int x, y;
+      if (sx * sx + sy * sy < 10) {
+         x = int(floor(sx * co - sy * si));
+         y = int(floor(sx * si + sy * co));
+      } else {
+        x = int(floor(sx));
+        y = int(floor(sy));
+      }
       std::uint8_t color = ((y & 1) ^ (x & 1)) * 255;
       set_rgb(i, j, color, color, color);
     }
@@ -53,7 +59,7 @@ class FakeVideoSource : public rtc::VideoSourceInterface<webrtc::VideoFrame> {
   FakeVideoSource() {
     data_ = std::make_shared<Data>();
     std::thread([data = data_] {
-      int N = 30;
+      int N = 100;
       std::vector<webrtc::VideoFrame> frames;
       frames.reserve(N);
       for (int i = 0; i < N; i++) {
@@ -63,7 +69,7 @@ class FakeVideoSource : public rtc::VideoSourceInterface<webrtc::VideoFrame> {
       std::uint32_t step = 0;
       while (!data->flag_) {
         step++;
-        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000 / 30));
         auto &frame = frames[step % N];
         frame.set_id(static_cast<std::uint16_t>(step));
         frame.set_timestamp_us(rtc::TimeMicros());
