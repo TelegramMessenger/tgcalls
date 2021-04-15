@@ -193,7 +193,7 @@ private:
 
 webrtc::CryptoOptions NativeNetworkingImpl::getDefaulCryptoOptions() {
     auto options = webrtc::CryptoOptions();
-    options.srtp.enable_aes128_sha1_80_crypto_cipher = false;
+    options.srtp.enable_aes128_sha1_80_crypto_cipher = true;
     options.srtp.enable_gcm_crypto_suites = true;
     return options;
 }
