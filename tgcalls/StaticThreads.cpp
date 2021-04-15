@@ -78,7 +78,9 @@ public:
     // This function must be called from a single thread because of SharedModuleThread implementation
     // So we don't care about making it thread safe
     if (!shared_module_thread_) {
-      shared_module_thread_ = webrtc::SharedModuleThread::Create(webrtc::ProcessThread::Create("tgc-module"), nullptr);
+      shared_module_thread_ = webrtc::SharedModuleThread::Create(
+          webrtc::ProcessThread::Create("tgc-module"),
+          [=] { shared_module_thread_ = nullptr; });
     }
     return shared_module_thread_;
   }
