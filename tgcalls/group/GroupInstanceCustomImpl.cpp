@@ -710,9 +710,9 @@ public:
         std::vector<webrtc::SdpVideoFormat> const &availableVideoFormats,
         GroupParticipantDescription const &description,
         Threads &threads) :
+    _endpointId(description.endpointId),
     _channelManager(channelManager),
-    _call(call),
-    _endpointId(description.endpointId) {
+    _call(call) {
         _videoSink.reset(new VideoSinkImpl());
 
         std::string streamId = std::string("stream") + uint32ToString(description.audioSsrc);
@@ -2092,7 +2092,7 @@ public:
 
     void setServerBandwidthProbingChannelSsrc(uint32_t probingSsrc) {
         RTC_CHECK(probingSsrc);
-        
+
         auto payloadTypes = assignPayloadTypes(_availableVideoFormats);
         if (payloadTypes.has_value()) {
             GroupParticipantDescription participant;
