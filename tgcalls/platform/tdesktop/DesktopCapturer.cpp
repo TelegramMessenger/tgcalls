@@ -4,11 +4,13 @@
 #include "modules/desktop_capture/desktop_and_cursor_composer.h"
 #include "third_party/libyuv/include/libyuv.h"
 #include "api/video/i420_buffer.h"
+#include "api/video/video_frame.h"
 #include "api/video/video_frame_buffer.h"
 #include "api/video/video_rotation.h"
 #include "rtc_base/checks.h"
 #include "rtc_base/thread.h"
 #include "rtc_base/logging.h"
+#include "system_wrappers/include/clock.h"
 
 #include <stdint.h>
 #include <memory>
@@ -55,7 +57,10 @@ rtc::Thread *getDesktopThread() {
 
 } // namespace
 
-DesktopCapturer::DesktopCapturer() : _thread(getDesktopThread()) {
+DesktopCapturer::DesktopCapturer(
+	rtc::VideoSinkInterface<webrtc::VideoFrame> *sink)
+: _sink(sink)
+, _thread(getDesktopThread()) {
 }
 
 DesktopCapturer::~DesktopCapturer() {
@@ -79,13 +84,13 @@ void DesktopCapturer::create() {
 }
 
 void DesktopCapturer::captureAndSchedule() {
-	_module->CaptureFrame();
 	_thread->PostDelayedTask(RTC_FROM_HERE, [this, guard = _guard] {
 		if (!guard.lock()) {
 			return;
 		}
 		captureAndSchedule();
 	}, 1000 / 24);
+	_module->CaptureFrame();
 }
 
 void DesktopCapturer::setState(VideoState state) {
@@ -173,25 +178,8 @@ void DesktopCapturer::OnCaptureResult(
 	const auto nativeVideoFrame = webrtc::VideoFrame(
 		_i420buffer,
 		webrtc::kVideoRotation_0,
-		_nextTimestamp / rtc::kNumNanosecsPerMicrosec);
-	_broadcaster.OnFrame(nativeVideoFrame);
-	_nextTimestamp += rtc::kNumNanosecsPerSec / 24.;
-}
-
-void DesktopCapturer::AddOrUpdateSink(
-		rtc::VideoSinkInterface<webrtc::VideoFrame> *sink,
-		const rtc::VideoSinkWants &wants) {
-	_broadcaster.AddOrUpdateSink(sink, wants);
-	updateVideoAdapter();
-}
-
-void DesktopCapturer::RemoveSink(rtc::VideoSinkInterface<webrtc::VideoFrame> *sink) {
-	_broadcaster.RemoveSink(sink);
-	updateVideoAdapter();
-}
-
-void DesktopCapturer::updateVideoAdapter() {
-	//_videoAdapter.OnSinkWants(_broadcaster.wants());
+		webrtc::Clock::GetRealTimeClock()->CurrentTime().us());
+	_sink->OnFrame(nativeVideoFrame);
 }
 
 }  // namespace tgcalls

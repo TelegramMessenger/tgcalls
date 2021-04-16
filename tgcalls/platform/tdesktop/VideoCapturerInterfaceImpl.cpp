@@ -9,22 +9,13 @@
 namespace tgcalls {
 namespace {
 
-VideoCameraCapturer *GetVideoCapturer(
-	const rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> nativeSource) {
+rtc::VideoSinkInterface<webrtc::VideoFrame> *GetSink(
+		const rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> &nativeSource) {
 	const auto proxy = static_cast<webrtc::VideoTrackSourceProxy*>(
 		nativeSource.get());
 	const auto internal = static_cast<VideoCapturerTrackSource*>(
 		proxy->internal());
-	return internal->videoCapturer();
-}
-
-DesktopCapturer *GetDesktopCapturer(
-	const rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> nativeSource) {
-	const auto proxy = static_cast<webrtc::VideoTrackSourceProxy*>(
-		nativeSource.get());
-	const auto internal = static_cast<VideoCapturerTrackSource*>(
-		proxy->internal());
-	return internal->desktopCapturer();
+	return internal->sink();
 }
 
 } // namespace
@@ -35,13 +26,16 @@ VideoCapturerInterfaceImpl::VideoCapturerInterfaceImpl(
 	std::function<void(VideoState)> stateUpdated,
 	std::pair<int, int> &outResolution)
 : _source(source)
+, _sink(GetSink(source))
 , _stateUpdated(stateUpdated) {
-	if (const auto video = GetVideoCapturer(_source)) {
-		video->setDeviceId(deviceId);
-		video->setState(VideoState::Active);
-		outResolution = video->resolution();
-	} else if (const auto desktop = GetDesktopCapturer(_source)) {
-		desktop->setState(VideoState::Active);
+	if (deviceId.find("desktop_capturer_") == 0) {
+		_desktopCapturer = std::make_unique<DesktopCapturer>(_sink);
+		_desktopCapturer->setState(VideoState::Active);
+		outResolution = _desktopCapturer->resolution();
+	} else {
+		_cameraCapturer = std::make_unique<VideoCameraCapturer>(_sink);
+		_cameraCapturer->setDeviceId(deviceId);
+		_cameraCapturer->setState(VideoState::Active);
 		outResolution = { 1280, 960 };
 	}
 }
@@ -50,10 +44,10 @@ VideoCapturerInterfaceImpl::~VideoCapturerInterfaceImpl() {
 }
 
 void VideoCapturerInterfaceImpl::setState(VideoState state) {
-	if (const auto video = GetVideoCapturer(_source)) {
-		video->setState(state);
-	} else if (const auto desktop = GetDesktopCapturer(_source)) {
-		desktop->setState(state);
+	if (_desktopCapturer) {
+		_desktopCapturer->setState(state);
+	} else if (_cameraCapturer) {
+		_cameraCapturer->setState(state);
 	}
 	if (_stateUpdated) {
 		_stateUpdated(state);
@@ -62,8 +56,8 @@ void VideoCapturerInterfaceImpl::setState(VideoState state) {
 
 void VideoCapturerInterfaceImpl::setPreferredCaptureAspectRatio(
 		float aspectRatio) {
-	if (const auto video = GetVideoCapturer(_source)) {
-		video->setPreferredCaptureAspectRatio(aspectRatio);
+	if (_cameraCapturer) {
+		_cameraCapturer->setPreferredCaptureAspectRatio(aspectRatio);
 	}
 }
 

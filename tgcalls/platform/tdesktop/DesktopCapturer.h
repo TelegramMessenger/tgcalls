@@ -5,7 +5,6 @@
 #include "api/video/i420_buffer.h"
 #include "api/video/video_source_interface.h"
 #include "media/base/video_adapter.h"
-#include "media/base/video_broadcaster.h"
 #include "modules/desktop_capture/desktop_capturer.h"
 
 #include "VideoCaptureInterface.h"
@@ -24,11 +23,10 @@ class Thread;
 
 namespace tgcalls {
 
-class DesktopCapturer :
-	public rtc::VideoSourceInterface<webrtc::VideoFrame>,
-	public webrtc::DesktopCapturer::Callback {
+class DesktopCapturer : public webrtc::DesktopCapturer::Callback {
 public:
-	DesktopCapturer();
+	DesktopCapturer(
+		rtc::VideoSinkInterface<webrtc::VideoFrame> *sink);
 	~DesktopCapturer();
 
 	void setState(VideoState state);
@@ -36,10 +34,6 @@ public:
 	void setPreferredCaptureAspectRatio(float aspectRatio);
 
 	std::pair<int, int> resolution() const;
-
-	void AddOrUpdateSink(rtc::VideoSinkInterface<webrtc::VideoFrame>* sink,
-		const rtc::VideoSinkWants& wants) override;
-	void RemoveSink(rtc::VideoSinkInterface<webrtc::VideoFrame>* sink) override;
 
 	void OnCaptureResult(
 		webrtc::DesktopCapturer::Result result,
@@ -49,15 +43,13 @@ private:
 	void create();
 	void destroy();
 	void captureAndSchedule();
-	void updateVideoAdapter();
 
-	rtc::VideoBroadcaster _broadcaster;
+	rtc::VideoSinkInterface<webrtc::VideoFrame> *_sink = nullptr;
 	std::shared_ptr<webrtc::DesktopCapturer> _module;
 	std::weak_ptr<webrtc::DesktopCapturer> _guard;
 	rtc::Thread *_thread = nullptr;
 
 	rtc::scoped_refptr<webrtc::I420Buffer> _i420buffer;
-	int64_t _nextTimestamp = 0;
 
 	VideoState _state = VideoState::Inactive;
 	std::string _requestedDeviceId;

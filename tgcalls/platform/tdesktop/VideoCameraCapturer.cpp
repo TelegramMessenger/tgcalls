@@ -20,7 +20,10 @@ constexpr auto kPreferredFps = 30;
 
 } // namespace
 
-VideoCameraCapturer::VideoCameraCapturer() = default;
+VideoCameraCapturer::VideoCameraCapturer(
+	rtc::VideoSinkInterface<webrtc::VideoFrame> *sink)
+: _sink(sink) {
+}
 
 VideoCameraCapturer::~VideoCameraCapturer() {
 	destroy();
@@ -63,7 +66,9 @@ void VideoCameraCapturer::create() {
 	}
 }
 
-bool VideoCameraCapturer::create(webrtc::VideoCaptureModule::DeviceInfo *info, const std::string &deviceId) {
+bool VideoCameraCapturer::create(
+		webrtc::VideoCaptureModule::DeviceInfo *info,
+		const std::string &deviceId) {
 	_module = webrtc::VideoCaptureFactory::Create(deviceId.c_str());
 	if (!_module) {
 		RTC_LOG(LS_ERROR)
@@ -142,7 +147,7 @@ void VideoCameraCapturer::OnFrame(const webrtc::VideoFrame &frame) {
 	if (_state != VideoState::Active) {
 		return;
 	} else if (_aspectRatio <= 0.001) {
-		_broadcaster.OnFrame(frame);
+		_sink->OnFrame(frame);
 		return;
 	}
 	const auto originalWidth = frame.width();
@@ -154,7 +159,7 @@ void VideoCameraCapturer::OnFrame(const webrtc::VideoFrame &frame) {
 		? originalHeight
 		: int(std::round(originalHeight / _aspectRatio));
 	if ((width >= originalWidth && height >= originalHeight) || !width || !height) {
-		_broadcaster.OnFrame(frame);
+		_sink->OnFrame(frame);
 		return;
 	}
 
@@ -187,23 +192,7 @@ void VideoCameraCapturer::OnFrame(const webrtc::VideoFrame &frame) {
 			width,
 			height));
 	}
-	_broadcaster.OnFrame(croppedBuilder.build());
-}
-
-void VideoCameraCapturer::AddOrUpdateSink(
-		rtc::VideoSinkInterface<webrtc::VideoFrame> *sink,
-		const rtc::VideoSinkWants &wants) {
-	_broadcaster.AddOrUpdateSink(sink, wants);
-	updateVideoAdapter();
-}
-
-void VideoCameraCapturer::RemoveSink(rtc::VideoSinkInterface<webrtc::VideoFrame> *sink) {
-	_broadcaster.RemoveSink(sink);
-	updateVideoAdapter();
-}
-
-void VideoCameraCapturer::updateVideoAdapter() {
-	//_videoAdapter.OnSinkWants(_broadcaster.wants());
+	_sink->OnFrame(croppedBuilder.build());
 }
 
 }  // namespace tgcalls
