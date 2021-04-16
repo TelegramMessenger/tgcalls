@@ -7,6 +7,7 @@
 namespace tgcalls {
 
 class VideoCameraCapturer;
+class DesktopCapturer;
 
 class VideoCapturerTrackSource : public webrtc::VideoTrackSource {
 private:
@@ -19,13 +20,18 @@ public:
 	VideoCapturerTrackSource(
 		const CreateTag &,
 		std::unique_ptr<VideoCameraCapturer> capturer);
+	VideoCapturerTrackSource(
+		const CreateTag &,
+		std::unique_ptr<DesktopCapturer> capturer);
 
-	VideoCameraCapturer *capturer() const;
+	VideoCameraCapturer *videoCapturer() const;
+	DesktopCapturer *desktopCapturer() const;
 
 private:
 	rtc::VideoSourceInterface<webrtc::VideoFrame> *source() override;
 
-	std::unique_ptr<VideoCameraCapturer> _capturer;
+	std::unique_ptr<VideoCameraCapturer> _videoCapturer;
+	std::unique_ptr<DesktopCapturer> _desktopCapturer;
 
 };
 
