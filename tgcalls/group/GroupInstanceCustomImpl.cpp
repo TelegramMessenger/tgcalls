@@ -52,6 +52,8 @@
 
 #include "rnnoise.h"
 
+#include "third-party/json11.hpp"
+
 namespace tgcalls {
 
 namespace {
@@ -1863,34 +1865,27 @@ public:
 
         std::string pinnedEndpoint;
 
-        std::ostringstream string;
-        string << "{" << "\n";
-        string << " \"colibriClass\": \"ReceiverVideoConstraintsChangedEvent\"," << "\n";
-        string << " \"videoConstraints\": [" << "\n";
-        bool isFirst = true;
-        for (size_t i = 0; i < endpointIds.size(); i++) {
-            int idealHeight = 180;
-            if (_currentHighQualityVideoEndpointId == endpointIds[i]) {
-                idealHeight = 720;
-            }
+        json11::Json::object json;
+        json.insert(std::make_pair("colibriClass", json11::Json("ReceiverVideoConstraints")));
 
-            if (isFirst) {
-                isFirst = false;
-            } else {
-                if (i != 0) {
-                    string << ",";
-                }
-            }
-            string << "    {\n";
-            string << "      \"id\": \"" << endpointIds[i] << "\",\n";
-            string << "      \"idealHeight\": " << idealHeight << "\n";
-            string << "    }";
-            string << "\n";
+        json11::Json::object defaultConstraints;
+        defaultConstraints.insert(std::make_pair("maxHeight", json11::Json(180)));
+        json.insert(std::make_pair("defaultConstraints", json11::Json(std::move(defaultConstraints))));
+
+        if (_currentHighQualityVideoEndpointId.size() != 0) {
+            json11::Json::array onStageEndpoints;
+            onStageEndpoints.push_back(json11::Json(_currentHighQualityVideoEndpointId));
+            json.insert(std::make_pair("onStageEndpoints", json11::Json(std::move(onStageEndpoints))));
+
+            json11::Json::object selectedConstraint;
+            selectedConstraint.insert(std::make_pair("maxHeight", json11::Json(720)));
+
+            json11::Json::object constraints;
+            constraints.insert(std::make_pair(_currentHighQualityVideoEndpointId, json11::Json(std::move(selectedConstraint))));
+            json.insert(std::make_pair("constraints", json11::Json(std::move(constraints))));
         }
-        string << " ]" << "\n";
-        string << "}";
 
-        std::string result = string.str();
+        std::string result = json11::Json(std::move(json)).dump();
         _networkManager->perform(RTC_FROM_HERE, [result = std::move(result)](GroupNetworkManager *networkManager) {
             networkManager->sendDataChannelMessage(result);
         });
