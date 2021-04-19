@@ -93,7 +93,7 @@ absl::optional<FeedbackType> FeedbackType_parse(json11::Json::object const &obje
     return result;
 }
 
-json11::Json::object RtpExtension_serialize(RtpExtension const &rtpExtension) {
+json11::Json::object RtpExtension_serialize(webrtc::RtpExtension const &rtpExtension) {
     json11::Json::object object;
 
     object.insert(std::make_pair("id", json11::Json(rtpExtension.id)));
@@ -102,7 +102,7 @@ json11::Json::object RtpExtension_serialize(RtpExtension const &rtpExtension) {
     return object;
 }
 
-absl::optional<RtpExtension> RtpExtension_parse(json11::Json::object const &object) {
+absl::optional<webrtc::RtpExtension> RtpExtension_parse(json11::Json::object const &object) {
     const auto id = object.find("id");
     if (id == object.end() || !id->second.is_number()) {
         return absl::nullopt;
@@ -113,7 +113,7 @@ absl::optional<RtpExtension> RtpExtension_parse(json11::Json::object const &obje
         return absl::nullopt;
     }
 
-    return RtpExtension(id->second.int_value(), uri->second.string_value());
+    return webrtc::RtpExtension(uri->second.string_value(), id->second.int_value());
 }
 
 json11::Json::object PayloadType_serialize(PayloadType const &payloadType) {

@@ -6,6 +6,7 @@
 
 #include "absl/types/variant.h"
 #include "absl/types/optional.h"
+#include "api/rtp_parameters.h"
 
 namespace tgcalls {
 
@@ -36,15 +37,6 @@ struct FeedbackType {
     std::string subtype;
 };
 
-struct RtpExtension {
-    int id;
-    std::string uri;
-
-    RtpExtension(int id_, std::string uri_) :
-    id(id_), uri(uri_) {
-    }
-};
-
 struct PayloadType {
     uint32_t id = 0;
     std::string name;
@@ -58,7 +50,7 @@ struct MediaContent {
     uint32_t ssrc = 0;
     std::vector<SsrcGroup> ssrcGroups;
     std::vector<PayloadType> payloadTypes;
-    std::vector<RtpExtension> rtpExtensions;
+    std::vector<webrtc::RtpExtension> rtpExtensions;
 };
 
 struct InitialSetupMessage {
