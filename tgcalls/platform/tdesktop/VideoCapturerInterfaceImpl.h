@@ -7,7 +7,7 @@
 
 namespace tgcalls {
 
-class DesktopCapturer;
+class DesktopCaptureSourceHelper;
 class VideoCameraCapturer;
 
 class VideoCapturerInterfaceImpl final : public VideoCapturerInterface {
@@ -25,8 +25,8 @@ public:
 
 private:
 	rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _source;
-	rtc::VideoSinkInterface<webrtc::VideoFrame> *_sink = nullptr;
-	std::unique_ptr<DesktopCapturer> _desktopCapturer;
+	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _sink;
+	std::unique_ptr<DesktopCaptureSourceHelper> _desktopCapturer;
 	std::unique_ptr<VideoCameraCapturer> _cameraCapturer;
 	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _uncroppedSink;
 	std::function<void(VideoState)> _stateUpdated;

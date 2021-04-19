@@ -19,7 +19,7 @@ class VideoCameraCapturer
 	: public rtc::VideoSinkInterface<webrtc::VideoFrame> {
 public:
 	explicit VideoCameraCapturer(
-		rtc::VideoSinkInterface<webrtc::VideoFrame> *sink);
+		std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
 	~VideoCameraCapturer();
 
 	void setState(VideoState state);
@@ -37,7 +37,7 @@ private:
 		const std::string &deviceId);
 	void destroy();
 
-	rtc::VideoSinkInterface<webrtc::VideoFrame> *_sink = nullptr;
+	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _sink;
 	rtc::scoped_refptr<webrtc::VideoCaptureModule> _module;
 	webrtc::VideoCaptureCapability _capability;
 

@@ -21,7 +21,7 @@ constexpr auto kPreferredFps = 30;
 } // namespace
 
 VideoCameraCapturer::VideoCameraCapturer(
-	rtc::VideoSinkInterface<webrtc::VideoFrame> *sink)
+	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink)
 : _sink(sink) {
 }
 

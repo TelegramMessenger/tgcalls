@@ -16,12 +16,12 @@ class VideoCapturerTrackSource : public webrtc::VideoTrackSource {
 public:
 	VideoCapturerTrackSource();
 
-	rtc::VideoSinkInterface<webrtc::VideoFrame> *sink();
+	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink();
 
 private:
 	rtc::VideoSourceInterface<webrtc::VideoFrame> *source() override;
 
-	rtc::VideoBroadcaster _broadcaster;
+	std::shared_ptr<rtc::VideoBroadcaster> _broadcaster;
 
 };
 

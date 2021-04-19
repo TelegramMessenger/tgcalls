@@ -24,7 +24,7 @@ static RTCVideoFrame *customToObjCVideoFrame(const webrtc::VideoFrame &frame, RT
                                  rotation:rotation
                               timeStampNs:frame.timestamp_us() * rtc::kNumNanosecsPerMicrosec];
     videoFrame.timeStamp = frame.timestamp();
-    
+
     return videoFrame;
 }
 
@@ -41,18 +41,18 @@ public:
     RendererAdapterImpl(void (^frameReceived)(CGSize, RTCVideoFrame *, RTCVideoRotation)) {
         _frameReceived = [frameReceived copy];
     }
-    
+
     void OnFrame(const webrtc::VideoFrame& nativeVideoFrame) override {
         RTCVideoRotation rotation = RTCVideoRotation_0;
         RTCVideoFrame* videoFrame = customToObjCVideoFrame(nativeVideoFrame, rotation);
-        
+
         CGSize currentSize = (videoFrame.rotation % 180 == 0) ? CGSizeMake(videoFrame.width, videoFrame.height) : CGSizeMake(videoFrame.height, videoFrame.width);
 
         if (_frameReceived) {
             _frameReceived(currentSize, videoFrame, rotation);
         }
     }
-    
+
 private:
     void (^_frameReceived)(CGSize, RTCVideoFrame *, RTCVideoRotation);
 };
@@ -60,56 +60,34 @@ private:
 
 
 @implementation DesktopSharingCapturer {
-    DesktopCaptureSourceHelper *renderer;
+    absl::optional<DesktopCaptureSourceHelper> renderer;
     std::shared_ptr<RendererAdapterImpl> _sink;
     BOOL _isPaused;
 
 }
-- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)trackSource capturerKey:(NSString *)capturerKey {
+- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)trackSource captureSource:(DesktopCaptureSource)captureSource {
     self = [super init];
     if (self != nil) {
-        
-        
-        BOOL isWindow = [capturerKey containsString:@"_window_"];
-        DesktopCaptureSourceManager *manager;
-        int keyId;
-        if (isWindow) {
-            manager = [[DesktopCaptureSourceManager alloc] init_w];
-            keyId = [[capturerKey substringFromIndex:@"desktop_capturer_window_".length] intValue];
-        } else {
-            manager = [[DesktopCaptureSourceManager alloc] init_s];
-            keyId = [[capturerKey substringFromIndex:@"desktop_capturer_screen_".length] intValue];
-        }
-        
-        DesktopCaptureSource *source;
-        NSArray<DesktopCaptureSource *> *list = [manager list];
-        for (int i = 0; i < list.count; i++) {
-            if ((int)list[i].uniqueId == keyId) {
-                source = list[i];
-                break;
-            }
-        }
-        
-        
         _sink.reset(new RendererAdapterImpl(^(CGSize size, RTCVideoFrame *videoFrame, RTCVideoRotation rotation) {
             getObjCVideoSource(trackSource)->OnCapturedFrame(videoFrame);
         }));
-        
-        if (source != nil) {
-            renderer = [[DesktopCaptureSourceHelper alloc] initWithWindow:source data:[[DesktopCaptureSourceData alloc] initWithSize:CGSizeMake(1280, 720) fps:24 captureMouse: YES]];
-            [renderer setOutput:_sink];
-        }
-        
 
+        const auto data = DesktopCaptureSourceData{
+	        /*.aspectSize = */{ 1280, 720 },
+	        /*.fps = */24.,
+	        /*.captureMouse = */true,
+        };
+        renderer.emplace(captureSource, data);
+        renderer->setOutput(_sink);
     }
     return self;
 }
 
 -(void)start {
-    [renderer start];
+    renderer->start();
 }
 -(void)stop {
-    [renderer stop];
+    renderer->stop();
 }
 
 - (void)setIsEnabled:(bool)isEnabled {
@@ -117,21 +95,21 @@ private:
     _isPaused = !isEnabled;
     if (updated) {
         if (isEnabled) {
-            [renderer start];
+            renderer->start();
         } else {
-            [renderer stop];
+            renderer->stop();
         }
     }
 }
 
 
 - (void)setPreferredCaptureAspectRatio:(float)aspectRatio {
-    
+
 }
 
 
 - (void)setUncroppedSink:(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame> >)sink {
-    [renderer setSecondaryOutput:sink];
+    renderer->setSecondaryOutput(sink);
 }
 
 

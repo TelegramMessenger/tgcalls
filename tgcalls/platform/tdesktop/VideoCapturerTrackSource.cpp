@@ -3,15 +3,17 @@
 namespace tgcalls {
 
 VideoCapturerTrackSource::VideoCapturerTrackSource()
-: VideoTrackSource(/*remote=*/false) {
+: VideoTrackSource(/*remote=*/false)
+, _broadcaster(std::make_shared<rtc::VideoBroadcaster>()) {
 }
 
-rtc::VideoSinkInterface<webrtc::VideoFrame> *VideoCapturerTrackSource::sink() {
-	return &_broadcaster;
+auto VideoCapturerTrackSource::sink()
+-> std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> {
+	return _broadcaster;
 }
 
 rtc::VideoSourceInterface<webrtc::VideoFrame> *VideoCapturerTrackSource::source() {
-	return &_broadcaster;
+	return _broadcaster.get();
 }
 
 } // namespace tgcalls

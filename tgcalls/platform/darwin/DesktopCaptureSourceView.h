@@ -1,0 +1,41 @@
+//
+//  DesktopCaptureSourceView.h
+//  TgVoipWebrtc
+//
+//  Created by Mikhail Filimonov on 28.12.2020.
+//  Copyright © 2020 Mikhail Filimonov. All rights reserved.
+//
+
+#import <Foundation/Foundation.h>
+#import <AppKit/AppKit.h>
+#import "tgcalls/desktop_capturer/DesktopCaptureSource.h"
+#import "tgcalls/desktop_capturer/DesktopCaptureSourceHelper.h"
+#import "platform/darwin/VideoMetalViewMac.h"
+#import "platform/darwin/GLVideoViewMac.h"
+
+NS_ASSUME_NONNULL_BEGIN
+
+@interface DesktopCaptureSourceView : GLVideoView
+
+-(id)initWithHelper:(DesktopCaptureSourceHelper)helper;
+
+@end
+
+@interface DesktopCaptureSourceScope : NSObject
+@property(nonatomic, strong, readonly) DesktopCaptureSourceData data;
+@property(nonatomic, strong, readonly) DesktopCaptureSource source;
+-(id)initWithSource:(DesktopCaptureSource)source data:(DesktopCaptureSourceData)data;
+
+-(NSString *)cachedKey;
+
+@end
+
+@interface DesktopCaptureSourceViewManager : NSObject
+
+-(NSView *)createForScope:(DesktopCaptureSourceScope *)scope;
+-(void)start:(DesktopCaptureSourceScope *)scope;
+-(void)stop:(DesktopCaptureSourceScope *)scope;
+
+@end
+
+NS_ASSUME_NONNULL_END
