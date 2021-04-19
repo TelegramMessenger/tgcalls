@@ -15,9 +15,11 @@
 #include <stdint.h>
 #include <memory>
 #include <algorithm>
-#include <d3d11.h>
 
 #ifdef WEBRTC_WIN
+
+#include <d3d11.h>
+
 HRESULT WINAPI D3D11CreateDevice(
 		_In_opt_ IDXGIAdapter* pAdapter,
 		D3D_DRIVER_TYPE DriverType,
@@ -31,9 +33,11 @@ HRESULT WINAPI D3D11CreateDevice(
 		_COM_Outptr_opt_ ID3D11DeviceContext** ppImmediateContext) {
 	return S_FALSE;
 }
+
 HRESULT WINAPI CreateDXGIFactory1(REFIID riid, _COM_Outptr_ void **ppFactory) {
 	return S_FALSE;
 }
+
 #endif
 
 namespace tgcalls {
@@ -71,7 +75,11 @@ void DesktopCapturer::create() {
 	_thread->Invoke<void>(RTC_FROM_HERE, [&] {
 		auto options = webrtc::DesktopCaptureOptions::CreateDefault();
 		options.set_detect_updated_region(true);
+
+#ifdef WEBRTC_WIN
 		options.set_allow_directx_capturer(true);
+#endif // WEBRTC_WIN
+
 		_module = std::make_shared<webrtc::DesktopAndCursorComposer>(
 			webrtc::DesktopCapturer::CreateScreenCapturer(options),
 			options);

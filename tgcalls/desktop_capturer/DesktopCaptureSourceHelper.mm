@@ -30,55 +30,47 @@
 #include "third_party/libyuv/include/libyuv.h"
 #import "helpers/RTCDispatcher+Private.h"
 #import <QuartzCore/QuartzCore.h>
-#import <SSignalKit/STimer.h>
-#import <SSignalKit/SQueue.h>
-#import <SSignalKit/SQueueLocalObject.h>
 #include "ThreadLocalObject.h"
 
+namespace {
 
-rtc::Thread *makeDesktopThread() {
-    static std::unique_ptr<rtc::Thread> value = rtc::Thread::Create();
-    value->SetName("WebRTC-DesktopCapturer", nullptr);
-    value->Start();
-    return value.get();
-}
-
-rtc::Thread *getDesktopThread() {
-    static rtc::Thread *value = makeDesktopThread();
-    return value;
-}
-
-
-static CGSize aspectFitted(CGSize from, CGSize to) {
+CGSize aspectFitted(CGSize from, CGSize to) {
     CGFloat scale = MAX(from.width / MAX(1.0, to.width), from.height / MAX(1.0, to.height));
     return NSMakeSize(ceil(to.width * scale), ceil(to.height * scale));
 }
 
-static SQueue *queue = [[SQueue alloc] init];
+void onMain(std::function<void()> method) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        method();
+    });
+}
+
+void onMainDelayed(int delayMs, std::function<void()> method) {
+    const auto time = dispatch_time(
+        DISPATCH_TIME_NOW,
+        ((long long)delayMs * NSEC_PER_SEC) / 1000);
+    dispatch_after(time, dispatch_get_main_queue(), ^{
+        method();
+    });
+}
+
+} // namespace
 
 class SourceFrameCallbackImpl : public webrtc::DesktopCapturer::Callback {
-private:
-    int64_t next_timestamp_;
-    CGSize size_;
-    int fps_;
 public:
     std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _sink;
     std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _secondarySink;
 
-    SourceFrameCallbackImpl(CGSize size,
-                            int fps) {
-        next_timestamp_ = 0;
-        size_ = size;
-        fps_ = fps;
+    SourceFrameCallbackImpl(CGSize size, int fps) : size_(size), fps_(fps) {
     }
-    virtual void OnCaptureResult(webrtc::DesktopCapturer::Result result,
-                                 std::unique_ptr<webrtc::DesktopFrame> frame) {
+
+    void OnCaptureResult(
+            webrtc::DesktopCapturer::Result result,
+            std::unique_ptr<webrtc::DesktopFrame> frame) override {
         if (result != webrtc::DesktopCapturer::Result::SUCCESS) {
             return;
         }
-        
-       
-        
+
         std::unique_ptr<webrtc::DesktopFrame> output_frame_;
         
         CGSize fittedSize = aspectFitted(size_, CGSizeMake(frame->size().width(), frame->size().height()));
@@ -86,11 +78,9 @@ public:
             fittedSize.width -= 1;
         }
         
-        
         webrtc::DesktopSize output_size(fittedSize.width,
                                         fittedSize.height);
 
-        
         output_frame_.reset(new webrtc::BasicDesktopFrame(output_size));
         
         webrtc::DesktopRect output_rect_ = webrtc::DesktopRect::MakeSize(output_size);
@@ -135,8 +125,13 @@ public:
         }
         next_timestamp_ += rtc::kNumNanosecsPerSec / double(fps_);
     }
+
 private:
     rtc::scoped_refptr<webrtc::I420Buffer> i420_buffer_;
+    int64_t next_timestamp_ = 0;
+    CGSize size_;
+    int fps_ = 0;
+
 };
 
 @interface DesktopCaptureSource ()
@@ -157,40 +152,33 @@ static int count = 0;
 {
     std::unique_ptr<webrtc::DesktopCapturer> _capturer;
     std::shared_ptr<SourceFrameCallbackImpl> _callback;
+    std::shared_ptr<bool> timerGuard;
     bool isRunning;
     double delayMs;
-    STimer *timer;
 }
 -(id)initWithSource:(DesktopCaptureSource *)source data: (DesktopCaptureSourceData *)data {
     if (self = [super init]) {
         delayMs = 1000 / double(data.fps);
-        SourceFrameCallbackImpl *callback = new SourceFrameCallbackImpl(data.aspectSize, data.fps);
         isRunning = false;
-        _callback.reset(callback);
-        
+        _callback = std::make_shared<SourceFrameCallbackImpl>(data.aspectSize, data.fps);
+
         auto options = webrtc::DesktopCaptureOptions::CreateDefault();
         options.set_disable_effects(true);
         options.set_detect_updated_region(true);
         options.set_allow_iosurface(true);
         
-        if (data.captureMouse) {
-            if (source.isWindow) {
-                _capturer.reset(new webrtc::DesktopAndCursorComposer(webrtc::DesktopCapturer::CreateWindowCapturer(options), options));
-            } else {
-                _capturer.reset(new webrtc::DesktopAndCursorComposer(webrtc::DesktopCapturer::CreateScreenCapturer(options), options));
-            }
+        if (source.isWindow) {
+            _capturer = webrtc::DesktopCapturer::CreateWindowCapturer(options);
         } else {
-            if (source.isWindow) {
-                std::unique_ptr<webrtc::DesktopCapturer> capturer = webrtc::DesktopCapturer::CreateWindowCapturer(options);
-                _capturer = std::move(capturer);
-            } else {
-                std::unique_ptr<webrtc::DesktopCapturer> capturer = webrtc::DesktopCapturer::CreateScreenCapturer(options);
-                _capturer = std::move(capturer);
-            }
+            _capturer = webrtc::DesktopCapturer::CreateScreenCapturer(options);
         }
-        
+        if (data.captureMouse) {
+            _capturer = std::make_unique<webrtc::DesktopAndCursorComposer>(
+                std::move(_capturer),
+                options);
+        }
         _capturer->SelectSource([source getSource].id);
-        _capturer->Start(callback);
+        _capturer->Start(_callback.get());
     }
     return self;
 }
@@ -203,15 +191,17 @@ static int count = 0;
     NSLog(@"current capture count: %d", count);
 
     isRunning = true;
+    timerGuard = std::make_shared<bool>(true);
     [self Loop];
 }
+
 -(void)Stop {
     if (isRunning) {
         count--;
         NSLog(@"current capture count: %d", count);
     }
     isRunning = false;
-    [timer invalidate];
+    timerGuard = nullptr;
 }
 
 -(void)Loop {
@@ -221,12 +211,12 @@ static int count = 0;
 
     _capturer->CaptureFrame();
     __weak id weakSelf = self;
-
-    timer = [[STimer alloc] initWithTimeout:delayMs / 1000 repeat:false completion:^{
-        [weakSelf Loop];
-    } queue:[SQueue mainQueue]];
-    
-    [timer start];
+    const auto guard = std::weak_ptr<bool>(timerGuard);
+    onMainDelayed(delayMs, [=] {
+        if (guard.lock()) {
+            [weakSelf Loop];
+        }
+    });
 }
 
 -(void)SetOutput:(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)sink {
@@ -249,43 +239,46 @@ static int count = 0;
 
 @implementation DesktopCaptureSourceHelper
 {
-    SQueueLocalObject * _manager;
-    STimer *_timer;
-    DesktopCaptureSourceData *_data;
+    std::shared_ptr<DesktopSourceRenderer*> _renderer;
 }
 
 -(instancetype)initWithWindow:(DesktopCaptureSource *)source data: (DesktopCaptureSourceData *)data  {
     if (self = [super init]) {
-        _data = data;
-        _manager = [[SQueueLocalObject alloc] initWithQueue:[SQueue mainQueue] generate:^id {
-            return [[DesktopSourceRenderer alloc] initWithSource:source data:data];
-        }];
+        _renderer = std::make_shared<DesktopSourceRenderer*>(nil);
+        onMain([source, data, renderer = _renderer] {
+            *renderer = [[DesktopSourceRenderer alloc] initWithSource:source data:data];
+        });
     }
     return self;
 }
 
 -(void)setOutput:(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)sink {
-    [_manager with:^(id  _Nonnull object) {
-        [((DesktopSourceRenderer *)object) SetOutput:sink];
-    }];
+    onMain([sink, renderer = _renderer] {
+        [*renderer SetOutput:sink];
+    });
 }
 
 -(void)setSecondaryOutput:(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)sink {
-    [_manager with:^(id  _Nonnull object) {
-        [((DesktopSourceRenderer *)object) SetSecondaryOutput:sink];
-    }];
-}
--(void)start {
-    [_manager with:^(id  _Nonnull object) {
-        [((DesktopSourceRenderer *)object) Start];
-    }];
+    onMain([sink, renderer = _renderer] {
+        [*renderer SetSecondaryOutput:sink];
+    });
 }
 
+-(void)start {
+    onMain([renderer = _renderer] {
+        [*renderer Start];
+    });
+}
 
 -(void)stop {
-    [_manager with:^(id  _Nonnull object) {
-        [((DesktopSourceRenderer *)object) Stop];
-    }];
+    onMain([renderer = _renderer] {
+        [*renderer Stop];
+    });
+}
+
+-(void)dealloc {
+	onMain([renderer = std::move(_renderer)] {
+	});
 }
 
 @end

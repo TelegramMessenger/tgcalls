@@ -20,7 +20,9 @@ NS_ASSUME_NONNULL_BEGIN
 -(instancetype)init_w;
 -(NSArray<DesktopCaptureSource *> *)list;
 
+#ifndef WEBRTC_APP_TDESKTOP
 -(NSView *)createForScope:(DesktopCaptureSourceScope *)scope;
+#endif // WEBRTC_APP_TDESKTOP
 
 -(void)start:(DesktopCaptureSourceScope *)scope;
 -(void)stop:(DesktopCaptureSourceScope *)scope;

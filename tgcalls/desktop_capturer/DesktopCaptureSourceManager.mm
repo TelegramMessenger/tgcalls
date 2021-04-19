@@ -7,7 +7,6 @@
 //
 
 #import "DesktopCaptureSourceManager.h"
-#import "DesktopCaptureSourceView.h"
 
 #include "modules/desktop_capture/mac/screen_capturer_mac.h"
 #include "modules/desktop_capture/desktop_and_cursor_composer.h"
@@ -16,9 +15,9 @@
 #include "api/video/i420_buffer.h"
 #import "DesktopCaptureSourceHelper.h"
 
-
-
-
+#ifndef WEBRTC_APP_TDESKTOP
+#import "DesktopCaptureSourceView.h"
+#endif // WEBRTC_APP_TDESKTOP
 
 @interface DesktopCaptureSource ()
 
@@ -68,6 +67,7 @@
     return list;
 }
 
+#ifndef WEBRTC_APP_TDESKTOP
 -(NSView *)createForScope:(DesktopCaptureSourceScope *)scope {
     DesktopCaptureSourceHelper *helper = _cached[scope.cachedKey];
     
@@ -77,6 +77,7 @@
     }
     return [[DesktopCaptureSourceView alloc] initWithHelper:helper];
 }
+#endif // WEBRTC_APP_TDESKTOP
 
 -(void)start:(DesktopCaptureSourceScope *)scope {
     [_cached[scope.cachedKey] start];

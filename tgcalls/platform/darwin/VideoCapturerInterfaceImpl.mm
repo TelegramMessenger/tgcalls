@@ -25,9 +25,7 @@
 
 #ifndef WEBRTC_IOS
 #import "VideoCameraCapturerMac.h"
-#ifndef WEBRTC_APP_TDESKTOP
-#import "DesktopSharingCapturer.h"
-#endif // WEBRTC_APP_TDESKTOP
+#import "tgcalls/desktop_capturer/DesktopSharingCapturer.h"
 #else
 #import "VideoCameraCapturer.h"
 #endif
@@ -204,7 +202,6 @@
         [_videoCapturer startCaptureWithDevice:sourceDescription.device format:sourceDescription.format fps:30];
 #else
         
-#ifndef WEBRTC_APP_TDESKTOP
         if([sourceDescription.deviceId hasPrefix:@"desktop_capturer_"]) {
             DesktopSharingCapturer *sharing = [[DesktopSharingCapturer alloc] initWithSource:source capturerKey:sourceDescription.deviceId];
             _videoCapturer = sharing;
@@ -213,11 +210,6 @@
             [camera setupCaptureWithDevice:sourceDescription.device format:sourceDescription.format fps:30];
             _videoCapturer = camera;
         }
-#else // WEBRTC_APP_TDESKTOP
-        VideoCameraCapturer *camera = [[VideoCameraCapturer alloc] initWithSource:source isActiveUpdated:isActiveUpdated];
-        [camera setupCaptureWithDevice:sourceDescription.device format:sourceDescription.format fps:30];
-        _videoCapturer = camera;
-#endif // WEBRTC_APP_TDESKTOP
         
         [_videoCapturer start];
 #endif
