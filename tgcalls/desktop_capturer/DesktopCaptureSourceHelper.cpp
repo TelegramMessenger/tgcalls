@@ -109,7 +109,6 @@ private:
 	std::shared_ptr<
         rtc::VideoSinkInterface<webrtc::VideoFrame>> _secondarySink;
     DesktopSize size_;
-    int fps_ = 0;
 
 };
 
@@ -137,8 +136,7 @@ private:
 };
 
 SourceFrameCallbackImpl::SourceFrameCallbackImpl(DesktopSize size, int fps)
-: size_(size)
-, fps_(fps) {
+: size_(size) {
 }
 
 void SourceFrameCallbackImpl::OnCaptureResult(
@@ -269,11 +267,10 @@ void DesktopSourceRenderer::start() {
     if (_isRunning) {
         return;
     }
-    ++GlobalCount;
-
-#ifdef WEBRTC_MAC
-    NSLog(@"current capture count: %d", GlobalCount);
-#endif // WEBRTC_MAC
+//    ++GlobalCount;
+//#ifdef WEBRTC_MAC
+//    NSLog(@"current capture count: %d", GlobalCount);
+//#endif // WEBRTC_MAC
 
     _isRunning = true;
     _timerGuard = std::make_shared<bool>(true);
@@ -281,13 +278,13 @@ void DesktopSourceRenderer::start() {
 }
 
 void DesktopSourceRenderer::stop() {
-    if (_isRunning) {
-        GlobalCount--;
-
-#ifdef WEBRTC_MAC
-        NSLog(@"current capture count: %d", GlobalCount);
-#endif // WEBRTC_MAC
-    }
+//    if (_isRunning) {
+//        GlobalCount--;
+//
+//#ifdef WEBRTC_MAC
+//        NSLog(@"current capture count: %d", GlobalCount);
+//#endif // WEBRTC_MAC
+//    }
     _isRunning = false;
     _timerGuard = nullptr;
 }
@@ -329,7 +326,7 @@ DesktopCaptureSource DesktopCaptureSourceForKey(std::string uniqueKey) {
     }
     const auto windowPrefix = std::string("desktop_capturer_window_");
     const auto isWindow = (uniqueKey.find(windowPrefix) == 0);
-    auto manager = DesktopCaptureSourceManager(isWindow
+    DesktopCaptureSourceManager manager(isWindow
         ? DesktopCaptureType::Window
         : DesktopCaptureType::Screen);
 	const auto sources = manager.sources();

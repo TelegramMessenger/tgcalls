@@ -25,7 +25,8 @@
 
 #ifndef WEBRTC_IOS
 #import "VideoCameraCapturerMac.h"
-#import "tgcalls/desktop_capturer/DesktopSharingCapturer.h"
+#import "tgcalls/platform/darwin/DesktopSharingCapturer.h"
+#import "tgcalls/desktop_capturer/DesktopCaptureSourceHelper.h"
 #else
 #import "VideoCameraCapturer.h"
 #endif
@@ -201,7 +202,7 @@
         _videoCapturer = [[VideoCameraCapturer alloc] initWithSource:source useFrontCamera:sourceDescription.isFrontCamera keepLandscape:sourceDescription.keepLandscape isActiveUpdated:isActiveUpdated orientationUpdated:orientationUpdated];
         [_videoCapturer startCaptureWithDevice:sourceDescription.device format:sourceDescription.format fps:30];
 #else
-        if (const auto desktopCaptureSource = DesktopCaptureSourceForKey(sourceDescription.deviceId)) {
+        if (const auto desktopCaptureSource = tgcalls::DesktopCaptureSourceForKey([sourceDescription.deviceId UTF8String])) {
             DesktopSharingCapturer *sharing = [[DesktopSharingCapturer alloc] initWithSource:source captureSource:desktopCaptureSource];
             _videoCapturer = sharing;
         } else {

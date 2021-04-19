@@ -5,17 +5,17 @@
 #include "modules/desktop_capture/desktop_capturer_differ_wrapper.h"
 #include "third_party/libyuv/include/libyuv.h"
 #include "api/video/i420_buffer.h"
-
-
 #include "common_video/libyuv/include/webrtc_libyuv.h"
 #include "rtc_base/checks.h"
 #include "rtc_base/logging.h"
 #include "third_party/libyuv/include/libyuv.h"
+
+#include "tgcalls/desktop_capturer/DesktopCaptureSource.h"
+#include "tgcalls/desktop_capturer/DesktopCaptureSourceHelper.h"
+#include "tgcalls/desktop_capturer/DesktopCaptureSourceManager.h"
+
 #import "helpers/RTCDispatcher+Private.h"
 #import <QuartzCore/QuartzCore.h>
-#import "DesktopCaptureSourceHelper.h"
-#import "DesktopCaptureSource.h"
-#import "DesktopCaptureSourceManager.h"
 
 static RTCVideoFrame *customToObjCVideoFrame(const webrtc::VideoFrame &frame, RTCVideoRotation &rotation) {
     rotation = RTCVideoRotation(frame.rotation());
@@ -33,8 +33,6 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     static_cast<webrtc::VideoTrackSourceProxy *>(nativeSource.get());
     return static_cast<webrtc::ObjCVideoTrackSource *>(proxy_source->internal());
 }
-
-
 
 class RendererAdapterImpl : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
 public:
@@ -55,24 +53,22 @@ public:
 
 private:
     void (^_frameReceived)(CGSize, RTCVideoFrame *, RTCVideoRotation);
+
 };
 
-
-
 @implementation DesktopSharingCapturer {
-    absl::optional<DesktopCaptureSourceHelper> renderer;
+    absl::optional<tgcalls::DesktopCaptureSourceHelper> renderer;
     std::shared_ptr<RendererAdapterImpl> _sink;
     BOOL _isPaused;
-
 }
-- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)trackSource captureSource:(DesktopCaptureSource)captureSource {
+- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)trackSource captureSource:(tgcalls::DesktopCaptureSource)captureSource {
     self = [super init];
     if (self != nil) {
         _sink.reset(new RendererAdapterImpl(^(CGSize size, RTCVideoFrame *videoFrame, RTCVideoRotation rotation) {
             getObjCVideoSource(trackSource)->OnCapturedFrame(videoFrame);
         }));
 
-        const auto data = DesktopCaptureSourceData{
+        tgcalls::DesktopCaptureSourceData data{
 	        /*.aspectSize = */{ 1280, 720 },
 	        /*.fps = */24.,
 	        /*.captureMouse = */true,
@@ -86,6 +82,7 @@ private:
 -(void)start {
     renderer->start();
 }
+
 -(void)stop {
     renderer->stop();
 }
@@ -102,23 +99,11 @@ private:
     }
 }
 
-
 - (void)setPreferredCaptureAspectRatio:(float)aspectRatio {
-
 }
-
 
 - (void)setUncroppedSink:(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame> >)sink {
     renderer->setSecondaryOutput(sink);
 }
 
-
 @end
-
-
-
-
-
-
-
-

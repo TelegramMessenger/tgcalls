@@ -17,14 +17,14 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface DesktopCaptureSourceView : GLVideoView
 
--(id)initWithHelper:(DesktopCaptureSourceHelper)helper;
+-(id)initWithHelper:(tgcalls::DesktopCaptureSourceHelper)helper;
 
 @end
 
 @interface DesktopCaptureSourceScope : NSObject
-@property(nonatomic, strong, readonly) DesktopCaptureSourceData data;
-@property(nonatomic, strong, readonly) DesktopCaptureSource source;
--(id)initWithSource:(DesktopCaptureSource)source data:(DesktopCaptureSourceData)data;
+@property(nonatomic, strong, readonly) tgcalls::DesktopCaptureSourceData data;
+@property(nonatomic, strong, readonly) tgcalls::DesktopCaptureSource source;
+-(id)initWithSource:(tgcalls::DesktopCaptureSource)source data:(tgcalls::DesktopCaptureSourceData)data;
 
 -(NSString *)cachedKey;
 

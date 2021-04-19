@@ -18,7 +18,7 @@
 #import "tgcalls/desktop_capturer/DesktopCaptureSource.h"
 
 @interface DesktopSharingCapturer : NSObject<CapturerInterface>
-- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)trackSource captureSource:(DesktopCaptureSource)captureSource;
+- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)trackSource captureSource:(tgcalls::DesktopCaptureSource)captureSource;
 
 @end
 

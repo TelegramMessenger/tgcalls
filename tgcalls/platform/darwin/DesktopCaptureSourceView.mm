@@ -15,10 +15,10 @@
 
 @implementation DesktopCaptureSourceView
 {
-    DesktopCaptureSourceHelper _helper;
+    tgcalls::DesktopCaptureSourceHelper _helper;
 }
 
--(id)initWithHelper:(DesktopCaptureSourceHelper)helper {
+-(id)initWithHelper:(tgcalls::DesktopCaptureSourceHelper)helper {
     if (self = [super initWithFrame:CGRectZero]) {
         _helper = helper;
         std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink = [self getSink];
@@ -32,7 +32,7 @@
 
 @implementation DesktopCaptureSourceScope
 
--(id)initWithSource:(DesktopCaptureSource)source data:(DesktopCaptureSourceData)data {
+-(id)initWithSource:(tgcalls::DesktopCaptureSource)source data:(tgcalls::DesktopCaptureSourceData)data {
     if (self = [super init]) {
         _data = data;
         _source = source;
@@ -48,7 +48,7 @@
 
 @implementation DesktopCaptureSourceViewManager
 {
-    std::map<NSString*, DesktopCaptureSourceHelper> _cached;
+    std::map<NSString*, tgcalls::DesktopCaptureSourceHelper> _cached;
 }
 
 -(NSView *)createForScope:(DesktopCaptureSourceScope*)scope {
@@ -56,7 +56,7 @@
     if (i == end(_cached)) {
         i = _cached.emplace(
             scope.cachedKey,
-            DesktopCaptureSourceHelper(scope.source, scope.data)).first;
+            tgcalls::DesktopCaptureSourceHelper(scope.source, scope.data)).first;
     }
     return [[DesktopCaptureSourceView alloc] initWithHelper:i->second];
 }
