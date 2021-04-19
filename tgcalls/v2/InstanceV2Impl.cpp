@@ -1422,9 +1422,13 @@ public:
             decryptedData = data;
         }
 
-        RTC_LOG(LS_INFO) << "receiveSignalingData: " << std::string(decryptedData.begin(), decryptedData.end());
+        processSignalingData(decryptedData);
+    }
 
-        const auto message = signaling::Message::parse(decryptedData);
+    void processSignalingData(const std::vector<uint8_t> &data) {
+        RTC_LOG(LS_INFO) << "processSignalingData: " << std::string(data.begin(), data.end());
+
+        const auto message = signaling::Message::parse(data);
         if (!message) {
             return;
         }
@@ -1658,7 +1662,7 @@ public:
     void onDataChannelMessage(std::string const &message) {
         RTC_LOG(LS_INFO) << "dataChannelMessage received: " << message;
         std::vector<uint8_t> data(message.begin(), message.end());
-        receiveSignalingData(data);
+        processSignalingData(data);
     }
 
     void sendMediaState() {
