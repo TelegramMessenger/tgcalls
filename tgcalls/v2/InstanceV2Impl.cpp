@@ -1292,10 +1292,20 @@ public:
 
         RTC_LOG(LS_INFO) << "sendSignalingMessage: " << std::string(data.begin(), data.end());
 
-        _signalingDataEmitted(data);
+        if (_signalingEncryption) {
+            if (const auto encryptedData = _signalingEncryption->encryptOutgoing(data)) {
+                _signalingDataEmitted(std::vector<uint8_t>(encryptedData->data(), encryptedData->data() + encryptedData->size()));
+            } else {
+                RTC_LOG(LS_ERROR) << "sendSignalingMessage: failed to encrypt payload";
+            }
+        } else {
+            _signalingDataEmitted(data);
+        }
     }
 
     void beginSignaling() {
+        //_signalingEncryption.reset(new SignalingEncryption(_encryptionKey));
+
         if (_encryptionKey.isOutgoing) {
             _outgoingAudioContent = OutgoingAudioChannel::createOutgoingContentDescription();
             _outgoingVideoContent = OutgoingVideoChannel::createOutgoingContentDescription(_availableVideoFormats);
@@ -1397,9 +1407,24 @@ public:
     }
 
     void receiveSignalingData(const std::vector<uint8_t> &data) {
-        RTC_LOG(LS_INFO) << "receiveSignalingData: " << std::string(data.begin(), data.end());
+        std::vector<uint8_t> decryptedData;
 
-        const auto message = signaling::Message::parse(data);
+        if (_signalingEncryption) {
+            const auto rawDecryptedData = _signalingEncryption->decryptIncoming(data);
+            if (!rawDecryptedData) {
+                RTC_LOG(LS_ERROR) << "receiveSignalingData: could not decrypt payload";
+
+                return;
+            }
+
+            decryptedData = std::vector<uint8_t>(rawDecryptedData->data(), rawDecryptedData->data() + rawDecryptedData->size());
+        } else {
+            decryptedData = data;
+        }
+
+        RTC_LOG(LS_INFO) << "receiveSignalingData: " << std::string(decryptedData.begin(), decryptedData.end());
+
+        const auto message = signaling::Message::parse(decryptedData);
         if (!message) {
             return;
         }
@@ -1789,7 +1814,7 @@ private:
     std::function<void(const std::vector<uint8_t> &)> _signalingDataEmitted;
     std::function<rtc::scoped_refptr<webrtc::AudioDeviceModule>(webrtc::TaskQueueFactory*)> _createAudioDeviceModule;
 
-    //std::unique_ptr<SignalingEncryption> _signalingEncryption;
+    std::unique_ptr<SignalingEncryption> _signalingEncryption;
 
     bool _handshakeCompleted = false;
     std::vector<cricket::Candidate> _pendingIceCandidates;
@@ -1833,10 +1858,10 @@ private:
 
 InstanceV2Impl::InstanceV2Impl(Descriptor &&descriptor) {
     if (descriptor.config.logPath.data.size() != 0) {
-      //_logSink = std::make_unique<LogSinkImpl>(descriptor.config.logPath);
+        _logSink = std::make_unique<LogSinkImpl>(descriptor.config.logPath);
     }
     rtc::LogMessage::LogToDebug(rtc::LS_INFO);
-    rtc::LogMessage::SetLogToStderr(true);
+    rtc::LogMessage::SetLogToStderr(false);
     if (_logSink) {
         rtc::LogMessage::AddLogToStream(_logSink.get(), rtc::LS_INFO);
     }
@@ -1851,6 +1876,7 @@ InstanceV2Impl::InstanceV2Impl(Descriptor &&descriptor) {
 }
 
 InstanceV2Impl::~InstanceV2Impl() {
+    rtc::LogMessage::RemoveLogToStream(_logSink.get());
 }
 
 void InstanceV2Impl::receiveSignalingData(const std::vector<uint8_t> &data) {
@@ -1953,8 +1979,15 @@ PersistentState InstanceV2Impl::getPersistentState() {
 }
 
 void InstanceV2Impl::stop(std::function<void(FinalState)> completion) {
-    _internal->perform(RTC_FROM_HERE, [completion](InstanceV2ImplInternal *internal) {
-        internal->stop(completion);
+    std::string debugLog;
+    if (_logSink) {
+        debugLog = _logSink->result();
+    }
+    _internal->perform(RTC_FROM_HERE, [completion, debugLog = std::move(debugLog)](InstanceV2ImplInternal *internal) mutable {
+        internal->stop([completion, debugLog = std::move(debugLog)](FinalState finalState) mutable {
+            finalState.debugLog = debugLog;
+            completion(finalState);
+        });
     });
 }
 
