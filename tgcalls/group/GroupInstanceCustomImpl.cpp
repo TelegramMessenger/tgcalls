@@ -926,7 +926,7 @@ public:
         } while (!_outgoingAudioSsrc);
 
         uint32_t outgoingVideoSsrcBase = _outgoingAudioSsrc + 1;
-        int numVideoSimulcastLayers = 3;
+        int numVideoSimulcastLayers = 1;
         for (int layerIndex = 0; layerIndex < numVideoSimulcastLayers; layerIndex++) {
             _outgoingVideoSsrcs.simulcastLayers.push_back(VideoSsrcs::SimulcastLayer(outgoingVideoSsrcBase + layerIndex * 2 + 0, outgoingVideoSsrcBase + layerIndex * 2 + 1));
         }
@@ -1080,7 +1080,9 @@ public:
         _videoBitrateAllocatorFactory = webrtc::CreateBuiltinVideoBitrateAllocatorFactory();
 
         if (_enableVideo) {
-            _outgoingVideoChannel = _channelManager->CreateVideoChannel(_call.get(), cricket::MediaConfig(), _rtpTransport, _threads->getMediaThread(), "1", false, GroupNetworkManager::getDefaulCryptoOptions(), _uniqueRandomIdGenerator.get(), cricket::VideoOptions(), _videoBitrateAllocatorFactory.get());
+            cricket::VideoOptions videoOptions;
+            videoOptions.is_screencast = true;
+            _outgoingVideoChannel = _channelManager->CreateVideoChannel(_call.get(), cricket::MediaConfig(), _rtpTransport, _threads->getMediaThread(), "1", false, GroupNetworkManager::getDefaulCryptoOptions(), _uniqueRandomIdGenerator.get(), videoOptions, _videoBitrateAllocatorFactory.get());
         }
 
         configureSendVideo();
@@ -1630,6 +1632,9 @@ public:
                     rtpParameters.encodings[i].max_bitrate_bps = 800000 + 100000;
                 }
             }
+        } else {
+            rtpParameters.encodings[0].min_bitrate_bps = 200000;
+            rtpParameters.encodings[0].max_bitrate_bps = 800000 + 100000;
         }
 
         _outgoingVideoChannel->media_channel()->SetRtpSendParameters(_outgoingVideoSsrcs.simulcastLayers[0].ssrc, rtpParameters);
@@ -1929,7 +1934,8 @@ public:
             } while (!_outgoingAudioSsrc);
 
             uint32_t outgoingVideoSsrcBase = _outgoingAudioSsrc + 1;
-            int numVideoSimulcastLayers = 2;
+            size_t numVideoSimulcastLayers = _outgoingVideoSsrcs.simulcastLayers.size();
+            _outgoingVideoSsrcs.simulcastLayers.clear();
             for (int layerIndex = 0; layerIndex < numVideoSimulcastLayers; layerIndex++) {
                 _outgoingVideoSsrcs.simulcastLayers.push_back(VideoSsrcs::SimulcastLayer(outgoingVideoSsrcBase + layerIndex * 2 + 0, outgoingVideoSsrcBase + layerIndex * 2 + 1));
             }
