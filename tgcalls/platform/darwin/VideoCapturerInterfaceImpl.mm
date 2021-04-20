@@ -249,7 +249,13 @@
 }
 
 - (int)getRotation {
+#ifdef WEBRTC_IOS
+    return [_videoCapturer getRotation];
+#elif TARGET_OS_OSX
     return 0;
+#else
+    #error "Unsupported platform"
+#endif
 }
 
 @end
