@@ -249,7 +249,7 @@
 }
 
 - (int)getRotation {
-    return [_videoCapturer getRotation];
+    return 0;
 }
 
 @end
