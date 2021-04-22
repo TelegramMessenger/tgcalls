@@ -436,7 +436,7 @@ static bool FindByUri(const cricket::RtpHeaderExtensions& extensions,
                       webrtc::RtpExtension* found_extension) {
   // We assume that all URIs are given in a canonical format.
   const webrtc::RtpExtension* found =
-      webrtc::RtpExtension::FindHeaderExtensionByUri(extensions,
+    webrtc::RtpExtension::FindHeaderExtensionByUri(extensions,
                                                      ext_to_match.uri);
   if (!found) {
     return false;
