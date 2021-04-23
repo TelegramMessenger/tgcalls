@@ -29,6 +29,7 @@ public:
     void setJoinResponsePayload(GroupJoinResponsePayload payload, std::vector<tgcalls::GroupParticipantDescription> &&participants);
     void addParticipants(std::vector<GroupParticipantDescription> &&participants);
     void removeSsrcs(std::vector<uint32_t> ssrcs);
+    void removeIncomingVideoSource(uint32_t ssrc);
 
     void setIsMuted(bool isMuted);
     void setIsNoiseSuppressionEnabled(bool isNoiseSuppressionEnabled);

@@ -1088,7 +1088,7 @@ public:
 
         if (_enableVideo) {
             cricket::VideoOptions videoOptions;
-            videoOptions.is_screencast = false;
+            videoOptions.is_screencast = true;
             _outgoingVideoChannel = _channelManager->CreateVideoChannel(_call.get(), cricket::MediaConfig(), _rtpTransport, _threads->getMediaThread(), "1", false, GroupNetworkManager::getDefaulCryptoOptions(), _uniqueRandomIdGenerator.get(), videoOptions, _videoBitrateAllocatorFactory.get());
         }
 
@@ -1505,6 +1505,50 @@ public:
             return;
         }
 
+        for (const auto &payloadType : payloadTypes) {
+            GroupJoinPayloadVideoPayloadType payload;
+            payload.id = payloadType.videoCodec.id;
+            payload.name = payloadType.videoCodec.name;
+            payload.clockrate = payloadType.videoCodec.clockrate;
+            payload.channels = 0;
+
+            std::vector<GroupJoinPayloadVideoPayloadFeedbackType> feedbackTypes;
+
+            GroupJoinPayloadVideoPayloadFeedbackType fbGoogRemb;
+            fbGoogRemb.type = "goog-remb";
+            feedbackTypes.push_back(fbGoogRemb);
+
+            GroupJoinPayloadVideoPayloadFeedbackType fbTransportCc;
+            fbTransportCc.type = "transport-cc";
+            feedbackTypes.push_back(fbTransportCc);
+
+            GroupJoinPayloadVideoPayloadFeedbackType fbCcmFir;
+            fbCcmFir.type = "ccm";
+            fbCcmFir.subtype = "fir";
+            feedbackTypes.push_back(fbCcmFir);
+
+            GroupJoinPayloadVideoPayloadFeedbackType fbNack;
+            fbNack.type = "nack";
+            feedbackTypes.push_back(fbNack);
+
+            GroupJoinPayloadVideoPayloadFeedbackType fbNackPli;
+            fbNackPli.type = "nack";
+            fbNackPli.subtype = "pli";
+            feedbackTypes.push_back(fbNackPli);
+
+            payload.feedbackTypes = feedbackTypes;
+            payload.parameters = {};
+
+            _videoPayloadTypes.push_back(std::move(payload));
+
+            GroupJoinPayloadVideoPayloadType rtxPayload;
+            rtxPayload.id = payloadType.rtxCodec.id;
+            rtxPayload.name = payloadType.rtxCodec.name;
+            rtxPayload.clockrate = payloadType.rtxCodec.clockrate;
+            rtxPayload.parameters.push_back(std::make_pair("apt", intToString(payloadType.videoCodec.id)));
+            _videoPayloadTypes.push_back(std::move(rtxPayload));
+        }
+
         absl::optional<OutgoingVideoFormat> selectedPayloadType;
         std::vector<std::string> codecPriorities = {
             cricket::kVp9CodecName,
@@ -1527,48 +1571,6 @@ public:
         if (!selectedPayloadType) {
             return;
         }
-
-        GroupJoinPayloadVideoPayloadType vp8Payload;
-        vp8Payload.id = selectedPayloadType->videoCodec.id;
-        vp8Payload.name = selectedPayloadType->videoCodec.name;
-        vp8Payload.clockrate = selectedPayloadType->videoCodec.clockrate;
-        vp8Payload.channels = 0;
-
-        std::vector<GroupJoinPayloadVideoPayloadFeedbackType> vp8FeedbackTypes;
-
-        GroupJoinPayloadVideoPayloadFeedbackType fbGoogRemb;
-        fbGoogRemb.type = "goog-remb";
-        vp8FeedbackTypes.push_back(fbGoogRemb);
-
-        GroupJoinPayloadVideoPayloadFeedbackType fbTransportCc;
-        fbTransportCc.type = "transport-cc";
-        vp8FeedbackTypes.push_back(fbTransportCc);
-
-        GroupJoinPayloadVideoPayloadFeedbackType fbCcmFir;
-        fbCcmFir.type = "ccm";
-        fbCcmFir.subtype = "fir";
-        vp8FeedbackTypes.push_back(fbCcmFir);
-
-        GroupJoinPayloadVideoPayloadFeedbackType fbNack;
-        fbNack.type = "nack";
-        vp8FeedbackTypes.push_back(fbNack);
-
-        GroupJoinPayloadVideoPayloadFeedbackType fbNackPli;
-        fbNackPli.type = "nack";
-        fbNackPli.subtype = "pli";
-        vp8FeedbackTypes.push_back(fbNackPli);
-
-        vp8Payload.feedbackTypes = vp8FeedbackTypes;
-        vp8Payload.parameters = {};
-
-        _videoPayloadTypes.push_back(std::move(vp8Payload));
-
-        GroupJoinPayloadVideoPayloadType rtxPayload;
-        rtxPayload.id = selectedPayloadType->rtxCodec.id;
-        rtxPayload.name = selectedPayloadType->rtxCodec.name;
-        rtxPayload.clockrate = selectedPayloadType->rtxCodec.clockrate;
-        rtxPayload.parameters.push_back(std::make_pair("apt", intToString(selectedPayloadType->videoCodec.id)));
-        _videoPayloadTypes.push_back(std::move(rtxPayload));
 
         auto outgoingVideoDescription = std::make_unique<cricket::VideoContentDescription>();
         outgoingVideoDescription->AddRtpHeaderExtension(webrtc::RtpExtension(webrtc::RtpExtension::kAbsSendTimeUri, 2));
@@ -1636,7 +1638,7 @@ public:
         _outgoingVideoChannel->SetRemoteContent(incomingVideoDescription.get(), webrtc::SdpType::kAnswer, nullptr);
 
         webrtc::RtpParameters rtpParameters = _outgoingVideoChannel->media_channel()->GetRtpSendParameters(_outgoingVideoSsrcs.simulcastLayers[0].ssrc);
-        /*if (rtpParameters.encodings.size() == 3) {
+        if (rtpParameters.encodings.size() == 3) {
             for (int i = 0; i < (int)rtpParameters.encodings.size(); i++) {
                 if (i == 0) {
                     rtpParameters.encodings[i].min_bitrate_bps = 50000;
@@ -1665,7 +1667,7 @@ public:
         } else {
             rtpParameters.encodings[0].min_bitrate_bps = 200000;
             rtpParameters.encodings[0].max_bitrate_bps = 800000 + 100000;
-        }*/
+        }
 
         _outgoingVideoChannel->media_channel()->SetRtpSendParameters(_outgoingVideoSsrcs.simulcastLayers[0].ssrc, rtpParameters);
     }
@@ -1914,6 +1916,7 @@ public:
 
             json11::Json::object selectedConstraint;
             selectedConstraint.insert(std::make_pair("maxHeight", json11::Json(720)));
+            selectedConstraint.insert(std::make_pair("maxFrameRate", json11::Json(30)));
 
             json11::Json::object constraints;
             constraints.insert(std::make_pair(_currentHighQualityVideoEndpointId, json11::Json(std::move(selectedConstraint))));
@@ -2227,6 +2230,14 @@ public:
         }
 
         if (updatedIncomingVideoChannels) {
+            updateIncomingVideoSources();
+        }
+    }
+
+    void removeIncomingVideoSource(uint32_t ssrc) {
+        auto videoChannel = _incomingVideoChannels.find(ssrc);
+        if (videoChannel != _incomingVideoChannels.end()) {
+            _incomingVideoChannels.erase(videoChannel);
             updateIncomingVideoSources();
         }
     }
@@ -2592,6 +2603,12 @@ void GroupInstanceCustomImpl::addParticipants(std::vector<GroupParticipantDescri
 void GroupInstanceCustomImpl::removeSsrcs(std::vector<uint32_t> ssrcs) {
     _internal->perform(RTC_FROM_HERE, [ssrcs = std::move(ssrcs)](GroupInstanceCustomInternal *internal) mutable {
         internal->removeSsrcs(ssrcs);
+    });
+}
+
+void GroupInstanceCustomImpl::removeIncomingVideoSource(uint32_t ssrc) {
+    _internal->perform(RTC_FROM_HERE, [ssrc](GroupInstanceCustomInternal *internal) mutable {
+        internal->removeIncomingVideoSource(ssrc);
     });
 }
 
