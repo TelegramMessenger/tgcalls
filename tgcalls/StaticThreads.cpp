@@ -63,7 +63,6 @@ public:
     network_ = create_network("tgc-net" + suffix);
     media_ = create("tgc-media" + suffix);
     worker_ = create("tgc-work"  + suffix);
-    shared_module_thread_ = webrtc::SharedModuleThread::Create(webrtc::ProcessThread::Create("tgc-module"), nullptr);
   }
 
   rtc::Thread *getNetworkThread() override {
@@ -76,6 +75,13 @@ public:
     return worker_.get();
   }
   rtc::scoped_refptr<webrtc::SharedModuleThread> getSharedModuleThread() override {
+    // This function must be called from a single thread because of SharedModuleThread implementation
+    // So we don't care about making it thread safe
+    if (!shared_module_thread_) {
+      shared_module_thread_ = webrtc::SharedModuleThread::Create(
+          webrtc::ProcessThread::Create("tgc-module"),
+          [=] { shared_module_thread_ = nullptr; });
+    }
     return shared_module_thread_;
   }
 

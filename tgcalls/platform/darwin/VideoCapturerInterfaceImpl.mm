@@ -25,9 +25,8 @@
 
 #ifndef WEBRTC_IOS
 #import "VideoCameraCapturerMac.h"
-#ifndef WEBRTC_APP_TDESKTOP
-#import "DesktopSharingCapturer.h"
-#endif // WEBRTC_APP_TDESKTOP
+#import "tgcalls/platform/darwin/DesktopSharingCapturer.h"
+#import "tgcalls/desktop_capturer/DesktopCaptureSourceHelper.h"
 #else
 #import "VideoCameraCapturer.h"
 #endif
@@ -94,7 +93,7 @@
         selectedCamera = backCamera;
     }
 #else
-    
+
         NSArray *deviceComponents = [deviceId componentsSeparatedByString:@":"];
         if (deviceComponents.count == 2) {
             deviceId = deviceComponents[0];
@@ -117,7 +116,7 @@
             }
         }
 #endif
-    
+
     return selectedCamera;
 }
 
@@ -134,7 +133,7 @@
     }
 
     AVCaptureDeviceFormat *bestFormat = sortedFormats.firstObject;
-    
+
     bool didSelectPreferredFormat = false;
     #ifdef WEBRTC_IOS
     for (AVCaptureDeviceFormat *format in sortedFormats) {
@@ -175,7 +174,7 @@
         assert(false);
         return nil;
     }
-    
+
     return bestFormat;
 }
 
@@ -184,13 +183,13 @@
         return [[VideoCapturerInterfaceImplSourceDescription alloc] initWithIsFrontCamera:false keepLandscape:true deviceId: deviceId device: nil format: nil];
     }
     AVCaptureDevice *selectedCamera = [VideoCapturerInterfaceImplReference selectCapturerDeviceWithDeviceId:deviceId];
-    
+
     if (selectedCamera == nil) {
         return [[VideoCapturerInterfaceImplSourceDescription alloc] initWithIsFrontCamera:![deviceId hasPrefix:@"back"] keepLandscape:[deviceId containsString:@"landscape"] deviceId: deviceId device: nil format: nil];
     }
 
     AVCaptureDeviceFormat *bestFormat = [VideoCapturerInterfaceImplReference selectCaptureDeviceFormatForDevice:selectedCamera];
-    
+
     return [[VideoCapturerInterfaceImplSourceDescription alloc] initWithIsFrontCamera:![deviceId hasPrefix:@"back"] keepLandscape:[deviceId containsString:@"landscape"] deviceId:deviceId device:selectedCamera format:bestFormat];
 }
 
@@ -198,27 +197,20 @@
     self = [super init];
     if (self != nil) {
         assert([NSThread isMainThread]);
-        
+
 #ifdef WEBRTC_IOS
         _videoCapturer = [[VideoCameraCapturer alloc] initWithSource:source useFrontCamera:sourceDescription.isFrontCamera keepLandscape:sourceDescription.keepLandscape isActiveUpdated:isActiveUpdated rotationUpdated:rotationUpdated];
         [_videoCapturer startCaptureWithDevice:sourceDescription.device format:sourceDescription.format fps:30];
 #else
-        
-#ifndef WEBRTC_APP_TDESKTOP
-        if([sourceDescription.deviceId hasPrefix:@"desktop_capturer_"]) {
-            DesktopSharingCapturer *sharing = [[DesktopSharingCapturer alloc] initWithSource:source capturerKey:sourceDescription.deviceId];
+        if (const auto desktopCaptureSource = tgcalls::DesktopCaptureSourceForKey([sourceDescription.deviceId UTF8String])) {
+            DesktopSharingCapturer *sharing = [[DesktopSharingCapturer alloc] initWithSource:source captureSource:desktopCaptureSource];
             _videoCapturer = sharing;
         } else {
             VideoCameraCapturer *camera = [[VideoCameraCapturer alloc] initWithSource:source isActiveUpdated:isActiveUpdated];
             [camera setupCaptureWithDevice:sourceDescription.device format:sourceDescription.format fps:30];
             _videoCapturer = camera;
         }
-#else // WEBRTC_APP_TDESKTOP
-        VideoCameraCapturer *camera = [[VideoCameraCapturer alloc] initWithSource:source isActiveUpdated:isActiveUpdated];
-        [camera setupCaptureWithDevice:sourceDescription.device format:sourceDescription.format fps:30];
-        _videoCapturer = camera;
-#endif // WEBRTC_APP_TDESKTOP
-        
+
         [_videoCapturer start];
 #endif
 
@@ -269,7 +261,7 @@ namespace tgcalls {
 VideoCapturerInterfaceImpl::VideoCapturerInterfaceImpl(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, std::string deviceId, std::function<void(VideoState)> stateUpdated, std::function<void(PlatformCaptureInfo)> captureInfoUpdated, std::pair<int, int> &outResolution) :
     _source(source) {
         VideoCapturerInterfaceImplSourceDescription *sourceDescription = [VideoCapturerInterfaceImplReference selectCapturerDescriptionWithDeviceId:[NSString stringWithUTF8String:deviceId.c_str()]];
-        
+
     CMVideoDimensions dimensions = CMVideoFormatDescriptionGetDimensions(sourceDescription.format.formatDescription);
     #ifdef WEBRTC_IOS
     outResolution.first = dimensions.height;
@@ -278,7 +270,7 @@ VideoCapturerInterfaceImpl::VideoCapturerInterfaceImpl(rtc::scoped_refptr<webrtc
     outResolution.first = dimensions.width;
     outResolution.second = dimensions.height;
     #endif
-        
+
     _implReference = [[VideoCapturerInterfaceImplHolder alloc] init];
     VideoCapturerInterfaceImplHolder *implReference = _implReference;
     dispatch_async(dispatch_get_main_queue(), ^{
