@@ -1304,7 +1304,7 @@ public:
     }
 
     void beginSignaling() {
-        //_signalingEncryption.reset(new SignalingEncryption(_encryptionKey));
+        _signalingEncryption.reset(new SignalingEncryption(_encryptionKey));
 
         if (_encryptionKey.isOutgoing) {
             _outgoingAudioContent = OutgoingAudioChannel::createOutgoingContentDescription();

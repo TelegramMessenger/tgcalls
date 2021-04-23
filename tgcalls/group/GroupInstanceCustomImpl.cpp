@@ -124,9 +124,9 @@ static void addDefaultFeedbackParams(cricket::VideoCodec *codec) {
     codec->AddFeedbackParam(cricket::FeedbackParam(cricket::kRtcpFbParamNack, cricket::kRtcpFbNackParamPli));
 }
 
-static absl::optional<OutgoingVideoFormat> assignPayloadTypes(std::vector<webrtc::SdpVideoFormat> const &formats) {
+static std::vector<OutgoingVideoFormat> assignPayloadTypes(std::vector<webrtc::SdpVideoFormat> const &formats) {
     if (formats.empty()) {
-        return absl::nullopt;
+        return {};
     }
 
     constexpr int kFirstDynamicPayloadType = 100;
@@ -134,37 +134,26 @@ static absl::optional<OutgoingVideoFormat> assignPayloadTypes(std::vector<webrtc
 
     int payload_type = kFirstDynamicPayloadType;
 
-    auto result = OutgoingVideoFormat();
+    std::vector<OutgoingVideoFormat> result;
 
-    bool codecSelected = false;
+    std::vector<std::string> filterCodecNames = {
+        cricket::kVp8CodecName,
+        cricket::kVp9CodecName
+    };
 
-    for (const auto &format : formats) {
-        if (codecSelected) {
-            break;
-        }
+    for (const auto &codecName : filterCodecNames) {
+        for (const auto &format : formats) {
+            if (format.name != codecName) {
+                continue;
+            }
 
-        cricket::VideoCodec codec(format);
-        codec.id = payload_type;
-        addDefaultFeedbackParams(&codec);
+            cricket::VideoCodec codec(format);
+            codec.id = payload_type;
+            addDefaultFeedbackParams(&codec);
 
-        if (!absl::EqualsIgnoreCase(codec.name, cricket::kVp8CodecName)) {
-            continue;
-        }
+            OutgoingVideoFormat resultFormat;
 
-        result.videoCodec = codec;
-        codecSelected = true;
-
-        // Increment payload type.
-        ++payload_type;
-        if (payload_type > kLastDynamicPayloadType) {
-            RTC_LOG(LS_ERROR) << "Out of dynamic payload types, skipping the rest.";
-            break;
-        }
-
-        // Add associated RTX codec for non-FEC codecs.
-        if (!absl::EqualsIgnoreCase(codec.name, cricket::kUlpfecCodecName) &&
-            !absl::EqualsIgnoreCase(codec.name, cricket::kFlexfecCodecName)) {
-            result.rtxCodec = cricket::VideoCodec::CreateRtxCodec(payload_type, codec.id);
+            resultFormat.videoCodec = codec;
 
             // Increment payload type.
             ++payload_type;
@@ -172,8 +161,24 @@ static absl::optional<OutgoingVideoFormat> assignPayloadTypes(std::vector<webrtc
                 RTC_LOG(LS_ERROR) << "Out of dynamic payload types, skipping the rest.";
                 break;
             }
+
+            // Add associated RTX codec for non-FEC codecs.
+            if (!absl::EqualsIgnoreCase(codec.name, cricket::kUlpfecCodecName) &&
+                !absl::EqualsIgnoreCase(codec.name, cricket::kFlexfecCodecName)) {
+                resultFormat.rtxCodec = cricket::VideoCodec::CreateRtxCodec(payload_type, codec.id);
+
+                // Increment payload type.
+                ++payload_type;
+                if (payload_type > kLastDynamicPayloadType) {
+                    RTC_LOG(LS_ERROR) << "Out of dynamic payload types, skipping the rest.";
+                    break;
+                }
+            }
+
+            result.push_back(std::move(resultFormat));
         }
     }
+
     return result;
 }
 
@@ -728,8 +733,10 @@ public:
         _videoChannel = _channelManager->CreateVideoChannel(call, cricket::MediaConfig(), rtpTransport, threads.getMediaThread(), std::string("video") + uint32ToString(description.audioSsrc), false, GroupNetworkManager::getDefaulCryptoOptions(), randomIdGenerator, cricket::VideoOptions(), _videoBitrateAllocatorFactory.get());
 
         auto payloadTypes = assignPayloadTypes(availableVideoFormats);
-        if (!payloadTypes.has_value()) {
-            return;
+        std::vector<cricket::VideoCodec> codecs;
+        for (const auto &payloadType : payloadTypes) {
+            codecs.push_back(payloadType.videoCodec);
+            codecs.push_back(payloadType.rtxCodec);
         }
 
         auto outgoingVideoDescription = std::make_unique<cricket::VideoContentDescription>();
@@ -739,7 +746,7 @@ public:
         outgoingVideoDescription->set_rtcp_mux(true);
         outgoingVideoDescription->set_rtcp_reduced_size(true);
         outgoingVideoDescription->set_direction(webrtc::RtpTransceiverDirection::kRecvOnly);
-        outgoingVideoDescription->set_codecs({ payloadTypes->videoCodec, payloadTypes->rtxCodec });
+        outgoingVideoDescription->set_codecs(codecs);
         outgoingVideoDescription->set_bandwidth(2032000);
 
         cricket::StreamParams videoRecvStreamParams;
@@ -779,7 +786,7 @@ public:
         incomingVideoDescription->set_rtcp_mux(true);
         incomingVideoDescription->set_rtcp_reduced_size(true);
         incomingVideoDescription->set_direction(webrtc::RtpTransceiverDirection::kSendOnly);
-        incomingVideoDescription->set_codecs({ payloadTypes->videoCodec, payloadTypes->rtxCodec });
+        incomingVideoDescription->set_codecs(codecs);
         incomingVideoDescription->set_bandwidth(2032000);
 
         incomingVideoDescription->AddStream(videoRecvStreamParams);
@@ -1494,14 +1501,37 @@ public:
         }
 
         auto payloadTypes = assignPayloadTypes(_availableVideoFormats);
-        if (!payloadTypes.has_value()) {
+        if (payloadTypes.size() == 0) {
+            return;
+        }
+
+        absl::optional<OutgoingVideoFormat> selectedPayloadType;
+        std::vector<std::string> codecPriorities = {
+            cricket::kVp9CodecName,
+            cricket::kVp8CodecName,
+            cricket::kH264CodecName
+        };
+
+        for (const auto &codecName : codecPriorities) {
+            if (selectedPayloadType) {
+                break;
+            }
+            for (const auto &payloadType : payloadTypes) {
+                if (payloadType.videoCodec.name == codecName) {
+                    selectedPayloadType = payloadType;
+                    break;
+                }
+            }
+        }
+
+        if (!selectedPayloadType) {
             return;
         }
 
         GroupJoinPayloadVideoPayloadType vp8Payload;
-        vp8Payload.id = payloadTypes.value().videoCodec.id;
-        vp8Payload.name = payloadTypes.value().videoCodec.name;
-        vp8Payload.clockrate = payloadTypes.value().videoCodec.clockrate;
+        vp8Payload.id = selectedPayloadType->videoCodec.id;
+        vp8Payload.name = selectedPayloadType->videoCodec.name;
+        vp8Payload.clockrate = selectedPayloadType->videoCodec.clockrate;
         vp8Payload.channels = 0;
 
         std::vector<GroupJoinPayloadVideoPayloadFeedbackType> vp8FeedbackTypes;
@@ -1534,10 +1564,10 @@ public:
         _videoPayloadTypes.push_back(std::move(vp8Payload));
 
         GroupJoinPayloadVideoPayloadType rtxPayload;
-        rtxPayload.id = payloadTypes.value().rtxCodec.id;
-        rtxPayload.name = payloadTypes.value().rtxCodec.name;
-        rtxPayload.clockrate = payloadTypes.value().rtxCodec.clockrate;
-        rtxPayload.parameters.push_back(std::make_pair("apt", intToString(payloadTypes.value().videoCodec.id)));
+        rtxPayload.id = selectedPayloadType->rtxCodec.id;
+        rtxPayload.name = selectedPayloadType->rtxCodec.name;
+        rtxPayload.clockrate = selectedPayloadType->rtxCodec.clockrate;
+        rtxPayload.parameters.push_back(std::make_pair("apt", intToString(selectedPayloadType->videoCodec.id)));
         _videoPayloadTypes.push_back(std::move(rtxPayload));
 
         auto outgoingVideoDescription = std::make_unique<cricket::VideoContentDescription>();
@@ -1552,7 +1582,7 @@ public:
         outgoingVideoDescription->set_rtcp_mux(true);
         outgoingVideoDescription->set_rtcp_reduced_size(true);
         outgoingVideoDescription->set_direction(webrtc::RtpTransceiverDirection::kSendOnly);
-        outgoingVideoDescription->set_codecs({ payloadTypes->videoCodec, payloadTypes->rtxCodec });
+        outgoingVideoDescription->set_codecs({ selectedPayloadType->videoCodec, selectedPayloadType->rtxCodec });
         outgoingVideoDescription->set_bandwidth(2032000);
 
         cricket::StreamParams videoSendStreamParams;
@@ -1598,7 +1628,7 @@ public:
         incomingVideoDescription->set_rtcp_mux(true);
         incomingVideoDescription->set_rtcp_reduced_size(true);
         incomingVideoDescription->set_direction(webrtc::RtpTransceiverDirection::kRecvOnly);
-        incomingVideoDescription->set_codecs({ payloadTypes->videoCodec, payloadTypes->rtxCodec });
+        incomingVideoDescription->set_codecs({ selectedPayloadType->videoCodec, selectedPayloadType->rtxCodec });
         incomingVideoDescription->set_bandwidth(2032000);
 
         _outgoingVideoChannel->SetPayloadTypeDemuxingEnabled(false);
@@ -1606,7 +1636,7 @@ public:
         _outgoingVideoChannel->SetRemoteContent(incomingVideoDescription.get(), webrtc::SdpType::kAnswer, nullptr);
 
         webrtc::RtpParameters rtpParameters = _outgoingVideoChannel->media_channel()->GetRtpSendParameters(_outgoingVideoSsrcs.simulcastLayers[0].ssrc);
-        if (rtpParameters.encodings.size() == 3) {
+        /*if (rtpParameters.encodings.size() == 3) {
             for (int i = 0; i < (int)rtpParameters.encodings.size(); i++) {
                 if (i == 0) {
                     rtpParameters.encodings[i].min_bitrate_bps = 50000;
@@ -1635,7 +1665,7 @@ public:
         } else {
             rtpParameters.encodings[0].min_bitrate_bps = 200000;
             rtpParameters.encodings[0].max_bitrate_bps = 800000 + 100000;
-        }
+        }*/
 
         _outgoingVideoChannel->media_channel()->SetRtpSendParameters(_outgoingVideoSsrcs.simulcastLayers[0].ssrc, rtpParameters);
     }
@@ -2087,12 +2117,26 @@ public:
         RTC_CHECK(probingSsrc);
         
         auto payloadTypes = assignPayloadTypes(_availableVideoFormats);
-        if (payloadTypes.has_value()) {
+        if (payloadTypes.size() != 0) {
             GroupParticipantDescription participant;
             GroupJoinPayloadVideoPayloadType vp8Payload;
-            vp8Payload.id = payloadTypes.value().videoCodec.id;
-            vp8Payload.name = payloadTypes.value().videoCodec.name;
-            vp8Payload.clockrate = payloadTypes.value().videoCodec.clockrate;
+
+            absl::optional<OutgoingVideoFormat> selectedPayloadType;
+
+            for (const auto &payloadType : payloadTypes) {
+                if (payloadType.videoCodec.name == cricket::kVp8CodecName) {
+                    selectedPayloadType = payloadType;
+                    break;
+                }
+            }
+
+            if (!selectedPayloadType) {
+                return;
+            }
+
+            vp8Payload.id = selectedPayloadType->videoCodec.id;
+            vp8Payload.name = selectedPayloadType->videoCodec.name;
+            vp8Payload.clockrate = selectedPayloadType->videoCodec.clockrate;
             vp8Payload.channels = 0;
 
             std::vector<GroupJoinPayloadVideoPayloadFeedbackType> vp8FeedbackTypes;
