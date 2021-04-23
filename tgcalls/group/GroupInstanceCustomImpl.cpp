@@ -721,8 +721,8 @@ public:
         std::vector<webrtc::SdpVideoFormat> const &availableVideoFormats,
         GroupParticipantDescription const &description,
         Threads &threads) :
-    _channelManager(channelManager),
     _endpointId(description.endpointId),
+    _channelManager(channelManager),
     _call(call) {
         _videoSink.reset(new VideoSinkImpl());
 

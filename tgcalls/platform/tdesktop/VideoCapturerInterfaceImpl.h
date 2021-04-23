@@ -22,6 +22,9 @@ public:
 	void setState(VideoState state) override;
 	void setPreferredCaptureAspectRatio(float aspectRatio) override;
 	void setUncroppedOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) override;
+	int getRotation() override {
+		return 0;
+	}
 
 private:
 	rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _source;
