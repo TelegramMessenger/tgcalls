@@ -1088,7 +1088,7 @@ public:
 
         if (_enableVideo) {
             cricket::VideoOptions videoOptions;
-            videoOptions.is_screencast = true;
+            videoOptions.is_screencast = false;
             _outgoingVideoChannel = _channelManager->CreateVideoChannel(_call.get(), cricket::MediaConfig(), _rtpTransport, _threads->getMediaThread(), "1", false, GroupNetworkManager::getDefaulCryptoOptions(), _uniqueRandomIdGenerator.get(), videoOptions, _videoBitrateAllocatorFactory.get());
         }
 
