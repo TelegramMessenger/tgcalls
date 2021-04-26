@@ -78,6 +78,17 @@ struct GroupNetworkState {
     bool isTransitioningFromBroadcastToRtc = false;
 };
 
+enum VideoContentType {
+    None,
+    Screencast,
+    Generic
+};
+
+enum VideoCodecName {
+    VP8,
+    VP9
+};
+
 struct GroupInstanceDescriptor {
     std::shared_ptr<Threads> threads;
     GroupConfig config;
@@ -96,8 +107,9 @@ struct GroupInstanceDescriptor {
     std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, std::function<void(BroadcastPart &&)>)> requestBroadcastPart;
     int outgoingAudioBitrateKbit{32};
     bool disableOutgoingAudioProcessing{false};
-    bool enableVideo{false};
-    bool initialEnableNoiseSuppression{true};
+    VideoContentType videoContentType{VideoContentType::None};
+    bool initialEnableNoiseSuppression{false};
+    std::vector<VideoCodecName> videoCodecPreferences;
 };
 
 struct GroupJoinPayloadFingerprint {

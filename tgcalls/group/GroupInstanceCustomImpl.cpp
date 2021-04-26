@@ -721,8 +721,8 @@ public:
         std::vector<webrtc::SdpVideoFormat> const &availableVideoFormats,
         GroupParticipantDescription const &description,
         Threads &threads) :
-    _channelManager(channelManager),
     _endpointId(description.endpointId),
+    _channelManager(channelManager),
     _call(call) {
         _videoSink.reset(new VideoSinkImpl());
 
@@ -917,7 +917,8 @@ public:
     _useDummyChannel(descriptor.useDummyChannel),
     _outgoingAudioBitrateKbit(descriptor.outgoingAudioBitrateKbit),
     _disableOutgoingAudioProcessing(descriptor.disableOutgoingAudioProcessing),
-    _enableVideo(descriptor.enableVideo),
+    _videoContentType(descriptor.videoContentType),
+    _videoCodecPreferences(std::move(descriptor.videoCodecPreferences)),
     _eventLog(std::make_unique<webrtc::RtcEventLogNull>()),
     _taskQueueFactory(webrtc::CreateDefaultTaskQueueFactory()),
 	_createAudioDeviceModule(descriptor.createAudioDeviceModule),
@@ -1086,10 +1087,22 @@ public:
 
         _videoBitrateAllocatorFactory = webrtc::CreateBuiltinVideoBitrateAllocatorFactory();
 
-        if (_enableVideo) {
-            cricket::VideoOptions videoOptions;
-            videoOptions.is_screencast = true;
-            _outgoingVideoChannel = _channelManager->CreateVideoChannel(_call.get(), cricket::MediaConfig(), _rtpTransport, _threads->getMediaThread(), "1", false, GroupNetworkManager::getDefaulCryptoOptions(), _uniqueRandomIdGenerator.get(), videoOptions, _videoBitrateAllocatorFactory.get());
+        switch (_videoContentType) {
+            case VideoContentType::None: {
+                break;
+            }
+            case VideoContentType::Screencast:
+            case VideoContentType::Generic: {
+                cricket::VideoOptions videoOptions;
+                if (_videoContentType == VideoContentType::Screencast) {
+                    videoOptions.is_screencast = true;
+                }
+                _outgoingVideoChannel = _channelManager->CreateVideoChannel(_call.get(), cricket::MediaConfig(), _rtpTransport, _threads->getMediaThread(), "1", false, GroupNetworkManager::getDefaulCryptoOptions(), _uniqueRandomIdGenerator.get(), videoOptions, _videoBitrateAllocatorFactory.get());
+                break;
+            }
+            default: {
+                break;
+            }
         }
 
         configureSendVideo();
@@ -1550,11 +1563,36 @@ public:
         }
 
         absl::optional<OutgoingVideoFormat> selectedPayloadType;
-        std::vector<std::string> codecPriorities = {
-            cricket::kVp9CodecName,
+
+        std::vector<std::string> codecPriorities;
+        for (auto name : _videoCodecPreferences) {
+            std::string codecName;
+            switch (name) {
+                case VideoCodecName::VP8: {
+                    codecName = cricket::kVp8CodecName;
+                    break;
+                }
+                case VideoCodecName::VP9: {
+                    codecName = cricket::kVp8CodecName;
+                    break;
+                }
+                default: {
+                    break;
+                }
+            }
+            if (codecName.size() != 0) {
+                codecPriorities.push_back(std::move(codecName));
+            }
+        }
+        std::vector<std::string> defaultCodecPriorities = {
             cricket::kVp8CodecName,
-            cricket::kH264CodecName
+            cricket::kVp9CodecName
         };
+        for (const auto &name : defaultCodecPriorities) {
+            if (std::find(codecPriorities.begin(), codecPriorities.end(), name) == codecPriorities.end()) {
+                codecPriorities.push_back(name);
+            }
+        }
 
         for (const auto &codecName : codecPriorities) {
             if (selectedPayloadType) {
@@ -2008,12 +2046,12 @@ public:
     }
 
     void emitJoinPayload(std::function<void(GroupJoinPayload)> completion) {
-        _networkManager->perform(RTC_FROM_HERE, [outgoingAudioSsrc = _outgoingAudioSsrc, videoPayloadTypes = _videoPayloadTypes, videoExtensionMap = _videoExtensionMap, videoSourceGroups = _videoSourceGroups, enableVideo = _enableVideo, completion](GroupNetworkManager *networkManager) {
+        _networkManager->perform(RTC_FROM_HERE, [outgoingAudioSsrc = _outgoingAudioSsrc, videoPayloadTypes = _videoPayloadTypes, videoExtensionMap = _videoExtensionMap, videoSourceGroups = _videoSourceGroups, videoContentType = _videoContentType, completion](GroupNetworkManager *networkManager) {
             GroupJoinPayload payload;
 
             payload.ssrc = outgoingAudioSsrc;
 
-            if (enableVideo) {
+            if (videoContentType != VideoContentType::None) {
                 payload.videoPayloadTypes = videoPayloadTypes;
                 payload.videoExtensionMap = videoExtensionMap;
                 payload.videoSourceGroups = videoSourceGroups;
@@ -2472,7 +2510,8 @@ private:
     bool _useDummyChannel{true};
     int _outgoingAudioBitrateKbit{32};
     bool _disableOutgoingAudioProcessing{false};
-    bool _enableVideo{false};
+    VideoContentType _videoContentType{VideoContentType::None};
+    std::vector<VideoCodecName> _videoCodecPreferences;
 
     int64_t _lastUnknownSsrcsReport = 0;
     std::set<uint32_t> _pendingUnknownSsrcs;
