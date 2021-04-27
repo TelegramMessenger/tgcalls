@@ -2095,6 +2095,8 @@ public:
         if (resetBitrate) {
             adjustBitratePreferences(true);
         }
+
+        updateIncomingVideoSources();
     }
 
 	void setAudioOutputDevice(const std::string &id) {
@@ -2307,9 +2309,17 @@ public:
     }
 
     void addIncomingVideoOutput(uint32_t ssrc, std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
-        auto it = _incomingVideoChannels.find(ssrc);
-        if (it != _incomingVideoChannels.end()) {
-            it->second->addSink(sink);
+        if (ssrc == _outgoingAudioSsrc) {
+            if (_videoCapture) {
+                std::shared_ptr<VideoSinkImpl> sinkWrapper(new VideoSinkImpl());
+                sinkWrapper->addSink(sink);
+                _videoCapture->setOutput(sinkWrapper);
+            }
+        } else {
+            auto it = _incomingVideoChannels.find(ssrc);
+            if (it != _incomingVideoChannels.end()) {
+                it->second->addSink(sink);
+            }
         }
     }
 
@@ -2441,6 +2451,9 @@ public:
             std::vector<uint32_t> videoChannelSsrcs;
             for (const auto &it : _incomingVideoChannels) {
                 videoChannelSsrcs.push_back(it.first);
+            }
+            if (_videoCapture) {
+                videoChannelSsrcs.push_back(_outgoingAudioSsrc);
             }
             _incomingVideoSourcesUpdated(videoChannelSsrcs);
         }
