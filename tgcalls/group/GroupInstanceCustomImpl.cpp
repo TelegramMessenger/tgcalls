@@ -52,6 +52,8 @@
 
 #include "rnnoise.h"
 
+#include "group/GroupJoinPayload.h"
+
 #include "third-party/json11.hpp"
 
 namespace tgcalls {
@@ -719,18 +721,20 @@ public:
         webrtc::RtpTransport *rtpTransport,
         rtc::UniqueRandomIdGenerator *randomIdGenerator,
         std::vector<webrtc::SdpVideoFormat> const &availableVideoFormats,
-        GroupParticipantDescription const &description,
+        GroupJoinVideoInformation sharedVideoInformation,
+        uint32_t audioSsrc,
+        GroupParticipantVideoInformation const &description,
         Threads &threads) :
     _endpointId(description.endpointId),
     _channelManager(channelManager),
     _call(call) {
         _videoSink.reset(new VideoSinkImpl());
 
-        std::string streamId = std::string("stream") + uint32ToString(description.audioSsrc);
+        std::string streamId = std::string("stream") + uint32ToString(audioSsrc);
 
         _videoBitrateAllocatorFactory = webrtc::CreateBuiltinVideoBitrateAllocatorFactory();
 
-        _videoChannel = _channelManager->CreateVideoChannel(call, cricket::MediaConfig(), rtpTransport, threads.getMediaThread(), std::string("video") + uint32ToString(description.audioSsrc), false, GroupNetworkManager::getDefaulCryptoOptions(), randomIdGenerator, cricket::VideoOptions(), _videoBitrateAllocatorFactory.get());
+        _videoChannel = _channelManager->CreateVideoChannel(call, cricket::MediaConfig(), rtpTransport, threads.getMediaThread(), std::string("video") + uint32ToString(audioSsrc), false, GroupNetworkManager::getDefaulCryptoOptions(), randomIdGenerator, cricket::VideoOptions(), _videoBitrateAllocatorFactory.get());
 
         auto payloadTypes = assignPayloadTypes(availableVideoFormats);
         std::vector<cricket::VideoCodec> codecs;
@@ -752,7 +756,7 @@ public:
         cricket::StreamParams videoRecvStreamParams;
 
         std::vector<uint32_t> allSsrcs;
-        for (const auto &group : description.videoSourceGroups) {
+        for (const auto &group : description.ssrcGroups) {
             for (auto ssrc : group.ssrcs) {
                 if (std::find(allSsrcs.begin(), allSsrcs.end(), ssrc) == allSsrcs.end()) {
                     allSsrcs.push_back(ssrc);
@@ -771,8 +775,8 @@ public:
         videoRecvStreamParams.ssrcs = allSsrcs;
 
         if (_mainVideoSsrc == 0) {
-            if (description.videoSourceGroups.size() == 1) {
-                _mainVideoSsrc = description.videoSourceGroups[0].ssrcs[0];
+            if (description.ssrcGroups.size() == 1) {
+                _mainVideoSsrc = description.ssrcGroups[0].ssrcs[0];
             }
         }
 
@@ -1120,7 +1124,7 @@ public:
         }
 
         if (_videoCapture) {
-            setVideoCapture(_videoCapture, [](GroupJoinPayload) {}, true);
+            setVideoCapture(_videoCapture, true);
         }
 
         if (_useDummyChannel) {
@@ -1528,26 +1532,26 @@ public:
             payload.clockrate = payloadType.videoCodec.clockrate;
             payload.channels = 0;
 
-            std::vector<GroupJoinPayloadVideoPayloadFeedbackType> feedbackTypes;
+            std::vector<GroupJoinPayloadVideoPayloadType::FeedbackType> feedbackTypes;
 
-            GroupJoinPayloadVideoPayloadFeedbackType fbGoogRemb;
+            GroupJoinPayloadVideoPayloadType::FeedbackType fbGoogRemb;
             fbGoogRemb.type = "goog-remb";
             feedbackTypes.push_back(fbGoogRemb);
 
-            GroupJoinPayloadVideoPayloadFeedbackType fbTransportCc;
+            GroupJoinPayloadVideoPayloadType::FeedbackType fbTransportCc;
             fbTransportCc.type = "transport-cc";
             feedbackTypes.push_back(fbTransportCc);
 
-            GroupJoinPayloadVideoPayloadFeedbackType fbCcmFir;
+            GroupJoinPayloadVideoPayloadType::FeedbackType fbCcmFir;
             fbCcmFir.type = "ccm";
             fbCcmFir.subtype = "fir";
             feedbackTypes.push_back(fbCcmFir);
 
-            GroupJoinPayloadVideoPayloadFeedbackType fbNack;
+            GroupJoinPayloadVideoPayloadType::FeedbackType fbNack;
             fbNack.type = "nack";
             feedbackTypes.push_back(fbNack);
 
-            GroupJoinPayloadVideoPayloadFeedbackType fbNackPli;
+            GroupJoinPayloadVideoPayloadType::FeedbackType fbNackPli;
             fbNackPli.type = "nack";
             fbNackPli.subtype = "pli";
             feedbackTypes.push_back(fbNackPli);
@@ -2048,36 +2052,43 @@ public:
         updateIsConnected();
     }
 
-    void emitJoinPayload(std::function<void(GroupJoinPayload)> completion) {
+    void emitJoinPayload(std::function<void(GroupJoinPayload const &)> completion) {
         _networkManager->perform(RTC_FROM_HERE, [outgoingAudioSsrc = _outgoingAudioSsrc, videoPayloadTypes = _videoPayloadTypes, videoExtensionMap = _videoExtensionMap, videoSourceGroups = _videoSourceGroups, videoContentType = _videoContentType, completion](GroupNetworkManager *networkManager) {
-            GroupJoinPayload payload;
+            GroupJoinInternalPayload payload;
 
-            payload.ssrc = outgoingAudioSsrc;
+            payload.audioSsrc = outgoingAudioSsrc;
 
             if (videoContentType != VideoContentType::None) {
-                payload.videoPayloadTypes = videoPayloadTypes;
-                payload.videoExtensionMap = videoExtensionMap;
-                payload.videoSourceGroups = videoSourceGroups;
+                GroupParticipantVideoInformation videoInformation;
+                videoInformation.ssrcGroups = videoSourceGroups;
+                payload.videoInformation = std::move(videoInformation);
             }
 
+            GroupJoinTransportDescription transportDescription;
+
             auto localIceParameters = networkManager->getLocalIceParameters();
-            payload.ufrag = localIceParameters.ufrag;
-            payload.pwd = localIceParameters.pwd;
+            transportDescription.ufrag = localIceParameters.ufrag;
+            transportDescription.pwd = localIceParameters.pwd;
 
             auto localFingerprint = networkManager->getLocalFingerprint();
             if (localFingerprint) {
-                GroupJoinPayloadFingerprint serializedFingerprint;
+                GroupJoinTransportDescription::Fingerprint serializedFingerprint;
                 serializedFingerprint.hash = localFingerprint->algorithm;
                 serializedFingerprint.fingerprint = localFingerprint->GetRfc4572Fingerprint();
                 serializedFingerprint.setup = "passive";
-                payload.fingerprints.push_back(std::move(serializedFingerprint));
+                transportDescription.fingerprints.push_back(std::move(serializedFingerprint));
             }
 
-            completion(payload);
+            payload.transport = std::move(transportDescription);
+
+            GroupJoinPayload result;
+            result.audioSsrc = payload.audioSsrc;
+            result.json = payload.serialize();
+            completion(result);
         });
     }
 
-    void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture, std::function<void(GroupJoinPayload)> completion, bool isInitializing) {
+    void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture, bool isInitializing) {
         bool resetBitrate = (_videoCapture == nullptr) != (videoCapture == nullptr) && !isInitializing;
         if (!isInitializing && _videoCapture == videoCapture) {
             return;
@@ -2114,22 +2125,30 @@ public:
 #endif // WEBRTC_IOS
     }
 
-    void setJoinResponsePayload(GroupJoinResponsePayload payload, std::vector<tgcalls::GroupParticipantDescription> &&participants) {
+    void setJoinResponsePayload(std::string const &payload) {
         RTC_LOG(LS_INFO) << formatTimestampMillis(rtc::TimeMillis()) << ": " << "setJoinResponsePayload";
+
+        auto parsedPayload = GroupJoinResponsePayload::parse(payload);
+        if (!parsedPayload) {
+            RTC_LOG(LS_ERROR) << "Could not parse json response payload";
+            return;
+        }
+
+        _sharedVideoInformation = parsedPayload->videoInformation;
 
         _serverBandwidthProbingVideoSsrc.reset();
 
-        if (payload.serverVideoBandwidthProbingSsrc != 0) {
-            setServerBandwidthProbingChannelSsrc(payload.serverVideoBandwidthProbingSsrc);
+        if (parsedPayload->videoInformation && parsedPayload->videoInformation->serverVideoBandwidthProbingSsrc) {
+            setServerBandwidthProbingChannelSsrc(parsedPayload->videoInformation->serverVideoBandwidthProbingSsrc.value());
         }
 
-        _networkManager->perform(RTC_FROM_HERE, [payload](GroupNetworkManager *networkManager) {
+        _networkManager->perform(RTC_FROM_HERE, [parsedTransport = parsedPayload->transport](GroupNetworkManager *networkManager) {
             PeerIceParameters remoteIceParameters;
-            remoteIceParameters.ufrag = payload.ufrag;
-            remoteIceParameters.pwd = payload.pwd;
+            remoteIceParameters.ufrag = parsedTransport.ufrag;
+            remoteIceParameters.pwd = parsedTransport.pwd;
 
             std::vector<cricket::Candidate> iceCandidates;
-            for (auto const &candidate : payload.candidates) {
+            for (auto const &candidate : parsedTransport.candidates) {
                 rtc::SocketAddress address(candidate.ip, stringToInt(candidate.port));
 
                 cricket::Candidate parsedCandidate(
@@ -2137,8 +2156,8 @@ public:
                     /*protocol=*/candidate.protocol,
                     /*address=*/address,
                     /*priority=*/stringToUInt32(candidate.priority),
-                    /*username=*/payload.ufrag,
-                    /*password=*/payload.pwd,
+                    /*username=*/parsedTransport.ufrag,
+                    /*password=*/parsedTransport.pwd,
                     /*type=*/candidate.type,
                     /*generation=*/stringToUInt32(candidate.generation),
                     /*foundation=*/candidate.foundation,
@@ -2149,75 +2168,32 @@ public:
             }
 
             std::unique_ptr<rtc::SSLFingerprint> fingerprint;
-            if (payload.fingerprints.size() != 0) {
-                fingerprint = rtc::SSLFingerprint::CreateUniqueFromRfc4572(payload.fingerprints[0].hash, payload.fingerprints[0].fingerprint);
+            if (parsedTransport.fingerprints.size() != 0) {
+                fingerprint = rtc::SSLFingerprint::CreateUniqueFromRfc4572(parsedTransport.fingerprints[0].hash, parsedTransport.fingerprints[0].fingerprint);
             }
 
             networkManager->setRemoteParams(remoteIceParameters, iceCandidates, fingerprint.get());
         });
 
-        addParticipants(std::move(participants));
+        addParticipants({});
     }
 
     void setServerBandwidthProbingChannelSsrc(uint32_t probingSsrc) {
         RTC_CHECK(probingSsrc);
+
+        if (!_sharedVideoInformation) {
+            return;
+        }
         
         auto payloadTypes = assignPayloadTypes(_availableVideoFormats);
         if (payloadTypes.size() != 0) {
-            GroupParticipantDescription participant;
-            GroupJoinPayloadVideoPayloadType vp8Payload;
-
-            absl::optional<OutgoingVideoFormat> selectedPayloadType;
-
-            for (const auto &payloadType : payloadTypes) {
-                if (payloadType.videoCodec.name == cricket::kVp8CodecName) {
-                    selectedPayloadType = payloadType;
-                    break;
-                }
-            }
-
-            if (!selectedPayloadType) {
-                return;
-            }
-
-            vp8Payload.id = selectedPayloadType->videoCodec.id;
-            vp8Payload.name = selectedPayloadType->videoCodec.name;
-            vp8Payload.clockrate = selectedPayloadType->videoCodec.clockrate;
-            vp8Payload.channels = 0;
-
-            std::vector<GroupJoinPayloadVideoPayloadFeedbackType> vp8FeedbackTypes;
-
-            GroupJoinPayloadVideoPayloadFeedbackType fbGoogRemb;
-            fbGoogRemb.type = "goog-remb";
-            vp8FeedbackTypes.push_back(fbGoogRemb);
-
-            GroupJoinPayloadVideoPayloadFeedbackType fbTransportCc;
-            fbTransportCc.type = "transport-cc";
-            vp8FeedbackTypes.push_back(fbTransportCc);
-
-            GroupJoinPayloadVideoPayloadFeedbackType fbCcmFir;
-            fbCcmFir.type = "ccm";
-            fbCcmFir.subtype = "fir";
-            vp8FeedbackTypes.push_back(fbCcmFir);
-
-            GroupJoinPayloadVideoPayloadFeedbackType fbNack;
-            fbNack.type = "nack";
-            vp8FeedbackTypes.push_back(fbNack);
-
-            GroupJoinPayloadVideoPayloadFeedbackType fbNackPli;
-            fbNackPli.type = "nack";
-            fbNackPli.subtype = "pli";
-            vp8FeedbackTypes.push_back(fbNackPli);
-
-            vp8Payload.feedbackTypes = vp8FeedbackTypes;
-            vp8Payload.parameters = {};
-
-            participant.videoPayloadTypes.push_back(std::move(vp8Payload));
+            GroupParticipantVideoInformation videoInformation;
 
             GroupJoinPayloadVideoSourceGroup sourceGroup;
             sourceGroup.ssrcs.push_back(probingSsrc);
             sourceGroup.semantics = "SIM";
-            participant.videoSourceGroups.push_back(std::move(sourceGroup));
+
+            videoInformation.ssrcGroups.push_back(std::move(sourceGroup));
 
             _serverBandwidthProbingVideoSsrc.reset(new IncomingVideoChannel(
                 _channelManager.get(),
@@ -2225,7 +2201,9 @@ public:
                 _rtpTransport,
                 _uniqueRandomIdGenerator.get(),
                 _availableVideoFormats,
-                participant,
+                _sharedVideoInformation.value(),
+                123456,
+                videoInformation,
                 *_threads
             ));
         }
@@ -2243,9 +2221,9 @@ public:
             _reportedUnknownSsrcs.erase(participant.audioSsrc);
 
             if (_incomingAudioChannels.find(ChannelId(participant.audioSsrc)) == _incomingAudioChannels.end()) {
-                addIncomingAudioChannel(participant.endpointId, ChannelId(participant.audioSsrc));
+                addIncomingAudioChannel(std::string("endpoint") + uint32ToString(participant.audioSsrc), ChannelId(participant.audioSsrc));
             }
-            if (participant.videoPayloadTypes.size() != 0 && participant.videoSourceGroups.size() != 0) {
+            if (participant.videoInformation) {
                 if (_incomingVideoChannels.find(participant.audioSsrc) == _incomingVideoChannels.end()) {
                     addIncomingVideoChannel(participant);
                 }
@@ -2411,6 +2389,16 @@ public:
         if (_incomingVideoChannels.find(participant.audioSsrc) != _incomingVideoChannels.end()) {
             return;
         }
+        if (!_sharedVideoInformation) {
+            return;
+        }
+        if (!participant.videoInformation) {
+            return;
+        }
+        const auto parsedVideoInformation = GroupParticipantVideoInformation::parse(participant.videoInformation.value());
+        if (!parsedVideoInformation) {
+            return;
+        }
 
         const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
 
@@ -2420,13 +2408,15 @@ public:
             _rtpTransport,
             _uniqueRandomIdGenerator.get(),
             _availableVideoFormats,
-            participant,
+            _sharedVideoInformation.value(),
+            participant.audioSsrc,
+            parsedVideoInformation.value(),
             *_threads
         ));
         _incomingVideoChannels.insert(std::make_pair(participant.audioSsrc, std::move(channel)));
 
         std::vector<uint32_t> allSsrcs;
-        for (const auto &group : participant.videoSourceGroups) {
+        for (const auto &group : parsedVideoInformation->ssrcGroups) {
             for (auto ssrc : group.ssrcs) {
                 if (_ssrcMapping.find(ssrc) == _ssrcMapping.end()) {
                     allSsrcs.push_back(ssrc);
@@ -2434,7 +2424,6 @@ public:
                     SsrcMappingInfo mapping;
                     mapping.ssrc = participant.audioSsrc;
                     mapping.isVideo = true;
-                    mapping.endpointId = participant.endpointId;
                     _ssrcMapping.insert(std::make_pair(ssrc, mapping));
                 }
             }
@@ -2579,6 +2568,8 @@ private:
     std::map<uint32_t, std::unique_ptr<IncomingVideoChannel>> _incomingVideoChannels;
     std::unique_ptr<IncomingVideoChannel> _serverBandwidthProbingVideoSsrc;
 
+    absl::optional<GroupJoinVideoInformation> _sharedVideoInformation;
+
     std::string _currentHighQualityVideoEndpointId;
 
     int64_t _broadcastPartDurationMilliseconds = 500;
@@ -2637,15 +2628,15 @@ void GroupInstanceCustomImpl::setConnectionMode(GroupConnectionMode connectionMo
     });
 }
 
-void GroupInstanceCustomImpl::emitJoinPayload(std::function<void(GroupJoinPayload)> completion) {
+void GroupInstanceCustomImpl::emitJoinPayload(std::function<void(GroupJoinPayload const &)> completion) {
     _internal->perform(RTC_FROM_HERE, [completion](GroupInstanceCustomInternal *internal) {
         internal->emitJoinPayload(completion);
     });
 }
 
-void GroupInstanceCustomImpl::setJoinResponsePayload(GroupJoinResponsePayload payload, std::vector<tgcalls::GroupParticipantDescription> &&participants) {
-    _internal->perform(RTC_FROM_HERE, [payload, participants = std::move(participants)](GroupInstanceCustomInternal *internal) mutable {
-        internal->setJoinResponsePayload(payload, std::move(participants));
+void GroupInstanceCustomImpl::setJoinResponsePayload(std::string const &payload) {
+    _internal->perform(RTC_FROM_HERE, [payload](GroupInstanceCustomInternal *internal) {
+        internal->setJoinResponsePayload(payload);
     });
 }
 
@@ -2679,9 +2670,9 @@ void GroupInstanceCustomImpl::setIsNoiseSuppressionEnabled(bool isNoiseSuppressi
     });
 }
 
-void GroupInstanceCustomImpl::setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture, std::function<void(GroupJoinPayload)> completion) {
-    _internal->perform(RTC_FROM_HERE, [videoCapture, completion](GroupInstanceCustomInternal *internal) {
-        internal->setVideoCapture(videoCapture, completion, false);
+void GroupInstanceCustomImpl::setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture) {
+    _internal->perform(RTC_FROM_HERE, [videoCapture](GroupInstanceCustomInternal *internal) {
+        internal->setVideoCapture(videoCapture, false);
     });
 }
 

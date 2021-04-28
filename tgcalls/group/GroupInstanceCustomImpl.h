@@ -25,16 +25,16 @@ public:
     
     void setConnectionMode(GroupConnectionMode connectionMode, bool keepBroadcastIfWasEnabled);
 
-    void emitJoinPayload(std::function<void(GroupJoinPayload)> completion);
-    void setJoinResponsePayload(GroupJoinResponsePayload payload, std::vector<tgcalls::GroupParticipantDescription> &&participants);
+    void emitJoinPayload(std::function<void(GroupJoinPayload const &)> completion);
+    void setJoinResponsePayload(std::string const &payload);
     void addParticipants(std::vector<GroupParticipantDescription> &&participants);
     void removeSsrcs(std::vector<uint32_t> ssrcs);
     void removeIncomingVideoSource(uint32_t ssrc);
 
     void setIsMuted(bool isMuted);
     void setIsNoiseSuppressionEnabled(bool isNoiseSuppressionEnabled);
-    void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture, std::function<void(GroupJoinPayload)> completion);
-//    void setVideoSource(std::function<webrtc::VideoTrackSourceInterface*()> getVideoSource, std::function<void(GroupJoinPayload)> completion);
+    void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture);
+    //void setVideoSource(std::function<webrtc::VideoTrackSourceInterface*()> getVideoSource);
     void setAudioOutputDevice(std::string id);
     void setAudioInputDevice(std::string id);
     
