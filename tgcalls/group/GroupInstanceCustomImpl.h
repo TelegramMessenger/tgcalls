@@ -38,10 +38,10 @@ public:
     void setAudioOutputDevice(std::string id);
     void setAudioInputDevice(std::string id);
     
-    void addIncomingVideoOutput(uint32_t ssrc, std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
+    void addIncomingVideoOutput(std::string const &endpointId, std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
     
     void setVolume(uint32_t ssrc, double volume);
-    void setFullSizeVideoSsrc(uint32_t ssrc);
+    void setFullSizeVideoEndpointId(std::string const &endpointId);
 
 private:
     std::shared_ptr<Threads> _threads;

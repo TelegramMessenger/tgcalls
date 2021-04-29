@@ -103,7 +103,7 @@ struct GroupInstanceDescriptor {
     std::function<rtc::scoped_refptr<webrtc::AudioDeviceModule>(webrtc::TaskQueueFactory*)> createAudioDeviceModule;
     std::shared_ptr<VideoCaptureInterface> videoCapture; // deprecated
     std::function<webrtc::VideoTrackSourceInterface*()> getVideoSource;
-    std::function<void(std::vector<uint32_t> const &)> incomingVideoSourcesUpdated;
+    std::function<void(std::vector<std::string> const &)> incomingVideoSourcesUpdated;
     std::function<void(std::vector<uint32_t> const &)> participantDescriptionsRequired;
     std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, std::function<void(BroadcastPart &&)>)> requestBroadcastPart;
     int outgoingAudioBitrateKbit{32};
@@ -147,10 +147,10 @@ public:
     virtual void setAudioOutputDevice(std::string id) = 0;
     virtual void setAudioInputDevice(std::string id) = 0;
 
-    virtual void addIncomingVideoOutput(uint32_t ssrc, std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) = 0;
+    virtual void addIncomingVideoOutput(std::string const &endpointId, std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) = 0;
 
     virtual void setVolume(uint32_t ssrc, double volume) = 0;
-    virtual void setFullSizeVideoSsrc(uint32_t ssrc) = 0;
+    virtual void setFullSizeVideoEndpointId(std::string const &endpointId) = 0;
 
     struct AudioDevice {
       enum class Type {Input, Output};
