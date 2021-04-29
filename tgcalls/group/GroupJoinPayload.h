@@ -5,8 +5,6 @@
 #include <string>
 #include <stdint.h>
 
-#include "absl/types/optional.h"
-
 namespace tgcalls {
 
 struct GroupJoinPayloadVideoSourceGroup {
@@ -59,32 +57,14 @@ struct GroupJoinTransportDescription {
 };
 
 struct GroupJoinVideoInformation {
-    absl::optional<uint32_t> serverVideoBandwidthProbingSsrc;
+    uint32_t serverVideoBandwidthProbingSsrc = 0;
     std::vector<GroupJoinPayloadVideoPayloadType> payloadTypes;
     std::vector<std::pair<uint32_t, std::string>> extensionMap;
-};
-
-struct GroupJoinResponsePayload {
-    GroupJoinTransportDescription transport;
-    absl::optional<GroupJoinVideoInformation> videoInformation;
-
-    static absl::optional<GroupJoinResponsePayload> parse(std::string const &data);
 };
 
 struct GroupParticipantVideoInformation {
     std::string endpointId;
     std::vector<GroupJoinPayloadVideoSourceGroup> ssrcGroups;
-
-    static absl::optional<GroupParticipantVideoInformation> parse(std::string const &data);
-};
-
-struct GroupJoinInternalPayload {
-    GroupJoinTransportDescription transport;
-
-    uint32_t audioSsrc = 0;
-    absl::optional<GroupParticipantVideoInformation> videoInformation;
-
-    std::string serialize();
 };
 
 struct GroupJoinPayload {

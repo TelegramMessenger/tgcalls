@@ -52,7 +52,7 @@
 
 #include "rnnoise.h"
 
-#include "group/GroupJoinPayload.h"
+#include "GroupJoinPayloadInternal.h"
 
 #include "third-party/json11.hpp"
 
@@ -2139,7 +2139,7 @@ public:
         _serverBandwidthProbingVideoSsrc.reset();
 
         if (parsedPayload->videoInformation && parsedPayload->videoInformation->serverVideoBandwidthProbingSsrc) {
-            setServerBandwidthProbingChannelSsrc(parsedPayload->videoInformation->serverVideoBandwidthProbingSsrc.value());
+            setServerBandwidthProbingChannelSsrc(parsedPayload->videoInformation->serverVideoBandwidthProbingSsrc);
         }
 
         _networkManager->perform(RTC_FROM_HERE, [parsedTransport = parsedPayload->transport](GroupNetworkManager *networkManager) {
@@ -2184,7 +2184,7 @@ public:
         if (!_sharedVideoInformation) {
             return;
         }
-        
+
         auto payloadTypes = assignPayloadTypes(_availableVideoFormats);
         if (payloadTypes.size() != 0) {
             GroupParticipantVideoInformation videoInformation;
@@ -2223,7 +2223,7 @@ public:
             if (_incomingAudioChannels.find(ChannelId(participant.audioSsrc)) == _incomingAudioChannels.end()) {
                 addIncomingAudioChannel(std::string("endpoint") + uint32ToString(participant.audioSsrc), ChannelId(participant.audioSsrc));
             }
-            if (participant.videoInformation) {
+            if (!participant.videoInformation.empty()) {
                 if (_incomingVideoChannels.find(participant.audioSsrc) == _incomingVideoChannels.end()) {
                     addIncomingVideoChannel(participant);
                 }
@@ -2392,10 +2392,10 @@ public:
         if (!_sharedVideoInformation) {
             return;
         }
-        if (!participant.videoInformation) {
+        if (participant.videoInformation.empty()) {
             return;
         }
-        const auto parsedVideoInformation = GroupParticipantVideoInformation::parse(participant.videoInformation.value());
+        const auto parsedVideoInformation = parseGroupParticipantVideoInformation(participant.videoInformation);
         if (!parsedVideoInformation) {
             return;
         }

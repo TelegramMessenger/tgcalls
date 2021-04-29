@@ -1,4 +1,4 @@
-#include "group/GroupJoinPayload.h"
+#include "GroupJoinPayloadInternal.h"
 
 #include "third-party/json11.hpp"
 #include <sstream>
@@ -24,7 +24,7 @@ absl::optional<std::string> parseString(json11::Json::object const &object, std:
 }
 
 template <typename Out>
-static void splitString(const std::string &s, char delim, Out result) {
+void splitString(const std::string &s, char delim, Out result) {
     std::istringstream iss(s);
     std::string item;
     while (std::getline(iss, item, delim)) {
@@ -32,12 +32,10 @@ static void splitString(const std::string &s, char delim, Out result) {
     }
 }
 
-static std::vector<std::string> splitString(const std::string &s, char delim) {
+std::vector<std::string> splitString(const std::string &s, char delim) {
     std::vector<std::string> elems;
     splitString(s, delim, std::back_inserter(elems));
     return elems;
-}
-
 }
 
 absl::optional<GroupJoinTransportDescription> parseTransportDescription(json11::Json::object const &object) {
@@ -248,7 +246,7 @@ absl::optional<GroupJoinVideoInformation> parseVideoInformation(json11::Json::ob
         for (const auto &item : serverSources->second.array_items()) {
             if (item.is_number()) {
                 int32_t value = item.int_value();
-                int32_t unsignedValue = *(int32_t *)&value;
+                uint32_t unsignedValue = *(uint32_t *)&value;
                 result.serverVideoBandwidthProbingSsrc = unsignedValue;
             }
         }
@@ -285,6 +283,8 @@ absl::optional<GroupJoinVideoInformation> parseVideoInformation(json11::Json::ob
     }
 
     return result;
+}
+
 }
 
 std::string GroupJoinInternalPayload::serialize() {
@@ -337,7 +337,7 @@ absl::optional<GroupJoinResponsePayload> GroupJoinResponsePayload::parse(std::st
     if (json.type() != json11::Json::OBJECT) {
         return absl::nullopt;
     }
-    
+
     tgcalls::GroupJoinResponsePayload result;
 
     const auto transport = json.object_items().find("transport");
@@ -358,7 +358,7 @@ absl::optional<GroupJoinResponsePayload> GroupJoinResponsePayload::parse(std::st
     return result;
 }
 
-absl::optional<GroupParticipantVideoInformation> GroupParticipantVideoInformation::parse(std::string const &data) {
+absl::optional<GroupParticipantVideoInformation> parseGroupParticipantVideoInformation(std::string const &data) {
     std::string parsingError;
     auto json = json11::Json::parse(data, parsingError);
     if (json.type() != json11::Json::OBJECT) {

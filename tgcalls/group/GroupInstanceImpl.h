@@ -10,7 +10,7 @@
 #include "../Instance.h"
 
 #include "../StaticThreads.h"
-#include "group/GroupJoinPayload.h"
+#include "GroupJoinPayload.h"
 
 namespace webrtc {
 class AudioDeviceModule;
@@ -116,8 +116,8 @@ struct GroupInstanceDescriptor {
 struct GroupParticipantDescription {
     uint32_t audioSsrc = 0;
 
-    absl::optional<std::string> videoInformation;
-    absl::optional<std::string> screencastInformation;
+    std::string videoInformation;
+    std::string screencastInformation;
 };
 
 template <typename T>
