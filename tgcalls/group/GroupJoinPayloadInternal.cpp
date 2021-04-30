@@ -282,6 +282,11 @@ absl::optional<GroupJoinVideoInformation> parseVideoInformation(json11::Json::ob
         }
     }
 
+    const auto endpointId = object.find("endpoint");
+    if (endpointId != object.end() && endpointId->second.is_string()) {
+        result.endpointId = endpointId->second.string_value();
+    }
+
     return result;
 }
 

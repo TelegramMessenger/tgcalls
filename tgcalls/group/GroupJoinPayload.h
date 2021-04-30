@@ -58,6 +58,7 @@ struct GroupJoinTransportDescription {
 
 struct GroupJoinVideoInformation {
     uint32_t serverVideoBandwidthProbingSsrc = 0;
+    std::string endpointId;
     std::vector<GroupJoinPayloadVideoPayloadType> payloadTypes;
     std::vector<std::pair<uint32_t, std::string>> extensionMap;
 };

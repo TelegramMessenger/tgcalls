@@ -2185,7 +2185,6 @@ public:
             return;
         }
 
-        //_outgoingEndpointId = parsedPayload->endpoint;
         _sharedVideoInformation = parsedPayload->videoInformation;
 
         _serverBandwidthProbingVideoSsrc.reset();
@@ -2320,7 +2319,7 @@ public:
     }
 
     void addIncomingVideoOutput(std::string const &endpointId, std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
-        if (_outgoingEndpointId && endpointId == _outgoingEndpointId.value()) {
+        if (_sharedVideoInformation && endpointId == _sharedVideoInformation->endpointId) {
             if (_videoCapture) {
                 std::shared_ptr<VideoSinkImpl> sinkWrapper(new VideoSinkImpl());
                 sinkWrapper->addSink(sink);
@@ -2487,8 +2486,8 @@ public:
             for (const auto &it : _incomingVideoChannels) {
                 videoChannelEndpointIds.push_back(it.first.endpointId);
             }
-            if (_outgoingEndpointId && _videoCapture) {
-                videoChannelEndpointIds.push_back(_outgoingEndpointId.value());
+            if (_sharedVideoInformation && !_sharedVideoInformation->endpointId.empty() && _videoCapture) {
+                videoChannelEndpointIds.push_back(_sharedVideoInformation->endpointId);
             }
             _incomingVideoSourcesUpdated(videoChannelEndpointIds);
         }
@@ -2614,7 +2613,6 @@ private:
     std::map<VideoChannelId, std::unique_ptr<IncomingVideoChannel>> _incomingVideoChannels;
     std::unique_ptr<IncomingVideoChannel> _serverBandwidthProbingVideoSsrc;
 
-    absl::optional<std::string> _outgoingEndpointId;
     absl::optional<GroupJoinVideoInformation> _sharedVideoInformation;
 
     std::string _currentHighQualityVideoEndpointId;
