@@ -10,7 +10,7 @@
 #include "../Instance.h"
 
 #include "../StaticThreads.h"
-#include "group/GroupJoinPayload.h"
+#include "GroupJoinPayload.h"
 
 namespace webrtc {
 class AudioDeviceModule;

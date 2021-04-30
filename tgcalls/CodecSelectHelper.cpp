@@ -26,7 +26,9 @@ bool CompareFormats(const VideoFormat &a, const VideoFormat &b) {
 int FormatPriority(const VideoFormat &format, const std::vector<std::string> &preferredCodecs) {
 	static const auto kCodecs = {
 		std::string(cricket::kAv1CodecName),
+#ifndef WEBRTC_DISABLE_H265
 		std::string(cricket::kH265CodecName),
+#endif
 		std::string(cricket::kH264CodecName),
 		std::string(cricket::kVp8CodecName),
         std::string(cricket::kVp9CodecName),

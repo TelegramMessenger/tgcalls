@@ -52,7 +52,7 @@
 
 #include "rnnoise.h"
 
-#include "group/GroupJoinPayload.h"
+#include "GroupJoinPayloadInternal.h"
 
 #include "third-party/json11.hpp"
 
@@ -1946,7 +1946,7 @@ public:
                 }
                 case MediaChannelDescription::Type::Video: {
                     if (description.audioSsrc != 0 && !description.videoInformation.empty()) {
-                        if (const auto videoInformation = GroupParticipantVideoInformation::parse(description.videoInformation)) {
+                        if (const auto videoInformation = parseGroupParticipantVideoInformation(description.videoInformation)) {
                             addIncomingVideoChannel(description.audioSsrc, videoInformation.value());
                         }
                     }
@@ -2191,7 +2191,7 @@ public:
         _serverBandwidthProbingVideoSsrc.reset();
 
         if (parsedPayload->videoInformation && parsedPayload->videoInformation->serverVideoBandwidthProbingSsrc) {
-            setServerBandwidthProbingChannelSsrc(parsedPayload->videoInformation->serverVideoBandwidthProbingSsrc.value());
+            setServerBandwidthProbingChannelSsrc(parsedPayload->videoInformation->serverVideoBandwidthProbingSsrc);
         }
 
         _networkManager->perform(RTC_FROM_HERE, [parsedTransport = parsedPayload->transport](GroupNetworkManager *networkManager) {
@@ -2236,7 +2236,7 @@ public:
         if (!_sharedVideoInformation) {
             return;
         }
-        
+
         auto payloadTypes = assignPayloadTypes(_availableVideoFormats);
         if (payloadTypes.size() != 0) {
             GroupParticipantVideoInformation videoInformation;
