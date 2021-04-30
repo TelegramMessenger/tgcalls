@@ -762,11 +762,13 @@ public:
     _call(call) {
         _videoSink.reset(new VideoSinkImpl());
 
-        std::string streamId = std::string("stream") + uint32ToString(audioSsrc);
+        uint32_t mid = randomIdGenerator->GenerateId();
+
+        std::string streamId = std::string("video") + uint32ToString(mid);
 
         _videoBitrateAllocatorFactory = webrtc::CreateBuiltinVideoBitrateAllocatorFactory();
 
-        _videoChannel = _channelManager->CreateVideoChannel(call, cricket::MediaConfig(), rtpTransport, threads.getMediaThread(), std::string("video") + uint32ToString(audioSsrc), false, GroupNetworkManager::getDefaulCryptoOptions(), randomIdGenerator, cricket::VideoOptions(), _videoBitrateAllocatorFactory.get());
+        _videoChannel = _channelManager->CreateVideoChannel(call, cricket::MediaConfig(), rtpTransport, threads.getMediaThread(), std::string("video") + uint32ToString(mid), false, GroupNetworkManager::getDefaulCryptoOptions(), randomIdGenerator, cricket::VideoOptions(), _videoBitrateAllocatorFactory.get());
 
         auto payloadTypes = assignPayloadTypes(availableVideoFormats);
         std::vector<cricket::VideoCodec> codecs;
