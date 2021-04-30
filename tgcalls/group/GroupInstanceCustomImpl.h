@@ -27,7 +27,6 @@ public:
 
     void emitJoinPayload(std::function<void(GroupJoinPayload const &)> completion);
     void setJoinResponsePayload(std::string const &payload);
-    void addParticipants(std::vector<GroupParticipantDescription> &&participants);
     void removeSsrcs(std::vector<uint32_t> ssrcs);
     void removeIncomingVideoSource(uint32_t ssrc);
 
@@ -42,6 +41,7 @@ public:
     
     void setVolume(uint32_t ssrc, double volume);
     void setFullSizeVideoEndpointId(std::string const &endpointId);
+    void setIgnoreVideoEndpointIds(std::vector<std::string> const &ignoreVideoEndpointIds);
 
 private:
     std::shared_ptr<Threads> _threads;

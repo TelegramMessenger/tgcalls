@@ -90,6 +90,24 @@ enum VideoCodecName {
     VP9
 };
 
+class RequestMediaChannelDescriptionTask {
+public:
+    virtual ~RequestMediaChannelDescriptionTask() = default;
+
+    virtual void cancel() = 0;
+};
+
+struct MediaChannelDescription {
+    enum class Type {
+        Audio,
+        Video
+    };
+
+    Type type = Type::Audio;
+    uint32_t audioSsrc = 0;
+    std::string videoInformation;
+};
+
 struct GroupInstanceDescriptor {
     std::shared_ptr<Threads> threads;
     GroupConfig config;
@@ -104,20 +122,13 @@ struct GroupInstanceDescriptor {
     std::shared_ptr<VideoCaptureInterface> videoCapture; // deprecated
     std::function<webrtc::VideoTrackSourceInterface*()> getVideoSource;
     std::function<void(std::vector<std::string> const &)> incomingVideoSourcesUpdated;
-    std::function<void(std::vector<uint32_t> const &)> participantDescriptionsRequired;
     std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, std::function<void(BroadcastPart &&)>)> requestBroadcastPart;
     int outgoingAudioBitrateKbit{32};
     bool disableOutgoingAudioProcessing{false};
     VideoContentType videoContentType{VideoContentType::None};
     bool initialEnableNoiseSuppression{false};
     std::vector<VideoCodecName> videoCodecPreferences;
-};
-
-struct GroupParticipantDescription {
-    uint32_t audioSsrc = 0;
-
-    absl::optional<std::string> videoInformation;
-    absl::optional<std::string> screencastInformation;
+    std::function<std::shared_ptr<RequestMediaChannelDescriptionTask>(std::vector<uint32_t> const &, std::function<void(std::vector<MediaChannelDescription> &&)>)> requestMediaChannelDescriptions;
 };
 
 template <typename T>
@@ -136,7 +147,6 @@ public:
 
     virtual void emitJoinPayload(std::function<void(GroupJoinPayload const &)> completion) = 0;
     virtual void setJoinResponsePayload(std::string const &payload) = 0;
-    virtual void addParticipants(std::vector<GroupParticipantDescription> &&participants) = 0;
     virtual void removeSsrcs(std::vector<uint32_t> ssrcs) = 0;
     virtual void removeIncomingVideoSource(uint32_t ssrc) = 0;
 
@@ -151,6 +161,7 @@ public:
 
     virtual void setVolume(uint32_t ssrc, double volume) = 0;
     virtual void setFullSizeVideoEndpointId(std::string const &endpointId) = 0;
+    virtual void setIgnoreVideoEndpointIds(std::vector<std::string> const &ignoreVideoEndpointIds) = 0;
 
     struct AudioDevice {
       enum class Type {Input, Output};
