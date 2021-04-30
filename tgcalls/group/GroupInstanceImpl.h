@@ -121,7 +121,7 @@ struct GroupInstanceDescriptor {
     std::function<rtc::scoped_refptr<webrtc::AudioDeviceModule>(webrtc::TaskQueueFactory*)> createAudioDeviceModule;
     std::shared_ptr<VideoCaptureInterface> videoCapture; // deprecated
     std::function<webrtc::VideoTrackSourceInterface*()> getVideoSource;
-    std::function<void(std::vector<std::string> const &)> incomingVideoSourcesUpdated;
+    std::function<void(std::vector<std::string>)> incomingVideoSourcesUpdated;
     std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, std::function<void(BroadcastPart &&)>)> requestBroadcastPart;
     int outgoingAudioBitrateKbit{32};
     bool disableOutgoingAudioProcessing{false};

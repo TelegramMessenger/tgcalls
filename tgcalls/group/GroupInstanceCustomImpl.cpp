@@ -266,7 +266,7 @@ struct RequestedMediaChannelDescriptions {
     std::vector<uint32_t> ssrcs;
 
     RequestedMediaChannelDescriptions(std::shared_ptr<RequestMediaChannelDescriptionTask> task_, std::vector<uint32_t> ssrcs_) :
-    task(task_), ssrcs(ssrcs_) {
+    task(task_), ssrcs(std::move(ssrcs_)) {
     }
 };
 
@@ -1931,7 +1931,7 @@ public:
                 strong->processMediaChannelDescriptionsResponse(requestId, descriptions);
             });
         });
-        _requestedMediaChannelDescriptions.insert(std::make_pair(requestId, RequestedMediaChannelDescriptions(task, requestSsrcs)));
+        _requestedMediaChannelDescriptions.insert(std::make_pair(requestId, RequestedMediaChannelDescriptions(task, std::move(requestSsrcs))));
     }
 
     void processMediaChannelDescriptionsResponse(int requestId, std::vector<MediaChannelDescription> const &descriptions) {
@@ -2490,7 +2490,7 @@ public:
             if (_sharedVideoInformation && !_sharedVideoInformation->endpointId.empty() && _videoCapture) {
                 videoChannelEndpointIds.push_back(_sharedVideoInformation->endpointId);
             }
-            _incomingVideoSourcesUpdated(videoChannelEndpointIds);
+            _incomingVideoSourcesUpdated(std::move(videoChannelEndpointIds));
         }
     }
 
@@ -2555,7 +2555,7 @@ private:
     std::function<void(GroupNetworkState)> _networkStateUpdated;
     std::function<void(GroupLevelsUpdate const &)> _audioLevelsUpdated;
     std::function<void(uint32_t, const AudioFrame &)> _onAudioFrame;
-    std::function<void(std::vector<std::string> const &)> _incomingVideoSourcesUpdated;
+    std::function<void(std::vector<std::string>)> _incomingVideoSourcesUpdated;
     std::function<std::shared_ptr<RequestMediaChannelDescriptionTask>(std::vector<uint32_t> const &, std::function<void(std::vector<MediaChannelDescription> &&)>)> _requestMediaChannelDescriptions;
     std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, std::function<void(BroadcastPart &&)>)> _requestBroadcastPart;
     std::shared_ptr<VideoCaptureInterface> _videoCapture;
