@@ -219,14 +219,21 @@ absl::optional<GroupJoinPayloadVideoPayloadType> parsePayloadType(json11::Json::
                     GroupJoinPayloadVideoPayloadType::FeedbackType parsedFeedbackType;
 
                     const auto typeString = type->second.string_value();
-                    auto components = splitString(typeString, ' ');
-                    if (components.size() == 1) {
-                        parsedFeedbackType.type = components[0];
-                    } else if (components.size() == 2) {
-                        parsedFeedbackType.type = components[0];
-                        parsedFeedbackType.subtype = components[1];
+
+                    const auto subtype = item.object_items().find("subtype");
+                    if (subtype != item.object_items().end() && subtype->second.is_string()) {
+                        parsedFeedbackType.type = typeString;
+                        parsedFeedbackType.subtype = subtype->second.string_value();
                     } else {
-                        continue;
+                        auto components = splitString(typeString, ' ');
+                        if (components.size() == 1) {
+                            parsedFeedbackType.type = components[0];
+                        } else if (components.size() == 2) {
+                            parsedFeedbackType.type = components[0];
+                            parsedFeedbackType.subtype = components[1];
+                        } else {
+                            continue;
+                        }
                     }
 
                     result.feedbackTypes.push_back(std::move(parsedFeedbackType));

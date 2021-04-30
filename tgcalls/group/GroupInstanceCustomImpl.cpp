@@ -946,6 +946,7 @@ public:
     _disableIncomingChannels(descriptor.disableIncomingChannels),
     _useDummyChannel(descriptor.useDummyChannel),
     _outgoingAudioBitrateKbit(descriptor.outgoingAudioBitrateKbit),
+    _minOutgoingVideoBitrateKbit(descriptor.minOutgoingVideoBitrateKbit),
     _disableOutgoingAudioProcessing(descriptor.disableOutgoingAudioProcessing),
     _videoContentType(descriptor.videoContentType),
     _videoCodecPreferences(std::move(descriptor.videoCodecPreferences)),
@@ -1751,11 +1752,11 @@ public:
     void adjustBitratePreferences(bool resetStartBitrate) {
         webrtc::BitrateConstraints preferences;
         if (_videoCapture) {
-            preferences.min_bitrate_bps = 64000;
+            preferences.min_bitrate_bps = _minOutgoingVideoBitrateKbit * 1024;
             if (resetStartBitrate) {
-                preferences.start_bitrate_bps = (100 + 800 + 32 + 100) * 1000;
+                preferences.start_bitrate_bps = std::max(preferences.min_bitrate_bps, (100 + 800 + 32 + 100) * 1000);
             }
-            preferences.max_bitrate_bps = (100 + 200 + 800 + 32 + 100) * 1000;
+            preferences.max_bitrate_bps = std::max(preferences.min_bitrate_bps, (100 + 200 + 800 + 32 + 100) * 1000);
         } else {
             preferences.min_bitrate_bps = 32000;
             if (resetStartBitrate) {
@@ -2562,6 +2563,7 @@ private:
     bool _useDummyChannel{true};
     int _outgoingAudioBitrateKbit{32};
     bool _disableOutgoingAudioProcessing{false};
+    int _minOutgoingVideoBitrateKbit{100};
     VideoContentType _videoContentType{VideoContentType::None};
     std::vector<VideoCodecName> _videoCodecPreferences;
 
