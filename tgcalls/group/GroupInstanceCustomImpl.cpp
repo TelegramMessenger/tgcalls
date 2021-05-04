@@ -51,7 +51,14 @@
 #include <sstream>
 #include <iostream>
 
+
+#ifndef USE_RNNOISE
+#define USE_RNNOISE 1
+#endif
+
+#if USE_RNNOISE
 #include "rnnoise.h"
+#endif
 
 #include "GroupJoinPayloadInternal.h"
 
@@ -477,6 +484,7 @@ struct NoiseSuppressionConfiguration {
     bool isEnabled = false;
 };
 
+#if USE_RNNOISE
 class AudioCapturePostProcessor : public webrtc::CustomProcessing {
 public:
     AudioCapturePostProcessor(std::function<void(GroupLevelValue const &)> updated, std::shared_ptr<NoiseSuppressionConfiguration> noiseSuppressionConfiguration) :
@@ -575,6 +583,7 @@ private:
     float _peak = 0;
     VadHistory _history;
 };
+#endif
 
 class AudioCaptureAnalyzer : public webrtc::CustomAudioAnalyzer {
 private:
@@ -938,6 +947,13 @@ struct DecodedBroadcastPart {
     std::vector<DecodedBroadcastPartChannel> channels;
 };
 
+std::function<webrtc::VideoTrackSourceInterface*()> videoCaptureToGetVideoSource(std::shared_ptr<VideoCaptureInterface> videoCapture) {
+  return [videoCapture]() {
+    VideoCaptureInterfaceObject *videoCaptureImpl = GetVideoCaptureAssumingSameThread(videoCapture.get());
+    return videoCaptureImpl->source();
+  };
+}
+
 } // namespace
 
 class GroupInstanceCustomInternal : public sigslot::has_slots<>, public std::enable_shared_from_this<GroupInstanceCustomInternal> {
@@ -952,6 +968,7 @@ public:
     _requestBroadcastPart(descriptor.requestBroadcastPart),
     _videoCapture(descriptor.videoCapture),
     _videoCaptureSink(new VideoSinkImpl()),
+    _getVideoSource(descriptor.getVideoSource),
     _disableIncomingChannels(descriptor.disableIncomingChannels),
     _useDummyChannel(descriptor.useDummyChannel),
     _outgoingAudioBitrateKbit(descriptor.outgoingAudioBitrateKbit),
@@ -966,6 +983,10 @@ public:
     _initialOutputDeviceId(std::move(descriptor.initialOutputDeviceId)),
     _missingPacketBuffer(100) {
         assert(_threads->getMediaThread()->IsCurrent());
+        if (_videoCapture) {
+          assert(!_getVideoSource);
+          _getVideoSource = videoCaptureToGetVideoSource(std::move(descriptor.videoCapture));
+        }
         auto generator = std::mt19937(std::random_device()());
         auto distribution = std::uniform_int_distribution<uint32_t>();
         do {
@@ -1070,6 +1091,7 @@ public:
         mediaDeps.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory();
         mediaDeps.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactory();
 
+#if USE_RNNOISE
         if (_audioLevelsUpdated) {
             /*auto analyzer = std::make_unique<AudioCaptureAnalyzer>([weak, threads = _threads](GroupLevelValue const &level) {
                 threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, level](){
@@ -1097,6 +1119,7 @@ public:
 
             mediaDeps.audio_processing = builder.Create();
         }
+#endif
 
         _audioDeviceModule = createAudioDeviceModule();
         if (!_audioDeviceModule) {
@@ -1158,8 +1181,8 @@ public:
             beginLevelsTimer(50);
         }
 
-        if (_videoCapture) {
-            setVideoCapture(_videoCapture, true);
+        if (_getVideoSource) {
+            setVideoSource(_getVideoSource, true);
         }
 
         if (_useDummyChannel && _videoContentType != VideoContentType::Screencast) {
@@ -1759,7 +1782,7 @@ public:
 
     void adjustBitratePreferences(bool resetStartBitrate) {
         webrtc::BitrateConstraints preferences;
-        if (_videoCapture) {
+        if (_getVideoSource) {
             preferences.min_bitrate_bps = _minOutgoingVideoBitrateKbit * 1024;
             if (resetStartBitrate) {
                 preferences.start_bitrate_bps = std::max(preferences.min_bitrate_bps, (100 + 800 + 32 + 100) * 1000);
@@ -1878,6 +1901,7 @@ public:
                 // Probably a data channel message
                 return;
             }
+
 
             if (header.ssrc == _outgoingAudioSsrc) {
                 return;
@@ -2155,30 +2179,35 @@ public:
         });
     }
 
-    void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture, bool isInitializing) {
-        bool resetBitrate = (_videoCapture == nullptr) != (videoCapture == nullptr) && !isInitializing;
-        if (!isInitializing && _videoCapture == videoCapture) {
-            return;
-        }
+  void setVideoSource(std::function<webrtc::VideoTrackSourceInterface*()> getVideoSource, bool isInitializing) {
+    bool resetBitrate = (!_getVideoSource) != (!getVideoSource) && !isInitializing;
+    if (!isInitializing && _getVideoSource && getVideoSource && getVideoSource() == _getVideoSource()) {
+      return;
+    }
 
-        _videoCapture = videoCapture;
+    _getVideoSource = std::move(getVideoSource);
 
-        if (_outgoingVideoChannel) {
-            if (_videoCapture) {
-                _outgoingVideoChannel->Enable(true);
-                _outgoingVideoChannel->media_channel()->SetVideoSend(_outgoingVideoSsrcs.simulcastLayers[0].ssrc, NULL, GetVideoCaptureAssumingSameThread(_videoCapture.get())->source());
-            } else {
-                _outgoingVideoChannel->Enable(false);
-                _outgoingVideoChannel->media_channel()->SetVideoSend(_outgoingVideoSsrcs.simulcastLayers[0].ssrc, NULL, nullptr);
-            }
-        }
+    if (_outgoingVideoChannel) {
+      if (_getVideoSource) {
+        _outgoingVideoChannel->Enable(true);
+        _outgoingVideoChannel->media_channel()->SetVideoSend(_outgoingVideoSsrcs.simulcastLayers[0].ssrc, NULL, _getVideoSource());
+      } else {
+        _outgoingVideoChannel->Enable(false);
+        _outgoingVideoChannel->media_channel()->SetVideoSend(_outgoingVideoSsrcs.simulcastLayers[0].ssrc, NULL, nullptr);
+      }
+    }
 
         if (resetBitrate) {
             adjustBitratePreferences(true);
         }
 
         updateIncomingVideoSources();
-    }
+  }
+
+  void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture, bool isInitializing) {
+      _videoCapture = videoCapture;
+      setVideoSource(videoCaptureToGetVideoSource(std::move(videoCapture)), isInitializing);
+  }
 
 	void setAudioOutputDevice(const std::string &id) {
 #ifndef WEBRTC_IOS
@@ -2501,7 +2530,7 @@ public:
             for (const auto &it : _incomingVideoChannels) {
                 videoChannelEndpointIds.push_back(it.first.endpointId);
             }
-            if (_sharedVideoInformation && !_sharedVideoInformation->endpointId.empty() && _videoCapture) {
+            if (_sharedVideoInformation && !_sharedVideoInformation->endpointId.empty() && _getVideoSource) {
                 videoChannelEndpointIds.push_back(_sharedVideoInformation->endpointId);
             }
             _incomingVideoSourcesUpdated(std::move(videoChannelEndpointIds));
@@ -2574,7 +2603,7 @@ private:
     std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, std::function<void(BroadcastPart &&)>)> _requestBroadcastPart;
     std::shared_ptr<VideoCaptureInterface> _videoCapture;
     std::shared_ptr<VideoSinkImpl> _videoCaptureSink;
-
+    std::function<webrtc::VideoTrackSourceInterface*()> _getVideoSource;
     bool _disableIncomingChannels = false;
     bool _useDummyChannel{true};
     int _outgoingAudioBitrateKbit{32};
@@ -2733,6 +2762,12 @@ void GroupInstanceCustomImpl::setVideoCapture(std::shared_ptr<VideoCaptureInterf
     _internal->perform(RTC_FROM_HERE, [videoCapture](GroupInstanceCustomInternal *internal) {
         internal->setVideoCapture(videoCapture, false);
     });
+}
+
+void GroupInstanceCustomImpl::setVideoSource(std::function<webrtc::VideoTrackSourceInterface*()> getVideoSource) {
+  _internal->perform(RTC_FROM_HERE, [getVideoSource](GroupInstanceCustomInternal *internal) {
+    internal->setVideoSource(getVideoSource, false);
+  });
 }
 
 void GroupInstanceCustomImpl::setAudioOutputDevice(std::string id) {

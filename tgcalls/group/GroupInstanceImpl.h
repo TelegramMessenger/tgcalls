@@ -154,7 +154,7 @@ public:
     virtual void setIsMuted(bool isMuted) = 0;
     virtual void setIsNoiseSuppressionEnabled(bool isNoiseSuppressionEnabled) = 0;
     virtual void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture) = 0;
-    //virtual void setVideoSource(std::function<webrtc::VideoTrackSourceInterface*()> getVideoSource) = 0;
+    virtual void setVideoSource(std::function<webrtc::VideoTrackSourceInterface*()> getVideoSource) = 0;
     virtual void setAudioOutputDevice(std::string id) = 0;
     virtual void setAudioInputDevice(std::string id) = 0;
 
