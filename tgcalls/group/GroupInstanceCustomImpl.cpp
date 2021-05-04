@@ -1914,6 +1914,9 @@ public:
 
     void maybeRequestUnknownSsrc(uint32_t ssrc) {
         if (!_requestMediaChannelDescriptions) {
+            MediaChannelDescription description;
+            description.audioSsrc = ssrc;
+            processMediaChannelDescriptionsResponse(-1, {description});
             return;
         }
 
@@ -1944,6 +1947,10 @@ public:
 
     void processMediaChannelDescriptionsResponse(int requestId, std::vector<MediaChannelDescription> const &descriptions) {
         _requestedMediaChannelDescriptions.erase(requestId);
+
+        if (_disableIncomingChannels) {
+            return;
+        }
 
         for (const auto &description : descriptions) {
             switch (description.type) {
