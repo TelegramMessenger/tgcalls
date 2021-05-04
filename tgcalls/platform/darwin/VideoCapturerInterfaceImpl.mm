@@ -27,8 +27,10 @@
 #import "VideoCameraCapturerMac.h"
 #import "tgcalls/platform/darwin/DesktopSharingCapturer.h"
 #import "tgcalls/desktop_capturer/DesktopCaptureSourceHelper.h"
+#impotr "CustomExternalCapturer.h"
 #else
 #import "VideoCameraCapturer.h"
+#import "CustomExternalCapturer.h"
 #endif
 #import <AVFoundation/AVFoundation.h>
 
@@ -63,7 +65,8 @@
 
 @interface VideoCapturerInterfaceImplReference : NSObject {
 #ifdef WEBRTC_IOS
-    VideoCameraCapturer *_videoCapturer;
+    CustomExternalCapturer *_customExternalCapturer;
+    VideoCameraCapturer *_videoCameraCapturer;
 #else
     id<CapturerInterface> _videoCapturer;
 #endif
@@ -179,6 +182,10 @@
 }
 
 + (VideoCapturerInterfaceImplSourceDescription *)selectCapturerDescriptionWithDeviceId:(NSString *)deviceId {
+    if ([deviceId isEqualToString:@":ios_custom"]) {
+        return [[VideoCapturerInterfaceImplSourceDescription alloc] initWithIsFrontCamera:false keepLandscape:false deviceId:deviceId device:nil format:nil];
+    }
+
     if ([deviceId hasPrefix:@"desktop_capturer_"]) {
         return [[VideoCapturerInterfaceImplSourceDescription alloc] initWithIsFrontCamera:false keepLandscape:true deviceId: deviceId device: nil format: nil];
     }
@@ -199,8 +206,12 @@
         assert([NSThread isMainThread]);
 
 #ifdef WEBRTC_IOS
-        _videoCapturer = [[VideoCameraCapturer alloc] initWithSource:source useFrontCamera:sourceDescription.isFrontCamera keepLandscape:sourceDescription.keepLandscape isActiveUpdated:isActiveUpdated rotationUpdated:rotationUpdated];
-        [_videoCapturer startCaptureWithDevice:sourceDescription.device format:sourceDescription.format fps:30];
+        if ([sourceDescription.deviceId isEqualToString:@":ios_custom"]) {
+            _customExternalCapturer = [[CustomExternalCapturer alloc] initWithSource:source];
+        } else {
+            _videoCameraCapturer = [[VideoCameraCapturer alloc] initWithSource:source useFrontCamera:sourceDescription.isFrontCamera keepLandscape:sourceDescription.keepLandscape isActiveUpdated:isActiveUpdated rotationUpdated:rotationUpdated];
+            [_videoCameraCapturer startCaptureWithDevice:sourceDescription.device format:sourceDescription.format fps:30];
+        }
 #else
         if (const auto desktopCaptureSource = tgcalls::DesktopCaptureSourceForKey([sourceDescription.deviceId UTF8String])) {
             DesktopSharingCapturer *sharing = [[DesktopSharingCapturer alloc] initWithSource:source captureSource:desktopCaptureSource];
@@ -222,31 +233,65 @@
     assert([NSThread isMainThread]);
 
 #ifdef WEBRTC_IOS
-    [_videoCapturer stopCapture];
+    [_videoCameraCapturer stopCapture];
 #elif TARGET_OS_OSX
     [_videoCapturer stop];
 #endif
 }
 
 - (void)setIsEnabled:(bool)isEnabled {
+#ifdef WEBRTC_IOS
+    if (_videoCameraCapturer) {
+        [_videoCameraCapturer setIsEnabled:isEnabled];
+    }
+#else
     [_videoCapturer setIsEnabled:isEnabled];
+#endif
 }
 
 - (void)setUncroppedSink:(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)sink {
+#ifdef WEBRTC_IOS
+    if (_videoCameraCapturer) {
+        [_videoCameraCapturer setUncroppedSink:sink];
+    }
+#else
     [_videoCapturer setUncroppedSink:sink];
+#endif
 }
 
 - (void)setPreferredCaptureAspectRatio:(float)aspectRatio {
+#ifdef WEBRTC_IOS
+    if (_videoCameraCapturer) {
+        [_videoCameraCapturer setPreferredCaptureAspectRatio:aspectRatio];
+    }
+#else
     [_videoCapturer setPreferredCaptureAspectRatio:aspectRatio];
+#endif
 }
 
 - (int)getRotation {
 #ifdef WEBRTC_IOS
-    return [_videoCapturer getRotation];
+    if (_videoCameraCapturer) {
+        return [_videoCameraCapturer getRotation];
+    } else {
+        return 0;
+    }
 #elif TARGET_OS_OSX
     return 0;
 #else
     #error "Unsupported platform"
+#endif
+}
+
+- (id)getInternalReference {
+#ifdef WEBRTC_IOS
+    if (_videoCameraCapturer) {
+        return _videoCameraCapturer;
+    } else if (_customExternalCapturer) {
+        return _customExternalCapturer;
+    } else {
+        return nil;
+    }
 #endif
 }
 
@@ -260,7 +305,7 @@ namespace tgcalls {
 
 VideoCapturerInterfaceImpl::VideoCapturerInterfaceImpl(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, std::string deviceId, std::function<void(VideoState)> stateUpdated, std::function<void(PlatformCaptureInfo)> captureInfoUpdated, std::pair<int, int> &outResolution) :
     _source(source) {
-        VideoCapturerInterfaceImplSourceDescription *sourceDescription = [VideoCapturerInterfaceImplReference selectCapturerDescriptionWithDeviceId:[NSString stringWithUTF8String:deviceId.c_str()]];
+    VideoCapturerInterfaceImplSourceDescription *sourceDescription = [VideoCapturerInterfaceImplReference selectCapturerDescriptionWithDeviceId:[NSString stringWithUTF8String:deviceId.c_str()]];
 
     CMVideoDimensions dimensions = CMVideoFormatDescriptionGetDimensions(sourceDescription.format.formatDescription);
     #ifdef WEBRTC_IOS
@@ -335,6 +380,18 @@ int VideoCapturerInterfaceImpl::getRotation() {
         if (implReference.reference != nil) {
             VideoCapturerInterfaceImplReference *reference = (__bridge VideoCapturerInterfaceImplReference *)implReference.reference;
             value = [reference getRotation];
+        }
+    });
+    return value;
+}
+
+id VideoCapturerInterfaceImpl::getInternalReference() {
+    __block id value = nil;
+    VideoCapturerInterfaceImplHolder *implReference = _implReference;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        if (implReference.reference != nil) {
+            VideoCapturerInterfaceImplReference *reference = (__bridge VideoCapturerInterfaceImplReference *)implReference.reference;
+            value = [reference getInternalReference];
         }
     });
     return value;

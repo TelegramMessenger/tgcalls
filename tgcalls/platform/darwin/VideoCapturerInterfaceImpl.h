@@ -26,6 +26,8 @@ public:
     void setUncroppedOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) override;
     int getRotation() override;
 
+    id getInternalReference();
+
 private:
 	rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _source;
 	VideoCapturerInterfaceImplHolder *_implReference;

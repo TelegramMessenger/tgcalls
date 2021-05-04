@@ -1054,7 +1054,9 @@ public:
                 }, threads);
         }));
 
-        PlatformInterface::SharedInstance()->configurePlatformAudio();
+        if (_videoContentType != VideoContentType::Screencast) {
+            PlatformInterface::SharedInstance()->configurePlatformAudio();
+        }
 
         cricket::MediaEngineDependencies mediaDeps;
         mediaDeps.task_queue_factory = _taskQueueFactory.get();
@@ -1740,8 +1742,8 @@ public:
                 }
             }
         } else {
-            rtpParameters.encodings[0].min_bitrate_bps = 200000;
-            rtpParameters.encodings[0].max_bitrate_bps = 800000 + 100000;
+            //rtpParameters.encodings[0].min_bitrate_bps = 200000;
+            rtpParameters.encodings[0].max_bitrate_bps = (800000 + 100000) * 2;
         }
 
         _outgoingVideoChannel->media_channel()->SetRtpSendParameters(_outgoingVideoSsrcs.simulcastLayers[0].ssrc, rtpParameters);
@@ -1758,7 +1760,11 @@ public:
             if (resetStartBitrate) {
                 preferences.start_bitrate_bps = std::max(preferences.min_bitrate_bps, (100 + 800 + 32 + 100) * 1000);
             }
-            preferences.max_bitrate_bps = std::max(preferences.min_bitrate_bps, (100 + 200 + 800 + 32 + 100) * 1000);
+            if (_videoContentType == VideoContentType::Screencast) {
+                preferences.max_bitrate_bps = std::max(preferences.min_bitrate_bps, (100 + 200 + 800 + 32 + 100) * 1000 * 2);
+            } else {
+                preferences.max_bitrate_bps = std::max(preferences.min_bitrate_bps, (100 + 200 + 800 + 32 + 100) * 1000);
+            }
         } else {
             preferences.min_bitrate_bps = 32000;
             if (resetStartBitrate) {

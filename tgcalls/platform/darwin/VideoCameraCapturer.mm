@@ -604,7 +604,7 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
             OSType pixelFormat = CVPixelBufferGetPixelFormatType(rtcPixelBuffer.pixelBuffer);
             CVPixelBufferCreate(NULL, width, height, pixelFormat, NULL, &outputPixelBufferRef);
             if (outputPixelBufferRef) {
-                int bufferSize = [rtcPixelBuffer bufferSizeForCroppingAndScalingToWidth:width height:width];
+                int bufferSize = [rtcPixelBuffer bufferSizeForCroppingAndScalingToWidth:width height:height];
                 if (_croppingBuffer.size() < bufferSize) {
                     _croppingBuffer.resize(bufferSize);
                 }
