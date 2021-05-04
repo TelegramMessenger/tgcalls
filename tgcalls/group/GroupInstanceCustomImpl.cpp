@@ -46,6 +46,7 @@
 #include "StreamingPart.h"
 #include "AudioDeviceHelper.h"
 
+#include <mutex>
 #include <random>
 #include <sstream>
 #include <iostream>
@@ -425,6 +426,7 @@ public:
     }
 
     virtual void OnFrame(const webrtc::VideoFrame& frame) override {
+        std::unique_lock<std::mutex> lock{ _mutex };
         _lastFrame = frame;
         for (int i = (int)(_sinks.size()) - 1; i >= 0; i--) {
             auto strong = _sinks[i].lock();
@@ -437,6 +439,7 @@ public:
     }
 
     virtual void OnDiscardedFrame() override {
+        std::unique_lock<std::mutex> lock{ _mutex };
         for (int i = (int)(_sinks.size()) - 1; i >= 0; i--) {
             auto strong = _sinks[i].lock();
             if (!strong) {
@@ -448,6 +451,7 @@ public:
     }
 
     void addSink(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> impl) {
+        std::unique_lock<std::mutex> lock{ _mutex };
         _sinks.push_back(impl);
         if (_lastFrame) {
             auto strong = impl.lock();
@@ -460,6 +464,8 @@ public:
 private:
     std::vector<std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>> _sinks;
     absl::optional<webrtc::VideoFrame> _lastFrame;
+    std::mutex _mutex;
+
 };
 
 struct NoiseSuppressionConfiguration {
