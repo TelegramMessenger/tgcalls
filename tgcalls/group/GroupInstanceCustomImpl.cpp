@@ -951,6 +951,7 @@ public:
     _requestMediaChannelDescriptions(descriptor.requestMediaChannelDescriptions),
     _requestBroadcastPart(descriptor.requestBroadcastPart),
     _videoCapture(descriptor.videoCapture),
+    _videoCaptureSink(new VideoSinkImpl()),
     _disableIncomingChannels(descriptor.disableIncomingChannels),
     _useDummyChannel(descriptor.useDummyChannel),
     _outgoingAudioBitrateKbit(descriptor.outgoingAudioBitrateKbit),
@@ -965,7 +966,6 @@ public:
     _initialOutputDeviceId(std::move(descriptor.initialOutputDeviceId)),
     _missingPacketBuffer(100) {
         assert(_threads->getMediaThread()->IsCurrent());
-
         auto generator = std::mt19937(std::random_device()());
         auto distribution = std::uniform_int_distribution<uint32_t>();
         do {
@@ -2330,9 +2330,8 @@ public:
     void addIncomingVideoOutput(std::string const &endpointId, std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
         if (_sharedVideoInformation && endpointId == _sharedVideoInformation->endpointId) {
             if (_videoCapture) {
-                std::shared_ptr<VideoSinkImpl> sinkWrapper(new VideoSinkImpl());
-                sinkWrapper->addSink(sink);
-                _videoCapture->setOutput(sinkWrapper);
+                _videoCaptureSink->addSink(sink);
+                _videoCapture->setOutput(_videoCaptureSink);
             }
         } else {
             auto it = _incomingVideoChannels.find(VideoChannelId(endpointId));
@@ -2567,6 +2566,8 @@ private:
     std::function<std::shared_ptr<RequestMediaChannelDescriptionTask>(std::vector<uint32_t> const &, std::function<void(std::vector<MediaChannelDescription> &&)>)> _requestMediaChannelDescriptions;
     std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, std::function<void(BroadcastPart &&)>)> _requestBroadcastPart;
     std::shared_ptr<VideoCaptureInterface> _videoCapture;
+    std::shared_ptr<VideoSinkImpl> _videoCaptureSink;
+
     bool _disableIncomingChannels = false;
     bool _useDummyChannel{true};
     int _outgoingAudioBitrateKbit{32};
@@ -2621,6 +2622,7 @@ private:
     std::map<uint32_t, double> _volumeBySsrc;
     std::map<ChannelId, std::unique_ptr<IncomingAudioChannel>> _incomingAudioChannels;
     std::map<VideoChannelId, std::unique_ptr<IncomingVideoChannel>> _incomingVideoChannels;
+    
     std::unique_ptr<IncomingVideoChannel> _serverBandwidthProbingVideoSsrc;
 
     absl::optional<GroupJoinVideoInformation> _sharedVideoInformation;
