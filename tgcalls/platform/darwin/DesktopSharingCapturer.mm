@@ -70,7 +70,7 @@ private:
 
         tgcalls::DesktopCaptureSourceData data{
 	        /*.aspectSize = */{ 1920, 1080 },
-	        /*.fps = */18,
+	        /*.fps = */24,
 	        /*.captureMouse = */true,
         };
         renderer.emplace(captureSource, data);
