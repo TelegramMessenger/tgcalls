@@ -363,7 +363,7 @@ absl::optional<GroupJoinResponsePayload> GroupJoinResponsePayload::parse(std::st
     }
 
     const auto video = json.object_items().find("video");
-    if (transport != json.object_items().end() && video->second.is_object()) {
+    if (video != json.object_items().end() && video->second.is_object()) {
         result.videoInformation = parseVideoInformation(video->second.object_items());
     }
 
