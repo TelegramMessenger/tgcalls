@@ -1030,16 +1030,11 @@ public:
     void start() {
         const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
 
-        std::ostringstream configString;
-        configString << "WebRTC-Audio-Allocation/";
-        configString << "min:" << _outgoingAudioBitrateKbit << "kbps" << ",";
-        configString << "max:" << _outgoingAudioBitrateKbit << "kbps" << "/";
-
-        configString << "WebRTC-Audio-OpusMinPacketLossRate/Enabled-1/";
-
-        //configString << "WebRTC-TaskQueuePacer/Enabled/";
-
-        webrtc::field_trial::InitFieldTrialsFromString(configString.str().c_str());
+        webrtc::field_trial::InitFieldTrialsFromString(
+            "WebRTC-Audio-Allocation/min:32kbps,max:32kbps/"
+            "WebRTC-Audio-OpusMinPacketLossRate/Enabled-1/"
+            "WebRTC-TaskQueuePacer/Enabled/"
+        );
 
         _networkManager.reset(new ThreadLocalObject<GroupNetworkManager>(_threads->getNetworkThread(), [weak, threads = _threads] () mutable {
             return new GroupNetworkManager(
@@ -1141,8 +1136,7 @@ public:
         callConfig.task_queue_factory = _taskQueueFactory.get();
         callConfig.trials = &_fieldTrials;
         callConfig.audio_state = _channelManager->media_engine()->voice().GetAudioState();
-        //_call.reset(webrtc::Call::Create(callConfig, _threads->getSharedModuleThread()));
-        _call.reset(webrtc::Call::Create(callConfig));
+        _call.reset(webrtc::Call::Create(callConfig, _threads->getSharedModuleThread()));
 
         _uniqueRandomIdGenerator.reset(new rtc::UniqueRandomIdGenerator());
 
@@ -1879,7 +1873,7 @@ public:
     }
 
     void receivePacket(rtc::CopyOnWriteBuffer const &packet, bool isUnresolved) {
-        if (packet.size() >= 4) {
+      if (packet.size() >= 4) {
             if (packet.data()[0] == 0x13 && packet.data()[1] == 0x88 && packet.data()[2] == 0x13 && packet.data()[3] == 0x88) {
                 // SCTP packet header (source port 5000, destination port 5000)
                 return;
@@ -2355,7 +2349,7 @@ public:
 
         if (_outgoingAudioChannel) {
             _outgoingAudioChannel->Enable(!_isMuted);
-            _outgoingAudioChannel->media_channel()->SetAudioSend(_outgoingAudioSsrc, _isRtcConnected && !_isMuted, nullptr, &_audioSource);
+            _outgoingAudioChannel->media_channel()->SetAudioSend(_outgoingAudioSsrc, !_isMuted, nullptr, &_audioSource);
         }
     }
 
