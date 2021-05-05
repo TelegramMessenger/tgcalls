@@ -228,6 +228,10 @@
 #endif
 }
 
+-(void)setOnFatalError:(std::function<void()>)error {
+    [_videoCapturer setOnFatalError:error];
+}
+
 - (void)setIsEnabled:(bool)isEnabled {
     [_videoCapturer setIsEnabled:isEnabled];
 }
@@ -327,6 +331,17 @@ void VideoCapturerInterfaceImpl::setUncroppedOutput(std::shared_ptr<rtc::VideoSi
         }
     });
 }
+
+void VideoCapturerInterfaceImpl::setOnFatalError(std::function<void()> error) {
+    VideoCapturerInterfaceImplHolder *implReference = _implReference;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (implReference.reference != nil) {
+            VideoCapturerInterfaceImplReference *reference = (__bridge VideoCapturerInterfaceImplReference *)implReference.reference;
+            [reference setOnFatalError:error];
+        }
+    });
+}
+
 
 int VideoCapturerInterfaceImpl::getRotation() {
     __block int value = 0;

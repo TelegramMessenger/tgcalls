@@ -61,6 +61,9 @@ void VideoCaptureInterfaceObject::switchToDevice(std::string deviceId) {
 		if (_currentUncroppedSink) {
 			_videoCapturer->setUncroppedOutput(_currentUncroppedSink);
 		}
+        if (_onFatalError) {
+            _videoCapturer->setOnFatalError(_onFatalError);
+        }
 		_videoCapturer->setState(_state);
 	}
 }
@@ -110,6 +113,13 @@ void VideoCaptureInterfaceObject::setOutput(std::shared_ptr<rtc::VideoSinkInterf
 	_currentUncroppedSink = sink;
 }
 
+void VideoCaptureInterfaceObject::setOnFatalError(std::function<void()> error) {
+    if (_videoCapturer) {
+        _videoCapturer->setOnFatalError(error);
+    }
+    _onFatalError = error;
+}
+
 void VideoCaptureInterfaceObject::setStateUpdated(std::function<void(VideoState)> stateUpdated) {
 	_stateUpdated = stateUpdated;
 }
@@ -142,6 +152,11 @@ void VideoCaptureInterfaceImpl::setState(VideoState state) {
 void VideoCaptureInterfaceImpl::setPreferredAspectRatio(float aspectRatio) {
     _impl.perform(RTC_FROM_HERE, [aspectRatio](VideoCaptureInterfaceObject *impl) {
         impl->setPreferredAspectRatio(aspectRatio);
+    });
+}
+void VideoCaptureInterfaceImpl::setOnFatalError(std::function<void()> error) {
+    _impl.perform(RTC_FROM_HERE, [error](VideoCaptureInterfaceObject *impl) {
+        impl->setOnFatalError(error);
     });
 }
 

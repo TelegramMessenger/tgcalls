@@ -189,9 +189,8 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     float _aspectRatio;
     std::vector<uint8_t> _croppingBuffer;
     std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _uncroppedSink;
-
+    std::function<void ()> _onFatalError;
     int _warmupFrameCount;
-
 }
 
 @end
@@ -259,6 +258,10 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
                         format:(AVCaptureDeviceFormat *)format
                            fps:(NSInteger)fps {
   [self setupCaptureWithDevice:device format:format fps:fps completionHandler:nil];
+}
+
+-(void)setOnFatalError:(std::function<void ()>)error {
+    _onFatalError = error;
 }
 
 - (void)stop {
@@ -537,6 +540,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
             self->_hasRetriedOnFatalError = YES;
         } else {
             RTCLogError(@"Previous fatal error recovery failed.");
+            _onFatalError();
         }
 //    }];
 }
