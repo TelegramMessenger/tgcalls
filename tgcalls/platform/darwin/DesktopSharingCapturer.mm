@@ -79,6 +79,10 @@ private:
     return self;
 }
 
+-(void)setOnFatalError:(std::function<void ()>)error {
+    renderer->setOnFatalError(error);
+}
+
 -(void)start {
     renderer->start();
 }
