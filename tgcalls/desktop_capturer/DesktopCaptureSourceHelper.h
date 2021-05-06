@@ -11,6 +11,7 @@
 #include "tgcalls/desktop_capturer/DesktopCaptureSource.h"
 
 #include <memory>
+#include <functional>
 
 namespace webrtc {
 class VideoFrame;

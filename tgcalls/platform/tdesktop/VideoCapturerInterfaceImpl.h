@@ -25,6 +25,8 @@ public:
 	int getRotation() override {
 		return 0;
 	}
+	void setOnFatalError(std::function<void()> error) override {
+	}
 
 private:
 	rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _source;
