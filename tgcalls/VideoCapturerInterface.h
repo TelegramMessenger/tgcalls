@@ -4,6 +4,7 @@
 #include "Instance.h"
 
 #include <memory>
+#include <functional>
 
 namespace rtc {
 template <typename VideoFrameT>
@@ -24,7 +25,9 @@ public:
 	virtual void setPreferredCaptureAspectRatio(float aspectRatio) = 0;
 	virtual void setUncroppedOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) = 0;
     virtual int getRotation() = 0;
-    virtual void setOnFatalError(std::function<void()> error) = 0;
+    virtual void setOnFatalError(std::function<void()> error) {
+      // TODO: make this function pure virtual when everybody implements it.
+    }
 };
 
 } // namespace tgcalls
