@@ -14,6 +14,7 @@ namespace tgcalls {
 
 class DesktopCaptureSourceHelper;
 class VideoCameraCapturer;
+class PlatformContext;
 
 class VideoCapturerInterfaceImpl final : public VideoCapturerInterface {
 public:
