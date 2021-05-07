@@ -950,7 +950,7 @@ struct DecodedBroadcastPart {
 std::function<webrtc::VideoTrackSourceInterface*()> videoCaptureToGetVideoSource(std::shared_ptr<VideoCaptureInterface> videoCapture) {
   return [videoCapture]() {
     VideoCaptureInterfaceObject *videoCaptureImpl = GetVideoCaptureAssumingSameThread(videoCapture.get());
-    return videoCaptureImpl->source();
+    return videoCaptureImpl ? videoCaptureImpl->source() : nullptr;
   };
 }
 
