@@ -145,10 +145,10 @@ void SourceFrameCallbackImpl::OnCaptureResult(
 	    webrtc::DesktopCapturer::Result result,
 	    std::unique_ptr<webrtc::DesktopFrame> frame) {
 	if (result != webrtc::DesktopCapturer::Result::SUCCESS) {
-        _onFatalError();
+        if (_onFatalError) _onFatalError();
 		return;
 	}
-    
+
     const auto frameSize = frame->size();
     DesktopSize fittedSize = AspectFitted(
         size_,
@@ -162,13 +162,12 @@ void SourceFrameCallbackImpl::OnCaptureResult(
         fittedSize.height
     };
 
-    auto outputFrame = std::make_unique<webrtc::BasicDesktopFrame>(
-        outputSize);
+    webrtc::BasicDesktopFrame outputFrame{ outputSize };
 
 	const auto outputRect = webrtc::DesktopRect::MakeSize(outputSize);
 
-	const auto outputRectData = outputFrame->data() +
-        outputFrame->stride() * outputRect.top() +
+	const auto outputRectData = outputFrame.data() +
+        outputFrame.stride() * outputRect.top() +
 		webrtc::DesktopFrame::kBytesPerPixel * outputRect.left();
 
 
@@ -178,13 +177,13 @@ void SourceFrameCallbackImpl::OnCaptureResult(
 		frame->size().width(),
 		frame->size().height(),
         outputRectData,
-        outputFrame->stride(),
+        outputFrame.stride(),
         outputSize.width(),
         outputSize.height(),
 		libyuv::kFilterBilinear);
 
-	int width = outputFrame->size().width();
-	int height = outputFrame->size().height();
+	int width = outputFrame.size().width();
+	int height = outputFrame.size().height();
 	int stride_y = width;
 	int stride_uv = (width + 1) / 2;
 
@@ -200,7 +199,7 @@ void SourceFrameCallbackImpl::OnCaptureResult(
 	}
 
 	int i420Result = libyuv::ConvertToI420(
-        outputFrame->data(),
+        outputFrame.data(),
 		width * height,
 		i420_buffer_->MutableDataY(), i420_buffer_->StrideY(),
 		i420_buffer_->MutableDataU(), i420_buffer_->StrideU(),
