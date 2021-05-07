@@ -11,6 +11,7 @@
 #include "tgcalls/desktop_capturer/DesktopCaptureSource.h"
 
 #include <memory>
+#include <functional>
 
 namespace webrtc {
 class VideoFrame;
@@ -40,7 +41,7 @@ public:
 		rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) const;
 	void start() const;
 	void stop() const;
-
+    void setOnFatalError(std::function<void ()>) const;
 private:
 	struct Renderer;
 	std::shared_ptr<Renderer> _renderer;

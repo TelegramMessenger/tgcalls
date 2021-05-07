@@ -25,11 +25,15 @@ public:
 	int getRotation() override {
 		return 0;
 	}
+	void setOnFatalError(std::function<void()> error) override {
+	}
 
 private:
 	rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _source;
 	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _sink;
+#ifndef TGCALLS_DISABLE_DESKTOP_CAPTURE
 	std::unique_ptr<DesktopCaptureSourceHelper> _desktopCapturer;
+#endif // TGCALLS_DISABLE_DESKTOP_CAPTURE
 	std::unique_ptr<VideoCameraCapturer> _cameraCapturer;
 	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _uncroppedSink;
 	std::function<void(VideoState)> _stateUpdated;

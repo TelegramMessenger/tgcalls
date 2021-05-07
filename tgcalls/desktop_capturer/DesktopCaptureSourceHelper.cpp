@@ -102,14 +102,15 @@ public:
 		std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
 	void setSecondaryOutput(
 		std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
-
+    void setOnFatalError(std::function<void ()>);
 private:
     rtc::scoped_refptr<webrtc::I420Buffer> i420_buffer_;
 	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _sink;
 	std::shared_ptr<
         rtc::VideoSinkInterface<webrtc::VideoFrame>> _secondarySink;
     DesktopSize size_;
-
+    std::function<void ()> _onFatalError;
+    int _index = 0;
 };
 
 class DesktopSourceRenderer {
@@ -124,6 +125,7 @@ public:
     void setOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
     void setSecondaryOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
     void loop();
+    void setOnFatalError(std::function<void ()>);
 
 private:
     CaptureScheduler &_scheduler;
@@ -143,9 +145,10 @@ void SourceFrameCallbackImpl::OnCaptureResult(
 	    webrtc::DesktopCapturer::Result result,
 	    std::unique_ptr<webrtc::DesktopFrame> frame) {
 	if (result != webrtc::DesktopCapturer::Result::SUCCESS) {
+        _onFatalError();
 		return;
 	}
-
+    
     const auto frameSize = frame->size();
     DesktopSize fittedSize = AspectFitted(
         size_,
@@ -227,6 +230,10 @@ void SourceFrameCallbackImpl::setOutput(
     _sink = std::move(sink);
 }
 
+void SourceFrameCallbackImpl::setOnFatalError(std::function<void ()> error) {
+    _onFatalError = error;
+}
+
 void SourceFrameCallbackImpl::setSecondaryOutput(
         std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
     _secondarySink = std::move(sink);
@@ -300,6 +307,13 @@ void DesktopSourceRenderer::loop() {
         if (guard.lock()) {
             loop();
         }
+    });
+}
+
+void DesktopSourceRenderer::setOnFatalError(std::function<void ()> error) {
+    _callback.setOnFatalError([=]{
+        stop();
+        error();
     });
 }
 
@@ -378,6 +392,11 @@ void DesktopCaptureSourceHelper::start() const {
 	_renderer->scheduler.runAsync([renderer = _renderer] {
 		renderer->renderer->start();
 	});
+}
+void DesktopCaptureSourceHelper::setOnFatalError(std::function<void ()> error) const {
+    _renderer->scheduler.runAsync([renderer = _renderer, error = error] {
+        renderer->renderer->setOnFatalError(error);
+    });
 }
 
 void DesktopCaptureSourceHelper::stop() const {

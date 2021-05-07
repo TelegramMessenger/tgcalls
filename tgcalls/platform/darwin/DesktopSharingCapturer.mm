@@ -70,13 +70,17 @@ private:
 
         tgcalls::DesktopCaptureSourceData data{
 	        /*.aspectSize = */{ 1920, 1080 },
-	        /*.fps = */18,
+	        /*.fps = */30,
 	        /*.captureMouse = */true,
         };
         renderer.emplace(captureSource, data);
         renderer->setOutput(_sink);
     }
     return self;
+}
+
+-(void)setOnFatalError:(std::function<void ()>)error {
+    renderer->setOnFatalError(error);
 }
 
 -(void)start {

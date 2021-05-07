@@ -2,7 +2,10 @@
 
 #include "tgcalls/platform/tdesktop/VideoCapturerTrackSource.h"
 #include "tgcalls/platform/tdesktop/VideoCameraCapturer.h"
+
+#ifndef TGCALLS_DISABLE_DESKTOP_CAPTURE
 #include "tgcalls/desktop_capturer/DesktopCaptureSourceHelper.h"
+#endif // TGCALLS_DISABLE_DESKTOP_CAPTURE
 
 #include "api/video_track_source_proxy.h"
 
@@ -29,6 +32,7 @@ VideoCapturerInterfaceImpl::VideoCapturerInterfaceImpl(
 : _source(source)
 , _sink(GetSink(source))
 , _stateUpdated(stateUpdated) {
+#ifndef TGCALLS_DISABLE_DESKTOP_CAPTURE
 	if (const auto source = DesktopCaptureSourceForKey(deviceId)) {
 		const auto data = DesktopCaptureSourceData{
 			/*.aspectSize = */{ 1280, 720 },
@@ -41,7 +45,9 @@ VideoCapturerInterfaceImpl::VideoCapturerInterfaceImpl(
 		_desktopCapturer->setOutput(_sink);
 		_desktopCapturer->start();
 		outResolution = { 1280, 960 };
-	} else {
+	} else
+#endif // TGCALLS_DISABLE_DESKTOP_CAPTURE
+	{
 		_cameraCapturer = std::make_unique<VideoCameraCapturer>(_sink);
 		_cameraCapturer->setDeviceId(deviceId);
 		_cameraCapturer->setState(VideoState::Active);
@@ -53,13 +59,16 @@ VideoCapturerInterfaceImpl::~VideoCapturerInterfaceImpl() {
 }
 
 void VideoCapturerInterfaceImpl::setState(VideoState state) {
+#ifndef TGCALLS_DISABLE_DESKTOP_CAPTURE
 	if (_desktopCapturer) {
 		if (state == VideoState::Active) {
 			_desktopCapturer->start();
 		} else {
 			_desktopCapturer->stop();
 		}
-	} else if (_cameraCapturer) {
+	} else
+#endif // TGCALLS_DISABLE_DESKTOP_CAPTURE
+	if (_cameraCapturer) {
 		_cameraCapturer->setState(state);
 	}
 	if (_stateUpdated) {
