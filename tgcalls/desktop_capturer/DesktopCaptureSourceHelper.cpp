@@ -110,7 +110,6 @@ private:
         rtc::VideoSinkInterface<webrtc::VideoFrame>> _secondarySink;
     DesktopSize size_;
     std::function<void ()> _onFatalError;
-    int _index = 0;
 };
 
 class DesktopSourceRenderer {
