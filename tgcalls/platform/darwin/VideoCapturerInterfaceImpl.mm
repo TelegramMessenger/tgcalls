@@ -240,7 +240,10 @@
 }
 
 -(void)setOnFatalError:(std::function<void()>)error {
+#ifdef WEBRTC_IOS
+#else
     [_videoCapturer setOnFatalError:error];
+#endif
 }
 
 - (void)setIsEnabled:(bool)isEnabled {
