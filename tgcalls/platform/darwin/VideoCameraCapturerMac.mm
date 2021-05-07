@@ -207,7 +207,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
         _isPaused = false;
         _skippedFrame = 0;
         _rotation = RTCVideoRotation_0;
-        
+
         _warmupFrameCount = 100;
 
         if (![self setupCaptureSession:[[AVCaptureSession alloc] init]]) {
@@ -227,7 +227,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 + (NSArray<AVCaptureDevice *> *)captureDevices {
     AVCaptureDevice * defaultDevice = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
     NSMutableArray<AVCaptureDevice *> * devices = [[AVCaptureDevice devicesWithMediaType:AVMediaTypeVideo] mutableCopy];
-    
+
     if ([devices count] > 0) {
         [devices insertObject:defaultDevice atIndex:0];
     }
@@ -540,7 +540,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
             self->_hasRetriedOnFatalError = YES;
         } else {
             RTCLogError(@"Previous fatal error recovery failed.");
-            _onFatalError();
+            if (_onFatalError) _onFatalError();
         }
 //    }];
 }
