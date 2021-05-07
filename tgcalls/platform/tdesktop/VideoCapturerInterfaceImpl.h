@@ -4,7 +4,7 @@
 #include "VideoCapturerInterface.h"
 
 #ifdef TGCALLS_UWP_DESKTOP_CAPTURE
-#include "platform/uwp/UwpPlatformContext.h"
+#include "platform/uwp/UwpContext.h"
 #include "platform/uwp/UwpScreenCapturer.h"
 #endif // TGCALLS_UWP_DESKTOP_CAPTURE
 

@@ -9,16 +9,16 @@ using namespace winrt::Windows::Graphics::Capture;
 
 namespace tgcalls {
 
-    class UwpPlatformContext : public PlatformContext {
+    class UwpContext : public PlatformContext {
 
     public:
-        UwpPlatformContext(GraphicsCaptureItem item)
+        UwpContext(GraphicsCaptureItem item)
         : item(item)
         {
 
         }
 
-        virtual ~UwpPlatformContext() = default;
+        virtual ~UwpContext() = default;
 
         GraphicsCaptureItem item;
     };

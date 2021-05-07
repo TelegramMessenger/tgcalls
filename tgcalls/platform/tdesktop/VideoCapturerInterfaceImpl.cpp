@@ -36,7 +36,7 @@ VideoCapturerInterfaceImpl::VideoCapturerInterfaceImpl(
 #ifdef TGCALLS_UWP_DESKTOP_CAPTURE
 	if (deviceId == "GraphicsCaptureItem")
 	{
-		auto uwpContext = std::static_pointer_cast<UwpPlatformContext>(platformContext);
+		auto uwpContext = std::static_pointer_cast<UwpContext>(platformContext);
 
 		_screenCapturer = std::make_unique<UwpScreenCapturer>(_sink, uwpContext->item);
 		_screenCapturer->setState(VideoState::Active);
