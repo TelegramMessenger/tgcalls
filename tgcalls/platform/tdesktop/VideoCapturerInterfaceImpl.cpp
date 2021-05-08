@@ -3,7 +3,7 @@
 #include "tgcalls/platform/tdesktop/VideoCapturerTrackSource.h"
 #include "tgcalls/platform/tdesktop/VideoCameraCapturer.h"
 
-#ifndef TGCALLS_DISABLE_DESKTOP_CAPTURE
+#ifndef TGCALLS_UWP_DESKTOP_CAPTURE
 #include "tgcalls/desktop_capturer/DesktopCaptureSourceHelper.h"
 #endif // TGCALLS_DISABLE_DESKTOP_CAPTURE
 
@@ -28,11 +28,22 @@ VideoCapturerInterfaceImpl::VideoCapturerInterfaceImpl(
 	rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source,
 	std::string deviceId,
 	std::function<void(VideoState)> stateUpdated,
+	std::shared_ptr<PlatformContext> platformContext,
 	std::pair<int, int> &outResolution)
 : _source(source)
 , _sink(GetSink(source))
 , _stateUpdated(stateUpdated) {
-#ifndef TGCALLS_DISABLE_DESKTOP_CAPTURE
+#ifdef TGCALLS_UWP_DESKTOP_CAPTURE
+	if (deviceId == "GraphicsCaptureItem")
+	{
+		auto uwpContext = std::static_pointer_cast<UwpContext>(platformContext);
+
+		_screenCapturer = std::make_unique<UwpScreenCapturer>(_sink, uwpContext->item);
+		_screenCapturer->setState(VideoState::Active);
+		outResolution = _screenCapturer->resolution();
+	}
+	else
+#else
 	if (const auto source = DesktopCaptureSourceForKey(deviceId)) {
 		const auto data = DesktopCaptureSourceData{
 			/*.aspectSize = */{ 1280, 720 },
@@ -46,7 +57,7 @@ VideoCapturerInterfaceImpl::VideoCapturerInterfaceImpl(
 		_desktopCapturer->start();
 		outResolution = { 1280, 960 };
 	} else
-#endif // TGCALLS_DISABLE_DESKTOP_CAPTURE
+#endif // TGCALLS_UWP_DESKTOP_CAPTURE
 	{
 		_cameraCapturer = std::make_unique<VideoCameraCapturer>(_sink);
 		_cameraCapturer->setDeviceId(deviceId);
@@ -59,7 +70,11 @@ VideoCapturerInterfaceImpl::~VideoCapturerInterfaceImpl() {
 }
 
 void VideoCapturerInterfaceImpl::setState(VideoState state) {
-#ifndef TGCALLS_DISABLE_DESKTOP_CAPTURE
+#ifdef TGCALLS_UWP_DESKTOP_CAPTURE
+	if (_screenCapturer) {
+		_screenCapturer->setState(state);
+	} else
+#else
 	if (_desktopCapturer) {
 		if (state == VideoState::Active) {
 			_desktopCapturer->start();
@@ -67,7 +82,7 @@ void VideoCapturerInterfaceImpl::setState(VideoState state) {
 			_desktopCapturer->stop();
 		}
 	} else
-#endif // TGCALLS_DISABLE_DESKTOP_CAPTURE
+#endif // TGCALLS_UWP_DESKTOP_CAPTURE
 	if (_cameraCapturer) {
 		_cameraCapturer->setState(state);
 	}
