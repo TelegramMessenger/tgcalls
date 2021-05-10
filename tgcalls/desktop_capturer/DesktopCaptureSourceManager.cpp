@@ -28,10 +28,13 @@ DesktopCaptureSourceManager::~DesktopCaptureSourceManager() = default;
 webrtc::DesktopCaptureOptions DesktopCaptureSourceManager::OptionsForType(
     DesktopCaptureType type) {
     auto result = webrtc::DesktopCaptureOptions::CreateDefault();
-#ifdef WEBRTC_MAC
-    result.set_allow_iosurface(type == DesktopCaptureType::Screen);
-#elif defined WEBRTC_WIN
+#ifdef WEBRTC_WIN
     result.set_allow_directx_capturer(true);
+    result.set_allow_use_magnification_api(false);
+#elif defined WEBRTC_MAC
+    result.set_allow_iosurface(type == DesktopCaptureType::Screen);
+#elif defined WEBRTC_LINUX
+    //result.set_allow_pipewire(true);
 #endif // WEBRTC_WIN || WEBRTC_MAC
     result.set_detect_updated_region(true);
     return result;
