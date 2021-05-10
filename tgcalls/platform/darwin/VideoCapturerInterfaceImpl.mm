@@ -27,7 +27,7 @@
 #import "VideoCameraCapturerMac.h"
 #import "tgcalls/platform/darwin/DesktopSharingCapturer.h"
 #import "tgcalls/desktop_capturer/DesktopCaptureSourceHelper.h"
-#impotr "CustomExternalCapturer.h"
+#import "CustomExternalCapturer.h"
 #else
 #import "VideoCameraCapturer.h"
 #import "CustomExternalCapturer.h"
@@ -300,6 +300,7 @@
         return nil;
     }
 #endif
+    return nil;
 }
 
 @end
