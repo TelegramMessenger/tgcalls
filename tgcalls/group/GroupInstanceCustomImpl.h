@@ -40,8 +40,7 @@ public:
     void addIncomingVideoOutput(std::string const &endpointId, std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
     
     void setVolume(uint32_t ssrc, double volume);
-    void setFullSizeVideoEndpointId(std::string const &endpointId);
-    void setIgnoreVideoEndpointIds(std::vector<std::string> const &ignoreVideoEndpointIds);
+    void setRequestedVideoChannels(std::vector<VideoChannelDescription> &&requestedVideoChannels);
 
 private:
     std::shared_ptr<Threads> _threads;

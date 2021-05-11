@@ -870,6 +870,14 @@ public:
         return _endpointId;
     }
 
+    VideoChannelDescription::Quality requestedQuality() {
+        return _requestedQuality;
+    }
+
+    void setRequstedQuality(VideoChannelDescription::Quality quality) {
+        _requestedQuality = quality;
+    }
+
 private:
     void OnSentPacket_w(const rtc::SentPacket& sent_packet) {
         _call->OnSentPacket(sent_packet);
@@ -886,6 +894,8 @@ private:
     // Memory is managed externally
     cricket::ChannelManager *_channelManager = nullptr;
     webrtc::Call *_call = nullptr;
+
+    VideoChannelDescription::Quality _requestedQuality = VideoChannelDescription::Quality::Thumbnail;
 };
 
 class MissingSsrcPacketBuffer {
@@ -963,7 +973,6 @@ public:
     _networkStateUpdated(descriptor.networkStateUpdated),
     _audioLevelsUpdated(descriptor.audioLevelsUpdated),
     _onAudioFrame(descriptor.onAudioFrame),
-    _incomingVideoSourcesUpdated(descriptor.incomingVideoSourcesUpdated),
     _requestMediaChannelDescriptions(descriptor.requestMediaChannelDescriptions),
     _requestBroadcastPart(descriptor.requestBroadcastPart),
     _videoCapture(descriptor.videoCapture),
@@ -1913,7 +1922,10 @@ public:
 
             auto ssrcInfo = _channelBySsrc.find(header.ssrc);
             if (ssrcInfo == _channelBySsrc.end()) {
-                maybeRequestUnknownSsrc(header.ssrc);
+                // opus
+                if (header.payloadType == 111) {
+                    maybeRequestUnknownSsrc(header.ssrc);
+                }
                 _missingPacketBuffer.add(header.ssrc, packet);
             } else {
                 switch (ssrcInfo->second.type) {
@@ -1989,11 +2001,6 @@ public:
                     break;
                 }
                 case MediaChannelDescription::Type::Video: {
-                    if (description.audioSsrc != 0 && !description.videoInformation.empty()) {
-                        if (const auto videoInformation = parseGroupParticipantVideoInformation(description.videoInformation)) {
-                            addIncomingVideoChannel(description.audioSsrc, videoInformation.value());
-                        }
-                    }
                     break;
                 }
                 default: {
@@ -2023,44 +2030,44 @@ public:
             return;
         }
 
-        std::vector<std::string> endpointIds;
-        for (const auto &incomingVideoChannel : _incomingVideoChannels) {
-            if (std::find(endpointIds.begin(), endpointIds.end(), incomingVideoChannel.first.endpointId) == endpointIds.end()) {
-                endpointIds.push_back(incomingVideoChannel.first.endpointId);
-            }
-        }
-        std::sort(endpointIds.begin(), endpointIds.end());
-
         std::string pinnedEndpoint;
 
         json11::Json::object json;
         json.insert(std::make_pair("colibriClass", json11::Json("ReceiverVideoConstraints")));
 
         json11::Json::object defaultConstraints;
-        defaultConstraints.insert(std::make_pair("maxHeight", json11::Json(180)));
+        defaultConstraints.insert(std::make_pair("maxHeight", json11::Json(0)));
         json.insert(std::make_pair("defaultConstraints", json11::Json(std::move(defaultConstraints))));
 
+        json11::Json::array onStageEndpoints;
         json11::Json::object constraints;
 
-        if (_currentHighQualityVideoEndpointId.size() != 0) {
-            json11::Json::array onStageEndpoints;
-            onStageEndpoints.push_back(json11::Json(_currentHighQualityVideoEndpointId));
-            json.insert(std::make_pair("onStageEndpoints", json11::Json(std::move(onStageEndpoints))));
-
+        for (const auto &incomingVideoChannel : _incomingVideoChannels) {
             json11::Json::object selectedConstraint;
-            selectedConstraint.insert(std::make_pair("maxHeight", json11::Json(720)));
-            selectedConstraint.insert(std::make_pair("maxFrameRate", json11::Json(30)));
 
-            constraints.insert(std::make_pair(_currentHighQualityVideoEndpointId, json11::Json(std::move(selectedConstraint))));
+            switch (incomingVideoChannel.second->requestedQuality()) {
+                case VideoChannelDescription::Quality::Full: {
+                    onStageEndpoints.push_back(json11::Json(incomingVideoChannel.first.endpointId));
+                    selectedConstraint.insert(std::make_pair("maxHeight", json11::Json(720)));
+                    break;
+                }
+                case VideoChannelDescription::Quality::Medium: {
+                    selectedConstraint.insert(std::make_pair("maxHeight", json11::Json(320)));
+                    break;
+                }
+                case VideoChannelDescription::Quality::Thumbnail: {
+                    selectedConstraint.insert(std::make_pair("maxHeight", json11::Json(180)));
+                    break;
+                }
+                default: {
+                    break;
+                }
+            }
+
+            constraints.insert(std::make_pair(incomingVideoChannel.first.endpointId, json11::Json(std::move(selectedConstraint))));
         }
 
-        for (const auto &endpointId : _ignoreVideoEndpointIds) {
-            json11::Json::object selectedConstraint;
-            selectedConstraint.insert(std::make_pair("maxHeight", json11::Json(0)));
-
-            constraints.insert(std::make_pair(endpointId, json11::Json(std::move(selectedConstraint))));
-        }
-
+        json.insert(std::make_pair("onStageEndpoints", json11::Json(std::move(onStageEndpoints))));
         json.insert(std::make_pair("constraints", json11::Json(std::move(constraints))));
 
         std::string result = json11::Json(std::move(json)).dump();
@@ -2184,28 +2191,26 @@ public:
     }
 
   void setVideoSource(std::function<webrtc::VideoTrackSourceInterface*()> getVideoSource, bool isInitializing) {
-    bool resetBitrate = (!_getVideoSource) != (!getVideoSource) && !isInitializing;
-    if (!isInitializing && _getVideoSource && getVideoSource && getVideoSource() == _getVideoSource()) {
-      return;
-    }
-
-    _getVideoSource = std::move(getVideoSource);
-
-    if (_outgoingVideoChannel) {
-      if (_getVideoSource) {
-        _outgoingVideoChannel->Enable(true);
-        _outgoingVideoChannel->media_channel()->SetVideoSend(_outgoingVideoSsrcs.simulcastLayers[0].ssrc, NULL, _getVideoSource());
-      } else {
-        _outgoingVideoChannel->Enable(false);
-        _outgoingVideoChannel->media_channel()->SetVideoSend(_outgoingVideoSsrcs.simulcastLayers[0].ssrc, NULL, nullptr);
+      bool resetBitrate = (!_getVideoSource) != (!getVideoSource) && !isInitializing;
+      if (!isInitializing && _getVideoSource && getVideoSource && getVideoSource() == _getVideoSource()) {
+          return;
       }
-    }
 
-        if (resetBitrate) {
-            adjustBitratePreferences(true);
-        }
+      _getVideoSource = std::move(getVideoSource);
 
-        updateIncomingVideoSources();
+      if (_outgoingVideoChannel) {
+          if (_getVideoSource) {
+              _outgoingVideoChannel->Enable(true);
+              _outgoingVideoChannel->media_channel()->SetVideoSend(_outgoingVideoSsrcs.simulcastLayers[0].ssrc, NULL, _getVideoSource());
+          } else {
+              _outgoingVideoChannel->Enable(false);
+              _outgoingVideoChannel->media_channel()->SetVideoSend(_outgoingVideoSsrcs.simulcastLayers[0].ssrc, NULL, nullptr);
+          }
+      }
+
+      if (resetBitrate) {
+          adjustBitratePreferences(true);
+      }
   }
 
   void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture, bool isInitializing) {
@@ -2377,6 +2382,8 @@ public:
             auto it = _incomingVideoChannels.find(VideoChannelId(endpointId));
             if (it != _incomingVideoChannels.end()) {
                 it->second->addSink(sink);
+            } else {
+                _pendingVideoSinks[VideoChannelId(endpointId)].push_back(sink);
             }
         }
     }
@@ -2500,6 +2507,16 @@ public:
             videoInformation,
             *_threads
         ));
+
+        const auto pendingSinks = _pendingVideoSinks.find(VideoChannelId(videoInformation.endpointId));
+        if (pendingSinks != _pendingVideoSinks.end()) {
+            for (const auto &sink : pendingSinks->second) {
+                channel->addSink(sink);
+            }
+
+            _pendingVideoSinks.erase(pendingSinks);
+        }
+
         _incomingVideoChannels.insert(std::make_pair(VideoChannelId(videoInformation.endpointId), std::move(channel)));
 
         std::vector<uint32_t> allSsrcs;
@@ -2519,26 +2536,11 @@ public:
             _channelBySsrc.insert(std::make_pair(ssrc, std::move(mapping)));
         }
 
-        updateIncomingVideoSources();
-
         for (auto ssrc : allSsrcs) {
             maybeDeliverBufferedPackets(ssrc);
         }
 
         adjustBitratePreferences(false);
-    }
-
-    void updateIncomingVideoSources() {
-        if (_incomingVideoSourcesUpdated) {
-            std::vector<std::string> videoChannelEndpointIds;
-            for (const auto &it : _incomingVideoChannels) {
-                videoChannelEndpointIds.push_back(it.first.endpointId);
-            }
-            if (_sharedVideoInformation && !_sharedVideoInformation->endpointId.empty() && _getVideoSource) {
-                videoChannelEndpointIds.push_back(_sharedVideoInformation->endpointId);
-            }
-            _incomingVideoSourcesUpdated(std::move(videoChannelEndpointIds));
-        }
     }
 
     void setVolume(uint32_t ssrc, double volume) {
@@ -2560,21 +2562,45 @@ public:
         }
     }
 
-    void setFullSizeVideoEndpointId(std::string const &endpointId) {
-        auto incomingVideoChannel = _incomingVideoChannels.find(VideoChannelId(endpointId));
-        std::string currentHighQualityVideoEndpointId;
-        if (incomingVideoChannel != _incomingVideoChannels.end()) {
-            currentHighQualityVideoEndpointId = incomingVideoChannel->second->endpointId();
+    void setRequestedVideoChannels(std::vector<VideoChannelDescription> &&requestedVideoChannels) {
+        bool updated = false;
+        std::vector<std::string> allEndpointIds;
+
+        for (const auto &description : requestedVideoChannels) {
+            const auto videoInformation = parseGroupParticipantVideoInformation(description.videoInformation);
+            if (!videoInformation) {
+                continue;
+            }
+
+            allEndpointIds.push_back(videoInformation->endpointId);
+
+            auto current = _incomingVideoChannels.find(VideoChannelId(videoInformation->endpointId));
+            if (current != _incomingVideoChannels.end()) {
+                if (current->second->requestedQuality() != description.quality) {
+                    current->second->setRequstedQuality(description.quality);
+                    updated = true;
+                }
+                continue;
+            }
+
+            addIncomingVideoChannel(description.audioSsrc, videoInformation.value());
         }
-        if (_currentHighQualityVideoEndpointId != currentHighQualityVideoEndpointId) {
-            _currentHighQualityVideoEndpointId = currentHighQualityVideoEndpointId;
+
+        std::vector<std::string> removeEndpointIds;
+        for (const auto &it : _incomingVideoChannels) {
+            if (std::find(allEndpointIds.begin(), allEndpointIds.end(), it.first.endpointId) == allEndpointIds.end()) {
+                removeEndpointIds.push_back(it.first.endpointId);
+                updated = true;
+            }
+        }
+
+        for (const auto &endpointId : removeEndpointIds) {
+            _incomingVideoChannels.erase(VideoChannelId(endpointId));
+        }
+
+        if (updated) {
             maybeUpdateRemoteVideoConstaints();
         }
-    }
-
-    void setIgnoreVideoEndpointIds(std::vector<std::string> const &ignoreVideoEndpointIds) {
-        _ignoreVideoEndpointIds = ignoreVideoEndpointIds;
-        maybeUpdateRemoteVideoConstaints();
     }
 
 private:
@@ -2602,7 +2628,6 @@ private:
     std::function<void(GroupNetworkState)> _networkStateUpdated;
     std::function<void(GroupLevelsUpdate const &)> _audioLevelsUpdated;
     std::function<void(uint32_t, const AudioFrame &)> _onAudioFrame;
-    std::function<void(std::vector<std::string>)> _incomingVideoSourcesUpdated;
     std::function<std::shared_ptr<RequestMediaChannelDescriptionTask>(std::vector<uint32_t> const &, std::function<void(std::vector<MediaChannelDescription> &&)>)> _requestMediaChannelDescriptions;
     std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, std::function<void(BroadcastPart &&)>)> _requestBroadcastPart;
     std::shared_ptr<VideoCaptureInterface> _videoCapture;
@@ -2662,13 +2687,12 @@ private:
     std::map<uint32_t, double> _volumeBySsrc;
     std::map<ChannelId, std::unique_ptr<IncomingAudioChannel>> _incomingAudioChannels;
     std::map<VideoChannelId, std::unique_ptr<IncomingVideoChannel>> _incomingVideoChannels;
+
+    std::map<VideoChannelId, std::vector<std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>>> _pendingVideoSinks;
     
     std::unique_ptr<IncomingVideoChannel> _serverBandwidthProbingVideoSsrc;
 
     absl::optional<GroupJoinVideoInformation> _sharedVideoInformation;
-
-    std::string _currentHighQualityVideoEndpointId;
-    std::vector<std::string> _ignoreVideoEndpointIds;
 
     int64_t _broadcastPartDurationMilliseconds = 500;
     std::vector<std::unique_ptr<StreamingPart>> _sourceBroadcastParts;
@@ -2798,15 +2822,9 @@ void GroupInstanceCustomImpl::setVolume(uint32_t ssrc, double volume) {
     });
 }
 
-void GroupInstanceCustomImpl::setFullSizeVideoEndpointId(std::string const &endpointId) {
-    _internal->perform(RTC_FROM_HERE, [endpointId](GroupInstanceCustomInternal *internal) {
-        internal->setFullSizeVideoEndpointId(endpointId);
-    });
-}
-
-void GroupInstanceCustomImpl::setIgnoreVideoEndpointIds(std::vector<std::string> const &ignoreVideoEndpointIds) {
-    _internal->perform(RTC_FROM_HERE, [ignoreVideoEndpointIds](GroupInstanceCustomInternal *internal) {
-        internal->setIgnoreVideoEndpointIds(ignoreVideoEndpointIds);
+void GroupInstanceCustomImpl::setRequestedVideoChannels(std::vector<VideoChannelDescription> &&requestedVideoChannels) {
+    _internal->perform(RTC_FROM_HERE, [requestedVideoChannels = std::move(requestedVideoChannels)](GroupInstanceCustomInternal *internal) mutable {
+        internal->setRequestedVideoChannels(std::move(requestedVideoChannels));
     });
 }
 
