@@ -32,8 +32,7 @@ public:
 	int getRotation() override {
 		return 0;
 	}
-	void setOnFatalError(std::function<void()> error) override {
-	}
+	void setOnFatalError(std::function<void()> error) override;
 
 private:
 	rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _source;
@@ -46,6 +45,7 @@ private:
 	std::unique_ptr<VideoCameraCapturer> _cameraCapturer;
 	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _uncroppedSink;
 	std::function<void(VideoState)> _stateUpdated;
+	std::function<void()> _onFatalError;
 
 };
 

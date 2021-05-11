@@ -216,13 +216,16 @@
         if (const auto desktopCaptureSource = tgcalls::DesktopCaptureSourceForKey([sourceDescription.deviceId UTF8String])) {
             DesktopSharingCapturer *sharing = [[DesktopSharingCapturer alloc] initWithSource:source captureSource:desktopCaptureSource];
             _videoCapturer = sharing;
-        } else {
+        } else if (!tgcalls::ShouldBeDesktopCapture([sourceDescription.deviceId UTF8String])) {
             VideoCameraCapturer *camera = [[VideoCameraCapturer alloc] initWithSource:source isActiveUpdated:isActiveUpdated];
             [camera setupCaptureWithDevice:sourceDescription.device format:sourceDescription.format fps:30];
             _videoCapturer = camera;
+        } else {
+            _videoCapturer = nil;
         }
-
-        [_videoCapturer start];
+        if (_videoCapturer) {
+            [_videoCapturer start];
+        }
 #endif
 
     }
@@ -235,14 +238,20 @@
 #ifdef WEBRTC_IOS
     [_videoCameraCapturer stopCapture];
 #elif TARGET_OS_OSX
-    [_videoCapturer stop];
+    if (_videoCapturer) {
+        [_videoCapturer stop];
+    }
 #endif
 }
 
 -(void)setOnFatalError:(std::function<void()>)error {
 #ifdef WEBRTC_IOS
 #else
-    [_videoCapturer setOnFatalError:error];
+    if (_videoCapturer) {
+        [_videoCapturer setOnFatalError:error];
+    } else if (error) {
+        error();
+    }
 #endif
 }
 
@@ -252,7 +261,9 @@
         [_videoCameraCapturer setIsEnabled:isEnabled];
     }
 #else
-    [_videoCapturer setIsEnabled:isEnabled];
+    if (_videoCapturer) {
+        [_videoCapturer setIsEnabled:isEnabled];
+    }
 #endif
 }
 
@@ -262,7 +273,9 @@
         [_videoCameraCapturer setUncroppedSink:sink];
     }
 #else
-    [_videoCapturer setUncroppedSink:sink];
+    if (_videoCapturer) {
+        [_videoCapturer setUncroppedSink:sink];
+    }
 #endif
 }
 
@@ -272,7 +285,9 @@
         [_videoCameraCapturer setPreferredCaptureAspectRatio:aspectRatio];
     }
 #else
-    [_videoCapturer setPreferredCaptureAspectRatio:aspectRatio];
+    if (_videoCapturer) {
+        [_videoCapturer setPreferredCaptureAspectRatio:aspectRatio];
+    }
 #endif
 }
 
