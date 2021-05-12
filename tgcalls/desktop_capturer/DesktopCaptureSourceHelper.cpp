@@ -131,7 +131,9 @@ private:
     std::unique_ptr<webrtc::DesktopCapturer> _capturer;
     SourceFrameCallbackImpl _callback;
     std::shared_ptr<bool> _timerGuard;
+    std::function<void()> _onFatalError;
     bool _isRunning = false;
+    bool _fatalError = false;
     double _delayMs = 0.;
 
 };
@@ -244,6 +246,12 @@ DesktopSourceRenderer::DesktopSourceRenderer(
 : _scheduler(scheduler)
 , _callback(data.aspectSize, data.fps)
 , _delayMs(1000. / data.fps) {
+	_callback.setOnFatalError([=] {
+		stop();
+		_fatalError = true;
+		if (_onFatalError) _onFatalError();
+	});
+
     auto options = webrtc::DesktopCaptureOptions::CreateDefault();
     options.set_disable_effects(true);
     options.set_detect_updated_region(true);
@@ -312,10 +320,11 @@ void DesktopSourceRenderer::loop() {
 }
 
 void DesktopSourceRenderer::setOnFatalError(std::function<void ()> error) {
-    _callback.setOnFatalError([=]{
-        stop();
+    if (_fatalError) {
         error();
-    });
+    } else {
+        _onFatalError = std::move(error);
+    }
 }
 
 void DesktopSourceRenderer::setOutput(
@@ -335,8 +344,9 @@ struct DesktopCaptureSourceHelper::Renderer {
     std::unique_ptr<DesktopSourceRenderer> renderer;
 };
 
-DesktopCaptureSource DesktopCaptureSourceForKey(std::string uniqueKey) {
-    if (uniqueKey.find("desktop_capturer_") != 0) {
+DesktopCaptureSource DesktopCaptureSourceForKey(
+	    const std::string &uniqueKey) {
+    if (!ShouldBeDesktopCapture(uniqueKey)) {
 		return DesktopCaptureSource::Invalid();
     }
     const auto windowPrefix = std::string("desktop_capturer_window_");
@@ -353,7 +363,11 @@ DesktopCaptureSource DesktopCaptureSourceForKey(std::string uniqueKey) {
             return source;
         }
     }
-	return DesktopCaptureSource::Invalid();
+    return DesktopCaptureSource::Invalid();
+}
+
+bool ShouldBeDesktopCapture(const std::string &uniqueKey) {
+    return (uniqueKey.find("desktop_capturer_") == 0);
 }
 
 DesktopCaptureSourceHelper::DesktopCaptureSourceHelper(

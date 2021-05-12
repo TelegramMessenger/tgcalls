@@ -56,7 +56,7 @@ VideoCapturerInterfaceImpl::VideoCapturerInterfaceImpl(
 		_desktopCapturer->setOutput(_sink);
 		_desktopCapturer->start();
 		outResolution = { 1280, 960 };
-	} else
+	} else if (!ShouldBeDesktopCapture(deviceId))
 #endif // TGCALLS_UWP_DESKTOP_CAPTURE
 	{
 		_cameraCapturer = std::make_unique<VideoCameraCapturer>(_sink);
@@ -109,6 +109,16 @@ void VideoCapturerInterfaceImpl::setUncroppedOutput(
 			_uncroppedSink.get(),
 			rtc::VideoSinkWants());
 	}
+}
+
+void VideoCapturerInterfaceImpl::setOnFatalError(std::function<void()> error) {
+#ifndef TGCALLS_UWP_DESKTOP_CAPTURE
+	if (_desktopCapturer) {
+		_desktopCapturer->setOnFatalError(std::move(error));
+	} else if (!_desktopCapturer && !_cameraCapturer && error) {
+		error();
+	}
+#endif // TGCALLS_UWP_DESKTOP_CAPTURE
 }
 
 } // namespace tgcalls

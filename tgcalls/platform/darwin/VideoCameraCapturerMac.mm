@@ -161,6 +161,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 
     // Live on RTCDispatcherTypeCaptureSession.
     BOOL _hasRetriedOnFatalError;
+    BOOL _hadFatalError;
     BOOL _isRunning;
 
     // Live on RTCDispatcherTypeCaptureSession and main thread.
@@ -261,7 +262,11 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 }
 
 -(void)setOnFatalError:(std::function<void ()>)error {
-    _onFatalError = error;
+    if (!self->_hadFatalError) {
+      _onFatalError = std::move(error);
+    } else if (error) {
+      error();
+    }
 }
 
 - (void)stop {
@@ -515,6 +520,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
         // If we successfully restarted after an unknown error,
         // allow future retries on fatal errors.
         self->_hasRetriedOnFatalError = NO;
+        self->_hadFatalError = NO;
 //    }];
 
 
@@ -540,7 +546,11 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
             self->_hasRetriedOnFatalError = YES;
         } else {
             RTCLogError(@"Previous fatal error recovery failed.");
-            if (_onFatalError) _onFatalError();
+            if (_onFatalError) {
+                _onFatalError();
+            } else {
+                self->_hadFatalError = YES;
+            }
         }
 //    }];
 }

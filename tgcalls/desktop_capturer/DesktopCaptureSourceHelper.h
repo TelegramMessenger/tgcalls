@@ -24,7 +24,9 @@ class VideoSinkInterface;
 
 namespace tgcalls {
 
-DesktopCaptureSource DesktopCaptureSourceForKey(std::string uniqueKey);
+DesktopCaptureSource DesktopCaptureSourceForKey(
+	const std::string &uniqueKey);
+bool ShouldBeDesktopCapture(const std::string &uniqueKey);
 
 class DesktopCaptureSourceHelper {
 public:
