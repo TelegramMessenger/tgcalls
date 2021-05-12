@@ -186,15 +186,15 @@ private:
 - (void)layout {
     [super layout];
     
-    if (_shouldBeMirrored) {
-        _metalView.layer.anchorPoint = NSMakePoint(1, 0);
-        _metalView.layer.affineTransform = CGAffineTransformMakeScale(-1, 1);
-        //  _metalView.layer.transform = CATransform3DMakeScale(-1, 1, 1);
-    } else {
-        _metalView.layer.anchorPoint = NSMakePoint(0, 0);
-        _metalView.layer.affineTransform = CGAffineTransformIdentity;
-        //_metalView.layer.transform = CATransform3DIdentity;
-    }
+//    if (_shouldBeMirrored) {
+//        _metalView.layer.anchorPoint = NSMakePoint(1, 0);
+//        _metalView.layer.affineTransform = CGAffineTransformMakeScale(-1, 1);
+//        //  _metalView.layer.transform = CATransform3DMakeScale(-1, 1, 1);
+//    } else {
+//        _metalView.layer.anchorPoint = NSMakePoint(0, 0);
+//        _metalView.layer.affineTransform = CGAffineTransformIdentity;
+//        //_metalView.layer.transform = CATransform3DIdentity;
+//    }
     
     CGRect bounds = self.bounds;
     _metalView.frame = bounds;
@@ -230,15 +230,15 @@ private:
                 _shouldBeMirrored = shouldBeMirrored;
                 bool shouldBeMirrored = ((TGRTCCVPixelBuffer *)buffer).shouldBeMirrored;
                 
-                if (shouldBeMirrored) {
-                    _metalView.layer.anchorPoint = NSMakePoint(1, 0);
-                    _metalView.layer.affineTransform = CGAffineTransformMakeScale(-1, 1);
-                    //  _metalView.layer.transform = CATransform3DMakeScale(-1, 1, 1);
-                } else {
-                    _metalView.layer.anchorPoint = NSMakePoint(0, 0);
-                    _metalView.layer.affineTransform = CGAffineTransformIdentity;
-                    //_metalView.layer.transform = CATransform3DIdentity;
-                }
+//                if (shouldBeMirrored) {
+//                    _metalView.layer.anchorPoint = NSMakePoint(1, 0);
+//                    _metalView.layer.affineTransform = CGAffineTransformMakeScale(-1, 1);
+//                    //  _metalView.layer.transform = CATransform3DMakeScale(-1, 1, 1);
+//                } else {
+//                    _metalView.layer.anchorPoint = NSMakePoint(0, 0);
+//                    _metalView.layer.affineTransform = CGAffineTransformIdentity;
+//                    //_metalView.layer.transform = CATransform3DIdentity;
+//                }
                 
                 if (_didSetShouldBeMirrored) {
                     if (_onIsMirroredUpdated) {
