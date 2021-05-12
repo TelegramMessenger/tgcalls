@@ -2584,6 +2584,7 @@ public:
             }
 
             addIncomingVideoChannel(description.audioSsrc, videoInformation.value());
+            updated = true;
         }
 
         std::vector<std::string> removeEndpointIds;
@@ -2689,7 +2690,7 @@ private:
     std::map<VideoChannelId, std::unique_ptr<IncomingVideoChannel>> _incomingVideoChannels;
 
     std::map<VideoChannelId, std::vector<std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>>> _pendingVideoSinks;
-    
+
     std::unique_ptr<IncomingVideoChannel> _serverBandwidthProbingVideoSsrc;
 
     absl::optional<GroupJoinVideoInformation> _sharedVideoInformation;
