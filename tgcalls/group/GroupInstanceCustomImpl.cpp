@@ -770,11 +770,13 @@ public:
         std::vector<webrtc::SdpVideoFormat> const &availableVideoFormats,
         GroupJoinVideoInformation sharedVideoInformation,
         uint32_t audioSsrc,
+        VideoChannelDescription::Quality quality,
         GroupParticipantVideoInformation const &description,
         Threads &threads) :
     _endpointId(description.endpointId),
     _channelManager(channelManager),
-    _call(call) {
+    _call(call),
+    _requestedQuality(quality) {
         _videoSink.reset(new VideoSinkImpl());
 
         uint32_t mid = randomIdGenerator->GenerateId();
@@ -2308,6 +2310,7 @@ public:
                 _availableVideoFormats,
                 _sharedVideoInformation.value(),
                 123456,
+                VideoChannelDescription::Quality::Thumbnail,
                 videoInformation,
                 *_threads
             ));
@@ -2486,7 +2489,7 @@ public:
         }
     }
 
-    void addIncomingVideoChannel(uint32_t audioSsrc, GroupParticipantVideoInformation const &videoInformation) {
+    void addIncomingVideoChannel(uint32_t audioSsrc, GroupParticipantVideoInformation const &videoInformation, VideoChannelDescription::Quality quality) {
         if (!_sharedVideoInformation) {
             return;
         }
@@ -2504,6 +2507,7 @@ public:
             _availableVideoFormats,
             _sharedVideoInformation.value(),
             audioSsrc,
+            quality,
             videoInformation,
             *_threads
         ));
@@ -2583,7 +2587,7 @@ public:
                 continue;
             }
 
-            addIncomingVideoChannel(description.audioSsrc, videoInformation.value());
+            addIncomingVideoChannel(description.audioSsrc, videoInformation.value(), description.quality);
             updated = true;
         }
 
