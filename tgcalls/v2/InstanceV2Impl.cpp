@@ -602,7 +602,7 @@ public:
         _outgoingAudioChannel->SetRemoteContent(incomingAudioDescription.get(), webrtc::SdpType::kAnswer, nullptr);
 
         _outgoingAudioChannel->SignalSentPacket().connect(this, &OutgoingAudioChannel::OnSentPacket_w);
-        _outgoingAudioChannel->UpdateRtpTransport(nullptr);
+        //_outgoingAudioChannel->UpdateRtpTransport(nullptr);
 
         setIsMuted(false);
     }
@@ -697,7 +697,7 @@ public:
         //_audioChannel->media_channel()->SetRawAudioSink(ssrc.networkSsrc, std::move(audioLevelSink));
 
         _audioChannel->SignalSentPacket().connect(this, &IncomingV2AudioChannel::OnSentPacket_w);
-        _audioChannel->UpdateRtpTransport(nullptr);
+        //_audioChannel->UpdateRtpTransport(nullptr);
 
         _audioChannel->Enable(true);
     }
@@ -874,7 +874,7 @@ public:
         _outgoingVideoChannel->media_channel()->SetRtpSendParameters(mediaContent.ssrc, rtpParameters);
 
         _outgoingVideoChannel->SignalSentPacket().connect(this, &OutgoingVideoChannel::OnSentPacket_w);
-        _outgoingVideoChannel->UpdateRtpTransport(nullptr);
+        //_outgoingVideoChannel->UpdateRtpTransport(nullptr);
 
         _outgoingVideoChannel->Enable(false);
         _outgoingVideoChannel->media_channel()->SetVideoSend(mediaContent.ssrc, NULL, nullptr);
@@ -1106,7 +1106,7 @@ public:
         _videoChannel->media_channel()->SetSink(_mainVideoSsrc, _videoSink.get());
 
         _videoChannel->SignalSentPacket().connect(this, &IncomingV2VideoChannel::OnSentPacket_w);
-        _videoChannel->UpdateRtpTransport(nullptr);
+        //_videoChannel->UpdateRtpTransport(nullptr);
 
         _videoChannel->Enable(true);
     }

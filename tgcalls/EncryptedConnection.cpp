@@ -567,7 +567,7 @@ auto EncryptedConnection::DelayIntervalsByType(Type type) -> DelayIntervals {
 
 rtc::CopyOnWriteBuffer EncryptedConnection::SerializeEmptyMessageWithSeq(uint32_t seq) {
     auto result = rtc::CopyOnWriteBuffer(5);
-    const auto bytes = result.data();
+    auto bytes = result.MutableData();
     WriteSeq(bytes, seq);
     bytes[4] = kEmptyId;
     return result;

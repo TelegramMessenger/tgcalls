@@ -224,7 +224,6 @@ _dataChannelMessageReceived(configuration.dataChannelMessageReceived) {
     _dtlsSrtpTransport = std::make_unique<webrtc::DtlsSrtpTransport>(true);
     _dtlsSrtpTransport->SetDtlsTransports(nullptr, nullptr);
     _dtlsSrtpTransport->SetActiveResetSrtpParams(false);
-    _dtlsSrtpTransport->SignalDtlsStateChange.connect(this, &NativeNetworkingImpl::DtlsStateChanged);
     _dtlsSrtpTransport->SignalReadyToSend.connect(this, &NativeNetworkingImpl::DtlsReadyToSend);
     _dtlsSrtpTransport->SignalRtpPacketReceived.connect(this, &NativeNetworkingImpl::RtpPacketReceived_n);
     _dtlsSrtpTransport->SignalRtcpPacketReceived.connect(this, &NativeNetworkingImpl::OnRtcpPacketReceived_n);
@@ -335,8 +334,6 @@ void NativeNetworkingImpl::resetDtlsSrtpTransport() {
         this, &NativeNetworkingImpl::OnTransportWritableState_n);
     _dtlsTransport->SignalReceivingState.connect(
         this, &NativeNetworkingImpl::OnTransportReceivingState_n);
-    _dtlsTransport->SignalDtlsHandshakeError.connect(
-        this, &NativeNetworkingImpl::OnDtlsHandshakeError);
 
     _dtlsTransport->SetLocalCertificate(_localCertificate);
     
@@ -377,7 +374,6 @@ void NativeNetworkingImpl::stop() {
     
     _dtlsTransport->SignalWritableState.disconnect(this);
     _dtlsTransport->SignalReceivingState.disconnect(this);
-    _dtlsTransport->SignalDtlsHandshakeError.disconnect(this);
     
     _dtlsSrtpTransport->SetDtlsTransports(nullptr, nullptr);
     
@@ -486,25 +482,6 @@ void NativeNetworkingImpl::OnTransportReceivingState_n(rtc::PacketTransportInter
     assert(_threads->getNetworkThread()->IsCurrent());
 
     UpdateAggregateStates_n();
-}
-
-void NativeNetworkingImpl::OnDtlsHandshakeError(rtc::SSLHandshakeError error) {
-    assert(_threads->getNetworkThread()->IsCurrent());
-}
-
-void NativeNetworkingImpl::DtlsStateChanged() {
-    UpdateAggregateStates_n();
-
-    if (_dtlsTransport->IsDtlsActive()) {
-        const auto weak = std::weak_ptr<NativeNetworkingImpl>(shared_from_this());
-        _threads->getNetworkThread()->PostTask(RTC_FROM_HERE, [weak]() {
-            const auto strong = weak.lock();
-            if (!strong) {
-                return;
-            }
-            strong->UpdateAggregateStates_n();
-        });
-    }
 }
 
 void NativeNetworkingImpl::DtlsReadyToSend(bool isReadyToSend) {

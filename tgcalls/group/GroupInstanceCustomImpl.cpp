@@ -709,9 +709,9 @@ public:
         streamParams.set_stream_ids({ streamId });
         incomingAudioDescription->AddStream(streamParams);
 
-        _audioChannel->SetPayloadTypeDemuxingEnabled(false);
         _audioChannel->SetLocalContent(outgoingAudioDescription.get(), webrtc::SdpType::kOffer, nullptr);
         _audioChannel->SetRemoteContent(incomingAudioDescription.get(), webrtc::SdpType::kAnswer, nullptr);
+        _audioChannel->SetPayloadTypeDemuxingEnabled(false);
 
         outgoingAudioDescription.reset();
         incomingAudioDescription.reset();
@@ -720,7 +720,6 @@ public:
         _audioChannel->media_channel()->SetRawAudioSink(ssrc.networkSsrc, std::move(audioLevelSink));
 
         _audioChannel->SignalSentPacket().connect(this, &IncomingAudioChannel::OnSentPacket_w);
-        _audioChannel->UpdateRtpTransport(nullptr);
 
         _audioChannel->Enable(true);
     }
@@ -846,14 +845,13 @@ public:
 
         incomingVideoDescription->AddStream(videoRecvStreamParams);
 
-        _videoChannel->SetPayloadTypeDemuxingEnabled(false);
         _videoChannel->SetLocalContent(outgoingVideoDescription.get(), webrtc::SdpType::kOffer, nullptr);
         _videoChannel->SetRemoteContent(incomingVideoDescription.get(), webrtc::SdpType::kAnswer, nullptr);
+        _videoChannel->SetPayloadTypeDemuxingEnabled(false);
 
         _videoChannel->media_channel()->SetSink(_mainVideoSsrc, _videoSink.get());
 
         _videoChannel->SignalSentPacket().connect(this, &IncomingVideoChannel::OnSentPacket_w);
-        _videoChannel->UpdateRtpTransport(nullptr);
 
         _videoChannel->Enable(true);
     }
@@ -1020,9 +1018,6 @@ public:
     }
 
     ~GroupInstanceCustomInternal() {
-        _call->SignalChannelNetworkState(webrtc::MediaType::AUDIO, webrtc::kNetworkDown);
-        _call->SignalChannelNetworkState(webrtc::MediaType::VIDEO, webrtc::kNetworkDown);
-
         _incomingAudioChannels.clear();
         _incomingVideoChannels.clear();
         _serverBandwidthProbingVideoSsrc.reset();
@@ -1149,7 +1144,7 @@ public:
         setAudioInputDevice(_initialInputDeviceId);
         setAudioOutputDevice(_initialOutputDeviceId);
 
-        webrtc::Call::Config callConfig(_eventLog.get());
+        webrtc::Call::Config callConfig(_eventLog.get(), _threads->getNetworkThread());
         callConfig.task_queue_factory = _taskQueueFactory.get();
         callConfig.trials = &_fieldTrials;
         callConfig.audio_state = _channelManager->media_engine()->voice().GetAudioState();
@@ -1185,7 +1180,7 @@ public:
 
         if (_outgoingVideoChannel) {
             _outgoingVideoChannel->SignalSentPacket().connect(this, &GroupInstanceCustomInternal::OnSentPacket_w);
-            _outgoingVideoChannel->UpdateRtpTransport(nullptr);
+            //_outgoingVideoChannel->UpdateRtpTransport(nullptr);
         }
 
         if (_audioLevelsUpdated) {
@@ -1279,12 +1274,11 @@ public:
         incomingAudioDescription->set_codecs({ opusCodec });
         incomingAudioDescription->set_bandwidth(2032000);
 
-        _outgoingAudioChannel->SetPayloadTypeDemuxingEnabled(false);
         _outgoingAudioChannel->SetLocalContent(outgoingAudioDescription.get(), webrtc::SdpType::kOffer, nullptr);
         _outgoingAudioChannel->SetRemoteContent(incomingAudioDescription.get(), webrtc::SdpType::kAnswer, nullptr);
+        _outgoingAudioChannel->SetPayloadTypeDemuxingEnabled(false);
 
         _outgoingAudioChannel->SignalSentPacket().connect(this, &GroupInstanceCustomInternal::OnSentPacket_w);
-        _outgoingAudioChannel->UpdateRtpTransport(nullptr);
 
         onUpdatedIsMuted();
 
@@ -1748,9 +1742,9 @@ public:
         incomingVideoDescription->set_codecs({ selectedPayloadType->videoCodec, selectedPayloadType->rtxCodec });
         incomingVideoDescription->set_bandwidth(2032000);
 
-        _outgoingVideoChannel->SetPayloadTypeDemuxingEnabled(false);
         _outgoingVideoChannel->SetLocalContent(outgoingVideoDescription.get(), webrtc::SdpType::kOffer, nullptr);
         _outgoingVideoChannel->SetRemoteContent(incomingVideoDescription.get(), webrtc::SdpType::kAnswer, nullptr);
+        _outgoingVideoChannel->SetPayloadTypeDemuxingEnabled(false);
 
         webrtc::RtpParameters rtpParameters = _outgoingVideoChannel->media_channel()->GetRtpSendParameters(_outgoingVideoSsrcs.simulcastLayers[0].ssrc);
         if (rtpParameters.encodings.size() == 3) {
@@ -1867,14 +1861,6 @@ public:
 
         if (_effectiveNetworkState.isConnected != effectiveNetworkState.isConnected || _effectiveNetworkState.isTransitioningFromBroadcastToRtc != effectiveNetworkState.isTransitioningFromBroadcastToRtc) {
             _effectiveNetworkState = effectiveNetworkState;
-
-            if (_effectiveNetworkState.isConnected) {
-                _call->SignalChannelNetworkState(webrtc::MediaType::AUDIO, webrtc::kNetworkUp);
-                _call->SignalChannelNetworkState(webrtc::MediaType::VIDEO, webrtc::kNetworkUp);
-            } else {
-                _call->SignalChannelNetworkState(webrtc::MediaType::AUDIO, webrtc::kNetworkDown);
-                _call->SignalChannelNetworkState(webrtc::MediaType::VIDEO, webrtc::kNetworkDown);
-            }
 
             if (_networkStateUpdated) {
                 _networkStateUpdated(_effectiveNetworkState);

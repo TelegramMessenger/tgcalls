@@ -93,11 +93,9 @@ private:
     void candidateGatheringState(cricket::IceTransportInternal *transport);
     void OnTransportWritableState_n(rtc::PacketTransportInternal *transport);
     void OnTransportReceivingState_n(rtc::PacketTransportInternal *transport);
-    void OnDtlsHandshakeError(rtc::SSLHandshakeError error);
     void transportStateChanged(cricket::IceTransportInternal *transport);
     void transportReadyToSend(cricket::IceTransportInternal *transport);
     void transportPacketReceived(rtc::PacketTransportInternal *transport, const char *bytes, size_t size, const int64_t &timestamp, int unused);
-    void DtlsStateChanged();
     void DtlsReadyToSend(bool DtlsReadyToSend);
     void UpdateAggregateStates_n();
     void RtpPacketReceived_n(rtc::CopyOnWriteBuffer *packet, int64_t packet_time_us, bool isUnresolved);
