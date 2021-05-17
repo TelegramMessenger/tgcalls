@@ -127,6 +127,11 @@ private:
                 [strongSelf setInternalOrientation:mappedValue];
                 
                 [strongSelf renderFrame:videoFrame];
+                
+                if (!strongSelf->_firstFrameReceivedReported && strongSelf->_onFirstFrameReceived) {
+                    strongSelf->_firstFrameReceivedReported = true;
+                    strongSelf->_onFirstFrameReceived((float)videoFrame.width / (float)videoFrame.height);
+                }
             });
         }));
 
@@ -263,11 +268,6 @@ private:
     renderer.rotationOverride = _rotationOverride;
     [renderer drawFrame:videoFrame];
     _lastFrameTimeNs = videoFrame.timeStampNs;
-    
-    if (!_firstFrameReceivedReported && _onFirstFrameReceived) {
-        _firstFrameReceivedReported = true;
-        _onFirstFrameReceived((float)videoFrame.width / (float)videoFrame.height);
-    }
 }
 
 - (void)mtkView:(MTKView *)view drawableSizeWillChange:(CGSize)size {
