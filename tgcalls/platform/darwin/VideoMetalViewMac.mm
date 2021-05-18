@@ -245,12 +245,8 @@ private:
 //                    //_metalView.layer.transform = CATransform3DIdentity;
 //                }
                 
-                if (_didSetShouldBeMirrored) {
-                    if (_onIsMirroredUpdated) {
-                        _onIsMirroredUpdated(_shouldBeMirrored);
-                    }
-                } else {
-                    _didSetShouldBeMirrored = true;
+                if (_onIsMirroredUpdated) {
+                    _onIsMirroredUpdated(_shouldBeMirrored);
                 }
             }
         }
