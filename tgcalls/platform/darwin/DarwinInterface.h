@@ -7,6 +7,7 @@ namespace tgcalls {
 
 class DarwinInterface : public PlatformInterface {
 public:
+    std::unique_ptr<rtc::NetworkMonitorFactory> createNetworkMonitorFactory() override;
 	void configurePlatformAudio() override;
 	std::unique_ptr<webrtc::VideoEncoderFactory> makeVideoEncoderFactory() override;
 	std::unique_ptr<webrtc::VideoDecoderFactory> makeVideoDecoderFactory() override;

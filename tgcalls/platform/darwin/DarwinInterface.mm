@@ -2,6 +2,7 @@
 
 #include "VideoCapturerInterfaceImpl.h"
 #include "sdk/objc/native/src/objc_video_track_source.h"
+#include "sdk/objc/native/api/network_monitor_factory.h"
 
 #include "media/base/media_constants.h"
 #include "TGRTCDefaultVideoEncoderFactory.h"
@@ -41,6 +42,10 @@ static NSString *getPlatformInfo() {
     
     free(answer);
     return results;
+}
+
+std::unique_ptr<rtc::NetworkMonitorFactory> DarwinInterface::createNetworkMonitorFactory() {
+    return webrtc::CreateNetworkMonitorFactory();
 }
 
 void DarwinInterface::configurePlatformAudio() {
