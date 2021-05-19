@@ -109,7 +109,9 @@ void UwpScreenCapturer::create() {
 
 //void UwpScreenCapturer::OnFrameArrived(Direct3D11CaptureFramePool const& sender, winrt::Windows::Foundation::IInspectable const&) {
 void UwpScreenCapturer::OnFrameArrived(ThreadPoolTimer const& sender) {
-	if (item_closed_) {
+	winrt::slim_lock_guard const guard(lock_);
+
+	if (item_closed_ || _state != VideoState::Active) {
 		RTC_LOG(LS_ERROR) << "The target source has been closed.";
 		destroy();
 		return;
@@ -218,6 +220,10 @@ void UwpScreenCapturer::OnClosed(GraphicsCaptureItem const& sender, winrt::Windo
 }
 
 HRESULT UwpScreenCapturer::CreateMappedTexture(winrt::com_ptr<ID3D11Texture2D> src_texture, UINT width, UINT height) {
+	if (mapped_texture_ != nullptr) {
+		mapped_texture_ = nullptr;
+	}
+
   D3D11_TEXTURE2D_DESC src_desc;
   src_texture->GetDesc(&src_desc);
   D3D11_TEXTURE2D_DESC map_desc;
@@ -255,6 +261,8 @@ std::pair<int, int> UwpScreenCapturer::resolution() const {
 }
 
 void UwpScreenCapturer::destroy() {
+	winrt::slim_lock_guard const guard(lock_);
+
 	if (worker_ != nullptr) {
 		worker_.Cancel();
 		worker_ = nullptr;

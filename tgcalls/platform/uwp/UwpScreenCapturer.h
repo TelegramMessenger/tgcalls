@@ -53,6 +53,7 @@ private:
 	winrt::com_ptr<ID3D11Device> d3d11_device_;
 	winrt::com_ptr<IInspectable> direct3d_device_;
 	winrt::com_ptr<ID3D11Texture2D> mapped_texture_ = nullptr;
+	winrt::slim_mutex lock_;
 	ThreadPoolTimer worker_ = nullptr;
 	HRESULT CreateMappedTexture(winrt::com_ptr<ID3D11Texture2D> src_texture, UINT width = 0, UINT height = 0);
 
