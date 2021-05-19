@@ -146,7 +146,9 @@ void SourceFrameCallbackImpl::OnCaptureResult(
 	    webrtc::DesktopCapturer::Result result,
 	    std::unique_ptr<webrtc::DesktopFrame> frame) {
 	if (result != webrtc::DesktopCapturer::Result::SUCCESS) {
-        if (_onFatalError) _onFatalError();
+        if (result == webrtc::DesktopCapturer::Result::ERROR_PERMANENT) {
+            if (_onFatalError) _onFatalError();
+        }
 		return;
 	}
 
