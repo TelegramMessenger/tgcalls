@@ -42,11 +42,14 @@ UwpScreenCapturer::~UwpScreenCapturer() {
 }
 
 void UwpScreenCapturer::create() {
+	winrt::slim_lock_guard const guard(lock_);
+
 	RTC_DCHECK(!is_capture_started_);
 
 	if (item_closed_) {
 		RTC_LOG(LS_ERROR) << "The target source has been closed.";
 		//RecordStartCaptureResult(StartCaptureResult::kSourceClosed);
+		onFatalError();
 		return;
 	}
 
@@ -78,13 +81,15 @@ void UwpScreenCapturer::create() {
 	hr = d3d11_device_->QueryInterface(IID_PPV_ARGS(&dxgi_device));
 	if (FAILED(hr)) {
 		//RecordStartCaptureResult(StartCaptureResult::kDxgiDeviceCastFailed);
-		return /*hr*/;
+		onFatalError();
+		return;
 	}
 
 	hr = CreateDirect3D11DeviceFromDXGIDevice(dxgi_device.get(), direct3d_device_.put());
 	if (FAILED(hr)) {
 		//RecordStartCaptureResult(StartCaptureResult::kD3dDeviceCreationFailed);
-		return /*hr*/;
+		onFatalError();
+		return;
 	}
 
 	// Cast to FramePoolStatics2 so we can use CreateFreeThreaded and avoid the
@@ -104,16 +109,22 @@ void UwpScreenCapturer::create() {
 	session_.StartCapture();
 
 	is_capture_started_ = true;
-	worker_ = ThreadPoolTimer::CreatePeriodicTimer({this, &UwpScreenCapturer::OnFrameArrived}, std::chrono::milliseconds{ 1000 / kPreferredFps });
+	queueController_ = DispatcherQueueController::CreateOnDedicatedThread();
+	queue_ = queueController_.DispatcherQueue();
+
+	repeatingTimer_ = queue_.CreateTimer();
+	repeatingTimer_.Interval(std::chrono::milliseconds{ 1000 / kPreferredFps });
+	repeatingTimer_.Tick({this, &UwpScreenCapturer::OnFrameArrived});
+	repeatingTimer_.Start();
 }
 
 //void UwpScreenCapturer::OnFrameArrived(Direct3D11CaptureFramePool const& sender, winrt::Windows::Foundation::IInspectable const&) {
-void UwpScreenCapturer::OnFrameArrived(ThreadPoolTimer const& sender) {
+void UwpScreenCapturer::OnFrameArrived(DispatcherQueueTimer const& sender, winrt::Windows::Foundation::IInspectable const& args) {
 	winrt::slim_lock_guard const guard(lock_);
 
 	if (item_closed_ || _state != VideoState::Active) {
 		RTC_LOG(LS_ERROR) << "The target source has been closed.";
-		destroy();
+		onFatalError();
 		return;
 	}
 
@@ -136,14 +147,16 @@ void UwpScreenCapturer::OnFrameArrived(ThreadPoolTimer const& sender) {
 	auto hr = direct3DDxgiInterfaceAccess->GetInterface(IID_PPV_ARGS(&texture_2D));
 	if (FAILED(hr)) {
 		//RecordGetFrameResult(GetFrameResult::kTexture2dCastFailed);
-		return /*hr*/;
+		onFatalError();
+		return;
 	}
 
 	if (!mapped_texture_) {
 		hr = CreateMappedTexture(texture_2D);
 		if (FAILED(hr)) {
 			//RecordGetFrameResult(GetFrameResult::kCreateMappedTextureFailed);
-			return /*hr*/;
+			onFatalError();
+			return;
 		}
 	}
 
@@ -160,7 +173,8 @@ void UwpScreenCapturer::OnFrameArrived(ThreadPoolTimer const& sender) {
 						&map_info);
 	if (FAILED(hr)) {
 		//RecordGetFrameResult(GetFrameResult::kMapFrameFailed);
-		return /*hr*/;
+		onFatalError();
+		return;
 	}
 
 	auto new_size = capture_frame.ContentSize();
@@ -196,7 +210,8 @@ void UwpScreenCapturer::OnFrameArrived(ThreadPoolTimer const& sender) {
 		hr = CreateMappedTexture(texture_2D, new_size.Width, new_size.Height);
 		if (FAILED(hr)) {
 			//RecordGetFrameResult(GetFrameResult::kResizeMappedTextureFailed);
-			return /*hr*/;
+			onFatalError();
+			return;
 		}
 		
 		winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice directDevice;
@@ -212,11 +227,13 @@ void UwpScreenCapturer::OnFrameArrived(ThreadPoolTimer const& sender) {
 
 void UwpScreenCapturer::OnClosed(GraphicsCaptureItem const& sender, winrt::Windows::Foundation::IInspectable const&)
 {
+	winrt::slim_lock_guard const guard(lock_);
+
 	RTC_LOG(LS_INFO) << "Capture target has been closed.";
 	item_closed_ = true;
 	is_capture_started_ = false;
 
-	destroy();
+	onFatalError();
 }
 
 HRESULT UwpScreenCapturer::CreateMappedTexture(winrt::com_ptr<ID3D11Texture2D> src_texture, UINT width, UINT height) {
@@ -256,24 +273,52 @@ void UwpScreenCapturer::setPreferredCaptureAspectRatio(float aspectRatio) {
 	_aspectRatio = aspectRatio;
 }
 
+void UwpScreenCapturer::setOnFatalError(std::function<void ()> error) {
+    if (_fatalError) {
+        error();
+    } else {
+        _onFatalError = std::move(error);
+    }
+}
+
 std::pair<int, int> UwpScreenCapturer::resolution() const {
 	return _dimensions;
+}
+
+void UwpScreenCapturer::onFatalError() {
+	if (repeatingTimer_ != nullptr) {
+		repeatingTimer_.Stop();
+		repeatingTimer_ = nullptr;
+		queue_ = nullptr;
+		queueController_ = nullptr;
+	}
+
+	if (session_ != nullptr) {
+		session_.Close();
+		item_ = nullptr;
+	}
+
+	if (frame_pool_ != nullptr) {
+		frame_pool_.Close();
+	}
+
+	mapped_texture_ = nullptr;
+	frame_pool_ = nullptr;
+	session_ = nullptr;
+	direct3d_device_ = nullptr;
+	d3d11_device_ = nullptr;
+
+	_fatalError = true;
+	if (_onFatalError) {
+		_onFatalError();
+	}
 }
 
 void UwpScreenCapturer::destroy() {
 	winrt::slim_lock_guard const guard(lock_);
 
-	if (worker_ != nullptr) {
-		worker_.Cancel();
-		worker_ = nullptr;
-	}
-
-	mapped_texture_ = nullptr;
-	session_ = nullptr;
-	frame_pool_ = nullptr;
-	direct3d_device_ = nullptr;
-	//item_ = nullptr;
-	d3d11_device_ = nullptr;
+	_onFatalError = nullptr;
+	onFatalError();
 }
 
 void UwpScreenCapturer::OnFrame(std::vector<uint8_t> bytes, int width, int height) {

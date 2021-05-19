@@ -112,7 +112,13 @@ void VideoCapturerInterfaceImpl::setUncroppedOutput(
 }
 
 void VideoCapturerInterfaceImpl::setOnFatalError(std::function<void()> error) {
-#ifndef TGCALLS_UWP_DESKTOP_CAPTURE
+#ifdef TGCALLS_UWP_DESKTOP_CAPTURE
+	if (_screenCapturer) {
+		_screenCapturer->setOnFatalError(std::move(error));
+	} else if (!_screenCapturer && !_cameraCapturer && error) {
+		error();
+	}
+#else
 	if (_desktopCapturer) {
 		_desktopCapturer->setOnFatalError(std::move(error));
 	} else if (!_desktopCapturer && !_cameraCapturer && error) {
