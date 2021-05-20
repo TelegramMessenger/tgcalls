@@ -1875,7 +1875,7 @@ public:
         _isDataChannelOpen = isDataChannelOpen;
 
         if (_isDataChannelOpen) {
-            maybeUpdateRemoteVideoConstaints();
+            maybeUpdateRemoteVideoConstraints();
         }
     }
 
@@ -2013,7 +2013,7 @@ public:
         }*/
     }
 
-    void maybeUpdateRemoteVideoConstaints() {
+    void maybeUpdateRemoteVideoConstraints() {
         if (!_isDataChannelOpen) {
             return;
         }
@@ -2040,7 +2040,7 @@ public:
                     break;
                 }
                 case VideoChannelDescription::Quality::Medium: {
-                    selectedConstraint.insert(std::make_pair("maxHeight", json11::Json(320)));
+                    selectedConstraint.insert(std::make_pair("maxHeight", json11::Json(360)));
                     break;
                 }
                 case VideoChannelDescription::Quality::Thumbnail: {
@@ -2590,7 +2590,7 @@ public:
         }
 
         if (updated) {
-            maybeUpdateRemoteVideoConstaints();
+            maybeUpdateRemoteVideoConstraints();
         }
     }
 
