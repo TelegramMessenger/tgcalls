@@ -2269,6 +2269,11 @@ public:
         });
 
         adjustBitratePreferences(true);
+        
+        if (!_pendingRequestedVideo.empty()) {
+            setRequestedVideoChannels(std::move(_pendingRequestedVideo));
+            _pendingRequestedVideo.clear();
+        }
     }
 
     void setServerBandwidthProbingChannelSsrc(uint32_t probingSsrc) {
@@ -2553,6 +2558,10 @@ public:
     }
 
     void setRequestedVideoChannels(std::vector<VideoChannelDescription> &&requestedVideoChannels) {
+        if (!_sharedVideoInformation) {
+            _pendingRequestedVideo.insert(_pendingRequestedVideo.end(), requestedVideoChannels.begin(), requestedVideoChannels.end());
+            return;
+        }
         bool updated = false;
         std::vector<std::string> allEndpointIds;
 
@@ -2680,6 +2689,7 @@ private:
     std::map<VideoChannelId, std::unique_ptr<IncomingVideoChannel>> _incomingVideoChannels;
 
     std::map<VideoChannelId, std::vector<std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>>> _pendingVideoSinks;
+    std::vector<VideoChannelDescription> _pendingRequestedVideo;
 
     std::unique_ptr<IncomingVideoChannel> _serverBandwidthProbingVideoSsrc;
 
