@@ -160,7 +160,11 @@ private:
     [super layoutSubviews];
     
     CGRect bounds = self.bounds;
+    [CATransaction begin];
+    [CATransaction setAnimationDuration:0];
+    [CATransaction setDisableActions:true];
     _sampleBufferLayer.frame = bounds;
+    [CATransaction commit];
     
     if (_didStartWaitingForLayout) {
         _didStartWaitingForLayout = false;
