@@ -97,7 +97,7 @@ webrtc::VideoFrame FrameSource::next_frame() {
   rtc::scoped_refptr<webrtc::I420Buffer> buffer = webrtc::I420Buffer::Create(width, height);
   libyuv::ABGRToI420(bytes_ptr.get(), width * 4, buffer->MutableDataY(), buffer->StrideY(), buffer->MutableDataU(),
                      buffer->StrideU(), buffer->MutableDataV(), buffer->StrideV(), width, height);
-  return webrtc::VideoFrame::Builder().set_video_frame_buffer(buffer).build();
+  return webrtc::VideoFrame::Builder().set_timestamp_us(static_cast<int64_t>(pts * 1000000)).set_video_frame_buffer(buffer).build();
 }
 
 class FakeVideoSource : public rtc::VideoSourceInterface<webrtc::VideoFrame> {
@@ -163,5 +163,11 @@ std::function<webrtc::VideoTrackSourceInterface*()> FakeVideoTrackSource::create
 }
 std::unique_ptr<FrameSource> FrameSource::chess(){
   return std::make_unique<ChessFrameSource>();
+}
+
+void FrameSource::video_frame_to_rgb0(const webrtc::VideoFrame & src, char *dest){
+  auto buffer = src.video_frame_buffer()->GetI420();
+  libyuv::I420ToABGR(buffer->DataY(), buffer->StrideY(), buffer->DataU(),
+                     buffer->StrideU(), buffer->DataV(), buffer->StrideV( ), reinterpret_cast<uint8_t *>(dest), src.width() * 4,  src.width(), src.height());
 }
 }

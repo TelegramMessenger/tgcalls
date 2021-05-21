@@ -19,6 +19,7 @@ public:
 
   virtual Info info() const = 0;
   virtual webrtc::VideoFrame next_frame();
+  static void video_frame_to_rgb0(const webrtc::VideoFrame &src, char *dest);
   virtual void next_frame_rgb0(char *buf, double *pt_in_seconds) = 0;
 
   static std::unique_ptr<FrameSource> chess();
