@@ -344,6 +344,10 @@ public:
 
         return _history.update(result.speech_probability);
     }
+
+    bool update() {
+        return _history.update(0.0f);
+    }
 };
 
 class AudioSinkImpl: public webrtc::AudioSinkInterface {
@@ -386,12 +390,7 @@ public:
             const int16_t *samples = (const int16_t *)audio.data;
             int numberOfSamplesInFrame = (int)audio.samples_per_channel;
 
-            webrtc::AudioBuffer buffer(audio.sample_rate, 1, 48000, 1, 48000, 1);
-            webrtc::StreamConfig config(audio.sample_rate, 1);
-            buffer.CopyFrom(samples, config);
-
-            bool vadResult = _vad.update(&buffer);
-
+            int16_t currentPeak = 0;
             for (int i = 0; i < numberOfSamplesInFrame; i++) {
                 int16_t sample = samples[i];
                 if (sample < 0) {
@@ -400,7 +399,21 @@ public:
                 if (_peak < sample) {
                     _peak = sample;
                 }
+                if (currentPeak < sample) {
+                    currentPeak = sample;
+                }
                 _peakCount += 1;
+            }
+
+            bool vadResult = false;
+            if (currentPeak > 10) {
+                webrtc::AudioBuffer buffer(audio.sample_rate, 1, 48000, 1, 48000, 1);
+                webrtc::StreamConfig config(audio.sample_rate, 1);
+                buffer.CopyFrom(samples, config);
+
+                vadResult = _vad.update(&buffer);
+            } else {
+                vadResult = _vad.update();
             }
 
             if (_peakCount >= 1200) {

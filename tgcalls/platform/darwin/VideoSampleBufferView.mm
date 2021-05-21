@@ -87,6 +87,10 @@ private:
     
     bool _didSetShouldBeMirrored;
     bool _shouldBeMirrored;
+
+    CVPixelBufferPoolRef _pixelBufferPool;
+    int _pixelBufferPoolWidth;
+    int _pixelBufferPoolHeight;
 }
 
 @end
@@ -137,6 +141,12 @@ private:
         }));
     }
     return self;
+}
+
+- (void)dealloc {
+    if (_pixelBufferPool) {
+        CFRelease(_pixelBufferPool);
+    }
 }
 
 - (void)setEnabled:(BOOL)enabled {
@@ -235,23 +245,54 @@ bool CopyVideoFrameToNV12PixelBuffer(id<RTC_OBJC_TYPE(RTCI420Buffer)> frameBuffe
     return true;
 }
 
++ (CVPixelBufferPoolRef)createPixelBufferPoolWithWidth:(int32_t)width height:(int32_t)height pixelFormat:(FourCharCode)pixelFormat maxBufferCount:(int32_t) maxBufferCount {
+    CVPixelBufferPoolRef outputPool = NULL;
+
+    NSDictionary *sourcePixelBufferOptions = @{
+        (id)kCVPixelBufferPixelFormatTypeKey : @(pixelFormat),
+        (id)kCVPixelBufferWidthKey : @(width),
+        (id)kCVPixelBufferHeightKey : @(height),
+        (id)kCVPixelBufferIOSurfacePropertiesKey : @{}
+    };
+
+    NSDictionary *pixelBufferPoolOptions = @{ (id)kCVPixelBufferPoolMinimumBufferCountKey : @(maxBufferCount) };
+    CVPixelBufferPoolCreate(kCFAllocatorDefault, (__bridge CFDictionaryRef)pixelBufferPoolOptions, (__bridge CFDictionaryRef)sourcePixelBufferOptions, &outputPool);
+
+    return outputPool;
+}
+
 - (CMSampleBufferRef)createSampleBufferFromBuffer:(id<RTC_OBJC_TYPE(RTCI420Buffer)>)buffer {
     NSMutableDictionary *ioSurfaceProperties = [[NSMutableDictionary alloc] init];
-    ioSurfaceProperties[@"IOSurfaceIsGlobal"] = @(true);
+    //ioSurfaceProperties[@"IOSurfaceIsGlobal"] = @(true);
 
     NSMutableDictionary *options = [[NSMutableDictionary alloc] init];
     //options[(__bridge NSString *)kCVPixelBufferBytesPerRowAlignmentKey] = @(buffer.strideY);
     options[(__bridge NSString *)kCVPixelBufferIOSurfacePropertiesKey] = ioSurfaceProperties;
 
     CVPixelBufferRef pixelBufferRef = nil;
-    CVPixelBufferCreate(
-        kCFAllocatorDefault,
-        buffer.width,
-        buffer.height,
-        kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
-        (__bridge CFDictionaryRef)options,
-        &pixelBufferRef
-    );
+
+    if (!(_pixelBufferPool != nil && _pixelBufferPoolWidth == buffer.width && _pixelBufferPoolHeight == buffer.height)) {
+        if (_pixelBufferPool) {
+            CFRelease(_pixelBufferPool);
+            _pixelBufferPool = nil;
+        }
+        _pixelBufferPool = [VideoSampleBufferView createPixelBufferPoolWithWidth:buffer.width height:buffer.height pixelFormat:kCVPixelFormatType_420YpCbCr8BiPlanarFullRange maxBufferCount:10];
+        _pixelBufferPoolWidth = buffer.width;
+        _pixelBufferPoolHeight = buffer.height;
+    }
+
+    if (_pixelBufferPool != nil && _pixelBufferPoolWidth == buffer.width && _pixelBufferPoolHeight == buffer.height) {
+        CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(kCFAllocatorDefault, _pixelBufferPool, nil, &pixelBufferRef);
+    } else {
+        CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            buffer.width,
+            buffer.height,
+            kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+            (__bridge CFDictionaryRef)options,
+            &pixelBufferRef
+        );
+    }
 
     if (pixelBufferRef == nil) {
         return nil;
