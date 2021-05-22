@@ -2572,6 +2572,7 @@ public:
 
     void setRequestedVideoChannels(std::vector<VideoChannelDescription> &&requestedVideoChannels) {
         if (!_sharedVideoInformation) {
+            _pendingRequestedVideo.clear();
             _pendingRequestedVideo.insert(_pendingRequestedVideo.end(), requestedVideoChannels.begin(), requestedVideoChannels.end());
             return;
         }
