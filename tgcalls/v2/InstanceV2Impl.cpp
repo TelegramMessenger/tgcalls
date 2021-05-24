@@ -1254,8 +1254,13 @@ public:
 
         std::unique_ptr<cricket::MediaEngineInterface> mediaEngine = cricket::CreateMediaEngine(std::move(mediaDeps));
 
-        _channelManager.reset(new cricket::ChannelManager(std::move(mediaEngine), std::make_unique<cricket::RtpDataEngine>(), _threads->getMediaThread(), _threads->getNetworkThread()));
-        _channelManager->Init();
+        _channelManager = cricket::ChannelManager::Create(
+            std::move(mediaEngine),
+            std::make_unique<cricket::RtpDataEngine>(),
+            true,
+            _threads->getMediaThread(),
+            _threads->getNetworkThread()
+        );
 
         //setAudioInputDevice(_initialInputDeviceId);
         //setAudioOutputDevice(_initialOutputDeviceId);
