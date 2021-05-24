@@ -1209,6 +1209,7 @@ public:
         }
 
         beginNetworkStatusTimer(0);
+        beginAudioChannelCleanupTimer(0);
 
         adjustBitratePreferences(true);
     }
@@ -1339,6 +1340,32 @@ public:
 
             strong->beginLevelsTimer(50);
         }, timeoutMs);
+    }
+
+    void beginAudioChannelCleanupTimer(int delayMs) {
+        const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
+        _threads->getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
+            auto strong = weak.lock();
+            if (!strong) {
+                return;
+            }
+
+            auto timestamp = rtc::TimeMillis();
+
+            std::vector<ChannelId> removeChannels;
+            for (const auto &it : strong->_incomingAudioChannels) {
+                auto activity = it.second->getActivity();
+                if (activity < timestamp - 1000) {
+                    removeChannels.push_back(it.first);
+                }
+            }
+
+            for (const auto &channelId : removeChannels) {
+                strong->removeIncomingAudioChannel(channelId);
+            }
+
+            strong->beginAudioChannelCleanupTimer(500);
+        }, delayMs);
     }
 
     void beginNetworkStatusTimer(int delayMs) {
@@ -2401,12 +2428,14 @@ public:
         }
 
         if (_incomingAudioChannels.size() > 5) {
+            auto timestamp = rtc::TimeMillis();
+
             int64_t minActivity = INT64_MAX;
             ChannelId minActivityChannelId(0, 0);
 
             for (const auto &it : _incomingAudioChannels) {
                 auto activity = it.second->getActivity();
-                if (activity < minActivity) {
+                if (activity < minActivity && activity < timestamp - 1000) {
                     minActivity = activity;
                     minActivityChannelId = it.first;
                 }
@@ -2414,6 +2443,11 @@ public:
 
             if (minActivityChannelId.networkSsrc != 0) {
                 removeIncomingAudioChannel(minActivityChannelId);
+            }
+
+            if (_incomingAudioChannels.size() > 5) {
+                // Wait until there is a channel that hasn't been active in 1 second
+                return;
             }
         }
 
