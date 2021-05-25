@@ -2271,13 +2271,17 @@ public:
 
 	void setAudioOutputDevice(const std::string &id) {
 #ifndef WEBRTC_IOS
-        SetAudioOutputDeviceById(_audioDeviceModule.get(), id);
+        _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [=] {
+            SetAudioOutputDeviceById(_audioDeviceModule.get(), id);
+        });
 #endif // WEBRTC_IOS
     }
 
     void setAudioInputDevice(const std::string &id) {
 #ifndef WEBRTC_IOS
-        SetAudioInputDeviceById(_audioDeviceModule.get(), id);
+        _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [=] {
+            SetAudioInputDeviceById(_audioDeviceModule.get(), id);
+        });
 #endif // WEBRTC_IOS
     }
 
@@ -2332,7 +2336,7 @@ public:
         });
 
         adjustBitratePreferences(true);
-        
+
         if (!_pendingRequestedVideo.empty()) {
             setRequestedVideoChannels(std::move(_pendingRequestedVideo));
             _pendingRequestedVideo.clear();
