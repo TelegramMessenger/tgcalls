@@ -1064,6 +1064,7 @@ public:
             "WebRTC-TaskQueuePacer/Enabled/"
             "WebRTC-VP8ConferenceTemporalLayers/1/"
             "WebRTC-Audio-MinimizeResamplingOnMobile/Enabled/"
+            "WebRTC-VP8IosMaxNumberOfThread/max_thread:1/"
         );
 
         _networkManager.reset(new ThreadLocalObject<GroupNetworkManager>(_threads->getNetworkThread(), [weak, threads = _threads] () mutable {
