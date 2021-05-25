@@ -64,8 +64,24 @@ private:
 
 }
 
+@interface VideoSampleBufferContentView : UIView
+
+@end
+
+@implementation VideoSampleBufferContentView
+
++ (Class)layerClass {
+    return [AVSampleBufferDisplayLayer class];
+}
+
+- (AVSampleBufferDisplayLayer * _Nonnull)videoLayer {
+    return (AVSampleBufferDisplayLayer *)self.layer;
+}
+
+@end
+
 @interface VideoSampleBufferView () {
-    AVSampleBufferDisplayLayer *_sampleBufferLayer;
+    VideoSampleBufferContentView *_sampleBufferView;
 
     RTCVideoFrame *_videoFrame;
     RTCVideoFrame *_stashedVideoFrame;
@@ -160,8 +176,8 @@ private:
 #pragma mark - Private
 
 - (void)configure {
-    _sampleBufferLayer = [[AVSampleBufferDisplayLayer alloc] init];
-    [self.layer addSublayer:_sampleBufferLayer];
+    _sampleBufferView = [[VideoSampleBufferContentView alloc] init];
+    [self addSubview:_sampleBufferView];
 
     _videoFrameSize = CGSizeZero;
 }
@@ -170,11 +186,8 @@ private:
     [super layoutSubviews];
     
     CGRect bounds = self.bounds;
-    [CATransaction begin];
-    [CATransaction setAnimationDuration:0];
-    [CATransaction setDisableActions:true];
-    _sampleBufferLayer.frame = bounds;
-    [CATransaction commit];
+
+    _sampleBufferView.frame = bounds;
     
     if (_didStartWaitingForLayout) {
         _didStartWaitingForLayout = false;
@@ -334,6 +347,41 @@ bool CopyVideoFrameToNV12PixelBuffer(id<RTC_OBJC_TYPE(RTCI420Buffer)> frameBuffe
     return sampleBuffer;
 }
 
+- (CMSampleBufferRef)createSampleBufferFromPixelBuffer:(CVPixelBufferRef)pixelBufferRef {
+    CMVideoFormatDescriptionRef formatRef = nil;
+    OSStatus status = CMVideoFormatDescriptionCreateForImageBuffer(kCFAllocatorDefault, pixelBufferRef, &formatRef);
+    if (status != 0) {
+        return nil;
+    }
+    if (formatRef == nil) {
+        return nil;
+    }
+
+    CMSampleTimingInfo timingInfo;
+    timingInfo.duration = CMTimeMake(1, 30);
+    timingInfo.presentationTimeStamp = CMTimeMake(0, 30);
+    timingInfo.decodeTimeStamp = CMTimeMake(0, 30);
+
+    CMSampleBufferRef sampleBuffer = nil;
+    OSStatus bufferStatus = CMSampleBufferCreateReadyWithImageBuffer(kCFAllocatorDefault, pixelBufferRef, formatRef, &timingInfo, &sampleBuffer);
+
+
+    if (bufferStatus != noErr) {
+        return nil;
+    }
+    if (sampleBuffer == nil) {
+        return nil;
+    }
+
+    NSArray *attachments = (__bridge NSArray *)CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, true);
+    NSMutableDictionary *dict = (NSMutableDictionary *)attachments[0];
+
+    dict[(__bridge NSString *)kCMSampleAttachmentKey_DisplayImmediately] = @(true);
+
+    return sampleBuffer;
+}
+
+
 - (void)setSize:(CGSize)size {
     assert([NSThread isMainThread]);
 }
@@ -371,14 +419,51 @@ bool CopyVideoFrameToNV12PixelBuffer(id<RTC_OBJC_TYPE(RTCI420Buffer)> frameBuffe
             }
         }
     }
+
+    if ([frame.buffer isKindOfClass:[RTCCVPixelBuffer class]]) {
+        RTCCVPixelBuffer *buffer = (RTCCVPixelBuffer *)frame.buffer;
+
+        if ([buffer isKindOfClass:[TGRTCCVPixelBuffer class]]) {
+            bool shouldBeMirrored = ((TGRTCCVPixelBuffer *)buffer).shouldBeMirrored;
+            if (shouldBeMirrored != _shouldBeMirrored) {
+                _shouldBeMirrored = shouldBeMirrored;
+                if (_shouldBeMirrored) {
+                    _sampleBufferView.transform = CGAffineTransformMakeScale(1.0f, -1.0f);
+                } else {
+                    _sampleBufferView.transform = CGAffineTransformIdentity;
+                }
+
+                if (_didSetShouldBeMirrored) {
+                    if (_onIsMirroredUpdated) {
+                        _onIsMirroredUpdated(_shouldBeMirrored);
+                    }
+                } else {
+                    _didSetShouldBeMirrored = true;
+                }
+            }
+        }
+    }
+
     _videoFrame = frame;
 
-    id<RTC_OBJC_TYPE(RTCI420Buffer)> buffer = [frame.buffer toI420];
-    CMSampleBufferRef sampleBuffer = [self createSampleBufferFromBuffer:buffer];
-    if (sampleBuffer) {
-        [_sampleBufferLayer enqueueSampleBuffer:sampleBuffer];
+    if (_enabled) {
+        if ([frame.buffer isKindOfClass:[RTCCVPixelBuffer class]]) {
+            RTCCVPixelBuffer *pixelBuffer = (RTCCVPixelBuffer *)frame.buffer;
+            CMSampleBufferRef sampleBuffer = [self createSampleBufferFromPixelBuffer:pixelBuffer.pixelBuffer];
+            if (sampleBuffer) {
+                [[_sampleBufferView videoLayer] enqueueSampleBuffer:sampleBuffer];
 
-        CFRelease(sampleBuffer);
+                CFRelease(sampleBuffer);
+            }
+        } else {
+            id<RTC_OBJC_TYPE(RTCI420Buffer)> buffer = [frame.buffer toI420];
+            CMSampleBufferRef sampleBuffer = [self createSampleBufferFromBuffer:buffer];
+            if (sampleBuffer) {
+                [[_sampleBufferView videoLayer] enqueueSampleBuffer:sampleBuffer];
+
+                CFRelease(sampleBuffer);
+            }
+        }
     }
 }
 
