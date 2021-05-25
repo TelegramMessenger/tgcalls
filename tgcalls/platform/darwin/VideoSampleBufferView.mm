@@ -330,6 +330,7 @@ bool CopyVideoFrameToNV12PixelBuffer(id<RTC_OBJC_TYPE(RTCI420Buffer)> frameBuffe
     CMSampleBufferRef sampleBuffer = nil;
     OSStatus bufferStatus = CMSampleBufferCreateReadyWithImageBuffer(kCFAllocatorDefault, pixelBufferRef, formatRef, &timingInfo, &sampleBuffer);
 
+    CFRelease(formatRef);
     CFRelease(pixelBufferRef);
 
     if (bufferStatus != noErr) {
@@ -365,6 +366,7 @@ bool CopyVideoFrameToNV12PixelBuffer(id<RTC_OBJC_TYPE(RTCI420Buffer)> frameBuffe
     CMSampleBufferRef sampleBuffer = nil;
     OSStatus bufferStatus = CMSampleBufferCreateReadyWithImageBuffer(kCFAllocatorDefault, pixelBufferRef, formatRef, &timingInfo, &sampleBuffer);
 
+    CFRelease(formatRef);
 
     if (bufferStatus != noErr) {
         return nil;
