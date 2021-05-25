@@ -744,7 +744,6 @@ public:
     ~IncomingAudioChannel() {
         _audioChannel->SignalSentPacket().disconnect(this);
         _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this]() {
-            _audioChannel->Enable(false);
             _channelManager->DestroyVoiceChannel(_audioChannel);
             _audioChannel = nullptr;
         });
@@ -1033,9 +1032,6 @@ public:
         if (_videoContentType == VideoContentType::Screencast) {
             numVideoSimulcastLayers = 1;
         }
-        if (_videoCodecPreferences.size() != 0 && _videoCodecPreferences[0] == VideoCodecName::VP9) {
-            numVideoSimulcastLayers = 1;
-        }
         for (int layerIndex = 0; layerIndex < numVideoSimulcastLayers; layerIndex++) {
             _outgoingVideoSsrcs.simulcastLayers.push_back(VideoSsrcs::SimulcastLayer(outgoingVideoSsrcBase + layerIndex * 2 + 0, outgoingVideoSsrcBase + layerIndex * 2 + 1));
         }
@@ -1076,6 +1072,7 @@ public:
             "WebRTC-Audio-OpusMinPacketLossRate/Enabled-1/"
             "WebRTC-TaskQueuePacer/Enabled/"
             "WebRTC-VP8ConferenceTemporalLayers/1/"
+            "WebRTC-Audio-MinimizeResamplingOnMobile/Enabled/"
         );
 
         _networkManager.reset(new ThreadLocalObject<GroupNetworkManager>(_threads->getNetworkThread(), [weak, threads = _threads] () mutable {
@@ -1237,9 +1234,11 @@ public:
         }
 
         _outgoingAudioChannel->SignalSentPacket().disconnect(this);
-        _outgoingAudioChannel->media_channel()->SetAudioSend(_outgoingAudioSsrc, false, nullptr, &_audioSource);
-        _outgoingAudioChannel->Enable(false);
-        _channelManager->DestroyVoiceChannel(_outgoingAudioChannel);
+        _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this]() {
+            _outgoingAudioChannel->media_channel()->SetAudioSend(_outgoingAudioSsrc, false, nullptr, &_audioSource);
+            _outgoingAudioChannel->Enable(false);
+            _channelManager->DestroyVoiceChannel(_outgoingAudioChannel);
+        });
         _outgoingAudioChannel = nullptr;
     }
 
@@ -1262,8 +1261,8 @@ public:
             audioOptions.experimental_ns = false;
             audioOptions.residual_echo_detector = false;
         } else {
-            audioOptions.echo_cancellation = true;
-            audioOptions.noise_suppression = true;
+            audioOptions.echo_cancellation = false;
+            audioOptions.noise_suppression = false;
         }
 
         std::vector<std::string> streamIds;
@@ -1285,7 +1284,7 @@ public:
         opusCodec.SetParam(cricket::kCodecParamPTime, opusPTimeMs);
 
         auto outgoingAudioDescription = std::make_unique<cricket::AudioContentDescription>();
-        outgoingAudioDescription->AddRtpHeaderExtension(webrtc::RtpExtension(webrtc::RtpExtension::kAudioLevelUri, 1));
+        //outgoingAudioDescription->AddRtpHeaderExtension(webrtc::RtpExtension(webrtc::RtpExtension::kAudioLevelUri, 1));
         outgoingAudioDescription->AddRtpHeaderExtension(webrtc::RtpExtension(webrtc::RtpExtension::kAbsSendTimeUri, 2));
         outgoingAudioDescription->AddRtpHeaderExtension(webrtc::RtpExtension(webrtc::RtpExtension::kTransportSequenceNumberUri, 3));
         outgoingAudioDescription->set_rtcp_mux(true);
@@ -1296,7 +1295,7 @@ public:
         outgoingAudioDescription->AddStream(cricket::StreamParams::CreateLegacy(_outgoingAudioSsrc));
 
         auto incomingAudioDescription = std::make_unique<cricket::AudioContentDescription>();
-        incomingAudioDescription->AddRtpHeaderExtension(webrtc::RtpExtension(webrtc::RtpExtension::kAudioLevelUri, 1));
+        //incomingAudioDescription->AddRtpHeaderExtension(webrtc::RtpExtension(webrtc::RtpExtension::kAudioLevelUri, 1));
         incomingAudioDescription->AddRtpHeaderExtension(webrtc::RtpExtension(webrtc::RtpExtension::kAbsSendTimeUri, 2));
         incomingAudioDescription->AddRtpHeaderExtension(webrtc::RtpExtension(webrtc::RtpExtension::kTransportSequenceNumberUri, 3));
         incomingAudioDescription->set_rtcp_mux(true);
@@ -1701,7 +1700,7 @@ public:
                     break;
                 }
                 case VideoCodecName::VP9: {
-                    codecName = cricket::kVp8CodecName;
+                    codecName = cricket::kVp9CodecName;
                     break;
                 }
                 default: {
@@ -2246,16 +2245,19 @@ public:
       }
 
       _getVideoSource = std::move(getVideoSource);
+      webrtc::VideoTrackSourceInterface *videoSource = _getVideoSource ? _getVideoSource() : nullptr;
 
-      if (_outgoingVideoChannel) {
-          if (_getVideoSource) {
-              _outgoingVideoChannel->Enable(true);
-              _outgoingVideoChannel->media_channel()->SetVideoSend(_outgoingVideoSsrcs.simulcastLayers[0].ssrc, NULL, _getVideoSource());
-          } else {
-              _outgoingVideoChannel->Enable(false);
-              _outgoingVideoChannel->media_channel()->SetVideoSend(_outgoingVideoSsrcs.simulcastLayers[0].ssrc, NULL, nullptr);
+      _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this, videoSource]() {
+          if (_outgoingVideoChannel) {
+              if (_getVideoSource) {
+                  _outgoingVideoChannel->Enable(true);
+                  _outgoingVideoChannel->media_channel()->SetVideoSend(_outgoingVideoSsrcs.simulcastLayers[0].ssrc, NULL, videoSource);
+              } else {
+                  _outgoingVideoChannel->Enable(false);
+                  _outgoingVideoChannel->media_channel()->SetVideoSend(_outgoingVideoSsrcs.simulcastLayers[0].ssrc, NULL, nullptr);
+              }
           }
-      }
+      });
 
       if (resetBitrate) {
           adjustBitratePreferences(true);
@@ -2418,8 +2420,10 @@ public:
         }
 
         if (_outgoingAudioChannel) {
-            _outgoingAudioChannel->Enable(!_isMuted);
-            _outgoingAudioChannel->media_channel()->SetAudioSend(_outgoingAudioSsrc, !_isMuted, nullptr, &_audioSource);
+            _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this]() {
+                _outgoingAudioChannel->Enable(!_isMuted);
+                _outgoingAudioChannel->media_channel()->SetAudioSend(_outgoingAudioSsrc, !_isMuted, nullptr, &_audioSource);
+            });
         }
     }
 
