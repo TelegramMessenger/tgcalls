@@ -1252,7 +1252,7 @@ public:
             audioOptions.experimental_ns = false;
             audioOptions.residual_echo_detector = false;
         } else {
-            audioOptions.echo_cancellation = false;
+            audioOptions.echo_cancellation = true;
             audioOptions.noise_suppression = false;
         }
 
