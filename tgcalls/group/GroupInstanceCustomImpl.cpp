@@ -1203,7 +1203,7 @@ public:
         }
 
         if (_audioLevelsUpdated) {
-            beginLevelsTimer(50);
+            beginLevelsTimer(150);
         }
 
         if (_getVideoSource) {
@@ -1346,7 +1346,7 @@ public:
                 strong->_audioLevelsUpdated(levelsUpdate);
             }
 
-            strong->beginLevelsTimer(50);
+            strong->beginLevelsTimer(150);
         }, timeoutMs);
     }
 
