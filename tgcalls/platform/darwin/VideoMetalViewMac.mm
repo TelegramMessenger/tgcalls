@@ -158,7 +158,7 @@ private:
 #pragma mark - Private
 
 + (BOOL)isMetalAvailable {
-    return MTLCreateSystemDefaultDevice() != nil;
+    return CGDirectDisplayCopyCurrentMetalDevice(CGMainDisplayID()) != nil;
 }
 
 + (MTKView *)createMetalView:(CGRect)frame {
