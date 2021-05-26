@@ -178,7 +178,11 @@
                             std::string([scope.cachedKey UTF8String]),
             tgcalls::DesktopCaptureSourceHelper([scope getSource], [scope getData])).first;
     }
-    return [[DesktopCaptureSourceView alloc] initWithHelper:i->second];
+    DesktopCaptureSourceView *view = [[DesktopCaptureSourceView alloc] initWithHelper:i->second];
+    if (scope.data.captureMouse) {
+        [view setVideoContentMode:kCAGravityResizeAspect];
+    }
+    return view;
 }
 
 -(void)start:(DesktopCaptureSourceScopeMac *)scope {
