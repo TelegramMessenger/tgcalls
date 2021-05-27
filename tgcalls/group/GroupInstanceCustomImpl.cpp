@@ -741,7 +741,9 @@ public:
     }
 
     void setVolume(double value) {
-        _audioChannel->media_channel()->SetOutputVolume(_ssrc.networkSsrc, value);
+        _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this, value]() {
+            _audioChannel->media_channel()->SetOutputVolume(_ssrc.networkSsrc, value);
+        });
     }
 
     void updateActivity() {
