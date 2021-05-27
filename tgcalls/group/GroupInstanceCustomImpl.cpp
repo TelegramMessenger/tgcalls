@@ -2015,8 +2015,6 @@ public:
     }
 
     void receiveDataChannelMessage(std::string const &message) {
-        //{"colibriClass":"SenderVideoConstraints", "videoConstraints":{"idealHeight":180}}
-
         std::string parsingError;
         auto json = json11::Json::parse(message, parsingError);
         if (json.type() != json11::Json::OBJECT) {
@@ -2035,9 +2033,30 @@ public:
                         if (idealHeight != videoConstraints->second.object_items().end() && idealHeight->second.is_number()) {
                             int outgoingVideoConstraint = idealHeight->second.int_value();
                             if (_outgoingVideoConstraint != outgoingVideoConstraint) {
-                                _outgoingVideoConstraint = outgoingVideoConstraint;
-
-                                adjustVideoSendParams();
+                                if (_outgoingVideoConstraint > outgoingVideoConstraint) {
+                                    bool schedule = _pendingOutgoingVideoConstraint == -1;
+                                    _pendingOutgoingVideoConstraint = outgoingVideoConstraint;
+                                    if (schedule) {
+                                        const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
+                                        _threads->getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
+                                            auto strong = weak.lock();
+                                            if (!strong) {
+                                                return;
+                                            }
+                                            if (strong->_pendingOutgoingVideoConstraint != -1) {
+                                                if (strong->_outgoingVideoConstraint != strong->_pendingOutgoingVideoConstraint) {
+                                                    strong->_outgoingVideoConstraint = strong->_pendingOutgoingVideoConstraint;
+                                                    strong->adjustVideoSendParams();
+                                                }
+                                                strong->_pendingOutgoingVideoConstraint = -1;
+                                            }
+                                        }, 2000);
+                                    }
+                                } else {
+                                    _pendingOutgoingVideoConstraint = -1;
+                                    _outgoingVideoConstraint = outgoingVideoConstraint;
+                                    adjustVideoSendParams();
+                                }
                             }
                         }
                     }
@@ -2798,6 +2817,7 @@ private:
     cricket::VideoChannel *_outgoingVideoChannel = nullptr;
     VideoSsrcs _outgoingVideoSsrcs;
     int _outgoingVideoConstraint = 720;
+    int _pendingOutgoingVideoConstraint = -1;
 
     std::map<ChannelId, GroupLevelValue> _audioLevels;
     GroupLevelValue _myAudioLevel;
