@@ -296,6 +296,7 @@ void UwpScreenCapturer::onFatalError() {
 	if (session_ != nullptr) {
 		session_.Close();
 		item_ = nullptr;
+		item_closed_ = true;
 	}
 
 	if (frame_pool_ != nullptr) {
@@ -326,10 +327,10 @@ void UwpScreenCapturer::OnFrame(std::vector<uint8_t> bytes, int width, int heigh
 		return;
 	}
 
-	int dst_stride_y = width;
-	int dst_stride_uv = (width + 1) / 2;
-	int target_width = width;
-	int target_height = abs(height);
+	int dst_width = width & ~1;
+	int dst_height = abs(height) & ~1;
+	int dst_stride_y = dst_width;
+	int dst_stride_uv = (dst_width + 1) / 2;
 
 	uint8_t* plane_y = bytes.data();
 	size_t videoFrameLength = bytes.size();
@@ -338,7 +339,7 @@ void UwpScreenCapturer::OnFrame(std::vector<uint8_t> bytes, int width, int heigh
 	int32_t stride_uv = stride_y / 2;
 
 	rtc::scoped_refptr<webrtc::I420Buffer> buffer = webrtc::I420Buffer::Create(
-		target_width, target_height, dst_stride_y, dst_stride_uv, dst_stride_uv);
+		dst_width, dst_height, dst_stride_y, dst_stride_uv, dst_stride_uv);
 
 	const int conversionResult = libyuv::ConvertToI420(
 		plane_y, videoFrameLength, stride_y, plane_uv, stride_uv,
@@ -346,7 +347,7 @@ void UwpScreenCapturer::OnFrame(std::vector<uint8_t> bytes, int width, int heigh
 		buffer.get()->MutableDataU(), buffer.get()->StrideU(),
 		buffer.get()->MutableDataV(), buffer.get()->StrideV(),
 		0, 0,  // No Cropping
-		width, height, target_width, target_height, libyuv::kRotate0,
+		width, height, dst_width, dst_height, libyuv::kRotate0,
 		libyuv::FOURCC_ARGB);
 	if (conversionResult < 0) {
 		RTC_LOG(LS_ERROR) << "Failed to convert capture frame from type "
