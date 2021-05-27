@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <iomanip>
+#include <optional>
 
 #include "Instance.h"
 #include "VideoCaptureInterfaceImpl.h"
