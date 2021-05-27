@@ -1050,7 +1050,10 @@ public:
 
         _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this]() {
             _channelManager = nullptr;
-            _audioDeviceModule = nullptr;
+            if (_audioDeviceModule) {
+                _audioDeviceModule->Stop();
+                _audioDeviceModule = nullptr;
+            }
             _call.reset();
         });
     }
@@ -2672,13 +2675,13 @@ public:
     }
 
 private:
-    rtc::scoped_refptr<webrtc::AudioDeviceModule> createAudioDeviceModule() {
+    rtc::scoped_refptr<WrappedAudioDeviceModule> createAudioDeviceModule() {
 		const auto create = [&](webrtc::AudioDeviceModule::AudioLayer layer) {
 			return webrtc::AudioDeviceModule::Create(
 				layer,
 				_taskQueueFactory.get());
 		};
-		const auto check = [&](const rtc::scoped_refptr<webrtc::AudioDeviceModule> &result) -> rtc::scoped_refptr<webrtc::AudioDeviceModule> {
+		const auto check = [&](const rtc::scoped_refptr<webrtc::AudioDeviceModule> &result) -> rtc::scoped_refptr<WrappedAudioDeviceModule> {
             if (result && result->Init() == 0) {
                 return PlatformInterface::SharedInstance()->wrapAudioDeviceModule(result);
             } else {
@@ -2724,7 +2727,7 @@ private:
     std::unique_ptr<webrtc::Call> _call;
     webrtc::FieldTrialBasedConfig _fieldTrials;
     webrtc::LocalAudioSinkAdapter _audioSource;
-    rtc::scoped_refptr<webrtc::AudioDeviceModule> _audioDeviceModule;
+    rtc::scoped_refptr<WrappedAudioDeviceModule> _audioDeviceModule;
 	std::function<rtc::scoped_refptr<webrtc::AudioDeviceModule>(webrtc::TaskQueueFactory*)> _createAudioDeviceModule;
     std::string _initialInputDeviceId;
     std::string _initialOutputDeviceId;
