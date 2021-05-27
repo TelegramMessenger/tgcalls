@@ -6,6 +6,7 @@
 #include "api/video_codecs/video_decoder_factory.h"
 #include "api/media_stream_interface.h"
 #include "rtc_base/network_monitor_factory.h"
+#include "modules/audio_device/include/audio_device.h"
 #include <string>
 
 namespace tgcalls {
@@ -38,6 +39,9 @@ public:
 	virtual rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> makeVideoSource(rtc::Thread *signalingThread, rtc::Thread *workerThread) = 0;
     virtual void adaptVideoSource(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> videoSource, int width, int height, int fps) = 0;
 	virtual std::unique_ptr<VideoCapturerInterface> makeVideoCapturer(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, std::string deviceId, std::function<void(VideoState)> stateUpdated, std::function<void(PlatformCaptureInfo)> captureInfoUpdated, std::shared_ptr<PlatformContext> platformContext, std::pair<int, int> &outResolution) = 0;
+    virtual rtc::scoped_refptr<webrtc::AudioDeviceModule> wrapAudioDeviceModule(rtc::scoped_refptr<webrtc::AudioDeviceModule> module) {
+        return module;
+    }
 
 };
 

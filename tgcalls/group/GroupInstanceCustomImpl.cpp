@@ -2678,8 +2678,12 @@ private:
 				layer,
 				_taskQueueFactory.get());
 		};
-		const auto check = [&](const rtc::scoped_refptr<webrtc::AudioDeviceModule> &result) {
-			return (result && result->Init() == 0) ? result : nullptr;
+		const auto check = [&](const rtc::scoped_refptr<webrtc::AudioDeviceModule> &result) -> rtc::scoped_refptr<webrtc::AudioDeviceModule> {
+            if (result && result->Init() == 0) {
+                return PlatformInterface::SharedInstance()->wrapAudioDeviceModule(result);
+            } else {
+                return nullptr;
+            }
 		};
 		if (_createAudioDeviceModule) {
 			if (const auto result = check(_createAudioDeviceModule(_taskQueueFactory.get()))) {

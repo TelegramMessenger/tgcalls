@@ -107,6 +107,10 @@ std::unique_ptr<VideoCapturerInterface> DarwinInterface::makeVideoCapturer(rtc::
     return std::make_unique<VideoCapturerInterfaceImpl>(source, deviceId, stateUpdated, captureInfoUpdated, outResolution);
 }
 
+rtc::scoped_refptr<webrtc::AudioDeviceModule> DarwinInterface::wrapAudioDeviceModule(rtc::scoped_refptr<webrtc::AudioDeviceModule> module) {
+    return module;
+}
+
 std::unique_ptr<PlatformInterface> CreatePlatformInterface() {
 	return std::make_unique<DarwinInterface>();
 }
