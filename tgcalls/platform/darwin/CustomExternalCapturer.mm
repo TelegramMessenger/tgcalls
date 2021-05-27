@@ -89,29 +89,6 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
 + (void)passPixelBuffer:(CVPixelBufferRef)pixelBuffer toSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source croppingBuffer:(std::vector<uint8_t> &)croppingBuffer {
     TGRTCCVPixelBuffer *rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:pixelBuffer];
 
-    int width = (int)(rtcPixelBuffer.width * 2 / 3);
-    if (width % 2 != 0) {
-        width += 1;
-    }
-    int height = (int)(rtcPixelBuffer.height * 2 / 3);
-    if (height % 2 != 0) {
-        height += 1;
-    }
-
-    CVPixelBufferRef outputPixelBufferRef = NULL;
-    OSType pixelFormat = CVPixelBufferGetPixelFormatType(rtcPixelBuffer.pixelBuffer);
-    CVPixelBufferCreate(NULL, width, height, pixelFormat, NULL, &outputPixelBufferRef);
-    if (outputPixelBufferRef) {
-        int bufferSize = [rtcPixelBuffer bufferSizeForCroppingAndScalingToWidth:width height:height];
-        if (croppingBuffer.size() < bufferSize) {
-            croppingBuffer.resize(bufferSize);
-        }
-        if ([rtcPixelBuffer cropAndScaleTo:outputPixelBufferRef withTempBuffer:croppingBuffer.data()]) {
-            rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:outputPixelBufferRef];
-        }
-        CVPixelBufferRelease(outputPixelBufferRef);
-    }
-
     int64_t timeStampNs = CACurrentMediaTime() * kNanosecondsPerSecond;
     RTCVideoFrame *videoFrame = [[RTCVideoFrame alloc] initWithBuffer:rtcPixelBuffer rotation:RTCVideoRotation_0 timeStampNs:timeStampNs];
 
