@@ -2735,7 +2735,7 @@ private:
 
     std::vector<webrtc::SdpVideoFormat> _availableVideoFormats;
     std::vector<OutgoingVideoFormat> _availablePayloadTypes;
-    std::optional<OutgoingVideoFormat> _selectedPayloadType;
+    absl::optional<OutgoingVideoFormat> _selectedPayloadType;
 
     std::vector<GroupJoinPayloadVideoPayloadType> _videoPayloadTypes;
     std::vector<std::pair<uint32_t, std::string>> _videoExtensionMap;

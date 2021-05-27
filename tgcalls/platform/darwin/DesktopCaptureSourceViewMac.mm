@@ -17,7 +17,7 @@
 @interface DesktopCaptureSourceViewGL : GLVideoView
 @end
 
-@interface DesktopCaptureSourceViewMetal : GLVideoView
+@interface DesktopCaptureSourceViewMetal : VideoMetalView
 @end
 
 
