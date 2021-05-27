@@ -12,6 +12,7 @@
 #include "api/video_track_source_proxy.h"
 #import "base/RTCLogging.h"
 #include "AudioDeviceModuleIOS.h"
+#include "DarwinVideoSource.h"
 
 #ifdef WEBRTC_IOS
 #include "sdk/objc/components/audio/RTCAudioSession.h"
@@ -24,10 +25,10 @@
 
 namespace tgcalls {
 
-static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> nativeSource) {
+static DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> nativeSource) {
     webrtc::VideoTrackSourceProxy *proxy_source =
     static_cast<webrtc::VideoTrackSourceProxy *>(nativeSource.get());
-    return static_cast<webrtc::ObjCVideoTrackSource *>(proxy_source->internal());
+    return static_cast<DarwinVideoTrackSource *>(proxy_source->internal());
 }
 
 static NSString *getPlatformInfo() {
@@ -96,7 +97,7 @@ bool DarwinInterface::supportsEncoding(const std::string &codecName) {
 }
 
 rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> DarwinInterface::makeVideoSource(rtc::Thread *signalingThread, rtc::Thread *workerThread) {
-    rtc::scoped_refptr<webrtc::ObjCVideoTrackSource> objCVideoTrackSource(new rtc::RefCountedObject<webrtc::ObjCVideoTrackSource>());
+    rtc::scoped_refptr<tgcalls::DarwinVideoTrackSource> objCVideoTrackSource(new rtc::RefCountedObject<tgcalls::DarwinVideoTrackSource>());
     return webrtc::VideoTrackSourceProxy::Create(signalingThread, workerThread, objCVideoTrackSource);
 }
 
