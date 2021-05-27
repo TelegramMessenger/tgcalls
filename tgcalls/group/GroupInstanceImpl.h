@@ -79,13 +79,13 @@ struct GroupNetworkState {
     bool isTransitioningFromBroadcastToRtc = false;
 };
 
-enum VideoContentType {
+enum class VideoContentType {
     None,
     Screencast,
     Generic
 };
 
-enum VideoCodecName {
+enum class VideoCodecName {
     VP8,
     VP9
 };

@@ -14,15 +14,26 @@
 #import "platform/darwin/VideoMetalViewMac.h"
 #import "platform/darwin/GLVideoViewMac.h"
 
-@interface DesktopCaptureSourceView : GLVideoView
+@interface DesktopCaptureSourceViewGL : GLVideoView
+@end
+
+@interface DesktopCaptureSourceViewMetal : VideoMetalView
 @end
 
 
-@interface DesktopCaptureSourceView ()
+@implementation DesktopCaptureSourceViewGL
 
+-(id)initWithHelper:(tgcalls::DesktopCaptureSourceHelper)helper {
+    if (self = [super initWithFrame:CGRectZero]) {
+        std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink = [self getSink];
+        helper.setOutput(sink);
+        [self setVideoContentMode:kCAGravityResizeAspectFill];
+    }
+    return self;
+}
 @end
 
-@implementation DesktopCaptureSourceView
+@implementation DesktopCaptureSourceViewMetal
 
 -(id)initWithHelper:(tgcalls::DesktopCaptureSourceHelper)helper {
     if (self = [super initWithFrame:CGRectZero]) {
@@ -178,7 +189,20 @@
                             std::string([scope.cachedKey UTF8String]),
             tgcalls::DesktopCaptureSourceHelper([scope getSource], [scope getData])).first;
     }
-    return [[DesktopCaptureSourceView alloc] initWithHelper:i->second];
+    
+    if ([VideoMetalView isSupported]) {
+        DesktopCaptureSourceViewMetal *view = [[DesktopCaptureSourceViewMetal alloc] initWithHelper:i->second];
+        if (scope.data.captureMouse) {
+            [view setVideoContentMode:kCAGravityResizeAspect];
+        }
+        return view;
+    } else {
+        DesktopCaptureSourceViewGL *view = [[DesktopCaptureSourceViewGL alloc] initWithHelper:i->second];
+        if (scope.data.captureMouse) {
+            [view setVideoContentMode:kCAGravityResizeAspect];
+        }
+        return view;
+    }
 }
 
 -(void)start:(DesktopCaptureSourceScopeMac *)scope {
