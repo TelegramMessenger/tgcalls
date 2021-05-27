@@ -617,9 +617,11 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
         }
     }
     
-    int64_t timeStampNs = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer)) *
-    kNanosecondsPerSecond;
-    RTCVideoFrame *videoFrame = [[RTCVideoFrame alloc] initWithBuffer:rtcPixelBuffer rotation:_rotation timeStampNs:timeStampNs];
+    int64_t timeStampNs = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer)) * kNanosecondsPerSecond;
+
+    //RTCVideoFrame *videoFrame = [[RTCVideoFrame alloc] initWithBuffer:rtcPixelBuffer rotation:_rotation timeStampNs:timeStampNs];
+
+    RTCVideoFrame *videoFrame = [[RTCVideoFrame alloc] initWithBuffer:(id<RTCVideoFrameBuffer>)[rtcPixelBuffer toI420] rotation:_rotation timeStampNs:timeStampNs];
     
     if (!_isPaused) {
         getObjCVideoSource(_source)->OnCapturedFrame(videoFrame);

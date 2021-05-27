@@ -90,7 +90,7 @@ static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr
     TGRTCCVPixelBuffer *rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:pixelBuffer];
 
     int64_t timeStampNs = CACurrentMediaTime() * kNanosecondsPerSecond;
-    RTCVideoFrame *videoFrame = [[RTCVideoFrame alloc] initWithBuffer:rtcPixelBuffer rotation:RTCVideoRotation_0 timeStampNs:timeStampNs];
+    RTCVideoFrame *videoFrame = [[RTCVideoFrame alloc] initWithBuffer:(id<RTCVideoFrameBuffer>)[rtcPixelBuffer toI420] rotation:RTCVideoRotation_0 timeStampNs:timeStampNs];
 
     getObjCVideoSource(source)->OnCapturedFrame(videoFrame);
 }
