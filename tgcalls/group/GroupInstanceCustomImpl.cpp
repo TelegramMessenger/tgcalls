@@ -1103,8 +1103,9 @@ public:
                     });
                 },
                 [=](std::string const &message) {
-                    threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, message]() mutable {
+                    threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, message]() {
                         if (const auto strong = weak.lock()) {
+                            strong->receiveDataChannelMessage(message);
                         }
                     });
                 }, threads);
@@ -1190,7 +1191,9 @@ public:
                 if (_videoContentType == VideoContentType::Screencast) {
                     videoOptions.is_screencast = true;
                 }
-                _outgoingVideoChannel = _channelManager->CreateVideoChannel(_call.get(), cricket::MediaConfig(), _rtpTransport, _threads->getWorkerThread(), "1", false, GroupNetworkManager::getDefaulCryptoOptions(), _uniqueRandomIdGenerator.get(), videoOptions, _videoBitrateAllocatorFactory.get());
+                cricket::MediaConfig mediaConfig;
+                mediaConfig.video.enable_cpu_adaptation = true;
+                _outgoingVideoChannel = _channelManager->CreateVideoChannel(_call.get(), mediaConfig, _rtpTransport, _threads->getWorkerThread(), "1", false, GroupNetworkManager::getDefaulCryptoOptions(), _uniqueRandomIdGenerator.get(), videoOptions, _videoBitrateAllocatorFactory.get());
                 break;
             }
             default: {
@@ -1797,6 +1800,10 @@ public:
         _outgoingVideoChannel->SetRemoteContent(incomingVideoDescription.get(), webrtc::SdpType::kAnswer, nullptr);
         _outgoingVideoChannel->SetPayloadTypeDemuxingEnabled(false);
 
+        adjustVideoSendParams();
+    }
+
+    void adjustVideoSendParams() {
         _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this]() {
             webrtc::RtpParameters rtpParameters = _outgoingVideoChannel->media_channel()->GetRtpSendParameters(_outgoingVideoSsrcs.simulcastLayers[0].ssrc);
             if (rtpParameters.encodings.size() == 3) {
@@ -1805,13 +1812,28 @@ public:
                         rtpParameters.encodings[i].min_bitrate_bps = 50000;
                         rtpParameters.encodings[i].max_bitrate_bps = 100000;
                         rtpParameters.encodings[i].scale_resolution_down_by = 4.0;
+                        if (_outgoingVideoConstraint != -1) {
+                            rtpParameters.encodings[i].active = _outgoingVideoConstraint >= 180;
+                        } else {
+                            rtpParameters.encodings[i].active = true;
+                        }
                     } else if (i == 1) {
                         rtpParameters.encodings[i].max_bitrate_bps = 150000;
                         rtpParameters.encodings[i].max_bitrate_bps = 200000;
                         rtpParameters.encodings[i].scale_resolution_down_by = 2.0;
+                        if (_outgoingVideoConstraint != -1) {
+                            rtpParameters.encodings[i].active = _outgoingVideoConstraint >= 360;
+                        } else {
+                            rtpParameters.encodings[i].active = true;
+                        }
                     } else if (i == 2) {
                         rtpParameters.encodings[i].min_bitrate_bps = 300000;
                         rtpParameters.encodings[i].max_bitrate_bps = 800000 + 100000;
+                        if (_outgoingVideoConstraint != -1) {
+                            rtpParameters.encodings[i].active = _outgoingVideoConstraint >= 720;
+                        } else {
+                            rtpParameters.encodings[i].active = true;
+                        }
                     }
                 }
             } else if (rtpParameters.encodings.size() == 2) {
@@ -1826,7 +1848,6 @@ public:
                     }
                 }
             } else {
-                //rtpParameters.encodings[0].min_bitrate_bps = 200000;
                 rtpParameters.encodings[0].max_bitrate_bps = (800000 + 100000) * 2;
             }
 
@@ -1956,7 +1977,6 @@ public:
                 return;
             }
 
-
             if (header.ssrc == _outgoingAudioSsrc) {
                 return;
             }
@@ -1990,9 +2010,41 @@ public:
     }
 
     void receiveRtcpPacket(rtc::CopyOnWriteBuffer const &packet, int64_t timestamp) {
-        _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this, packet, timestamp]() {
+        _threads->getWorkerThread()->PostTask(RTC_FROM_HERE, [this, packet, timestamp]() {
             _call->Receiver()->DeliverPacket(webrtc::MediaType::ANY, packet, timestamp);
         });
+    }
+
+    void receiveDataChannelMessage(std::string const &message) {
+        //{"colibriClass":"SenderVideoConstraints", "videoConstraints":{"idealHeight":180}}
+
+        std::string parsingError;
+        auto json = json11::Json::parse(message, parsingError);
+        if (json.type() != json11::Json::OBJECT) {
+            RTC_LOG(LS_WARNING) << "receiveDataChannelMessage: error parsing message: " << parsingError;
+            return;
+        }
+
+        if (json.is_object()) {
+            const auto colibriClass = json.object_items().find("colibriClass");
+            if (colibriClass != json.object_items().end() && colibriClass->second.is_string()) {
+                const auto messageType = colibriClass->second.string_value();
+                if (messageType == "SenderVideoConstraints") {
+                    const auto videoConstraints = json.object_items().find("videoConstraints");
+                    if (videoConstraints != json.object_items().end() && videoConstraints->second.is_object()) {
+                        const auto idealHeight = videoConstraints->second.object_items().find("idealHeight");
+                        if (idealHeight != videoConstraints->second.object_items().end() && idealHeight->second.is_number()) {
+                            int outgoingVideoConstraint = idealHeight->second.int_value();
+                            if (_outgoingVideoConstraint != outgoingVideoConstraint) {
+                                _outgoingVideoConstraint = outgoingVideoConstraint;
+
+                                adjustVideoSendParams();
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     void maybeRequestUnknownSsrc(uint32_t ssrc) {
@@ -2750,6 +2802,7 @@ private:
     // _outgoingVideoChannel memory is managed by _channelManager
     cricket::VideoChannel *_outgoingVideoChannel = nullptr;
     VideoSsrcs _outgoingVideoSsrcs;
+    int _outgoingVideoConstraint = 720;
 
     std::map<ChannelId, GroupLevelValue> _audioLevels;
     GroupLevelValue _myAudioLevel;
