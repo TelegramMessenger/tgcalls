@@ -301,7 +301,7 @@ private:
     
     renderer.rotationOverride = _rotationOverride;
     
-    //[renderer drawFrame:videoFrame];
+    [renderer drawFrame:videoFrame];
     _lastFrameTimeNs = videoFrame.timeStampNs;
 }
 
