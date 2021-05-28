@@ -13,6 +13,7 @@
 #include "p2p/base/dtls_transport_factory.h"
 #include "pc/dtls_srtp_transport.h"
 #include "pc/dtls_transport.h"
+#include "platform/PlatformInterface.h"
 
 #include "StaticThreads.h"
 
@@ -214,9 +215,11 @@ _dataChannelMessageReceived(dataChannelMessageReceived) {
     _localIceParameters = PeerIceParameters(rtc::CreateRandomString(cricket::ICE_UFRAG_LENGTH), rtc::CreateRandomString(cricket::ICE_PWD_LENGTH));
     
     _localCertificate = rtc::RTCCertificateGenerator::GenerateCertificate(rtc::KeyParams(rtc::KT_ECDSA), absl::nullopt);
+
+    _networkMonitorFactory = PlatformInterface::SharedInstance()->createNetworkMonitorFactory();
     
     _socketFactory.reset(new rtc::BasicPacketSocketFactory(_threads->getNetworkThread()));
-    _networkManager = std::make_unique<rtc::BasicNetworkManager>();
+    _networkManager = std::make_unique<rtc::BasicNetworkManager>(_networkMonitorFactory.get());
     _asyncResolverFactory = std::make_unique<webrtc::BasicAsyncResolverFactory>();
     
     _dtlsSrtpTransport = std::make_unique<webrtc::DtlsSrtpTransport>(true);
