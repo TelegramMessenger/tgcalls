@@ -1634,7 +1634,9 @@ public:
                 }
 
                 auto buffer = packet.Buffer();
-                _call->Receiver()->DeliverPacket(webrtc::MediaType::AUDIO, buffer, -1);
+                _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this, buffer]() {
+                    _call->Receiver()->DeliverPacket(webrtc::MediaType::AUDIO, buffer, -1);
+                });
 
                 channelsWithActivity.insert(ChannelId(channelSsrc));
             }
@@ -1969,7 +1971,9 @@ public:
                 return;
             }
 
-            _call->Receiver()->DeliverPacket(webrtc::MediaType::ANY, packet, -1);
+            _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this, packet]() {
+                _call->Receiver()->DeliverPacket(webrtc::MediaType::ANY, packet, -1);
+            });
         } else {
             if (!rtpParser.Parse(&header)) {
                 // Probably a data channel message
