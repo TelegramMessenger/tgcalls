@@ -13,6 +13,7 @@
 #include "tgcalls/desktop_capturer/DesktopCaptureSource.h"
 #include "tgcalls/desktop_capturer/DesktopCaptureSourceHelper.h"
 #include "tgcalls/desktop_capturer/DesktopCaptureSourceManager.h"
+#include "DarwinVideoSource.h"
 
 #import "helpers/RTCDispatcher+Private.h"
 #import <QuartzCore/QuartzCore.h>
@@ -28,10 +29,10 @@ static RTCVideoFrame *customToObjCVideoFrame(const webrtc::VideoFrame &frame, RT
     return videoFrame;
 }
 
-static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> nativeSource) {
+static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> nativeSource) {
     webrtc::VideoTrackSourceProxy *proxy_source =
     static_cast<webrtc::VideoTrackSourceProxy *>(nativeSource.get());
-    return static_cast<webrtc::ObjCVideoTrackSource *>(proxy_source->internal());
+    return static_cast<tgcalls::DarwinVideoTrackSource *>(proxy_source->internal());
 }
 
 class RendererAdapterImpl : public rtc::VideoSinkInterface<webrtc::VideoFrame> {

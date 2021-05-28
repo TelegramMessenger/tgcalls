@@ -10,7 +10,7 @@
 
 #ifndef TGCALLS_DARWIN_VIDEO_SOURCE_H
 #define TGCALLS_DARWIN_VIDEO_SOURCE_H
-#ifdef WEBRTC_IOS
+//#ifdef WEBRTC_IOS
 
 #import "base/RTCVideoCapturer.h"
 
@@ -53,5 +53,5 @@ class DarwinVideoTrackSource : public rtc::AdaptedVideoTrackSource {
 
 }  // namespace tgcalls
 
-#endif //WEBRTC_IOS
+//#endif //WEBRTC_IOS
 #endif

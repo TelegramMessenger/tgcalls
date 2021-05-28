@@ -223,6 +223,9 @@ private:
     if (CGRectIsEmpty(view.bounds)) {
         return;
     }
+    if (CGRectIsEmpty(self.visibleRect)) {
+        return;
+    }
         
     RTCMTLRenderer *renderer;
     
@@ -316,7 +319,6 @@ private:
            
    _videoFrameSize = size;
    CGSize drawableSize = [self drawableSize];
-   
    _metalView.drawableSize = drawableSize;
    [self setNeedsLayout:YES];
     
