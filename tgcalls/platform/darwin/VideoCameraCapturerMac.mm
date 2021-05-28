@@ -19,13 +19,13 @@
 #include "rtc_base/checks.h"
 #include "rtc_base/logging.h"
 #include "third_party/libyuv/include/libyuv.h"
-
+#include "DarwinVideoSource.h"
 static const int64_t kNanosecondsPerSecond = 1000000000;
 
-static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> nativeSource) {
+static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> nativeSource) {
     webrtc::VideoTrackSourceProxy *proxy_source =
     static_cast<webrtc::VideoTrackSourceProxy *>(nativeSource.get());
-    return static_cast<webrtc::ObjCVideoTrackSource *>(proxy_source->internal());
+    return static_cast<tgcalls::DarwinVideoTrackSource *>(proxy_source->internal());
 }
 
 
