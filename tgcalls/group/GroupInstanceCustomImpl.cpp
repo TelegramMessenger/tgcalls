@@ -2034,26 +2034,28 @@ public:
                             int outgoingVideoConstraint = idealHeight->second.int_value();
                             if (_outgoingVideoConstraint != outgoingVideoConstraint) {
                                 if (_outgoingVideoConstraint > outgoingVideoConstraint) {
-                                    bool schedule = _pendingOutgoingVideoConstraint == -1;
                                     _pendingOutgoingVideoConstraint = outgoingVideoConstraint;
-                                    if (schedule) {
-                                        const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
-                                        _threads->getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
-                                            auto strong = weak.lock();
-                                            if (!strong) {
-                                                return;
+
+                                    int requestId = _pendingOutgoingVideoConstraintRequestId;
+                                    _pendingOutgoingVideoConstraintRequestId += 1;
+
+                                    const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
+                                    _threads->getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak, requestId]() {
+                                        auto strong = weak.lock();
+                                        if (!strong) {
+                                            return;
+                                        }
+                                        if (strong->_pendingOutgoingVideoConstraint != -1 && strong->_pendingOutgoingVideoConstraintRequestId == requestId) {
+                                            if (strong->_outgoingVideoConstraint != strong->_pendingOutgoingVideoConstraint) {
+                                                strong->_outgoingVideoConstraint = strong->_pendingOutgoingVideoConstraint;
+                                                strong->adjustVideoSendParams();
                                             }
-                                            if (strong->_pendingOutgoingVideoConstraint != -1) {
-                                                if (strong->_outgoingVideoConstraint != strong->_pendingOutgoingVideoConstraint) {
-                                                    strong->_outgoingVideoConstraint = strong->_pendingOutgoingVideoConstraint;
-                                                    strong->adjustVideoSendParams();
-                                                }
-                                                strong->_pendingOutgoingVideoConstraint = -1;
-                                            }
-                                        }, 2000);
-                                    }
+                                            strong->_pendingOutgoingVideoConstraint = -1;
+                                        }
+                                    }, 2000);
                                 } else {
                                     _pendingOutgoingVideoConstraint = -1;
+                                    _pendingOutgoingVideoConstraintRequestId += 1;
                                     _outgoingVideoConstraint = outgoingVideoConstraint;
                                     adjustVideoSendParams();
                                 }
@@ -2818,6 +2820,7 @@ private:
     VideoSsrcs _outgoingVideoSsrcs;
     int _outgoingVideoConstraint = 720;
     int _pendingOutgoingVideoConstraint = -1;
+    int _pendingOutgoingVideoConstraintRequestId = 0;
 
     std::map<ChannelId, GroupLevelValue> _audioLevels;
     GroupLevelValue _myAudioLevel;
