@@ -421,9 +421,20 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
             static_cast<uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 1));
             const int srcUVStride = (int)CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 1);
 
-            auto resultBuffer = new rtc::RefCountedObject<webrtc::NV12Buffer>(CVPixelBufferGetWidth(pixelBuffer), CVPixelBufferGetHeight(pixelBuffer), srcYStride, srcUVStride);
-            memcpy(resultBuffer->MutableDataY(), srcY, srcYStride * resultBuffer->height());
-            memcpy(resultBuffer->MutableDataUV(), srcUV, srcUVStride * resultBuffer->height() / 2);
+            const int srcWidth = (int)CVPixelBufferGetWidth(pixelBuffer);
+            const int srcHeight = (int)CVPixelBufferGetHeight(pixelBuffer);
+
+            int resultWidth = (int)(srcWidth * 0.8f);
+            resultWidth &= ~1;
+            int resultHeight = (int)(srcHeight * 0.8f);
+            resultHeight &= ~1;
+
+            rtc::scoped_refptr<webrtc::NV12Buffer> resultBuffer = new rtc::RefCountedObject<webrtc::NV12Buffer>(resultWidth, resultHeight, srcYStride, srcUVStride);
+
+            libyuv::NV12Scale(srcY, srcYStride, srcUV, srcUVStride,
+                                        resultWidth, resultHeight, resultBuffer->MutableDataY(),
+                                        resultBuffer->StrideY(), resultBuffer->MutableDataUV(), resultBuffer->StrideUV(), resultBuffer->width(),
+                                        resultBuffer->height(), libyuv::kFilterBilinear);
 
             return resultBuffer;
         }
