@@ -87,7 +87,7 @@ private:
 @implementation VideoMetalView
 
 + (bool)isSupported {
-    return NO;//[VideoMetalView isMetalAvailable]
+    return [VideoMetalView isMetalAvailable];
 }
 
 - (instancetype)initWithFrame:(CGRect)frameRect {
@@ -127,6 +127,11 @@ private:
                 [strongSelf setInternalOrientation:mappedValue];
                 
                 [strongSelf renderFrame:videoFrame];
+                
+                if (!strongSelf->_firstFrameReceivedReported && strongSelf->_onFirstFrameReceived) {
+                    strongSelf->_firstFrameReceivedReported = true;
+                    strongSelf->_onFirstFrameReceived((float)videoFrame.width / (float)videoFrame.height);
+                }
             });
         }));
 
@@ -153,7 +158,7 @@ private:
 #pragma mark - Private
 
 + (BOOL)isMetalAvailable {
-    return MTLCreateSystemDefaultDevice() != nil;
+    return CGDirectDisplayCopyCurrentMetalDevice(CGMainDisplayID()) != nil;
 }
 
 + (MTKView *)createMetalView:(CGRect)frame {
@@ -180,19 +185,21 @@ private:
 }
 
 
-
+-(void)setFrameSize:(NSSize)newSize {
+    [super setFrameSize:newSize];
+}
 - (void)layout {
     [super layout];
     
-    if (_shouldBeMirrored) {
-        _metalView.layer.anchorPoint = NSMakePoint(1, 0);
-        _metalView.layer.affineTransform = CGAffineTransformMakeScale(-1, 1);
-        //  _metalView.layer.transform = CATransform3DMakeScale(-1, 1, 1);
-    } else {
-        _metalView.layer.anchorPoint = NSMakePoint(0, 0);
-        _metalView.layer.affineTransform = CGAffineTransformIdentity;
-        //_metalView.layer.transform = CATransform3DIdentity;
-    }
+//    if (_shouldBeMirrored) {
+//        _metalView.layer.anchorPoint = NSMakePoint(1, 0);
+//        _metalView.layer.affineTransform = CGAffineTransformMakeScale(-1, 1);
+//        //  _metalView.layer.transform = CATransform3DMakeScale(-1, 1, 1);
+//    } else {
+//        _metalView.layer.anchorPoint = NSMakePoint(0, 0);
+//        _metalView.layer.affineTransform = CGAffineTransformIdentity;
+//        //_metalView.layer.transform = CATransform3DIdentity;
+//    }
     
     CGRect bounds = self.bounds;
     _metalView.frame = bounds;
@@ -216,6 +223,9 @@ private:
     if (CGRectIsEmpty(view.bounds)) {
         return;
     }
+    if (CGRectIsEmpty(self.visibleRect)) {
+        return;
+    }
         
     RTCMTLRenderer *renderer;
     
@@ -228,22 +238,18 @@ private:
                 _shouldBeMirrored = shouldBeMirrored;
                 bool shouldBeMirrored = ((TGRTCCVPixelBuffer *)buffer).shouldBeMirrored;
                 
-                if (shouldBeMirrored) {
-                    _metalView.layer.anchorPoint = NSMakePoint(1, 0);
-                    _metalView.layer.affineTransform = CGAffineTransformMakeScale(-1, 1);
-                    //  _metalView.layer.transform = CATransform3DMakeScale(-1, 1, 1);
-                } else {
-                    _metalView.layer.anchorPoint = NSMakePoint(0, 0);
-                    _metalView.layer.affineTransform = CGAffineTransformIdentity;
-                    //_metalView.layer.transform = CATransform3DIdentity;
-                }
+//                if (shouldBeMirrored) {
+//                    _metalView.layer.anchorPoint = NSMakePoint(1, 0);
+//                    _metalView.layer.affineTransform = CGAffineTransformMakeScale(-1, 1);
+//                    //  _metalView.layer.transform = CATransform3DMakeScale(-1, 1, 1);
+//                } else {
+//                    _metalView.layer.anchorPoint = NSMakePoint(0, 0);
+//                    _metalView.layer.affineTransform = CGAffineTransformIdentity;
+//                    //_metalView.layer.transform = CATransform3DIdentity;
+//                }
                 
-                if (_didSetShouldBeMirrored) {
-                    if (_onIsMirroredUpdated) {
-                        _onIsMirroredUpdated(_shouldBeMirrored);
-                    }
-                } else {
-                    _didSetShouldBeMirrored = true;
+                if (_onIsMirroredUpdated) {
+                    _onIsMirroredUpdated(_shouldBeMirrored);
                 }
             }
         }
@@ -261,11 +267,6 @@ private:
     renderer.rotationOverride = _rotationOverride;
     [renderer drawFrame:videoFrame];
     _lastFrameTimeNs = videoFrame.timeStampNs;
-    
-    if (!_firstFrameReceivedReported && _onFirstFrameReceived) {
-        _firstFrameReceivedReported = true;
-        _onFirstFrameReceived((float)videoFrame.width / (float)videoFrame.height);
-    }
 }
 
 - (void)mtkView:(MTKView *)view drawableSizeWillChange:(CGSize)size {
@@ -318,9 +319,10 @@ private:
            
    _videoFrameSize = size;
    CGSize drawableSize = [self drawableSize];
-   
    _metalView.drawableSize = drawableSize;
    [self setNeedsLayout:YES];
+    
+    _internalAspect = _videoFrameSize.width / _videoFrameSize.height;
    //[strongSelf.delegate videoView:self didChangeVideoSize:size];
 }
 

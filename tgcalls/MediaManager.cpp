@@ -203,6 +203,7 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
 		"WebRTC-Audio-OpusMinPacketLossRate/Enabled-1/"
 		"WebRTC-FlexFEC-03/Enabled/"
 		"WebRTC-FlexFEC-03-Advertised/Enabled/"
+        "WebRTC-Turn-AllowSystemPorts/Enabled/"
 	);
 
 	PlatformInterface::SharedInstance()->configurePlatformAudio();
@@ -388,7 +389,7 @@ void MediaManager::start() {
 
     beginStatsTimer(3000);
     if (_audioLevelUpdated != nullptr) {
-        beginLevelsTimer(50);
+        beginLevelsTimer(100);
     }
 }
 
@@ -501,7 +502,7 @@ void MediaManager::beginLevelsTimer(int timeoutMs) {
         float effectiveLevel = fmaxf(strong->_currentAudioLevel, strong->_currentMyAudioLevel);
         strong->_audioLevelUpdated(effectiveLevel);
 
-        strong->beginLevelsTimer(50);
+        strong->beginLevelsTimer(100);
     }, timeoutMs);
 }
 

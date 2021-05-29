@@ -25,6 +25,14 @@ webrtc::VideoTrackSourceInterface *VideoCaptureInterfaceObject::source() {
 	return _videoSource;
 }
 
+int VideoCaptureInterfaceObject::getRotation() {
+    if (_videoCapturer) {
+        return _videoCapturer->getRotation();
+    } else {
+        return 0;
+    }
+}
+
 void VideoCaptureInterfaceObject::switchToDevice(std::string deviceId) {
     if (_videoCapturer && _currentUncroppedSink) {
 		_videoCapturer->setUncroppedOutput(nullptr);
@@ -41,6 +49,9 @@ void VideoCaptureInterfaceObject::switchToDevice(std::string deviceId) {
                 this->_shouldBeAdaptedToReceiverAspectRate = info.shouldBeAdaptedToReceiverAspectRate;
                 this->updateAspectRateAdaptation();
             }
+            if (this->_rotationUpdated) {
+                this->_rotationUpdated(info.rotation);
+            }
         }, _platformContext, _videoCapturerResolution);
 	}
 	if (_videoCapturer) {
@@ -50,6 +61,9 @@ void VideoCaptureInterfaceObject::switchToDevice(std::string deviceId) {
 		if (_currentUncroppedSink) {
 			_videoCapturer->setUncroppedOutput(_currentUncroppedSink);
 		}
+        if (_onFatalError) {
+            _videoCapturer->setOnFatalError(_onFatalError);
+        }
 		_videoCapturer->setState(_state);
 	}
 }
@@ -99,8 +113,19 @@ void VideoCaptureInterfaceObject::setOutput(std::shared_ptr<rtc::VideoSinkInterf
 	_currentUncroppedSink = sink;
 }
 
+void VideoCaptureInterfaceObject::setOnFatalError(std::function<void()> error) {
+    if (_videoCapturer) {
+        _videoCapturer->setOnFatalError(error);
+    }
+    _onFatalError = error;
+}
+
 void VideoCaptureInterfaceObject::setStateUpdated(std::function<void(VideoState)> stateUpdated) {
 	_stateUpdated = stateUpdated;
+}
+
+void VideoCaptureInterfaceObject::setRotationUpdated(std::function<void(int)> rotationUpdated) {
+    _rotationUpdated = rotationUpdated;
 }
 
 VideoCaptureInterfaceImpl::VideoCaptureInterfaceImpl(std::string deviceId,
@@ -127,6 +152,11 @@ void VideoCaptureInterfaceImpl::setState(VideoState state) {
 void VideoCaptureInterfaceImpl::setPreferredAspectRatio(float aspectRatio) {
     _impl.perform(RTC_FROM_HERE, [aspectRatio](VideoCaptureInterfaceObject *impl) {
         impl->setPreferredAspectRatio(aspectRatio);
+    });
+}
+void VideoCaptureInterfaceImpl::setOnFatalError(std::function<void()> error) {
+    _impl.perform(RTC_FROM_HERE, [error](VideoCaptureInterfaceObject *impl) {
+        impl->setOnFatalError(error);
     });
 }
 

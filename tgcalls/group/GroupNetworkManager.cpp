@@ -222,7 +222,6 @@ _dataChannelMessageReceived(dataChannelMessageReceived) {
     _dtlsSrtpTransport = std::make_unique<webrtc::DtlsSrtpTransport>(true);
     _dtlsSrtpTransport->SetDtlsTransports(nullptr, nullptr);
     _dtlsSrtpTransport->SetActiveResetSrtpParams(false);
-    _dtlsSrtpTransport->SignalDtlsStateChange.connect(this, &GroupNetworkManager::DtlsStateChanged);
     _dtlsSrtpTransport->SignalReadyToSend.connect(this, &GroupNetworkManager::DtlsReadyToSend);
     _dtlsSrtpTransport->SignalRtpPacketReceived.connect(this, &GroupNetworkManager::RtpPacketReceived_n);
     _dtlsSrtpTransport->SignalRtcpPacketReceived.connect(this, &GroupNetworkManager::OnRtcpPacketReceived_n);
@@ -281,8 +280,6 @@ void GroupNetworkManager::resetDtlsSrtpTransport() {
         this, &GroupNetworkManager::OnTransportWritableState_n);
     _dtlsTransport->SignalReceivingState.connect(
         this, &GroupNetworkManager::OnTransportReceivingState_n);
-    _dtlsTransport->SignalDtlsHandshakeError.connect(
-        this, &GroupNetworkManager::OnDtlsHandshakeError);
 
     _dtlsTransport->SetDtlsRole(rtc::SSLRole::SSL_SERVER);
     _dtlsTransport->SetLocalCertificate(_localCertificate);
@@ -293,22 +290,27 @@ void GroupNetworkManager::resetDtlsSrtpTransport() {
 void GroupNetworkManager::start() {
     _transportChannel->MaybeStartGathering();
 
-    /*const auto weak = std::weak_ptr<GroupNetworkManager>(shared_from_this());
-    _dataChannelInterface.reset(new SctpDataChannelProviderInterfaceImpl(_dtlsTransport.get(), [weak, threads = _threads](bool state) {
-        assert(threads->getNetworkThread()->IsCurrent());
-        const auto strong = weak.lock();
-        if (!strong) {
-            return;
-        }
-        strong->_dataChannelStateUpdated(state);
-    }, [weak, threads = _threads[](std::string const &message) {
-        assert(threads->getNetworkThread()->IsCurrent());
-        const auto strong = weak.lock();
-        if (!strong) {
-            return;
-        }
-        strong->_dataChannelMessageReceived(message);
-    }));*/
+    const auto weak = std::weak_ptr<GroupNetworkManager>(shared_from_this());
+    _dataChannelInterface.reset(new SctpDataChannelProviderInterfaceImpl(
+        _dtlsTransport.get(),
+        [weak, threads = _threads](bool state) {
+            assert(threads->getNetworkThread()->IsCurrent());
+            const auto strong = weak.lock();
+            if (!strong) {
+                return;
+            }
+            strong->_dataChannelStateUpdated(state);
+        },
+        [weak, threads = _threads](std::string const &message) {
+            assert(threads->getNetworkThread()->IsCurrent());
+            const auto strong = weak.lock();
+            if (!strong) {
+                return;
+            }
+            strong->_dataChannelMessageReceived(message);
+        },
+        _threads
+    ));
 }
 
 void GroupNetworkManager::stop() {
@@ -317,7 +319,6 @@ void GroupNetworkManager::stop() {
     
     _dtlsTransport->SignalWritableState.disconnect(this);
     _dtlsTransport->SignalReceivingState.disconnect(this);
-    _dtlsTransport->SignalDtlsHandshakeError.disconnect(this);
     
     _dtlsSrtpTransport->SetDtlsTransports(nullptr, nullptr);
     
@@ -414,25 +415,6 @@ void GroupNetworkManager::OnTransportReceivingState_n(rtc::PacketTransportIntern
     assert(_threads->getNetworkThread()->IsCurrent());
 
     UpdateAggregateStates_n();
-}
-
-void GroupNetworkManager::OnDtlsHandshakeError(rtc::SSLHandshakeError error) {
-    assert(_threads->getNetworkThread()->IsCurrent());
-}
-
-void GroupNetworkManager::DtlsStateChanged() {
-    UpdateAggregateStates_n();
-
-    if (_dtlsTransport->IsDtlsActive()) {
-        const auto weak = std::weak_ptr<GroupNetworkManager>(shared_from_this());
-        _threads->getNetworkThread()->PostTask(RTC_FROM_HERE, [weak]() {
-            const auto strong = weak.lock();
-            if (!strong) {
-                return;
-            }
-            strong->UpdateAggregateStates_n();
-        });
-    }
 }
 
 void GroupNetworkManager::DtlsReadyToSend(bool isReadyToSend) {

@@ -86,6 +86,7 @@ private:
     
     bool _didSetShouldBeMirrored;
     bool _shouldBeMirrored;
+    bool _shouldBeMirroredVertically;
 }
 
 @end
@@ -240,10 +241,16 @@ private:
         
         if ([buffer isKindOfClass:[TGRTCCVPixelBuffer class]]) {
             bool shouldBeMirrored = ((TGRTCCVPixelBuffer *)buffer).shouldBeMirrored;
-            if (shouldBeMirrored != _shouldBeMirrored) {
+            bool shouldBeMirroredVertically = _internalOrientation == 1 || _internalOrientation == 3;
+            if (shouldBeMirrored != _shouldBeMirrored || shouldBeMirroredVertically != _shouldBeMirroredVertically) {
                 _shouldBeMirrored = shouldBeMirrored;
+                _shouldBeMirroredVertically = shouldBeMirroredVertically;
                 if (_shouldBeMirrored) {
-                    _metalView.transform = CGAffineTransformMakeScale(1.0f, -1.0f);
+                    if (_shouldBeMirroredVertically) {
+                        _metalView.transform = CGAffineTransformMakeScale(1.0f, -1.0f);
+                    } else {
+                        _metalView.transform = CGAffineTransformMakeScale(-1.0f, 1.0f);
+                    }
                 } else {
                     _metalView.transform = CGAffineTransformIdentity;
                 }

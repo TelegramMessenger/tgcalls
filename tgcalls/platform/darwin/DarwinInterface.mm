@@ -2,6 +2,7 @@
 
 #include "VideoCapturerInterfaceImpl.h"
 #include "sdk/objc/native/src/objc_video_track_source.h"
+#include "sdk/objc/native/api/network_monitor_factory.h"
 
 #include "media/base/media_constants.h"
 #include "TGRTCDefaultVideoEncoderFactory.h"
@@ -10,6 +11,8 @@
 #include "sdk/objc/native/api/video_decoder_factory.h"
 #include "api/video_track_source_proxy.h"
 #import "base/RTCLogging.h"
+#include "AudioDeviceModuleIOS.h"
+#include "DarwinVideoSource.h"
 
 #ifdef WEBRTC_IOS
 #include "sdk/objc/components/audio/RTCAudioSession.h"
@@ -22,10 +25,10 @@
 
 namespace tgcalls {
 
-static webrtc::ObjCVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> nativeSource) {
+static DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> nativeSource) {
     webrtc::VideoTrackSourceProxy *proxy_source =
     static_cast<webrtc::VideoTrackSourceProxy *>(nativeSource.get());
-    return static_cast<webrtc::ObjCVideoTrackSource *>(proxy_source->internal());
+    return static_cast<DarwinVideoTrackSource *>(proxy_source->internal());
 }
 
 static NSString *getPlatformInfo() {
@@ -41,6 +44,10 @@ static NSString *getPlatformInfo() {
     
     free(answer);
     return results;
+}
+
+std::unique_ptr<rtc::NetworkMonitorFactory> DarwinInterface::createNetworkMonitorFactory() {
+    return webrtc::CreateNetworkMonitorFactory();
 }
 
 void DarwinInterface::configurePlatformAudio() {
@@ -90,7 +97,7 @@ bool DarwinInterface::supportsEncoding(const std::string &codecName) {
 }
 
 rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> DarwinInterface::makeVideoSource(rtc::Thread *signalingThread, rtc::Thread *workerThread) {
-    rtc::scoped_refptr<webrtc::ObjCVideoTrackSource> objCVideoTrackSource(new rtc::RefCountedObject<webrtc::ObjCVideoTrackSource>());
+    rtc::scoped_refptr<tgcalls::DarwinVideoTrackSource> objCVideoTrackSource(new rtc::RefCountedObject<tgcalls::DarwinVideoTrackSource>());
     return webrtc::VideoTrackSourceProxy::Create(signalingThread, workerThread, objCVideoTrackSource);
 }
 
@@ -100,6 +107,10 @@ void DarwinInterface::adaptVideoSource(rtc::scoped_refptr<webrtc::VideoTrackSour
 
 std::unique_ptr<VideoCapturerInterface> DarwinInterface::makeVideoCapturer(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, std::string deviceId, std::function<void(VideoState)> stateUpdated, std::function<void(PlatformCaptureInfo)> captureInfoUpdated, std::shared_ptr<PlatformContext> platformContext, std::pair<int, int> &outResolution) {
     return std::make_unique<VideoCapturerInterfaceImpl>(source, deviceId, stateUpdated, captureInfoUpdated, outResolution);
+}
+
+rtc::scoped_refptr<WrappedAudioDeviceModule> DarwinInterface::wrapAudioDeviceModule(rtc::scoped_refptr<webrtc::AudioDeviceModule> module) {
+    return new rtc::RefCountedObject<AudioDeviceModuleIOS>(module);
 }
 
 std::unique_ptr<PlatformInterface> CreatePlatformInterface() {
