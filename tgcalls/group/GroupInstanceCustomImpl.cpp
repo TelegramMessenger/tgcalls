@@ -350,29 +350,6 @@ public:
     }
 };
 
-class SparseVad {
-public:
-    SparseVad() {
-    }
-
-    bool update(webrtc::AudioBuffer *buffer) {
-        _sampleCount += buffer->num_frames();
-        if (_sampleCount < 400) {
-            return _currentValue;
-        }
-        _sampleCount = 0;
-
-        _currentValue = _vad.update(buffer);
-
-        return _currentValue;
-    }
-
-private:
-    CombinedVad _vad;
-    bool _currentValue = false;
-    size_t _sampleCount = 0;
-};
-
 class AudioSinkImpl: public webrtc::AudioSinkInterface {
 public:
     struct Update {
@@ -428,7 +405,7 @@ public:
                 _peakCount += 1;
             }
 
-            /*bool vadResult = false;
+            bool vadResult = false;
             if (currentPeak > 10) {
                 webrtc::AudioBuffer buffer(audio.sample_rate, 1, 48000, 1, 48000, 1);
                 webrtc::StreamConfig config(audio.sample_rate, 1);
@@ -437,13 +414,13 @@ public:
                 vadResult = _vad.update(&buffer);
             } else {
                 vadResult = _vad.update();
-            }*/
+            }
 
-            if (_peakCount >= 4400) {
-                float level = ((float)(_peak)) / 8000.0f;
+            if (_peakCount >= 1200) {
+                float level = ((float)(_peak)) / 4000.0f;
                 _peak = 0;
                 _peakCount = 0;
-                _update(Update(level, level >= 1.0f));
+                _update(Update(level, vadResult));
             }
         }
     }
@@ -562,74 +539,43 @@ private:
             sourcePeak = std::max(std::fabs(sourceSamples[i]), sourcePeak);
         }
 
-        if (_noiseSuppressionConfiguration->isEnabled) {
-            float vadProbability = 0.0f;
-            if (sourcePeak >= 0.01f) {
-                vadProbability = rnnoise_process_frame(_denoiseState, _frameSamples.data(), buffer->channels()[0]);
-                if (_noiseSuppressionConfiguration->isEnabled) {
-                    memcpy(buffer->channels()[0], _frameSamples.data(), _frameSamples.size() * sizeof(float));
-                }
+        float vadProbability = 0.0f;
+        if (sourcePeak >= 0.01f) {
+            vadProbability = rnnoise_process_frame(_denoiseState, _frameSamples.data(), buffer->channels()[0]);
+            if (_noiseSuppressionConfiguration->isEnabled) {
+                memcpy(buffer->channels()[0], _frameSamples.data(), _frameSamples.size() * sizeof(float));
             }
+        }
 
-            float peak = 0;
-            int peakCount = 0;
-            const float *samples = buffer->channels_const()[0];
-            for (int i = 0; i < buffer->num_frames(); i++) {
-                float sample = samples[i];
-                if (sample < 0) {
-                    sample = -sample;
-                }
-                if (peak < sample) {
-                    peak = sample;
-                }
-                peakCount += 1;
+        float peak = 0;
+        int peakCount = 0;
+        const float *samples = buffer->channels_const()[0];
+        for (int i = 0; i < buffer->num_frames(); i++) {
+            float sample = samples[i];
+            if (sample < 0) {
+                sample = -sample;
             }
+            if (peak < sample) {
+                peak = sample;
+            }
+            peakCount += 1;
+        }
 
-            bool vadStatus = _history.update(vadProbability);
+        bool vadStatus = _history.update(vadProbability);
 
-            _peakCount += peakCount;
-            if (_peak < peak) {
-                _peak = peak;
-            }
-            if (_peakCount >= 4400) {
-                float level = _peak / 4000.0f;
-                _peak = 0;
-                _peakCount = 0;
+        _peakCount += peakCount;
+        if (_peak < peak) {
+            _peak = peak;
+        }
+        if (_peakCount >= 1200) {
+            float level = _peak / 4000.0f;
+            _peak = 0;
+            _peakCount = 0;
 
-                _updated(GroupLevelValue{
-                    level,
-                    vadStatus,
-                });
-            }
-        } else {
-            float peak = 0;
-            int peakCount = 0;
-            const float *samples = buffer->channels_const()[0];
-            for (int i = 0; i < buffer->num_frames(); i++) {
-                float sample = samples[i];
-                if (sample < 0) {
-                    sample = -sample;
-                }
-                if (peak < sample) {
-                    peak = sample;
-                }
-                peakCount += 1;
-            }
-
-            _peakCount += peakCount;
-            if (_peak < peak) {
-                _peak = peak;
-            }
-            if (_peakCount >= 1200) {
-                float level = _peak / 8000.0f;
-                _peak = 0;
-                _peakCount = 0;
-
-                _updated(GroupLevelValue{
-                    level,
-                    level >= 1.0f,
-                });
-            }
+            _updated(GroupLevelValue{
+                level,
+                vadStatus,
+            });
         }
     }
 
@@ -649,9 +595,72 @@ private:
     int32_t _peakCount = 0;
     float _peak = 0;
     VadHistory _history;
-    SparseVad _vad;
 };
 #endif
+
+class AudioCaptureAnalyzer : public webrtc::CustomAudioAnalyzer {
+private:
+    void Initialize(int sample_rate_hz, int num_channels) override {
+    }
+
+    void Analyze(const webrtc::AudioBuffer* buffer) override {
+        if (!buffer) {
+            return;
+        }
+        if (buffer->num_channels() != 1) {
+            return;
+        }
+
+        float peak = 0;
+        int peakCount = 0;
+        const float *samples = buffer->channels_const()[0];
+        for (int i = 0; i < buffer->num_frames(); i++) {
+            float sample = samples[i];
+            if (sample < 0) {
+                sample = -sample;
+            }
+            if (peak < sample) {
+                peak = sample;
+            }
+            peakCount += 1;
+        }
+
+        bool vadStatus = _vad.update((webrtc::AudioBuffer *)buffer);
+
+        _peakCount += peakCount;
+        if (_peak < peak) {
+            _peak = peak;
+        }
+        if (_peakCount >= 1200) {
+            float level = _peak / 4000.0f;
+            _peak = 0;
+            _peakCount = 0;
+
+            _updated(GroupLevelValue{
+                level,
+                vadStatus,
+            });
+        }
+    }
+
+    std::string ToString() const override {
+        return "analyzing";
+    }
+
+private:
+    std::function<void(GroupLevelValue const &)> _updated;
+
+    CombinedVad _vad;
+    int32_t _peakCount = 0;
+    float _peak = 0;
+
+public:
+    AudioCaptureAnalyzer(std::function<void(GroupLevelValue const &)> updated) :
+    _updated(updated) {
+    }
+
+    virtual ~AudioCaptureAnalyzer() = default;
+};
 
 class IncomingAudioChannel : public sigslot::has_slots<> {
 public:
