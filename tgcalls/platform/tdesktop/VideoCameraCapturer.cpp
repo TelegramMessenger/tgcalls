@@ -91,7 +91,9 @@ bool VideoCameraCapturer::create(
 		_capability.height = kPreferredHeight;
 		_capability.maxFPS = kPreferredFps;
 	}
+#ifndef WEBRTC_WIN
 	_capability.videoType = webrtc::VideoType::kI420;
+#endif // WEBRTC_WIN
 	if (_module->StartCapture(_capability) != 0) {
 		RTC_LOG(LS_ERROR)
 			<< "Failed to start VideoCameraCapturer '" << _requestedDeviceId << "'.";
