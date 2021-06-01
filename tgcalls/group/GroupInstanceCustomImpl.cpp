@@ -1047,6 +1047,7 @@ public:
             "WebRTC-TaskQueuePacer/Enabled/"
             "WebRTC-VP8ConferenceTemporalLayers/1/"
             "WebRTC-Audio-MinimizeResamplingOnMobile/Enabled/"
+            "WebRTC-MutedStateKillSwitch/Enabled/"
             //"WebRTC-VP8IosMaxNumberOfThread/max_thread:1/"
         );
 
@@ -1174,6 +1175,10 @@ public:
 
         if (_useDummyChannel && _videoContentType != VideoContentType::Screencast) {
             addIncomingAudioChannel(ChannelId(1), true);
+        }
+
+        if (_videoContentType != VideoContentType::Screencast) {
+            createOutgoingAudioChannel();
         }
 
         beginNetworkStatusTimer(0);
@@ -1425,6 +1430,8 @@ public:
 
         _outgoingAudioChannel->SignalSentPacket().connect(this, &GroupInstanceCustomInternal::OnSentPacket_w);
 
+        _outgoingAudioChannel->Enable(true);
+
         onUpdatedIsMuted();
 
         adjustBitratePreferences(false);
@@ -1458,10 +1465,7 @@ public:
                 }
             }
             auto myAudioLevel = strong->_myAudioLevel;
-            if (strong->_isMuted) {
-                myAudioLevel.level = 0.0f;
-                myAudioLevel.voice = false;
-            }
+            myAudioLevel.isMuted = strong->_isMuted;
             levelsUpdate.updates.push_back(GroupLevelUpdate{ 0, myAudioLevel });
 
             strong->_audioLevels.clear();
@@ -2483,15 +2487,8 @@ public:
     }
 
     void onUpdatedIsMuted() {
-        if (!_isMuted) {
-            if (!_outgoingAudioChannel) {
-                createOutgoingAudioChannel();
-            }
-        }
-
         if (_outgoingAudioChannel) {
             _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this]() {
-                _outgoingAudioChannel->Enable(!_isMuted);
                 _outgoingAudioChannel->media_channel()->SetAudioSend(_outgoingAudioSsrc, !_isMuted, nullptr, &_audioSource);
             });
         }

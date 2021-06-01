@@ -37,6 +37,7 @@ struct GroupConfig {
 struct GroupLevelValue {
     float level = 0.;
     bool voice = false;
+    bool isMuted = false;
 };
 
 struct GroupLevelUpdate {
