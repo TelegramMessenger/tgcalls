@@ -1096,6 +1096,7 @@ public:
             PlatformInterface::SharedInstance()->configurePlatformAudio();
         }
 
+#if USE_RNNOISE
         auto processor = std::make_unique<AudioCapturePostProcessor>([weak, threads = _threads](GroupLevelValue const &level) {
             threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, level](){
                 auto strong = weak.lock();
@@ -1105,8 +1106,13 @@ public:
                 strong->_myAudioLevel = level;
             });
         }, _noiseSuppressionConfiguration);
+#endif
 
-        _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this, processor = std::move(processor)]() mutable {
+        _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this
+#if USE_RNNOISE
+            , processor = std::move(processor)
+#endif
+          ]() mutable {
             cricket::MediaEngineDependencies mediaDeps;
             mediaDeps.task_queue_factory = _taskQueueFactory.get();
             mediaDeps.audio_encoder_factory = webrtc::CreateAudioEncoderFactory<webrtc::AudioEncoderOpus, webrtc::AudioEncoderL16>();
