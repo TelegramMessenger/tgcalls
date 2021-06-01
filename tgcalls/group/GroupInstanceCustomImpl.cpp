@@ -872,6 +872,7 @@ public:
     }
 
     ~IncomingVideoChannel() {
+        _videoChannel->SignalSentPacket().disconnect(this);
         _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this]() {
             _videoChannel->Enable(false);
             _channelManager->DestroyVideoChannel(_videoChannel);

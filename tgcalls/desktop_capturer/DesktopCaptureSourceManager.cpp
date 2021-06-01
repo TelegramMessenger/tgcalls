@@ -34,7 +34,7 @@ webrtc::DesktopCaptureOptions DesktopCaptureSourceManager::OptionsForType(
 #elif defined WEBRTC_MAC
     result.set_allow_iosurface(type == DesktopCaptureType::Screen);
 #elif defined WEBRTC_LINUX
-    //result.set_allow_pipewire(true);
+    result.set_allow_pipewire(true);
 #endif // WEBRTC_WIN || WEBRTC_MAC
     result.set_detect_updated_region(true);
     return result;
