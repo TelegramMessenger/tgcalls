@@ -27,8 +27,6 @@ struct GroupJoinInternalPayload {
     std::string serialize();
 };
 
-absl::optional<GroupParticipantVideoInformation> parseGroupParticipantVideoInformation(std::string const &data);
-
 }
 
 #endif

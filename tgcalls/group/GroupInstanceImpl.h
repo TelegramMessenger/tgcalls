@@ -108,6 +108,11 @@ struct MediaChannelDescription {
     std::string videoInformation;
 };
 
+struct MediaSsrcGroup {
+    std::string semantics;
+    std::vector<uint32_t> ssrcs;
+};
+
 struct VideoChannelDescription {
     enum class Quality {
         Thumbnail,
@@ -115,7 +120,8 @@ struct VideoChannelDescription {
         Full
     };
     uint32_t audioSsrc = 0;
-    std::string videoInformation;
+    std::string endpointId;
+    std::vector<MediaSsrcGroup> ssrcGroups;
     Quality quality = Quality::Thumbnail;
 };
 

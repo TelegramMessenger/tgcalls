@@ -2708,14 +2708,18 @@ public:
         std::vector<std::string> allEndpointIds;
 
         for (const auto &description : requestedVideoChannels) {
-            const auto videoInformation = parseGroupParticipantVideoInformation(description.videoInformation);
-            if (!videoInformation) {
-                continue;
+            GroupParticipantVideoInformation videoInformation;
+            videoInformation.endpointId = description.endpointId;
+            for (const auto &group : description.ssrcGroups) {
+                GroupJoinPayloadVideoSourceGroup parsedGroup;
+                parsedGroup.semantics = group.semantics;
+                parsedGroup.ssrcs = group.ssrcs;
+                videoInformation.ssrcGroups.push_back(std::move(parsedGroup));
             }
 
-            allEndpointIds.push_back(videoInformation->endpointId);
+            allEndpointIds.push_back(videoInformation.endpointId);
 
-            auto current = _incomingVideoChannels.find(VideoChannelId(videoInformation->endpointId));
+            auto current = _incomingVideoChannels.find(VideoChannelId(videoInformation.endpointId));
             if (current != _incomingVideoChannels.end()) {
                 if (current->second->requestedQuality() != description.quality) {
                     current->second->setRequstedQuality(description.quality);
@@ -2724,7 +2728,7 @@ public:
                 continue;
             }
 
-            addIncomingVideoChannel(description.audioSsrc, videoInformation.value(), description.quality);
+            addIncomingVideoChannel(description.audioSsrc, videoInformation, description.quality);
             updated = true;
         }
 
