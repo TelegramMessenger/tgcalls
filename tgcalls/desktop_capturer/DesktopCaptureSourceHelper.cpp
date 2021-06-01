@@ -264,7 +264,7 @@ DesktopSourceRenderer::DesktopSourceRenderer(
 #elif defined WEBRTC_MAC
     options.set_allow_iosurface(true);
 #elif defined WEBRTC_LINUX
-    //options.set_allow_pipewire(true);
+    options.set_allow_pipewire(true);
 #endif // WEBRTC_WIN || WEBRTC_MAC
 
     if (source.isWindow()) {
@@ -350,6 +350,9 @@ DesktopCaptureSource DesktopCaptureSourceForKey(
 	    const std::string &uniqueKey) {
     if (!ShouldBeDesktopCapture(uniqueKey)) {
 		return DesktopCaptureSource::Invalid();
+    }
+    if (uniqueKey == "desktop_capturer_pipewire") {
+        return DesktopCaptureSource(0, "pipewire", false);
     }
     const auto windowPrefix = std::string("desktop_capturer_window_");
     const auto isWindow = (uniqueKey.find(windowPrefix) == 0);
