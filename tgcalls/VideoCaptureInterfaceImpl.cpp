@@ -44,6 +44,18 @@ void VideoCaptureInterfaceObject::switchToDevice(std::string deviceId) {
 			if (this->_stateUpdated) {
 				this->_stateUpdated(state);
 			}
+            if (this->_onIsActiveUpdated) {
+                switch (state) {
+                    case VideoState::Active: {
+                        this->_onIsActiveUpdated(true);
+                        break;
+                    }
+                    default: {
+                        this->_onIsActiveUpdated(false);
+                        break;
+                    }
+                }
+            }
         }, [this](PlatformCaptureInfo info) {
             if (this->_shouldBeAdaptedToReceiverAspectRate != info.shouldBeAdaptedToReceiverAspectRate) {
                 this->_shouldBeAdaptedToReceiverAspectRate = info.shouldBeAdaptedToReceiverAspectRate;
@@ -120,6 +132,10 @@ void VideoCaptureInterfaceObject::setOnFatalError(std::function<void()> error) {
     _onFatalError = error;
 }
 
+void VideoCaptureInterfaceObject::setOnIsActiveUpdated(std::function<void(bool)> onIsActiveUpdated) {
+    _onIsActiveUpdated = onIsActiveUpdated;
+}
+
 void VideoCaptureInterfaceObject::setStateUpdated(std::function<void(VideoState)> stateUpdated) {
 	_stateUpdated = stateUpdated;
 }
@@ -157,6 +173,12 @@ void VideoCaptureInterfaceImpl::setPreferredAspectRatio(float aspectRatio) {
 void VideoCaptureInterfaceImpl::setOnFatalError(std::function<void()> error) {
     _impl.perform(RTC_FROM_HERE, [error](VideoCaptureInterfaceObject *impl) {
         impl->setOnFatalError(error);
+    });
+}
+
+void VideoCaptureInterfaceImpl::setOnIsActiveUpdated(std::function<void(bool)> onIsActiveUpdated) {
+    _impl.perform(RTC_FROM_HERE, [onIsActiveUpdated](VideoCaptureInterfaceObject *impl) {
+        impl->setOnIsActiveUpdated(onIsActiveUpdated);
     });
 }
 

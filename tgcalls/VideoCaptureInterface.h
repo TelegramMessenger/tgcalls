@@ -45,7 +45,9 @@ public:
     virtual void setOnFatalError(std::function<void()> error) {
       // TODO: make this function pure virtual when everybody implements it.
     }
-
+    virtual void setOnIsActiveUpdated(std::function<void(bool)> onIsActiveUpdated) {
+      // TODO: make this function pure virtual when everybody implements it.
+    }
 };
 
 } // namespace tgcalls
