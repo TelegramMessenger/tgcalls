@@ -128,6 +128,20 @@ private:
                 
                 [strongSelf renderFrame:videoFrame];
                 
+                if ([videoFrame.buffer isKindOfClass:[RTCCVPixelBuffer class]]) {
+                    RTCCVPixelBuffer *buffer = (RTCCVPixelBuffer*)videoFrame.buffer;
+                    
+                    if ([buffer isKindOfClass:[TGRTCCVPixelBuffer class]]) {
+                        bool shouldBeMirrored = ((TGRTCCVPixelBuffer *)buffer).shouldBeMirrored;
+                        if (shouldBeMirrored != strongSelf->_shouldBeMirrored) {
+                            strongSelf->_shouldBeMirrored = shouldBeMirrored;
+                            if (strongSelf->_onIsMirroredUpdated) {
+                                strongSelf->_onIsMirroredUpdated(strongSelf->_shouldBeMirrored);
+                            }
+                        }
+                    }
+                }
+                
                 if (!strongSelf->_firstFrameReceivedReported && strongSelf->_onFirstFrameReceived) {
                     strongSelf->_firstFrameReceivedReported = true;
                     strongSelf->_onFirstFrameReceived((float)videoFrame.width / (float)videoFrame.height);
@@ -220,6 +234,8 @@ private:
         return;
     }
     
+   
+    
     if (CGRectIsEmpty(view.bounds)) {
         return;
     }
@@ -228,32 +244,7 @@ private:
     }
         
     RTCMTLRenderer *renderer;
-    
-    if ([videoFrame.buffer isKindOfClass:[RTCCVPixelBuffer class]]) {
-        RTCCVPixelBuffer *buffer = (RTCCVPixelBuffer*)videoFrame.buffer;
-        
-        if ([buffer isKindOfClass:[TGRTCCVPixelBuffer class]]) {
-            bool shouldBeMirrored = ((TGRTCCVPixelBuffer *)buffer).shouldBeMirrored;
-            if (shouldBeMirrored != _shouldBeMirrored) {
-                _shouldBeMirrored = shouldBeMirrored;
-                bool shouldBeMirrored = ((TGRTCCVPixelBuffer *)buffer).shouldBeMirrored;
-                
-//                if (shouldBeMirrored) {
-//                    _metalView.layer.anchorPoint = NSMakePoint(1, 0);
-//                    _metalView.layer.affineTransform = CGAffineTransformMakeScale(-1, 1);
-//                    //  _metalView.layer.transform = CATransform3DMakeScale(-1, 1, 1);
-//                } else {
-//                    _metalView.layer.anchorPoint = NSMakePoint(0, 0);
-//                    _metalView.layer.affineTransform = CGAffineTransformIdentity;
-//                    //_metalView.layer.transform = CATransform3DIdentity;
-//                }
-                
-                if (_onIsMirroredUpdated) {
-                    _onIsMirroredUpdated(_shouldBeMirrored);
-                }
-            }
-        }
-    }
+
     if (!_rendererI420) {
         _rendererI420 = [VideoMetalView createI420Renderer];
         if (![_rendererI420 addRenderingDestination:_metalView]) {
