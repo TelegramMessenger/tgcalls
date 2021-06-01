@@ -727,13 +727,13 @@ public:
             _audioChannel->media_channel()->SetRawAudioSink(ssrc.networkSsrc, std::move(audioLevelSink));
         });
 
-        _audioChannel->SignalSentPacket().connect(this, &IncomingAudioChannel::OnSentPacket_w);
+        //_audioChannel->SignalSentPacket().connect(this, &IncomingAudioChannel::OnSentPacket_w);
 
         _audioChannel->Enable(true);
     }
 
     ~IncomingAudioChannel() {
-        _audioChannel->SignalSentPacket().disconnect(this);
+        //_audioChannel->SignalSentPacket().disconnect(this);
         _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this]() {
             _channelManager->DestroyVoiceChannel(_audioChannel);
             _audioChannel = nullptr;
@@ -866,13 +866,13 @@ public:
             _videoChannel->media_channel()->SetSink(_mainVideoSsrc, _videoSink.get());
         });
 
-        _videoChannel->SignalSentPacket().connect(this, &IncomingVideoChannel::OnSentPacket_w);
+        //_videoChannel->SignalSentPacket().connect(this, &IncomingVideoChannel::OnSentPacket_w);
 
         _videoChannel->Enable(true);
     }
 
     ~IncomingVideoChannel() {
-        _videoChannel->SignalSentPacket().disconnect(this);
+        //_videoChannel->SignalSentPacket().disconnect(this);
         _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this]() {
             _videoChannel->Enable(false);
             _channelManager->DestroyVideoChannel(_videoChannel);
@@ -898,7 +898,7 @@ public:
 
 private:
     void OnSentPacket_w(const rtc::SentPacket& sent_packet) {
-        _call->OnSentPacket(sent_packet);
+        //_call->OnSentPacket(sent_packet);
     }
 
 private:
@@ -1158,6 +1158,7 @@ public:
 
         _threads->getNetworkThread()->Invoke<void>(RTC_FROM_HERE, [this]() {
             _rtpTransport = _networkManager->getSyncAssumingSameThread()->getRtpTransport();
+            _rtpTransport->SignalSentPacket.connect(this, &GroupInstanceCustomInternal::OnSentPacket_w);
         });
 
         _videoBitrateAllocatorFactory = webrtc::CreateBuiltinVideoBitrateAllocatorFactory();
@@ -1177,9 +1178,9 @@ public:
             addIncomingAudioChannel(ChannelId(1), true);
         }
 
-        if (_videoContentType != VideoContentType::Screencast) {
+        /*if (_videoContentType != VideoContentType::Screencast) {
             createOutgoingAudioChannel();
-        }
+        }*/
 
         beginNetworkStatusTimer(0);
         beginAudioChannelCleanupTimer(0);
@@ -1191,7 +1192,7 @@ public:
         if (!_outgoingVideoChannel) {
             return;
         }
-        _outgoingVideoChannel->SignalSentPacket().disconnect(this);
+        //_outgoingVideoChannel->SignalSentPacket().disconnect(this);
         _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this]() {
             _outgoingVideoChannel->Enable(false);
             _outgoingVideoChannel->media_channel()->SetVideoSend(_outgoingVideoSsrcs.simulcastLayers[0].ssrc, nullptr, nullptr);
@@ -1283,7 +1284,7 @@ public:
         _outgoingVideoChannel->SetLocalContent(outgoingVideoDescription.get(), webrtc::SdpType::kOffer, nullptr);
         _outgoingVideoChannel->SetPayloadTypeDemuxingEnabled(false);
 
-        _outgoingVideoChannel->SignalSentPacket().connect(this, &GroupInstanceCustomInternal::OnSentPacket_w);
+        //_outgoingVideoChannel->SignalSentPacket().connect(this, &GroupInstanceCustomInternal::OnSentPacket_w);
 
         adjustVideoSendParams();
         updateVideoSend();
@@ -1355,7 +1356,7 @@ public:
             return;
         }
 
-        _outgoingAudioChannel->SignalSentPacket().disconnect(this);
+        //_outgoingAudioChannel->SignalSentPacket().disconnect(this);
         _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this]() {
             _outgoingAudioChannel->media_channel()->SetAudioSend(_outgoingAudioSsrc, false, nullptr, &_audioSource);
             _outgoingAudioChannel->Enable(false);
@@ -1428,7 +1429,7 @@ public:
         _outgoingAudioChannel->SetRemoteContent(incomingAudioDescription.get(), webrtc::SdpType::kAnswer, nullptr);
         _outgoingAudioChannel->SetPayloadTypeDemuxingEnabled(false);
 
-        _outgoingAudioChannel->SignalSentPacket().connect(this, &GroupInstanceCustomInternal::OnSentPacket_w);
+        //_outgoingAudioChannel->SignalSentPacket().connect(this, &GroupInstanceCustomInternal::OnSentPacket_w);
 
         _outgoingAudioChannel->Enable(true);
 
@@ -2482,6 +2483,10 @@ public:
             return;
         }
         _isMuted = isMuted;
+
+        if (!_isMuted && !_outgoingAudioChannel) {
+            createOutgoingAudioChannel();
+        }
 
         onUpdatedIsMuted();
     }
