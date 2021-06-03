@@ -26,6 +26,8 @@ void LogSinkImpl::OnLogMessage(const std::string &message, rtc::LoggingSeverity 
 }
 
 void LogSinkImpl::OnLogMessage(const std::string &message) {
+    return;
+    
 	time_t rawTime;
 	time(&rawTime);
 	struct tm timeinfo;
