@@ -1388,7 +1388,7 @@ public:
             audioOptions.residual_echo_detector = false;
         } else {
             audioOptions.echo_cancellation = true;
-            audioOptions.noise_suppression = false;
+            audioOptions.noise_suppression = true;
             audioOptions.experimental_ns = true;
             audioOptions.residual_echo_detector = true;
         }
@@ -2305,9 +2305,9 @@ public:
 
         uint32_t outgoingVideoSsrcBase = _outgoingAudioSsrc + 1;
         int numVideoSimulcastLayers = 3;
-        if (_videoContentType == VideoContentType::Screencast) {
+        /*if (_videoContentType == VideoContentType::Screencast) {
             numVideoSimulcastLayers = 1;
-        }
+        }*/
         _outgoingVideoSsrcs.simulcastLayers.clear();
         for (int layerIndex = 0; layerIndex < numVideoSimulcastLayers; layerIndex++) {
             _outgoingVideoSsrcs.simulcastLayers.push_back(VideoSsrcs::SimulcastLayer(outgoingVideoSsrcBase + layerIndex * 2 + 0, outgoingVideoSsrcBase + layerIndex * 2 + 1));
