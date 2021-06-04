@@ -1009,7 +1009,7 @@ public:
     _createAudioDeviceModule(descriptor.createAudioDeviceModule),
     _initialInputDeviceId(std::move(descriptor.initialInputDeviceId)),
     _initialOutputDeviceId(std::move(descriptor.initialOutputDeviceId)),
-    _missingPacketBuffer(100) {
+    _missingPacketBuffer(50) {
         assert(_threads->getMediaThread()->IsCurrent());
         if (_videoCapture) {
           assert(!_getVideoSource);
@@ -1063,6 +1063,9 @@ public:
                     });
                 },
                 [=](rtc::CopyOnWriteBuffer const &message, bool isUnresolved) {
+                    if (!isUnresolved) {
+                        return;
+                    }
                     threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, message, isUnresolved]() mutable {
                         if (const auto strong = weak.lock()) {
                             strong->receivePacket(message, isUnresolved);
@@ -1189,7 +1192,7 @@ public:
         }*/
 
         beginNetworkStatusTimer(0);
-        beginAudioChannelCleanupTimer(0);
+        //beginAudioChannelCleanupTimer(0);
 
         adjustBitratePreferences(true);
     }
@@ -1390,6 +1393,8 @@ public:
         } else {
             audioOptions.echo_cancellation = true;
             audioOptions.noise_suppression = false;
+            audioOptions.experimental_ns = true;
+            audioOptions.residual_echo_detector = true;
         }
 
         std::vector<std::string> streamIds;
@@ -1469,6 +1474,12 @@ public:
                         effectiveSsrc,
                         it.second,
                         });
+                    if (it.second.level > 0.001f) {
+                        auto audioChannel = strong->_incomingAudioChannels.find(it.first);
+                        if (audioChannel != strong->_incomingAudioChannels.end()) {
+                            audioChannel->second->updateActivity();
+                        }
+                    }
                 }
             }
             auto myAudioLevel = strong->_myAudioLevel;
@@ -1496,6 +1507,9 @@ public:
 
             std::vector<ChannelId> removeChannels;
             for (const auto &it : strong->_incomingAudioChannels) {
+                if (it.first.networkSsrc == 1) {
+                    continue;
+                }
                 auto activity = it.second->getActivity();
                 if (activity < timestamp - 1000) {
                     removeChannels.push_back(it.first);
@@ -2001,8 +2015,8 @@ public:
                 // opus
                 if (header.payloadType == 111) {
                     maybeRequestUnknownSsrc(header.ssrc);
+                    _missingPacketBuffer.add(header.ssrc, packet);
                 }
-                _missingPacketBuffer.add(header.ssrc, packet);
             } else {
                 switch (ssrcInfo->second.type) {
                     case ChannelSsrcInfo::Type::Audio: {
@@ -2450,6 +2464,11 @@ public:
             videoInformation,
             _threads
         ));
+
+        ChannelSsrcInfo mapping;
+        mapping.type = ChannelSsrcInfo::Type::Video;
+        mapping.allSsrcs.push_back(probingSsrc);
+        _channelBySsrc.insert(std::make_pair(probingSsrc, std::move(mapping)));
     }
 
     void removeSsrcs(std::vector<uint32_t> ssrcs) {
@@ -2537,6 +2556,9 @@ public:
             ChannelId minActivityChannelId(0, 0);
 
             for (const auto &it : _incomingAudioChannels) {
+                if (it.first.networkSsrc == 1) {
+                    continue;
+                }
                 auto activity = it.second->getActivity();
                 if (activity < minActivity && activity < timestamp - 1000) {
                     minActivity = activity;
