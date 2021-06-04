@@ -59,11 +59,11 @@ void VideoCaptureInterfaceObject::switchToDevice(std::string deviceId) {
         }, [this](PlatformCaptureInfo info) {
             if (this->_shouldBeAdaptedToReceiverAspectRate != info.shouldBeAdaptedToReceiverAspectRate) {
                 this->_shouldBeAdaptedToReceiverAspectRate = info.shouldBeAdaptedToReceiverAspectRate;
-                this->updateAspectRateAdaptation();
             }
             if (this->_rotationUpdated) {
                 this->_rotationUpdated(info.rotation);
             }
+            this->updateAspectRateAdaptation();
         }, _platformContext, _videoCapturerResolution);
 	}
 	if (_videoCapturer) {
@@ -118,9 +118,9 @@ void VideoCaptureInterfaceObject::updateAspectRateAdaptation() {
                     ? originalHeight
                     : int(std::round(originalHeight / aspectRatio));
 
-                PlatformInterface::SharedInstance()->adaptVideoSource(_videoSource, (int)width, (int)height, 30);
+                PlatformInterface::SharedInstance()->adaptVideoSource(_videoSource, (int)width, (int)height, 25);
             } else {
-                PlatformInterface::SharedInstance()->adaptVideoSource(_videoSource, _videoCapturerResolution.first, _videoCapturerResolution.second, 30);
+                PlatformInterface::SharedInstance()->adaptVideoSource(_videoSource, _videoCapturerResolution.first, _videoCapturerResolution.second, 25);
             }
         }
     }
