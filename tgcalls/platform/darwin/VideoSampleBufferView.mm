@@ -66,6 +66,7 @@ private:
 
 @interface VideoSampleBufferViewRenderingContext : NSObject {
     __weak VideoSampleBufferContentView *_sampleBufferView;
+    __weak AVSampleBufferDisplayLayer *_cloneTarget;
 
     CVPixelBufferPoolRef _pixelBufferPool;
     int _pixelBufferPoolWidth;
@@ -388,15 +389,19 @@ static bool CopyNV12VideoFrameToNV12PixelBuffer(const webrtc::NV12BufferInterfac
     }
 
     AVSampleBufferDisplayLayer *layer = [sampleBufferView videoLayer];
+    __weak AVSampleBufferDisplayLayer *cloneLayer = _cloneTarget;
 
     _isBusy = true;
     dispatch_async([VideoSampleBufferViewRenderingContext sharedQueue], ^{
+        __strong AVSampleBufferDisplayLayer *strongCloneLayer = cloneLayer;
+
         switch (frame->video_frame_buffer()->type()) {
             case webrtc::VideoFrameBuffer::Type::kI420:
             case webrtc::VideoFrameBuffer::Type::kI420A: {
                 CMSampleBufferRef sampleBuffer = [self createSampleBufferFromI420Buffer:frame->video_frame_buffer()->GetI420()];
                 if (sampleBuffer) {
                     [layer enqueueSampleBuffer:sampleBuffer];
+                    [cloneLayer enqueueSampleBuffer:sampleBuffer];
 
                     CFRelease(sampleBuffer);
                 }
@@ -407,6 +412,7 @@ static bool CopyNV12VideoFrameToNV12PixelBuffer(const webrtc::NV12BufferInterfac
                 CMSampleBufferRef sampleBuffer = [self createSampleBufferFromNV12Buffer:(webrtc::NV12BufferInterface *)frame->video_frame_buffer().get()];
                 if (sampleBuffer) {
                     [layer enqueueSampleBuffer:sampleBuffer];
+                    [cloneLayer enqueueSampleBuffer:sampleBuffer];
 
                     CFRelease(sampleBuffer);
                 }
@@ -420,11 +426,21 @@ static bool CopyNV12VideoFrameToNV12PixelBuffer(const webrtc::NV12BufferInterfac
         _isBusy = false;
 
         void *opaqueReference = (__bridge_retained void *)layer;
+        void *cloneLayerReference = (__bridge_retained void *)strongCloneLayer;
+        strongCloneLayer = nil;
+
         dispatch_async(dispatch_get_main_queue(), ^{
             __strong AVSampleBufferDisplayLayer *object = (__bridge_transfer AVSampleBufferDisplayLayer *)opaqueReference;
             object = nil;
+
+            __strong AVSampleBufferDisplayLayer *cloneObject = (__bridge_transfer AVSampleBufferDisplayLayer *)cloneLayerReference;
+            cloneObject = nil;
         });
     });
+}
+
+- (void)setCloneTarget:(AVSampleBufferDisplayLayer * _Nullable)cloneTarget {
+    _cloneTarget = cloneTarget;
 }
 
 @end
@@ -453,6 +469,8 @@ static bool CopyNV12VideoFrameToNV12PixelBuffer(const webrtc::NV12BufferInterfac
     
     bool _didSetShouldBeMirrored;
     bool _shouldBeMirrored;
+
+    __weak VideoSampleBufferView *_cloneTarget;
 }
 
 @end
@@ -517,7 +535,9 @@ static bool CopyNV12VideoFrameToNV12PixelBuffer(const webrtc::NV12BufferInterfac
     
     CGRect bounds = self.bounds;
 
-    _sampleBufferView.frame = bounds;
+    if (!CGRectEqualToRect(_sampleBufferView.frame, bounds)) {
+        _sampleBufferView.frame = bounds;
+    }
     
     if (_didStartWaitingForLayout) {
         _didStartWaitingForLayout = false;
@@ -571,6 +591,14 @@ static bool CopyNV12VideoFrameToNV12PixelBuffer(const webrtc::NV12BufferInterfac
 }
 
 - (void)renderFrame:(std::shared_ptr<webrtc::VideoFrame>)frame {
+    [self renderFrameInternal:frame skipRendering:false];
+    VideoSampleBufferView *cloneTarget = _cloneTarget;
+    if (cloneTarget) {
+        [cloneTarget renderFrameInternal:frame skipRendering:true];
+    }
+}
+
+- (void)renderFrameInternal:(std::shared_ptr<webrtc::VideoFrame>)frame skipRendering:(bool)skipRendering {
     assert([NSThread isMainThread]);
 
     CGSize size = CGSizeMake(frame->width(), frame->height());
@@ -633,7 +661,9 @@ static bool CopyNV12VideoFrameToNV12PixelBuffer(const webrtc::NV12BufferInterfac
 
     _videoFrame = frame;
 
-    [_renderingContext renderFrameIfReady:frame];
+    if (!skipRendering) {
+        [_renderingContext renderFrameIfReady:frame];
+    }
 }
 
 - (std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)getSink {
@@ -645,6 +675,13 @@ static bool CopyNV12VideoFrameToNV12PixelBuffer(const webrtc::NV12BufferInterfac
 - (void)addFrame:(const webrtc::VideoFrame&)frame {
     std::shared_ptr<webrtc::VideoFrame> videoFrame = std::make_shared<webrtc::VideoFrame>(frame);
     [self renderFrame:videoFrame];
+}
+
+- (void)setCloneTarget:(VideoSampleBufferView * _Nullable)cloneTarget {
+    _cloneTarget = cloneTarget;
+    if (cloneTarget) {
+        [_renderingContext setCloneTarget:[cloneTarget->_sampleBufferView videoLayer]];
+    }
 }
 
 - (void)setOnFirstFrameReceived:(void (^ _Nullable)())onFirstFrameReceived {

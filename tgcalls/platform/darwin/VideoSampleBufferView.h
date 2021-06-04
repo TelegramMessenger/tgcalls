@@ -26,6 +26,8 @@
 - (void)internalSetOnIsMirroredUpdated:(void (^ _Nullable)(bool))onIsMirroredUpdated;
 - (void)addFrame:(const webrtc::VideoFrame&)frame;
 
+- (void)setCloneTarget:(VideoSampleBufferView * _Nullable)cloneTarget;
+
 @end
 
 #endif //WEBRTC_IOS
