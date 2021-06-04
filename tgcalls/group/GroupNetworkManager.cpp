@@ -200,14 +200,12 @@ webrtc::CryptoOptions GroupNetworkManager::getDefaulCryptoOptions() {
 GroupNetworkManager::GroupNetworkManager(
     std::function<void(const State &)> stateUpdated,
     std::function<void(rtc::CopyOnWriteBuffer const &, bool)> transportMessageReceived,
-    std::function<void(rtc::CopyOnWriteBuffer const &, int64_t)> rtcpPacketReceived,
     std::function<void(bool)> dataChannelStateUpdated,
     std::function<void(std::string const &)> dataChannelMessageReceived,
     std::shared_ptr<Threads> threads) :
 _threads(std::move(threads)),
 _stateUpdated(std::move(stateUpdated)),
 _transportMessageReceived(std::move(transportMessageReceived)),
-_rtcpPacketReceived(std::move(rtcpPacketReceived)),
 _dataChannelStateUpdated(dataChannelStateUpdated),
 _dataChannelMessageReceived(dataChannelMessageReceived) {
     assert(_threads->getNetworkThread()->IsCurrent());
@@ -227,7 +225,6 @@ _dataChannelMessageReceived(dataChannelMessageReceived) {
     _dtlsSrtpTransport->SetActiveResetSrtpParams(false);
     _dtlsSrtpTransport->SignalReadyToSend.connect(this, &GroupNetworkManager::DtlsReadyToSend);
     _dtlsSrtpTransport->SignalRtpPacketReceived.connect(this, &GroupNetworkManager::RtpPacketReceived_n);
-    _dtlsSrtpTransport->SignalRtcpPacketReceived.connect(this, &GroupNetworkManager::OnRtcpPacketReceived_n);
     
     resetDtlsSrtpTransport();
 }
@@ -452,12 +449,6 @@ void GroupNetworkManager::transportPacketReceived(rtc::PacketTransportInternal *
 void GroupNetworkManager::RtpPacketReceived_n(rtc::CopyOnWriteBuffer *packet, int64_t packet_time_us, bool isUnresolved) {
     if (_transportMessageReceived) {
         _transportMessageReceived(*packet, isUnresolved);
-    }
-}
-
-void GroupNetworkManager::OnRtcpPacketReceived_n(rtc::CopyOnWriteBuffer *packet, int64_t packet_time_us) {
-    if (_rtcpPacketReceived) {
-        _rtcpPacketReceived(*packet, packet_time_us);
     }
 }
 

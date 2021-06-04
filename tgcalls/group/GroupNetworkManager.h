@@ -58,7 +58,6 @@ public:
     GroupNetworkManager(
         std::function<void(const State &)> stateUpdated,
         std::function<void(rtc::CopyOnWriteBuffer const &, bool)> transportMessageReceived,
-        std::function<void(rtc::CopyOnWriteBuffer const &, int64_t)> rtcpPacketReceived,
         std::function<void(bool)> dataChannelStateUpdated,
         std::function<void(std::string const &)> dataChannelMessageReceived,
         std::shared_ptr<Threads> threads);
@@ -96,7 +95,6 @@ private:
     std::shared_ptr<Threads> _threads;
     std::function<void(const GroupNetworkManager::State &)> _stateUpdated;
     std::function<void(rtc::CopyOnWriteBuffer const &, bool)> _transportMessageReceived;
-    std::function<void(rtc::CopyOnWriteBuffer const &, int64_t)> _rtcpPacketReceived;
     std::function<void(bool)> _dataChannelStateUpdated;
     std::function<void(std::string const &)> _dataChannelMessageReceived;
 

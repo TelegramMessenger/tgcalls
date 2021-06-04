@@ -1011,6 +1011,11 @@ public:
     _initialOutputDeviceId(std::move(descriptor.initialOutputDeviceId)),
     _missingPacketBuffer(50) {
         assert(_threads->getMediaThread()->IsCurrent());
+
+        _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this] {
+            _workerThreadSafery = webrtc::PendingTaskSafetyFlag::Create();
+        });
+
         if (_videoCapture) {
           assert(!_getVideoSource);
           _getVideoSource = videoCaptureToGetVideoSource(std::move(descriptor.videoCapture));
@@ -1069,13 +1074,6 @@ public:
                     threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, message, isUnresolved]() mutable {
                         if (const auto strong = weak.lock()) {
                             strong->receivePacket(message, isUnresolved);
-                        }
-                    });
-                },
-                [=](rtc::CopyOnWriteBuffer const &message, int64_t timestamp) {
-                    threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, message, timestamp]() mutable {
-                        if (const auto strong = weak.lock()) {
-                            strong->receiveRtcpPacket(message, timestamp);
                         }
                     });
                 },
@@ -1168,6 +1166,7 @@ public:
         _threads->getNetworkThread()->Invoke<void>(RTC_FROM_HERE, [this]() {
             _rtpTransport = _networkManager->getSyncAssumingSameThread()->getRtpTransport();
             _rtpTransport->SignalSentPacket.connect(this, &GroupInstanceCustomInternal::OnSentPacket_w);
+            _rtpTransport->SignalRtcpPacketReceived.connect(this, &GroupInstanceCustomInternal::OnRtcpPacketReceived_n);
         });
 
         _videoBitrateAllocatorFactory = webrtc::CreateBuiltinVideoBitrateAllocatorFactory();
@@ -1884,6 +1883,15 @@ public:
 
     void OnSentPacket_w(const rtc::SentPacket& sent_packet) {
         _call->OnSentPacket(sent_packet);
+    }
+
+    void OnRtcpPacketReceived_n(rtc::CopyOnWriteBuffer *buffer, int64_t packet_time_us) {
+        rtc::CopyOnWriteBuffer packet = *buffer;
+        _threads->getWorkerThread()->PostTask(ToQueuedTask(_workerThreadSafery, [this, packet, packet_time_us] {
+            if (_call) {
+                _call->Receiver()->DeliverPacket(webrtc::MediaType::ANY, packet, packet_time_us);
+            }
+        }));
     }
 
     void adjustBitratePreferences(bool resetStartBitrate) {
@@ -2893,6 +2901,8 @@ private:
     absl::optional<int64_t> _broadcastEnabledUntilRtcIsConnectedAtTimestamp;
     bool _isDataChannelOpen = false;
     GroupNetworkState _effectiveNetworkState;
+
+    rtc::scoped_refptr<webrtc::PendingTaskSafetyFlag> _workerThreadSafery;
 };
 
 GroupInstanceCustomImpl::GroupInstanceCustomImpl(GroupInstanceDescriptor &&descriptor) {
