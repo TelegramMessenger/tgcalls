@@ -113,7 +113,51 @@ void DarwinVideoTrackSource::OnCapturedFrame(RTC_OBJC_TYPE(RTCVideoFrame) * fram
 }
 
 void DarwinVideoTrackSource::OnCapturedFrame(const webrtc::VideoFrame& frame) {
-    OnFrame(frame);
+    const int64_t timestamp_us = frame.timestamp_us() / rtc::kNumNanosecsPerMicrosec;
+    const int64_t translated_timestamp_us =
+        timestamp_aligner_.TranslateTimestamp(timestamp_us, rtc::TimeMicros());
+
+    int adapted_width;
+    int adapted_height;
+    int crop_width;
+    int crop_height;
+    int crop_x;
+    int crop_y;
+    if (!AdaptFrame(frame.width(),
+                    frame.height(),
+                    timestamp_us,
+                    &adapted_width,
+                    &adapted_height,
+                    &crop_width,
+                    &crop_height,
+                    &crop_x,
+                    &crop_y)) {
+      return;
+    }
+
+    rtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer;
+    if (adapted_width == frame.width() && adapted_height == frame.height()) {
+        buffer = frame.video_frame_buffer();
+    } else {
+        rtc::scoped_refptr<webrtc::I420Buffer> i420_buffer = webrtc::I420Buffer::Create(adapted_width, adapted_height);
+        buffer = frame.video_frame_buffer();
+        i420_buffer->CropAndScaleFrom(*buffer->ToI420(), crop_x, crop_y, crop_width, crop_height);
+        buffer = i420_buffer;
+    }
+
+    // Applying rotation is only supported for legacy reasons and performance is
+    // not critical here.
+    webrtc::VideoRotation rotation = frame.rotation();
+    if (apply_rotation() && rotation != webrtc::kVideoRotation_0) {
+      buffer = webrtc::I420Buffer::Rotate(*buffer->ToI420(), rotation);
+      rotation = webrtc::kVideoRotation_0;
+    }
+
+    OnFrame(webrtc::VideoFrame::Builder()
+                .set_video_frame_buffer(buffer)
+                .set_rotation(rotation)
+                .set_timestamp_us(translated_timestamp_us)
+                .build());
 }
 
 }  // namespace webrtc
