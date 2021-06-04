@@ -9,6 +9,8 @@
 #include "api/media_stream_interface.h"
 #include "Instance.h"
 
+@class VideoCaptureView;
+
 @interface VideoCameraCapturer : NSObject
 
 + (NSArray<AVCaptureDevice *> *)captureDevices;
@@ -22,6 +24,9 @@
 - (void)setPreferredCaptureAspectRatio:(float)aspectRatio;
 - (void)setUncroppedSink:(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)sink;
 - (int)getRotation;
+
+- (void)addPreviewView:(VideoCaptureView *)previewView;
+- (void)addDirectSink:(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)directSink;
 
 @end
 #endif // WEBRTC_IOS

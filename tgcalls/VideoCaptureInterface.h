@@ -48,6 +48,9 @@ public:
     virtual void setOnIsActiveUpdated(std::function<void(bool)> onIsActiveUpdated) {
       // TODO: make this function pure virtual when everybody implements it.
     }
+    virtual void withNativeImplementation(std::function<void(void *)> completion) {
+        completion(nullptr);
+    }
 };
 
 } // namespace tgcalls

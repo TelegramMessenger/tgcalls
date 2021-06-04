@@ -76,6 +76,12 @@
 
 @implementation VideoCapturerInterfaceImplReference
 
+#ifdef WEBRTC_IOS
+- (VideoCameraCapturer *)videoCameraCapturer {
+    return _videoCameraCapturer;
+}
+#endif
+
 + (AVCaptureDevice *)selectCapturerDeviceWithDeviceId:(NSString *)deviceId {
     AVCaptureDevice *selectedCamera = nil;
 
@@ -382,6 +388,16 @@ void VideoCapturerInterfaceImpl::setPreferredCaptureAspectRatio(float aspectRati
         if (implReference.reference != nil) {
             VideoCapturerInterfaceImplReference *reference = (__bridge VideoCapturerInterfaceImplReference *)implReference.reference;
             [reference setPreferredCaptureAspectRatio:aspectRatio];
+        }
+    });
+}
+
+void VideoCapturerInterfaceImpl::withNativeImplementation(std::function<void(void *)> completion) {
+    VideoCapturerInterfaceImplHolder *implReference = _implReference;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (implReference.reference != nil) {
+            VideoCapturerInterfaceImplReference *reference = (__bridge VideoCapturerInterfaceImplReference *)implReference.reference;
+            completion((__bridge void *)[reference videoCameraCapturer]);
         }
     });
 }

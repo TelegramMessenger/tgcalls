@@ -28,6 +28,10 @@ public:
     virtual void setOnFatalError(std::function<void()> error) {
       // TODO: make this function pure virtual when everybody implements it.
     }
+    virtual void withNativeImplementation(std::function<void(void *)> completion) {
+        completion(nullptr);
+    }
+    
 };
 
 } // namespace tgcalls

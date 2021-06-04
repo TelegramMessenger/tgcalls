@@ -18,6 +18,7 @@ public:
 	~VideoCaptureInterfaceObject();
 
 	void switchToDevice(std::string deviceId);
+    void withNativeImplementation(std::function<void(void *)> completion);
 	void setState(VideoState state);
     void setPreferredAspectRatio(float aspectRatio);
 	void setOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
@@ -51,6 +52,7 @@ public:
 	virtual ~VideoCaptureInterfaceImpl();
 
 	void switchToDevice(std::string deviceId) override;
+    void withNativeImplementation(std::function<void(void *)> completion) override;
 	void setState(VideoState state) override;
     void setPreferredAspectRatio(float aspectRatio) override;
 	void setOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) override;

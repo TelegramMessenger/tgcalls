@@ -24,6 +24,8 @@
 #include "api/video/i420_buffer.h"
 #include "api/video/nv12_buffer.h"
 
+#include "VideoCaptureView.h"
+
 namespace {
 
 static const int64_t kNanosecondsPerSecond = 1000000000;
@@ -50,6 +52,24 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
 }
 
 }
+
+@interface VideoCameraCapturerPreviewRecord : NSObject
+
+@property (nonatomic, weak) VideoCaptureView *view;
+
+@end
+
+@implementation VideoCameraCapturerPreviewRecord
+
+- (instancetype)initWithCaptureView:(VideoCaptureView *)view {
+    self = [super init];
+    if (self != nil) {
+        self.view = view;
+    }
+    return self;
+}
+
+@end
 
 @interface VideoCameraCapturer () <AVCaptureVideoDataOutputSampleBufferDelegate> {
     rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _source;
@@ -96,6 +116,9 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
     std::atomic<int> _warmupFrameCount;
 
     webrtc::NV12ToI420Scaler _nv12ToI420Scaler;
+
+    NSMutableArray<VideoCameraCapturerPreviewRecord *> *_previews;
+    std::vector<std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>> _directSinks;
 }
 
 @end
@@ -115,6 +138,8 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
         _rotationUpdated = [rotationUpdated copy];
         
         _warmupFrameCount = 100;
+
+        _previews = [[NSMutableArray alloc] init];
         
         if (![self setupCaptureSession:[[AVCaptureSession alloc] init]]) {
             return nil;
@@ -270,6 +295,15 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
         default:
             return 0;
     }
+}
+
+- (void)addPreviewView:(VideoCaptureView *)previewView {
+    [_previews addObject:[[VideoCameraCapturerPreviewRecord alloc] initWithCaptureView:previewView]];
+    [previewView previewLayer].session = _captureSession;
+}
+
+- (void)addDirectSink:(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)directSink {
+    _directSinks.push_back(directSink);
 }
 
 - (void)setPreferredCaptureAspectRatio:(float)aspectRatio {
@@ -436,16 +470,17 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
                                         resultBuffer->StrideY(), resultBuffer->MutableDataUV(), resultBuffer->StrideUV(), resultBuffer->width(),
                                         resultBuffer->height(), libyuv::kFilterBilinear);
 
+            CVPixelBufferUnlockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
+
             return resultBuffer;
         }
         case kCVPixelFormatType_32BGRA:
         case kCVPixelFormatType_32ARGB: {
+            CVPixelBufferUnlockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
             return nullptr;
         }
         default: { RTC_NOTREACHED() << "Unsupported pixel format."; }
     }
-
-    CVPixelBufferUnlockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
 
     return nullptr;
 }
@@ -539,18 +574,8 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
     rtcPixelBuffer.shouldBeMirrored = usingFrontCamera;
     
     TGRTCCVPixelBuffer *uncroppedRtcPixelBuffer = rtcPixelBuffer;
-    
-    if (_keepLandscape) {
-        switch (_rotation) {
-            case RTCVideoRotation_0:
-            case RTCVideoRotation_180:
-                _aspectRatio = 0.0f;
-                break;
-            default:
-                _aspectRatio = 1280.0f / 720.0f;
-                break;
-        }
-    }
+
+    CGSize initialSize = CGSizeMake(uncroppedRtcPixelBuffer.width, uncroppedRtcPixelBuffer.height);
     
     if (_aspectRatio > FLT_EPSILON) {
         float aspect = 1.0f / _aspectRatio;
@@ -609,15 +634,38 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
     //RTCVideoFrame *videoFrame = [[RTCVideoFrame alloc] initWithBuffer:(id<RTCVideoFrameBuffer>)[rtcPixelBuffer toI420] rotation:_rotation timeStampNs:timeStampNs];
 
     webrtc::VideoRotation rotation = static_cast<webrtc::VideoRotation>(_rotation);
+
+    int previewRotation = 0;
+    CGSize previewSize = initialSize;
+    if (rotation == 90 || rotation == 270) {
+        previewSize = CGSizeMake(previewSize.height, previewSize.width);
+    }
+
+    for (VideoCameraCapturerPreviewRecord *record in _previews) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            VideoCaptureView *captureView = record.view;
+            [captureView onFrameGenerated:previewSize isMirrored:true rotation:previewRotation];
+        });
+    }
+
     auto i420Buffer = [self prepareNV12Buffer:[rtcPixelBuffer pixelBuffer]];
     
     if (!_isPaused && i420Buffer) {
-        //getObjCVideoSource(_source)->OnCapturedFrame(videoFrame);
-        getObjCVideoSource(_source)->OnCapturedFrame(webrtc::VideoFrame::Builder()
+        auto videoFrame = webrtc::VideoFrame::Builder()
             .set_video_frame_buffer(i420Buffer)
             .set_rotation(rotation)
             .set_timestamp_us(timeStampNs)
-            .build());
+            .build();
+
+        if (!_directSinks.empty()) {
+            for (const auto &it : _directSinks) {
+                if (const auto value = it.lock()) {
+                    value->OnFrame(videoFrame);
+                }
+            }
+        }
+
+        getObjCVideoSource(_source)->OnCapturedFrame(videoFrame);
         
         if (_uncroppedSink && uncroppedRtcPixelBuffer) {
             int64_t timeStampNs = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer)) *

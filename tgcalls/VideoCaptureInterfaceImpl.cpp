@@ -80,6 +80,14 @@ void VideoCaptureInterfaceObject::switchToDevice(std::string deviceId) {
 	}
 }
 
+void VideoCaptureInterfaceObject::withNativeImplementation(std::function<void(void *)> completion) {
+    if (_videoCapturer) {
+        _videoCapturer->withNativeImplementation(completion);
+    } else {
+        completion(nullptr);
+    }
+}
+
 void VideoCaptureInterfaceObject::setState(VideoState state) {
 	if (_state != state) {
 		_state = state;
@@ -157,6 +165,12 @@ void VideoCaptureInterfaceImpl::switchToDevice(std::string deviceId) {
 	_impl.perform(RTC_FROM_HERE, [deviceId](VideoCaptureInterfaceObject *impl) {
 		impl->switchToDevice(deviceId);
 	});
+}
+
+void VideoCaptureInterfaceImpl::withNativeImplementation(std::function<void(void *)> completion) {
+    _impl.perform(RTC_FROM_HERE, [completion](VideoCaptureInterfaceObject *impl) {
+        impl->withNativeImplementation(completion);
+    });
 }
 
 void VideoCaptureInterfaceImpl::setState(VideoState state) {
