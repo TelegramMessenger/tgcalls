@@ -403,6 +403,13 @@ static bool CopyNV12VideoFrameToNV12PixelBuffer(const webrtc::NV12BufferInterfac
                     [layer enqueueSampleBuffer:sampleBuffer];
                     [cloneLayer enqueueSampleBuffer:sampleBuffer];
 
+                    if ([layer status] == AVQueuedSampleBufferRenderingStatusFailed) {
+                        [layer flush];
+                    }
+                    if ([cloneLayer status] == AVQueuedSampleBufferRenderingStatusFailed) {
+                        [cloneLayer flush];
+                    }
+
                     CFRelease(sampleBuffer);
                 }
 
