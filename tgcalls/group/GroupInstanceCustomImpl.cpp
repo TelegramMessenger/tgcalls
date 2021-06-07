@@ -1030,6 +1030,11 @@ public:
         destroyOutgoingAudioChannel();
         destroyOutgoingVideoChannel();
 
+        _threads->getNetworkThread()->Invoke<void>(RTC_FROM_HERE, [this]() {
+            _rtpTransport->SignalSentPacket.disconnect(this);
+            _rtpTransport->SignalRtcpPacketReceived.disconnect(this);
+        });
+
         _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this]() {
             _channelManager = nullptr;
             if (_audioDeviceModule) {
