@@ -2207,7 +2207,7 @@ public:
                     break;
                 }
                 case VideoChannelDescription::Quality::Medium: {
-                    selectedConstraint.insert(std::make_pair("maxHeight", json11::Json(180)));
+                    selectedConstraint.insert(std::make_pair("maxHeight", json11::Json(360)));
                     break;
                 }
                 case VideoChannelDescription::Quality::Thumbnail: {
