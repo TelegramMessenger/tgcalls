@@ -40,7 +40,7 @@ class DarwinVideoTrackSource : public rtc::AdaptedVideoTrackSource {
   bool remote() const override;
 
   void OnCapturedFrame(RTC_OBJC_TYPE(RTCVideoFrame) * frame);
-  void OnCapturedFrame(const webrtc::VideoFrame& frame);
+  bool OnCapturedFrame(const webrtc::VideoFrame& frame);
 
   // Called by RTCVideoSource.
   void OnOutputFormatRequest(int width, int height, int fps);

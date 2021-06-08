@@ -112,7 +112,7 @@ void DarwinVideoTrackSource::OnCapturedFrame(RTC_OBJC_TYPE(RTCVideoFrame) * fram
               .build());
 }
 
-void DarwinVideoTrackSource::OnCapturedFrame(const webrtc::VideoFrame& frame) {
+bool DarwinVideoTrackSource::OnCapturedFrame(const webrtc::VideoFrame& frame) {
     const int64_t timestamp_us = frame.timestamp_us() / rtc::kNumNanosecsPerMicrosec;
     const int64_t translated_timestamp_us =
         timestamp_aligner_.TranslateTimestamp(timestamp_us, rtc::TimeMicros());
@@ -132,7 +132,7 @@ void DarwinVideoTrackSource::OnCapturedFrame(const webrtc::VideoFrame& frame) {
                     &crop_height,
                     &crop_x,
                     &crop_y)) {
-      return;
+      return false;
     }
 
     rtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer;
@@ -158,6 +158,8 @@ void DarwinVideoTrackSource::OnCapturedFrame(const webrtc::VideoFrame& frame) {
                 .set_rotation(rotation)
                 .set_timestamp_us(translated_timestamp_us)
                 .build());
+
+    return true;
 }
 
 }  // namespace webrtc

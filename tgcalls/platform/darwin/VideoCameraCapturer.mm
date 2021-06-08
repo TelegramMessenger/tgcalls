@@ -657,15 +657,15 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
             .set_timestamp_us(timeStampNs)
             .build();
 
-        if (!_directSinks.empty()) {
-            for (const auto &it : _directSinks) {
-                if (const auto value = it.lock()) {
-                    value->OnFrame(videoFrame);
+        if (getObjCVideoSource(_source)->OnCapturedFrame(videoFrame)) {
+            if (!_directSinks.empty()) {
+                for (const auto &it : _directSinks) {
+                    if (const auto value = it.lock()) {
+                        value->OnFrame(videoFrame);
+                    }
                 }
             }
         }
-
-        getObjCVideoSource(_source)->OnCapturedFrame(videoFrame);
         
         if (_uncroppedSink && uncroppedRtcPixelBuffer) {
             int64_t timeStampNs = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer)) *
