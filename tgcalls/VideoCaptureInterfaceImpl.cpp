@@ -16,7 +16,7 @@ VideoCaptureInterfaceObject::VideoCaptureInterfaceObject(std::string deviceId, s
 }
 
 VideoCaptureInterfaceObject::~VideoCaptureInterfaceObject() {
-	if (_videoCapturer && _currentUncroppedSink != nullptr) {
+	if (_videoCapturer) {
 		_videoCapturer->setUncroppedOutput(nullptr);
 	}
 }
@@ -34,7 +34,7 @@ int VideoCaptureInterfaceObject::getRotation() {
 }
 
 void VideoCaptureInterfaceObject::switchToDevice(std::string deviceId) {
-    if (_videoCapturer && _currentUncroppedSink) {
+    if (_videoCapturer) {
 		_videoCapturer->setUncroppedOutput(nullptr);
     }
 	if (_videoSource) {
@@ -70,8 +70,8 @@ void VideoCaptureInterfaceObject::switchToDevice(std::string deviceId) {
 		if (_preferredAspectRatio > 0) {
 			_videoCapturer->setPreferredCaptureAspectRatio(_preferredAspectRatio);
 		}
-		if (_currentUncroppedSink) {
-			_videoCapturer->setUncroppedOutput(_currentUncroppedSink);
+		if (const auto currentUncroppedSink = _currentUncroppedSink.lock()) {
+			_videoCapturer->setUncroppedOutput(currentUncroppedSink);
 		}
         if (_onFatalError) {
             _videoCapturer->setOnFatalError(_onFatalError);

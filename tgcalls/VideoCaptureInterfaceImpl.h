@@ -33,7 +33,7 @@ private:
     void updateAspectRateAdaptation();
     
     rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _videoSource;
-	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _currentUncroppedSink;
+	std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _currentUncroppedSink;
 	std::shared_ptr<PlatformContext> _platformContext;
     std::pair<int, int> _videoCapturerResolution;
 	std::unique_ptr<VideoCapturerInterface> _videoCapturer;
