@@ -781,14 +781,16 @@ public:
         std::vector<webrtc::SdpVideoFormat> const &availableVideoFormats,
         GroupJoinVideoInformation sharedVideoInformation,
         uint32_t audioSsrc,
-        VideoChannelDescription::Quality quality,
+        VideoChannelDescription::Quality minQuality,
+        VideoChannelDescription::Quality maxQuality,
         GroupParticipantVideoInformation const &description,
         std::shared_ptr<Threads> threads) :
     _threads(threads),
     _endpointId(description.endpointId),
     _channelManager(channelManager),
     _call(call),
-    _requestedQuality(quality) {
+    _requestedMinQuality(minQuality),
+    _requestedMaxQuality(maxQuality) {
         _videoSink.reset(new VideoSinkImpl());
 
         _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this, rtpTransport, &availableVideoFormats, &description, randomIdGenerator]() mutable {
@@ -885,12 +887,20 @@ public:
         return _endpointId;
     }
 
-    VideoChannelDescription::Quality requestedQuality() {
-        return _requestedQuality;
+    VideoChannelDescription::Quality requestedMinQuality() {
+        return _requestedMinQuality;
     }
 
-    void setRequstedQuality(VideoChannelDescription::Quality quality) {
-        _requestedQuality = quality;
+    VideoChannelDescription::Quality requestedMaxQuality() {
+        return _requestedMaxQuality;
+    }
+
+    void setRequstedMinQuality(VideoChannelDescription::Quality quality) {
+        _requestedMinQuality = quality;
+    }
+
+    void setRequstedMaxQuality(VideoChannelDescription::Quality quality) {
+        _requestedMaxQuality = quality;
     }
 
 private:
@@ -911,7 +921,8 @@ private:
     cricket::ChannelManager *_channelManager = nullptr;
     webrtc::Call *_call = nullptr;
 
-    VideoChannelDescription::Quality _requestedQuality = VideoChannelDescription::Quality::Thumbnail;
+    VideoChannelDescription::Quality _requestedMinQuality = VideoChannelDescription::Quality::Thumbnail;
+    VideoChannelDescription::Quality _requestedMaxQuality = VideoChannelDescription::Quality::Thumbnail;
 };
 
 class MissingSsrcPacketBuffer {
@@ -2222,7 +2233,25 @@ public:
         for (const auto &incomingVideoChannel : _incomingVideoChannels) {
             json11::Json::object selectedConstraint;
 
-            switch (incomingVideoChannel.second->requestedQuality()) {
+            switch (incomingVideoChannel.second->requestedMinQuality()) {
+                case VideoChannelDescription::Quality::Full: {
+                    onStageEndpoints.push_back(json11::Json(incomingVideoChannel.first.endpointId));
+                    selectedConstraint.insert(std::make_pair("minHeight", json11::Json(720)));
+                    break;
+                }
+                case VideoChannelDescription::Quality::Medium: {
+                    selectedConstraint.insert(std::make_pair("minHeight", json11::Json(360)));
+                    break;
+                }
+                case VideoChannelDescription::Quality::Thumbnail: {
+                    selectedConstraint.insert(std::make_pair("minHeight", json11::Json(180)));
+                    break;
+                }
+                default: {
+                    break;
+                }
+            }
+            switch (incomingVideoChannel.second->requestedMaxQuality()) {
                 case VideoChannelDescription::Quality::Full: {
                     onStageEndpoints.push_back(json11::Json(incomingVideoChannel.first.endpointId));
                     selectedConstraint.insert(std::make_pair("maxHeight", json11::Json(720)));
@@ -2493,6 +2522,7 @@ public:
             _sharedVideoInformation.value(),
             123456,
             VideoChannelDescription::Quality::Thumbnail,
+            VideoChannelDescription::Quality::Thumbnail,
             videoInformation,
             _threads
         ));
@@ -2684,7 +2714,7 @@ public:
         }
     }
 
-    void addIncomingVideoChannel(uint32_t audioSsrc, GroupParticipantVideoInformation const &videoInformation, VideoChannelDescription::Quality quality) {
+    void addIncomingVideoChannel(uint32_t audioSsrc, GroupParticipantVideoInformation const &videoInformation, VideoChannelDescription::Quality minQuality, VideoChannelDescription::Quality maxQuality) {
         if (!_sharedVideoInformation) {
             return;
         }
@@ -2702,7 +2732,8 @@ public:
             _availableVideoFormats,
             _sharedVideoInformation.value(),
             audioSsrc,
-            quality,
+            minQuality,
+            maxQuality,
             videoInformation,
             _threads
         ));
@@ -2787,14 +2818,15 @@ public:
 
             auto current = _incomingVideoChannels.find(VideoChannelId(videoInformation.endpointId));
             if (current != _incomingVideoChannels.end()) {
-                if (current->second->requestedQuality() != description.quality) {
-                    current->second->setRequstedQuality(description.quality);
+                if (current->second->requestedMinQuality() != description.minQuality || current->second->requestedMaxQuality() != description.maxQuality) {
+                    current->second->setRequstedMinQuality(description.minQuality);
+                    current->second->setRequstedMaxQuality(description.maxQuality);
                     updated = true;
                 }
                 continue;
             }
 
-            addIncomingVideoChannel(description.audioSsrc, videoInformation, description.quality);
+            addIncomingVideoChannel(description.audioSsrc, videoInformation, description.minQuality, description.maxQuality);
             updated = true;
         }
 
