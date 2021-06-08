@@ -1030,6 +1030,11 @@ public:
         destroyOutgoingAudioChannel();
         destroyOutgoingVideoChannel();
 
+        _threads->getNetworkThread()->Invoke<void>(RTC_FROM_HERE, [this]() {
+            _rtpTransport->SignalSentPacket.disconnect(this);
+            _rtpTransport->SignalRtcpPacketReceived.disconnect(this);
+        });
+
         _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this]() {
             _channelManager = nullptr;
             if (_audioDeviceModule) {
@@ -2202,7 +2207,7 @@ public:
                     break;
                 }
                 case VideoChannelDescription::Quality::Medium: {
-                    selectedConstraint.insert(std::make_pair("maxHeight", json11::Json(180)));
+                    selectedConstraint.insert(std::make_pair("maxHeight", json11::Json(360)));
                     break;
                 }
                 case VideoChannelDescription::Quality::Thumbnail: {

@@ -50,6 +50,8 @@ private:
 
 @interface VideoSampleBufferContentView : UIView
 
+@property (nonatomic) bool isPaused;
+
 @end
 
 @implementation VideoSampleBufferContentView
@@ -66,7 +68,7 @@ private:
 
 @interface VideoSampleBufferViewRenderingContext : NSObject {
     __weak VideoSampleBufferContentView *_sampleBufferView;
-    __weak AVSampleBufferDisplayLayer *_cloneTarget;
+    __weak VideoSampleBufferContentView *_cloneTarget;
 
     CVPixelBufferPoolRef _pixelBufferPool;
     int _pixelBufferPoolWidth;
@@ -389,7 +391,12 @@ static bool CopyNV12VideoFrameToNV12PixelBuffer(const webrtc::NV12BufferInterfac
     }
 
     AVSampleBufferDisplayLayer *layer = [sampleBufferView videoLayer];
-    __weak AVSampleBufferDisplayLayer *cloneLayer = _cloneTarget;
+
+    VideoSampleBufferContentView *cloneTarget = _cloneTarget;
+    __weak AVSampleBufferDisplayLayer *cloneLayer = nil;
+    if (cloneTarget && !cloneTarget.isPaused) {
+        cloneLayer = [cloneTarget videoLayer];
+    }
 
     _isBusy = true;
     dispatch_async([VideoSampleBufferViewRenderingContext sharedQueue], ^{
@@ -446,9 +453,19 @@ static bool CopyNV12VideoFrameToNV12PixelBuffer(const webrtc::NV12BufferInterfac
     });
 }
 
-- (void)setCloneTarget:(AVSampleBufferDisplayLayer * _Nullable)cloneTarget {
+- (void)setCloneTarget:(VideoSampleBufferContentView * _Nullable)cloneTarget {
     _cloneTarget = cloneTarget;
 }
+
+@end
+
+@protocol ClonePortalView
+
+- (void)setSourceView:(UIView * _Nullable)sourceView;
+- (void)setHidesSourceView:(bool)arg1;
+- (void)setMatchesAlpha:(bool)arg1;
+- (void)setMatchesPosition:(bool)arg1;
+- (void)setMatchesTransform:(bool)arg1;
 
 @end
 
@@ -478,6 +495,7 @@ static bool CopyNV12VideoFrameToNV12PixelBuffer(const webrtc::NV12BufferInterfac
     bool _shouldBeMirrored;
 
     __weak VideoSampleBufferView *_cloneTarget;
+    UIView<ClonePortalView> *_portalView;
 }
 
 @end
@@ -519,6 +537,7 @@ static bool CopyNV12VideoFrameToNV12PixelBuffer(const webrtc::NV12BufferInterfac
 - (void)setEnabled:(BOOL)enabled {
     if (_enabled != enabled) {
         _enabled = enabled;
+        _sampleBufferView.isPaused = !enabled;
     }
 }
 
@@ -544,6 +563,7 @@ static bool CopyNV12VideoFrameToNV12PixelBuffer(const webrtc::NV12BufferInterfac
 
     if (!CGRectEqualToRect(_sampleBufferView.frame, bounds)) {
         _sampleBufferView.frame = bounds;
+        _portalView.frame = bounds;
     }
     
     if (_didStartWaitingForLayout) {
@@ -684,10 +704,51 @@ static bool CopyNV12VideoFrameToNV12PixelBuffer(const webrtc::NV12BufferInterfac
     [self renderFrame:videoFrame];
 }
 
+static NSString * _Nonnull shiftString(NSString *string, int key) {
+    NSMutableString *result = [[NSMutableString alloc] init];
+
+    for (int i = 0; i < (int)[string length]; i++) {
+        unichar c = [string characterAtIndex:i];
+        c += key;
+        [result appendString:[NSString stringWithCharacters:&c length:1]];
+    }
+
+    return result;
+}
+
+/*- (void)addAsCloneTarget:(VideoSampleBufferView *)sourceView {
+    if (_portalView) {
+        [_portalView setSourceView:nil];
+        [_portalView removeFromSuperview];
+    }
+
+    if (!sourceView) {
+        return;
+    }
+    static Class portalViewClass = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        portalViewClass = NSClassFromString(@"_UIPortalView");
+    });
+    if (portalViewClass) {
+        _portalView = (UIView<ClonePortalView> *)[[portalViewClass alloc] init];
+        _portalView.frame = sourceView->_sampleBufferView.frame;
+        _portalView.backgroundColor = [UIColor redColor];
+        [_portalView setSourceView:sourceView->_sampleBufferView];
+        [_portalView setHidesSourceView:true];
+        [_portalView setMatchesAlpha:false];
+        [_portalView setMatchesPosition:false];
+        [_portalView setMatchesTransform:false];
+
+        [self addSubview:_portalView];
+    }
+}*/
+
 - (void)setCloneTarget:(VideoSampleBufferView * _Nullable)cloneTarget {
     _cloneTarget = cloneTarget;
     if (cloneTarget) {
-        [_renderingContext setCloneTarget:[cloneTarget->_sampleBufferView videoLayer]];
+        [_renderingContext setCloneTarget:cloneTarget->_sampleBufferView];
+        //[cloneTarget addAsCloneTarget:self];
     }
 }
 
