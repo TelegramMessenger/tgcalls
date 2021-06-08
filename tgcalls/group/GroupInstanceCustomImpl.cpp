@@ -1196,6 +1196,8 @@ public:
         //beginAudioChannelCleanupTimer(0);
 
         adjustBitratePreferences(true);
+
+        beginRemoteConstraintsUpdateTimer(5000);
     }
 
     void destroyOutgoingVideoChannel() {
@@ -1522,6 +1524,20 @@ public:
             }
 
             strong->beginAudioChannelCleanupTimer(500);
+        }, delayMs);
+    }
+
+    void beginRemoteConstraintsUpdateTimer(int delayMs) {
+        const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
+        _threads->getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
+            auto strong = weak.lock();
+            if (!strong) {
+                return;
+            }
+
+            strong->maybeUpdateRemoteVideoConstraints();
+
+            strong->beginRemoteConstraintsUpdateTimer(5000);
         }, delayMs);
     }
 
