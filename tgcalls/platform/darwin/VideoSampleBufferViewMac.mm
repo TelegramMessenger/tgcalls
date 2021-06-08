@@ -161,8 +161,10 @@ private:
 - (void)configure {
     self.wantsLayer = YES;
     _sampleBufferLayer = [[AVSampleBufferDisplayLayer alloc] init];
-    [self.layer addSublayer:_sampleBufferLayer];
+    self.layer = _sampleBufferLayer;
+//    [self.layer addSublayer:_sampleBufferLayer];
 
+    
     _videoFrameSize = CGSizeZero;
 }
 

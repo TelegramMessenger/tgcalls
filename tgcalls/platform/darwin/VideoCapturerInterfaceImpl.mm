@@ -76,11 +76,13 @@
 
 @implementation VideoCapturerInterfaceImplReference
 
+- (id)videoCameraCapturer {
 #ifdef WEBRTC_IOS
-- (VideoCameraCapturer *)videoCameraCapturer {
     return _videoCameraCapturer;
-}
+#else
+    return _videoCapturer;
 #endif
+}
 
 + (AVCaptureDevice *)selectCapturerDeviceWithDeviceId:(NSString *)deviceId {
     AVCaptureDevice *selectedCamera = nil;
