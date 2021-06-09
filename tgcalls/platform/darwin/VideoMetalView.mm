@@ -147,6 +147,10 @@ private:
     return self;
 }
 
+- (void)dealloc {
+    _sink.reset();
+}
+
 - (BOOL)isEnabled {
     return !_metalView.paused;
 }

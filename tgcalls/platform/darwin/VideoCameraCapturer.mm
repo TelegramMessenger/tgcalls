@@ -110,7 +110,7 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
     // Live on frameQueue.
     float _aspectRatio;
     std::vector<uint8_t> _croppingBuffer;
-    std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _uncroppedSink;
+    std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _uncroppedSink;
     
     // Live on frameQueue and RTCDispatcherTypeCaptureSession.
     std::atomic<int> _warmupFrameCount;
@@ -667,23 +667,26 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
             }
         }
         
-        if (_uncroppedSink && uncroppedRtcPixelBuffer) {
-            int64_t timeStampNs = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer)) *
-            kNanosecondsPerSecond;
-            RTCVideoFrame *frame = [[RTCVideoFrame alloc] initWithBuffer:uncroppedRtcPixelBuffer rotation:_rotation timeStampNs:timeStampNs];
-            
-            const int64_t timestamp_us = frame.timeStampNs / rtc::kNumNanosecsPerMicrosec;
+        if (uncroppedRtcPixelBuffer) {
+            const auto uncroppedSink = _uncroppedSink.lock();
+            if (uncroppedSink) {
+                int64_t timeStampNs = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer)) *
+                kNanosecondsPerSecond;
+                RTCVideoFrame *frame = [[RTCVideoFrame alloc] initWithBuffer:uncroppedRtcPixelBuffer rotation:_rotation timeStampNs:timeStampNs];
+                
+                const int64_t timestamp_us = frame.timeStampNs / rtc::kNumNanosecsPerMicrosec;
 
-            rtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer;
-            buffer = new rtc::RefCountedObject<webrtc::ObjCFrameBuffer>(frame.buffer);
-            
-            webrtc::VideoRotation rotation = static_cast<webrtc::VideoRotation>(frame.rotation);
-            
-            _uncroppedSink->OnFrame(webrtc::VideoFrame::Builder()
-                    .set_video_frame_buffer(buffer)
-                    .set_rotation(rotation)
-                    .set_timestamp_us(timestamp_us)
-                    .build());
+                rtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer;
+                buffer = new rtc::RefCountedObject<webrtc::ObjCFrameBuffer>(frame.buffer);
+                
+                webrtc::VideoRotation rotation = static_cast<webrtc::VideoRotation>(frame.rotation);
+                
+                uncroppedSink->OnFrame(webrtc::VideoFrame::Builder()
+                        .set_video_frame_buffer(buffer)
+                        .set_rotation(rotation)
+                        .set_timestamp_us(timestamp_us)
+                        .build());
+            }
         }
     }
 }
