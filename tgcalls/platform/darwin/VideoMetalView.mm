@@ -87,6 +87,8 @@ private:
     bool _didSetShouldBeMirrored;
     bool _shouldBeMirrored;
     bool _shouldBeMirroredVertically;
+
+    __weak VideoMetalView *_cloneView;
 }
 
 @end
@@ -141,6 +143,17 @@ private:
                 [strongSelf setInternalOrientationAndSize:mappedValue size:size];
                 
                 [strongSelf renderFrame:videoFrame];
+
+                VideoMetalView *cloneView = strongSelf->_cloneView;
+                if (cloneView) {
+                    if (!CGSizeEqualToSize(size, cloneView->_currentSize)) {
+                        cloneView->_currentSize = size;
+                        [cloneView setSize:size];
+                    }
+
+                    [cloneView setInternalOrientationAndSize:mappedValue size:size];
+                    [cloneView renderFrame:videoFrame];
+                }
             });
         }));
     }
@@ -437,6 +450,10 @@ private:
 
 - (void)internalSetOnIsMirroredUpdated:(void (^ _Nullable)(bool))onIsMirroredUpdated {
     _onIsMirroredUpdated = [onIsMirroredUpdated copy];
+}
+
+- (void)setClone:(VideoMetalView * _Nullable)clone {
+    _cloneView = clone;
 }
 
 @end
