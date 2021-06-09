@@ -7,6 +7,7 @@
 #include <memory>
 #include "api/scoped_refptr.h"
 #include "api/media_stream_interface.h"
+#import "base/RTCVideoFrame.h"
 #include "Instance.h"
 
 @interface CustomExternalCapturer : NSObject
@@ -16,7 +17,7 @@
 - (void)addSampleBuffer:(CMSampleBufferRef)sampleBuffer;
 
 + (void)passSampleBuffer:(CMSampleBufferRef)sampleBuffer toSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source;
-+ (void)passPixelBuffer:(CVPixelBufferRef)pixelBuffer toSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source croppingBuffer:(std::vector<uint8_t> &)croppingBuffer;
++ (void)passPixelBuffer:(CVPixelBufferRef)pixelBuffer rotation:(RTCVideoRotation)rotation toSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source croppingBuffer:(std::vector<uint8_t> &)croppingBuffer;
 
 @end
 #endif // WEBRTC_IOS
