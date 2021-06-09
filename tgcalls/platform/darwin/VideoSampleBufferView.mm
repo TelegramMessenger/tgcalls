@@ -394,7 +394,7 @@ static bool CopyNV12VideoFrameToNV12PixelBuffer(const webrtc::NV12BufferInterfac
 
     VideoSampleBufferContentView *cloneTarget = _cloneTarget;
     __weak AVSampleBufferDisplayLayer *cloneLayer = nil;
-    if (cloneTarget && !cloneTarget.isPaused) {
+    if (cloneTarget) {
         cloneLayer = [cloneTarget videoLayer];
     }
 
