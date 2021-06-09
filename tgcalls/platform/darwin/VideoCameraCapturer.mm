@@ -43,9 +43,9 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
         case UIInterfaceOrientationPortraitUpsideDown:
             return UIDeviceOrientationPortraitUpsideDown;
         case UIInterfaceOrientationLandscapeLeft:
-            return UIDeviceOrientationLandscapeLeft;
-        case UIInterfaceOrientationLandscapeRight:
             return UIDeviceOrientationLandscapeRight;
+        case UIInterfaceOrientationLandscapeRight:
+            return UIDeviceOrientationLandscapeLeft;
         default:
             return UIDeviceOrientationPortrait;
     }
