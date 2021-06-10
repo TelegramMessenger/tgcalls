@@ -103,6 +103,7 @@ public:
 	void setSecondaryOutput(
 		std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
     void setOnFatalError(std::function<void ()>);
+    void setOnPause(std::function<void (bool)>);
 private:
     rtc::scoped_refptr<webrtc::I420Buffer> i420_buffer_;
 	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _sink;
@@ -110,6 +111,7 @@ private:
         rtc::VideoSinkInterface<webrtc::VideoFrame>> _secondarySink;
     DesktopSize size_;
     std::function<void ()> _onFatalError;
+    std::function<void (bool)> _onPause;
 };
 
 class DesktopSourceRenderer {
@@ -125,15 +127,17 @@ public:
     void setSecondaryOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
     void loop();
     void setOnFatalError(std::function<void ()>);
-
+    void setOnPause(std::function<void (bool)>);
 private:
     CaptureScheduler &_scheduler;
     std::unique_ptr<webrtc::DesktopCapturer> _capturer;
     SourceFrameCallbackImpl _callback;
     std::shared_ptr<bool> _timerGuard;
     std::function<void()> _onFatalError;
+    std::function<void(bool)> _onPause;
     bool _isRunning = false;
     bool _fatalError = false;
+    bool _currentlyOnPause = false;
     double _delayMs = 0.;
 
 };
@@ -145,10 +149,16 @@ SourceFrameCallbackImpl::SourceFrameCallbackImpl(DesktopSize size, int fps)
 void SourceFrameCallbackImpl::OnCaptureResult(
 	    webrtc::DesktopCapturer::Result result,
 	    std::unique_ptr<webrtc::DesktopFrame> frame) {
+    
+    if (result == webrtc::DesktopCapturer::Result::SUCCESS || result == webrtc::DesktopCapturer::Result::ERROR_TEMPORARY) {
+        if (_onPause) _onPause(result == webrtc::DesktopCapturer::Result::ERROR_TEMPORARY);
+    }
+        
 	if (result != webrtc::DesktopCapturer::Result::SUCCESS) {
         if (result == webrtc::DesktopCapturer::Result::ERROR_PERMANENT) {
             if (_onFatalError) _onFatalError();
         }
+        
 		return;
 	}
 
@@ -235,6 +245,9 @@ void SourceFrameCallbackImpl::setOutput(
 void SourceFrameCallbackImpl::setOnFatalError(std::function<void ()> error) {
     _onFatalError = error;
 }
+void SourceFrameCallbackImpl::setOnPause(std::function<void (bool)> pause) {
+    _onPause = pause;
+}
 
 void SourceFrameCallbackImpl::setSecondaryOutput(
         std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
@@ -253,6 +266,14 @@ DesktopSourceRenderer::DesktopSourceRenderer(
 		_fatalError = true;
 		if (_onFatalError) _onFatalError();
 	});
+    
+    _callback.setOnPause([=] (bool pause) {
+        bool previousOnPause = _currentlyOnPause;
+        _currentlyOnPause = pause;
+        if (previousOnPause != _currentlyOnPause) {
+            if (_onPause) _onPause(pause);
+        }
+    });
 
     auto options = webrtc::DesktopCaptureOptions::CreateDefault();
     options.set_disable_effects(true);
@@ -327,6 +348,13 @@ void DesktopSourceRenderer::setOnFatalError(std::function<void ()> error) {
     } else {
         _onFatalError = std::move(error);
     }
+}
+
+void DesktopSourceRenderer::setOnPause(std::function<void (bool)> pause) {
+    if (_currentlyOnPause) {
+        pause(true);
+    }
+    _onPause = std::move(pause);
 }
 
 void DesktopSourceRenderer::setOutput(
@@ -416,6 +444,11 @@ void DesktopCaptureSourceHelper::start() const {
 void DesktopCaptureSourceHelper::setOnFatalError(std::function<void ()> error) const {
     _renderer->scheduler.runAsync([renderer = _renderer, error = error] {
         renderer->renderer->setOnFatalError(error);
+    });
+}
+void DesktopCaptureSourceHelper::setOnPause(std::function<void (bool)> pause) const {
+    _renderer->scheduler.runAsync([renderer = _renderer, pause = pause] {
+        renderer->renderer->setOnPause(pause);
     });
 }
 
