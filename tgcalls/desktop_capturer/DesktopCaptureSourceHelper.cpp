@@ -149,18 +149,21 @@ SourceFrameCallbackImpl::SourceFrameCallbackImpl(DesktopSize size, int fps)
 void SourceFrameCallbackImpl::OnCaptureResult(
 	    webrtc::DesktopCapturer::Result result,
 	    std::unique_ptr<webrtc::DesktopFrame> frame) {
-    
-    if (result == webrtc::DesktopCapturer::Result::SUCCESS || result == webrtc::DesktopCapturer::Result::ERROR_TEMPORARY) {
-        if (_onPause) _onPause(result == webrtc::DesktopCapturer::Result::ERROR_TEMPORARY);
-    }
-        
-	if (result != webrtc::DesktopCapturer::Result::SUCCESS) {
+
+    const auto failed = (result != webrtc::DesktopCapturer::Result::SUCCESS)
+        || frame->size().equals({ 1, 1 });
+    if (failed) {
         if (result == webrtc::DesktopCapturer::Result::ERROR_PERMANENT) {
-            if (_onFatalError) _onFatalError();
+            if (_onFatalError) {
+                _onFatalError();
+            }
+        } else if (_onPause) {
+            _onPause(true);
         }
-        
-		return;
-	}
+        return;
+    } else if (_onPause) {
+        _onPause(false);
+    }
 
     const auto frameSize = frame->size();
     DesktopSize fittedSize = AspectFitted(
@@ -266,7 +269,7 @@ DesktopSourceRenderer::DesktopSourceRenderer(
 		_fatalError = true;
 		if (_onFatalError) _onFatalError();
 	});
-    
+
     _callback.setOnPause([=] (bool pause) {
         bool previousOnPause = _currentlyOnPause;
         _currentlyOnPause = pause;
