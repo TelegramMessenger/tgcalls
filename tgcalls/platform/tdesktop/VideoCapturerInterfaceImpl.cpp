@@ -118,11 +118,23 @@ void VideoCapturerInterfaceImpl::setOnFatalError(std::function<void()> error) {
 	} else if (!_screenCapturer && !_cameraCapturer && error) {
 		error();
 	}
-#else
+#else // TGCALLS_UWP_DESKTOP_CAPTURE
 	if (_desktopCapturer) {
 		_desktopCapturer->setOnFatalError(std::move(error));
 	} else if (!_desktopCapturer && !_cameraCapturer && error) {
 		error();
+	}
+#endif // TGCALLS_UWP_DESKTOP_CAPTURE
+}
+
+void VideoCapturerInterfaceImpl::setOnPause(std::function<void(bool)> pause) {
+#ifdef TGCALLS_UWP_DESKTOP_CAPTURE
+	if (_screenCapturer) {
+		_screenCapturer->setOnPause(std::move(pause));
+	}
+#else // TGCALLS_UWP_DESKTOP_CAPTURE
+	if (_desktopCapturer) {
+		_desktopCapturer->setOnPause(std::move(pause));
 	}
 #endif // TGCALLS_UWP_DESKTOP_CAPTURE
 }

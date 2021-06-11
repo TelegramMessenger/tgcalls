@@ -33,13 +33,14 @@ public:
 		return 0;
 	}
 	void setOnFatalError(std::function<void()> error) override;
+	void setOnPause(std::function<void(bool)> pause) override;
 
 private:
 	rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _source;
 	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _sink;
 #ifdef TGCALLS_UWP_DESKTOP_CAPTURE
 	std::unique_ptr<UwpScreenCapturer> _screenCapturer;
-#else
+#else // TGCALLS_UWP_DESKTOP_CAPTURE
 	std::unique_ptr<DesktopCaptureSourceHelper> _desktopCapturer;
 #endif // TGCALLS_UWP_DESKTOP_CAPTURE
 	std::unique_ptr<VideoCameraCapturer> _cameraCapturer;
