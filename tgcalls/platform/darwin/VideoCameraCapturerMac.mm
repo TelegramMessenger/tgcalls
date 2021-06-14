@@ -269,6 +269,10 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
     }
 }
 
+-(void)setOnPause:(std::function<void (bool)>)pause {
+   
+}
+
 - (void)stop {
     _isActiveUpdated = nil;
     [self stopCaptureWithCompletionHandler:nil];

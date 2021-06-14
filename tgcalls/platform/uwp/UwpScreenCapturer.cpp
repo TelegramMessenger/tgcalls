@@ -213,7 +213,7 @@ void UwpScreenCapturer::OnFrameArrived(DispatcherQueueTimer const& sender, winrt
 			onFatalError();
 			return;
 		}
-		
+
 		winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice directDevice;
 		direct3d_device_->QueryInterface(winrt::guid_of<winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice>(), winrt::put_abi(directDevice));
 
@@ -279,6 +279,10 @@ void UwpScreenCapturer::setOnFatalError(std::function<void ()> error) {
     } else {
         _onFatalError = std::move(error);
     }
+}
+
+void UwpScreenCapturer::setOnPause(std::function<void(bool)> pause) {
+	// TODO
 }
 
 std::pair<int, int> UwpScreenCapturer::resolution() const {

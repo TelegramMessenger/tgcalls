@@ -1949,7 +1949,9 @@ public:
         settings.max_bitrate_bps = preferences.max_bitrate_bps;
 
         _call->GetTransportControllerSend()->SetSdpBitrateParameters(preferences);
-        _call->SetClientBitratePreferences(settings);
+		_threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [&]() {
+			_call->SetClientBitratePreferences(settings);
+		});
     }
 
     void setIsRtcConnected(bool isConnected) {
@@ -2426,7 +2428,7 @@ public:
 
     void setAudioOutputDevice(const std::string &id) {
 #ifndef WEBRTC_IOS
-        _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [=] {
+        _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [&] {
             SetAudioOutputDeviceById(_audioDeviceModule.get(), id);
         });
 #endif // WEBRTC_IOS
@@ -2434,7 +2436,7 @@ public:
 
     void setAudioInputDevice(const std::string &id) {
 #ifndef WEBRTC_IOS
-        _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [=] {
+        _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [&] {
             SetAudioInputDeviceById(_audioDeviceModule.get(), id);
         });
 #endif // WEBRTC_IOS

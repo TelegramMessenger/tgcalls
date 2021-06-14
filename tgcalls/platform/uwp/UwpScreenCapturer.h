@@ -36,6 +36,7 @@ public:
 	void setState(VideoState state);
 	void setPreferredCaptureAspectRatio(float aspectRatio);
 	void setOnFatalError(std::function<void ()> error);
+	void setOnPause(std::function<void(bool)> pause);
 
 	std::pair<int, int> resolution() const;
 

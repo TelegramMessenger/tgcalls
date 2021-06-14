@@ -263,6 +263,15 @@
 #endif
 }
 
+-(void)setOnPause:(std::function<void(bool)>)pause {
+#ifdef WEBRTC_IOS
+#else
+    if (_videoCapturer) {
+        [_videoCapturer setOnPause:pause];
+    } 
+#endif
+}
+
 - (void)setIsEnabled:(bool)isEnabled {
 #ifdef WEBRTC_IOS
     if (_videoCameraCapturer) {
@@ -420,6 +429,16 @@ void VideoCapturerInterfaceImpl::setOnFatalError(std::function<void()> error) {
         if (implReference.reference != nil) {
             VideoCapturerInterfaceImplReference *reference = (__bridge VideoCapturerInterfaceImplReference *)implReference.reference;
             [reference setOnFatalError:error];
+        }
+    });
+}
+
+void VideoCapturerInterfaceImpl::setOnPause(std::function<void(bool)> pause) {
+    VideoCapturerInterfaceImplHolder *implReference = _implReference;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (implReference.reference != nil) {
+            VideoCapturerInterfaceImplReference *reference = (__bridge VideoCapturerInterfaceImplReference *)implReference.reference;
+            [reference setOnPause: pause];
         }
     });
 }

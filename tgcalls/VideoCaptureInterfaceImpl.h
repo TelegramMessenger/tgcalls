@@ -25,6 +25,7 @@ public:
 	void setStateUpdated(std::function<void(VideoState)> stateUpdated);
     void setRotationUpdated(std::function<void(int)> rotationUpdated);
     void setOnFatalError(std::function<void()> error);
+    void setOnPause(std::function<void(bool)> pause);
     void setOnIsActiveUpdated(std::function<void(bool)> onIsActiveUpdated);
 	webrtc::VideoTrackSourceInterface *source();
     int getRotation();
@@ -39,6 +40,7 @@ private:
 	std::unique_ptr<VideoCapturerInterface> _videoCapturer;
 	std::function<void(VideoState)> _stateUpdated;
     std::function<void()> _onFatalError;
+    std::function<void(bool)> _onPause;
     std::function<void(bool)> _onIsActiveUpdated;
     std::function<void(int)> _rotationUpdated;
 	VideoState _state = VideoState::Active;
@@ -57,6 +59,7 @@ public:
     void setPreferredAspectRatio(float aspectRatio) override;
 	void setOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) override;
     void setOnFatalError(std::function<void()> error) override;
+    void setOnPause(std::function<void(bool)> pause) override;
     void setOnIsActiveUpdated(std::function<void(bool)> onIsActiveUpdated) override;
 
 	ThreadLocalObject<VideoCaptureInterfaceObject> *object();

@@ -44,6 +44,7 @@ public:
 	void start() const;
 	void stop() const;
     void setOnFatalError(std::function<void ()>) const;
+    void setOnPause(std::function<void (bool)>) const;
 private:
 	struct Renderer;
 	std::shared_ptr<Renderer> _renderer;

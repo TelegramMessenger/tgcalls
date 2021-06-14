@@ -26,6 +26,7 @@ public:
     void withNativeImplementation(std::function<void(void *)> completion) override;
     void setUncroppedOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) override;
     void setOnFatalError(std::function<void()> error) override;
+    void setOnPause(std::function<void(bool)> pause) override;
     int getRotation() override;
 
     id getInternalReference();

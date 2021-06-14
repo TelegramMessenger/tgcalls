@@ -76,6 +76,9 @@ void VideoCaptureInterfaceObject::switchToDevice(std::string deviceId) {
         if (_onFatalError) {
             _videoCapturer->setOnFatalError(_onFatalError);
         }
+        if (_onPause) {
+            _videoCapturer->setOnPause(_onPause);
+        }
 		_videoCapturer->setState(_state);
 	}
 }
@@ -139,6 +142,12 @@ void VideoCaptureInterfaceObject::setOnFatalError(std::function<void()> error) {
     }
     _onFatalError = error;
 }
+void VideoCaptureInterfaceObject::setOnPause(std::function<void(bool)> pause) {
+    if (_videoCapturer) {
+        _videoCapturer->setOnPause(pause);
+    }
+    _onPause = pause;
+}
 
 void VideoCaptureInterfaceObject::setOnIsActiveUpdated(std::function<void(bool)> onIsActiveUpdated) {
     _onIsActiveUpdated = onIsActiveUpdated;
@@ -187,6 +196,11 @@ void VideoCaptureInterfaceImpl::setPreferredAspectRatio(float aspectRatio) {
 void VideoCaptureInterfaceImpl::setOnFatalError(std::function<void()> error) {
     _impl.perform(RTC_FROM_HERE, [error](VideoCaptureInterfaceObject *impl) {
         impl->setOnFatalError(error);
+    });
+}
+void VideoCaptureInterfaceImpl::setOnPause(std::function<void(bool)> pause) {
+    _impl.perform(RTC_FROM_HERE, [pause](VideoCaptureInterfaceObject *impl) {
+        impl->setOnPause(pause);
     });
 }
 

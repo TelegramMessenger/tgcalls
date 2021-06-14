@@ -83,6 +83,9 @@ private:
 -(void)setOnFatalError:(std::function<void ()>)error {
     renderer->setOnFatalError(error);
 }
+-(void)setOnPause:(std::function<void (bool)>)pause {
+    renderer->setOnPause(pause);
+}
 
 -(void)start {
     renderer->start();

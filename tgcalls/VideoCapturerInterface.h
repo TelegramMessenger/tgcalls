@@ -28,6 +28,9 @@ public:
     virtual void setOnFatalError(std::function<void()> error) {
       // TODO: make this function pure virtual when everybody implements it.
     }
+    virtual void setOnPause(std::function<void(bool)> pause) {
+      // TODO: make this function pure virtual when everybody implements it.
+    }
     virtual void withNativeImplementation(std::function<void(void *)> completion) {
         completion(nullptr);
     }
