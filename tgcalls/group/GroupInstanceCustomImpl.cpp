@@ -1932,7 +1932,7 @@ public:
                 preferences.start_bitrate_bps = std::max(preferences.min_bitrate_bps, 400 * 1000);
             }
             if (_videoContentType == VideoContentType::Screencast) {
-                preferences.max_bitrate_bps = std::max(preferences.min_bitrate_bps, (900 + 32 + 100) * 1000 * 2);
+                preferences.max_bitrate_bps = std::max(preferences.min_bitrate_bps, (800 + 32) * 1000);
             } else {
                 preferences.max_bitrate_bps = std::max(preferences.min_bitrate_bps, (700 + 32) * 1000);
             }
