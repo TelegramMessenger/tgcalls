@@ -2237,7 +2237,6 @@ public:
 
             switch (incomingVideoChannel.second->requestedMinQuality()) {
                 case VideoChannelDescription::Quality::Full: {
-                    onStageEndpoints.push_back(json11::Json(incomingVideoChannel.first.endpointId));
                     selectedConstraint.insert(std::make_pair("minHeight", json11::Json(720)));
                     break;
                 }
