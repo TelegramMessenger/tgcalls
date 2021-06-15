@@ -1318,43 +1318,45 @@ public:
             return;
         }
 
-        /*_threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this]() {
-            webrtc::RtpParameters rtpParameters = _outgoingVideoChannel->media_channel()->GetRtpSendParameters(_outgoingVideoSsrcs.simulcastLayers[0].ssrc);
-            if (rtpParameters.encodings.size() == 3) {
-                for (int i = 0; i < (int)rtpParameters.encodings.size(); i++) {
-                    if (i == 0) {
-                        rtpParameters.encodings[i].min_bitrate_bps = 50000;
-                        rtpParameters.encodings[i].max_bitrate_bps = 100000;
-                        rtpParameters.encodings[i].scale_resolution_down_by = 4.0;
-                        rtpParameters.encodings[i].active = _outgoingVideoConstraint >= 180;
-                    } else if (i == 1) {
-                        rtpParameters.encodings[i].max_bitrate_bps = 150000;
-                        rtpParameters.encodings[i].max_bitrate_bps = 200000;
-                        rtpParameters.encodings[i].scale_resolution_down_by = 2.0;
-                        rtpParameters.encodings[i].active = _outgoingVideoConstraint >= 360;
-                    } else if (i == 2) {
-                        rtpParameters.encodings[i].min_bitrate_bps = 300000;
-                        rtpParameters.encodings[i].max_bitrate_bps = 800000 + 100000;
-                        rtpParameters.encodings[i].active = _outgoingVideoConstraint >= 720;
+        if (_videoContentType == VideoContentType::Screencast) {
+            _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this]() {
+                webrtc::RtpParameters rtpParameters = _outgoingVideoChannel->media_channel()->GetRtpSendParameters(_outgoingVideoSsrcs.simulcastLayers[0].ssrc);
+                if (rtpParameters.encodings.size() == 3) {
+                    for (int i = 0; i < (int)rtpParameters.encodings.size(); i++) {
+                        if (i == 0) {
+                            rtpParameters.encodings[i].min_bitrate_bps = 50000;
+                            rtpParameters.encodings[i].max_bitrate_bps = 100000;
+                            rtpParameters.encodings[i].scale_resolution_down_by = 4.0;
+                            rtpParameters.encodings[i].active = _outgoingVideoConstraint >= 180;
+                        } else if (i == 1) {
+                            rtpParameters.encodings[i].max_bitrate_bps = 150000;
+                            rtpParameters.encodings[i].max_bitrate_bps = 200000;
+                            rtpParameters.encodings[i].scale_resolution_down_by = 2.0;
+                            rtpParameters.encodings[i].active = _outgoingVideoConstraint >= 360;
+                        } else if (i == 2) {
+                            rtpParameters.encodings[i].min_bitrate_bps = 300000;
+                            rtpParameters.encodings[i].max_bitrate_bps = 800000 + 100000;
+                            rtpParameters.encodings[i].active = _outgoingVideoConstraint >= 720;
+                        }
                     }
-                }
-            } else if (rtpParameters.encodings.size() == 2) {
-                for (int i = 0; i < (int)rtpParameters.encodings.size(); i++) {
-                    if (i == 0) {
-                        rtpParameters.encodings[i].min_bitrate_bps = 50000;
-                        rtpParameters.encodings[i].max_bitrate_bps = 100000;
-                        rtpParameters.encodings[i].scale_resolution_down_by = 4.0;
-                    } else if (i == 1) {
-                        rtpParameters.encodings[i].min_bitrate_bps = 200000;
-                        rtpParameters.encodings[i].max_bitrate_bps = 800000 + 100000;
+                } else if (rtpParameters.encodings.size() == 2) {
+                    for (int i = 0; i < (int)rtpParameters.encodings.size(); i++) {
+                        if (i == 0) {
+                            rtpParameters.encodings[i].min_bitrate_bps = 50000;
+                            rtpParameters.encodings[i].max_bitrate_bps = 100000;
+                            rtpParameters.encodings[i].scale_resolution_down_by = 4.0;
+                        } else if (i == 1) {
+                            rtpParameters.encodings[i].min_bitrate_bps = 200000;
+                            rtpParameters.encodings[i].max_bitrate_bps = 900000 + 100000;
+                        }
                     }
+                } else {
+                    rtpParameters.encodings[0].max_bitrate_bps = (800000 + 100000) * 2;
                 }
-            } else {
-                rtpParameters.encodings[0].max_bitrate_bps = (800000 + 100000) * 2;
-            }
 
-            _outgoingVideoChannel->media_channel()->SetRtpSendParameters(_outgoingVideoSsrcs.simulcastLayers[0].ssrc, rtpParameters);
-        });*/
+                _outgoingVideoChannel->media_channel()->SetRtpSendParameters(_outgoingVideoSsrcs.simulcastLayers[0].ssrc, rtpParameters);
+            });
+        }
     }
 
     void updateVideoSend() {
@@ -1932,7 +1934,7 @@ public:
                 preferences.start_bitrate_bps = std::max(preferences.min_bitrate_bps, 400 * 1000);
             }
             if (_videoContentType == VideoContentType::Screencast) {
-                preferences.max_bitrate_bps = std::max(preferences.min_bitrate_bps, (800 + 32) * 1000);
+                preferences.max_bitrate_bps = std::max(preferences.min_bitrate_bps, (1020 + 32) * 1000);
             } else {
                 preferences.max_bitrate_bps = std::max(preferences.min_bitrate_bps, (700 + 32) * 1000);
             }
@@ -2362,9 +2364,9 @@ public:
 
         uint32_t outgoingVideoSsrcBase = _outgoingAudioSsrc + 1;
         int numVideoSimulcastLayers = 3;
-        /*if (_videoContentType == VideoContentType::Screencast) {
-            numVideoSimulcastLayers = 1;
-        }*/
+        if (_videoContentType == VideoContentType::Screencast) {
+            numVideoSimulcastLayers = 2;
+        }
         _outgoingVideoSsrcs.simulcastLayers.clear();
         for (int layerIndex = 0; layerIndex < numVideoSimulcastLayers; layerIndex++) {
             _outgoingVideoSsrcs.simulcastLayers.push_back(VideoSsrcs::SimulcastLayer(outgoingVideoSsrcBase + layerIndex * 2 + 0, outgoingVideoSsrcBase + layerIndex * 2 + 1));
