@@ -13,6 +13,7 @@
 #import "api/media_stream_interface.h"
 #import "rtc_base/time_utils.h"
 
+#import <SSignalKit/SSignalKit.h>
 
 
 #import "api/video/video_sink_interface.h"
@@ -22,6 +23,8 @@
 
 #define MTKViewClass NSClassFromString(@"MTKView")
 #define RTCMTLI420RendererClass NSClassFromString(@"RTCMTLI420Renderer")
+
+SQueue *renderQueue = [[SQueue alloc] init];
 
 namespace {
     
@@ -62,7 +65,7 @@ private:
 
 
 @interface VideoMetalView () <MTKViewDelegate> {
-    RTCMTLI420Renderer *_rendererI420;
+    SQueueLocalObject *_rendererI420;
 
     MTKView *_metalView;
     RTCVideoFrame *_videoFrame;
@@ -243,24 +246,31 @@ private:
         return;
     }
         
-    RTCMTLRenderer *renderer;
-
     if (!_rendererI420) {
-        _rendererI420 = [VideoMetalView createI420Renderer];
-        if (![_rendererI420 addRenderingDestination:_metalView]) {
-            _rendererI420 = nil;
-            RTCLogError(@"Failed to create I420 renderer");
-            return;
-        }
+        RTCMTLI420Renderer *renderer = [VideoMetalView createI420Renderer];
+        
+        [renderer addRenderingDestination:_metalView];
+        _rendererI420 = [[SQueueLocalObject alloc] initWithQueue:renderQueue generate: ^{
+            return renderer;
+        }];
     }
-    renderer = _rendererI420;
     
-    renderer.rotationOverride = _rotationOverride;
-    [renderer drawFrame:videoFrame];
+    NSValue * rotationOverride = _rotationOverride;
+    
+    [_rendererI420 with:^(RTCMTLI420Renderer * object) {
+        object.rotationOverride = rotationOverride;
+        [object drawFrame:videoFrame];
+    }];
+    
     _lastFrameTimeNs = videoFrame.timeStampNs;
 }
 
 - (void)mtkView:(MTKView *)view drawableSizeWillChange:(CGSize)size {
+}
+
+-(void)dealloc {
+    int bp = 0;
+    bp += 1;
 }
 
 #pragma mark -
