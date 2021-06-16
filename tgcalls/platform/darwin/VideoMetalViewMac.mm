@@ -19,10 +19,10 @@
 #import "api/video/video_sink_interface.h"
 #import "api/media_stream_interface.h"
 
-#import "RTCMTLI420Renderer.h"
+#import "TGRTCMTLI420Renderer.h"
 
 #define MTKViewClass NSClassFromString(@"MTKView")
-#define RTCMTLI420RendererClass NSClassFromString(@"RTCMTLI420Renderer")
+#define TGRTCMTLI420RendererClass NSClassFromString(@"TGRTCMTLI420Renderer")
 
 SQueue *renderQueue = [[SQueue alloc] init];
 
@@ -67,7 +67,7 @@ private:
 @interface VideoMetalView () <MTKViewDelegate> {
     SQueueLocalObject *_rendererI420;
 
-    MTKView *_metalView;
+    CAMetalLayer *_metalView;
     RTCVideoFrame *_videoFrame;
     CGSize _videoFrameSize;
     int64_t _lastFrameTimeNs;
@@ -157,19 +157,19 @@ private:
 }
 
 - (BOOL)isEnabled {
-    return !_metalView.paused;
+    return YES;
 }
 
 - (void)setEnabled:(BOOL)enabled {
-    _metalView.paused = !enabled;
+    
 }
 
 - (CALayerContentsGravity)videoContentMode {
-    return _metalView.layer.contentsGravity;
+    return _metalView.contentsGravity;
 }
 
 - (void)setVideoContentMode:(CALayerContentsGravity)mode {
-    _metalView.layer.contentsGravity = mode;
+    _metalView.contentsGravity = mode;
 }
 
 #pragma mark - Private
@@ -178,12 +178,12 @@ private:
     return CGDirectDisplayCopyCurrentMetalDevice(CGMainDisplayID()) != nil;
 }
 
-+ (MTKView *)createMetalView:(CGRect)frame {
-    return [[MTKViewClass alloc] initWithFrame:frame];
++ (CAMetalLayer *)createMetalView:(CGRect)frame {
+    return [[CAMetalLayer alloc] init];
 }
 
-+ (RTCMTLI420Renderer *)createI420Renderer {
-    return [[RTCMTLI420RendererClass alloc] init];
++ (TGRTCMTLI420Renderer *)createI420Renderer {
+    return [[TGRTCMTLI420RendererClass alloc] init];
 }
 
 
@@ -192,13 +192,14 @@ private:
     self.wantsLayer = YES;
     self.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
     _metalView = [VideoMetalView createMetalView:self.bounds];
-    _metalView.delegate = self;
-    _metalView.layer.cornerRadius = 4;
-    _metalView.layer.backgroundColor = [NSColor clearColor].CGColor;
-    _metalView.layer.contentsGravity = kCAGravityResizeAspect;//UIViewContentModeScaleAspectFill;
-    [self addSubview:_metalView];
+    self.layer = _metalView;
+    _metalView.framebufferOnly = true;
+    _metalView.opaque = false;
+
+    _metalView.cornerRadius = 4;
+    _metalView.backgroundColor = [NSColor clearColor].CGColor;
+    _metalView.contentsGravity = kCAGravityResizeAspect;//UIViewContentModeScaleAspectFill;
     _videoFrameSize = CGSizeZero;
-//    _metalView.layer.affineTransform = CGAffineTransformMakeScale(-1.0, -1.0);
 }
 
 
@@ -207,16 +208,6 @@ private:
 }
 - (void)layout {
     [super layout];
-    
-//    if (_shouldBeMirrored) {
-//        _metalView.layer.anchorPoint = NSMakePoint(1, 0);
-//        _metalView.layer.affineTransform = CGAffineTransformMakeScale(-1, 1);
-//        //  _metalView.layer.transform = CATransform3DMakeScale(-1, 1, 1);
-//    } else {
-//        _metalView.layer.anchorPoint = NSMakePoint(0, 0);
-//        _metalView.layer.affineTransform = CGAffineTransformIdentity;
-//        //_metalView.layer.transform = CATransform3DIdentity;
-//    }
     
     CGRect bounds = self.bounds;
     _metalView.frame = bounds;
@@ -227,46 +218,6 @@ private:
     }
 }
 
-#pragma mark - MTKViewDelegate methods
-
-- (void)drawInMTKView:(nonnull MTKView *)view {
-    NSAssert(view == _metalView, @"Receiving draw callbacks from foreign instance.");
-    RTCVideoFrame *videoFrame = _videoFrame;
-    // Skip rendering if we've already rendered this frame.
-    if (!videoFrame || videoFrame.timeStampNs == _lastFrameTimeNs) {
-        return;
-    }
-    
-   
-    
-    if (CGRectIsEmpty(view.bounds)) {
-        return;
-    }
-    if (CGRectIsEmpty(self.visibleRect)) {
-        return;
-    }
-        
-    if (!_rendererI420) {
-        RTCMTLI420Renderer *renderer = [VideoMetalView createI420Renderer];
-        
-        [renderer addRenderingDestination:_metalView];
-        _rendererI420 = [[SQueueLocalObject alloc] initWithQueue:renderQueue generate: ^{
-            return renderer;
-        }];
-    }
-    
-    NSValue * rotationOverride = _rotationOverride;
-    
-    [_rendererI420 with:^(RTCMTLI420Renderer * object) {
-        object.rotationOverride = rotationOverride;
-        [object drawFrame:videoFrame];
-    }];
-    
-    _lastFrameTimeNs = videoFrame.timeStampNs;
-}
-
-- (void)mtkView:(MTKView *)view drawableSizeWillChange:(CGSize)size {
-}
 
 -(void)dealloc {
     int bp = 0;
@@ -324,7 +275,6 @@ private:
    [self setNeedsLayout:YES];
     
     _internalAspect = _videoFrameSize.width / _videoFrameSize.height;
-   //[strongSelf.delegate videoView:self didChangeVideoSize:size];
 }
 
 - (void)renderFrame:(nullable RTCVideoFrame *)frame {
@@ -334,14 +284,44 @@ private:
         return;
     }
     
-    
-    
     if (frame == nil) {
         RTCLogInfo(@"Incoming frame is nil. Exiting render callback.");
         return;
     }
     _videoFrame = frame;
     
+    RTCVideoFrame *videoFrame = _videoFrame;
+    // Skip rendering if we've already rendered this frame.
+    if (!videoFrame || videoFrame.timeStampNs == _lastFrameTimeNs) {
+        return;
+    }
+        
+    if (CGRectIsEmpty(self.bounds)) {
+        return;
+    }
+    if (CGRectIsEmpty(self.visibleRect)) {
+        return;
+    }
+            
+    if (!_rendererI420) {
+        
+        CAMetalLayer *layer = _metalView;
+        
+        _rendererI420 = [[SQueueLocalObject alloc] initWithQueue:renderQueue generate: ^{
+            TGRTCMTLI420Renderer *renderer = [VideoMetalView createI420Renderer];
+            [renderer addRenderingDestination:layer];
+            return renderer;
+        }];
+    }
+    
+    NSValue * rotationOverride = _rotationOverride;
+    
+    [_rendererI420 with:^(TGRTCMTLI420Renderer * object) {
+        object.rotationOverride = rotationOverride;
+        [object drawFrame:videoFrame];
+    }];
+    
+    _lastFrameTimeNs = videoFrame.timeStampNs;
 
 }
 
