@@ -166,7 +166,9 @@ void SourceFrameCallbackImpl::OnCaptureResult(
     }
 
     const auto frameSize = frame->size();
-    DesktopSize fittedSize = { frameSize.width(), frameSize.height() };
+    DesktopSize fittedSize = AspectFitted(
+        size_,
+        { frameSize.width(), frameSize.height() });
     fittedSize.width &= ~1;
     fittedSize.height &= ~1;
 
