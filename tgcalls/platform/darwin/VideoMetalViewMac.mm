@@ -100,6 +100,8 @@ private:
         _lastFrameTimeNs = INT32_MAX;
         _currentSize = CGSizeZero;
         
+       
+        
         __weak VideoMetalView *weakSelf = self;
         _sink.reset(new VideoRendererAdapterImpl(^(CGSize size, RTCVideoFrame *videoFrame, RTCVideoRotation rotation) {
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -200,6 +202,14 @@ private:
     _metalView.backgroundColor = [NSColor clearColor].CGColor;
     _metalView.contentsGravity = kCAGravityResizeAspect;//UIViewContentModeScaleAspectFill;
     _videoFrameSize = CGSizeZero;
+    
+    CAMetalLayer *layer = _metalView;
+    
+    _rendererI420 = [[SQueueLocalObject alloc] initWithQueue:renderQueue generate: ^{
+        TGRTCMTLI420Renderer *renderer = [VideoMetalView createI420Renderer];
+        [renderer addRenderingDestination:layer];
+        return renderer;
+    }];
 }
 
 
@@ -302,17 +312,14 @@ private:
     if (CGRectIsEmpty(self.visibleRect)) {
         return;
     }
-            
-    if (!_rendererI420) {
-        
-        CAMetalLayer *layer = _metalView;
-        
-        _rendererI420 = [[SQueueLocalObject alloc] initWithQueue:renderQueue generate: ^{
-            TGRTCMTLI420Renderer *renderer = [VideoMetalView createI420Renderer];
-            [renderer addRenderingDestination:layer];
-            return renderer;
-        }];
+    if (self.window == nil || self.superview == nil) {
+        return;
     }
+    if ((self.window.occlusionState & NSWindowOcclusionStateVisible) == 0) {
+        return;
+    }
+            
+    
     
     NSValue * rotationOverride = _rotationOverride;
     
