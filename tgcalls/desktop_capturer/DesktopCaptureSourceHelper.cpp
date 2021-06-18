@@ -169,8 +169,10 @@ void SourceFrameCallbackImpl::OnCaptureResult(
     DesktopSize fittedSize = AspectFitted(
         size_,
         { frameSize.width(), frameSize.height() });
-    fittedSize.width &= ~1;
-    fittedSize.height &= ~1;
+    while ((int(fittedSize.width) / 2) % 16 != 0) {
+        fittedSize.width -= 1;
+    }
+
 
 
     const auto outputSize = webrtc::DesktopSize{

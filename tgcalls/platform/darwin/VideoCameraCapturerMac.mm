@@ -228,11 +228,13 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
 + (NSArray<AVCaptureDevice *> *)captureDevices {
     AVCaptureDevice * defaultDevice = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
     NSMutableArray<AVCaptureDevice *> * devices = [[AVCaptureDevice devicesWithMediaType:AVMediaTypeVideo] mutableCopy];
+    
+    [devices addObjectsFromArray:[AVCaptureDevice devicesWithMediaType:AVMediaTypeMuxed]];
 
     if ([devices count] > 0) {
         [devices insertObject:defaultDevice atIndex:0];
     }
-
+        
     return devices;
 }
 
@@ -337,10 +339,12 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
 //      dispatchAsyncOnType:RTCDispatcherTypeCaptureSession
 //   block:^{
       RTCLogInfo("startCaptureWithDevice %@ @ %ld fps", format, (long)fps);
+    NSError *error = nil;
 
       self->_currentDevice = device;
-      self->_currentInput = [[AVCaptureDeviceInput alloc] initWithDevice:device error:nil];
-      NSError *error = nil;
+    
+    
+      self->_currentInput = [[AVCaptureDeviceInput alloc] initWithDevice:device error:&error];
       if (![self->_currentDevice lockForConfiguration:&error]) {
           RTCLogError(@"Failed to lock device %@. Error: %@",
                       self->_currentDevice,
@@ -629,7 +633,7 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
     _preferredOutputPixelFormat = [pixelFormat unsignedIntValue];
     _outputPixelFormat = _preferredOutputPixelFormat;
     videoDataOutput.videoSettings = @{(NSString *)kCVPixelBufferPixelFormatTypeKey : pixelFormat};
-    videoDataOutput.alwaysDiscardsLateVideoFrames = NO;
+    videoDataOutput.alwaysDiscardsLateVideoFrames = YES;
     [videoDataOutput setSampleBufferDelegate:self queue:self.frameQueue];
     _videoDataOutput = videoDataOutput;
 }

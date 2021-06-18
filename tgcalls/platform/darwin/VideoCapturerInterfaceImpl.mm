@@ -109,9 +109,10 @@
         if (deviceComponents.count == 2) {
             deviceId = deviceComponents[0];
         }
+    //&& [devices[i] hasMediaType:AVMediaTypeVideo]
         NSArray<AVCaptureDevice *> *devices = [VideoCameraCapturer captureDevices];
         for (int i = 0; i < devices.count; i++) {
-            if (devices[i].isConnected && !devices[i].isSuspended) {
+            if (devices[i].isConnected && !devices[i].isSuspended ) {
                 if ([deviceId isEqualToString:@""] || [deviceId isEqualToString:devices[i].uniqueID]) {
                     selectedCamera = devices[i];
                     break;
@@ -173,18 +174,6 @@
         return nil;
     }
 
-    AVFrameRateRange *frameRateRange = [[bestFormat.videoSupportedFrameRateRanges sortedArrayUsingComparator:^NSComparisonResult(AVFrameRateRange *lhs, AVFrameRateRange *rhs) {
-        if (lhs.maxFrameRate < rhs.maxFrameRate) {
-            return NSOrderedAscending;
-        } else {
-            return NSOrderedDescending;
-        }
-    }] lastObject];
-
-    if (frameRateRange == nil) {
-        assert(false);
-        return nil;
-    }
 
     return bestFormat;
 }
