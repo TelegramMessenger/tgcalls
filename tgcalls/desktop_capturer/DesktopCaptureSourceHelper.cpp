@@ -169,9 +169,17 @@ void SourceFrameCallbackImpl::OnCaptureResult(
     DesktopSize fittedSize = AspectFitted(
         size_,
         { frameSize.width(), frameSize.height() });
-    while ((int(fittedSize.width) / 2) % 16 != 0) {
-        fittedSize.width -= 1;
+
+    int w = (int(fittedSize.width) / 2) % 16;
+    int h = (int(fittedSize.width) / 2) % 16;
+
+    if (w != 0) {
+        fittedSize.width -= (16 - w);
     }
+    if (h != 0) {
+        fittedSize.height -= (16 - h);
+    }
+
 
 
 
