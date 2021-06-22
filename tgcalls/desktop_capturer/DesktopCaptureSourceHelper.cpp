@@ -36,7 +36,7 @@ namespace {
 int GlobalCount = 0;
 
 DesktopSize AspectFitted(DesktopSize from, DesktopSize to) {
-    double scale = std::max(
+    double scale = std::min(
         from.width / std::max(1., double(to.width)),
         from.height / std::max(1., double(to.height)));
     return {
@@ -170,15 +170,16 @@ void SourceFrameCallbackImpl::OnCaptureResult(
         size_,
         { frameSize.width(), frameSize.height() });
 
-    int w = (int(fittedSize.width) / 2) % 16;
-    int h = (int(fittedSize.width) / 2) % 16;
+    int w = fittedSize.width % 4;
+    int h = fittedSize.height % 4;
 
     if (w != 0) {
-        fittedSize.width -= (16 - w);
+        fittedSize.width -= (4 - w);
     }
     if (h != 0) {
-        fittedSize.height -= (16 - h);
+        fittedSize.height -= (4 - h);
     }
+
 
 
 
