@@ -345,7 +345,9 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
     };
     UInt32 dataSize = 0;
     
-    CMIODeviceID deviceId = [[TGCMIODevice FindDeviceByUniqueId:[device uniqueID]] cmioDevice];
+    NSNumber *_connectionID = ((NSNumber *)[device valueForKey:@"_connectionID"]);
+    
+    CMIODeviceID deviceId = (CMIODeviceID)[_connectionID intValue];
     
     if (device) {
         if (CMIOObjectGetPropertyDataSize(deviceId, &latency_pa, 0, nil, &dataSize) == noErr) {
@@ -356,7 +358,6 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
     } else {
         _shouldBeMirrored = [device hasMediaType:AVMediaTypeVideo];
     }
-    
 //  [RTCDispatcher
 //      dispatchAsyncOnType:RTCDispatcherTypeCaptureSession
 //   block:^{
