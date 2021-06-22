@@ -73,6 +73,8 @@ private:
 	std::pair<int, int> _dimensions;
 	std::function<void()> _onFatalError;
 	bool _fatalError = false;
+	std::function<void(bool)> _onPause;
+	bool _paused = false;
 	float _aspectRatio = 0.;
 };
 
