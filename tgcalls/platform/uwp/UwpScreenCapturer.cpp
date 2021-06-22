@@ -132,8 +132,26 @@ void UwpScreenCapturer::OnFrameArrived(DispatcherQueueTimer const& sender, winrt
 
 	auto capture_frame = frame_pool_.TryGetNextFrame();
 	if (!capture_frame) {
+		// When resuming the capture after minimizing a window there seems to be a subsequent
+		// frame drop, as I'm lazing to deal with this from here this event is debounced in C# code.
+		if (!_paused) {
+			_paused = true;
+
+			if (_onPause){
+				_onPause(true);
+			}
+		}
+
 		//RecordGetFrameResult(GetFrameResult::kFrameDropped);
 		return /*hr*/;
+	}
+
+	if (_paused) {
+		_paused = false;
+
+		if (_onPause){
+			_onPause(false);
+		}
 	}
 
 	// We need to get this CaptureFrame as an ID3D11Texture2D so that we can get
@@ -282,7 +300,11 @@ void UwpScreenCapturer::setOnFatalError(std::function<void ()> error) {
 }
 
 void UwpScreenCapturer::setOnPause(std::function<void(bool)> pause) {
-	// TODO
+	if (_paused) {
+		pause(true);
+	}
+
+	_onPause = std::move(pause);
 }
 
 std::pair<int, int> UwpScreenCapturer::resolution() const {
