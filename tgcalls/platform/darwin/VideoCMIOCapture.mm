@@ -136,13 +136,12 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
     int height = (int)CVPixelBufferGetHeight(pixelBuffer);
 
     FrameSize fittedSize = { width, height };
-
     int w = (fittedSize.width % 16);
-    int h = (fittedSize.height * (fittedSize.width - w) / fittedSize.width);
-    h -= h % 2;
+    
+
+    int h = 0;
     
     fittedSize.width -= w;
-    fittedSize.height -= h;
 
 
     TGRTCCVPixelBuffer *rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:pixelBuffer adaptedWidth:fittedSize.width adaptedHeight:fittedSize.height cropWidth:fittedSize.width cropHeight:fittedSize.height cropX:w cropY:h];
