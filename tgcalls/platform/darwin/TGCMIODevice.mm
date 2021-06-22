@@ -9,9 +9,8 @@
 
 #import <CoreMediaIO/CMIOHardware.h>
 #import <CoreMediaIO/CMIOHardwareStream.h>
-
-
-
+#import <CoreMedia/CoreMedia.h>
+#import <AVFoundation/AVFoundation.h>
 @interface TGCMIODevice ()
 {
     CMIODeviceID _deviceId;
@@ -147,36 +146,19 @@ OSStatus GetInputStreams(CMIODeviceID devID, uint32_t&
     return  _deviceId;
 }
 
-+(TGCMIODevice *)FindDeviceByUniqueId:(NSString *)pUID {
-    OSStatus status = 0;
-    uint32_t numDev = 0;
-    if(((status = GetNumberDevices(numDev)) < 0) || (0 == numDev))
-        return nil;
-    // Allocate memory on the stack
-    CMIODeviceID* pDevs = (CMIODeviceID*)alloca(numDev * sizeof(*pDevs));
-    if((status = GetDevices(numDev, pDevs)) < 0)
-        return nil;
-    for(uint32_t i = 0; i < numDev; i++) {
-        char pUniqueID[64];
-        if((status = GetDeviceStrProp(pDevs[i], kCMIODevicePropertyDeviceUID, pUniqueID)) < 0)
-            break;
-        status = afpObjectNotFound;// Not Found…
-        if(0 != strcmp([pUID UTF8String], pUniqueID))
-            continue;
-        
-        uint32_t numStreams = GetNumberInputStreams(pDevs[i]);
-        CMIOStreamID* pStreams = (CMIOStreamID*)alloca(numStreams * sizeof(CMIOStreamID));
-        GetInputStreams(pDevs[i], numStreams, pStreams);
-        if (numStreams <= 0)
-            return nil;
-
-        
-        CMIOStreamID streamId = pStreams[0];
-//
-        return [[TGCMIODevice alloc] initWithDeviceId:pDevs[i] streamId:streamId];
-    }
++(TGCMIODevice *)FindDeviceByUniqueId:(AVCaptureDevice *)device {
+    NSNumber *_connectionID = ((NSNumber *)[device valueForKey:@"_connectionID"]);
+    CMIODeviceID deviceId = (CMIODeviceID)[_connectionID intValue];
     
-    return nil;
+    uint32_t numStreams = GetNumberInputStreams(deviceId);
+    CMIOStreamID* pStreams = (CMIOStreamID*)alloca(numStreams * sizeof(CMIOStreamID));
+    GetInputStreams(deviceId, numStreams, pStreams);
+    if (numStreams <= 0)
+        return nil;
+
+    CMIOStreamID streamId = pStreams[0];
+    return [[TGCMIODevice alloc] initWithDeviceId:deviceId streamId:streamId];
+
 }
 
 -(CMSimpleQueueRef)queue {

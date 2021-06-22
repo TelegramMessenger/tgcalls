@@ -130,36 +130,29 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
 
 -(void)applyPixelBuffer:(CVPixelBufferRef)pixelBuffer timeStampNs:(int64_t)timeStampNs {
     
-    
-    
     int width = (int)CVPixelBufferGetWidth(pixelBuffer);
     int height = (int)CVPixelBufferGetHeight(pixelBuffer);
 
-    FrameSize fittedSize = { width, height };
+    FrameSize fittedSize = AspectFitted({ 1920, 1080 }, { width, height });
     int w = (fittedSize.width % 16);
-    
-
-    int h = 0;
     
     fittedSize.width -= w;
 
-
-    TGRTCCVPixelBuffer *rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:pixelBuffer adaptedWidth:fittedSize.width adaptedHeight:fittedSize.height cropWidth:fittedSize.width cropHeight:fittedSize.height cropX:w cropY:h];
-
+    TGRTCCVPixelBuffer *rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:pixelBuffer adaptedWidth:fittedSize.width adaptedHeight:fittedSize.height cropWidth:width cropHeight:height cropX:0 cropY:0];
+    
     rtcPixelBuffer.shouldBeMirrored = _shouldBeMirrored;
     
+    RTCVideoFrame *videoFrame = [[RTCVideoFrame alloc] initWithBuffer:rtcPixelBuffer
+                                                             rotation:RTCVideoRotation_0
+                                                          timeStampNs:timeStampNs];
+    
     if (_uncroppedSink) {
-        
-        RTCVideoFrame *frame = [[RTCVideoFrame alloc] initWithBuffer:rtcPixelBuffer
-                                                            rotation:RTCVideoRotation_0
-                                                         timeStampNs:timeStampNs];
-
-        const int64_t timestamp_us = frame.timeStampNs / rtc::kNumNanosecsPerMicrosec;
+        const int64_t timestamp_us = timeStampNs / rtc::kNumNanosecsPerMicrosec;
 
         rtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer;
-        buffer = new rtc::RefCountedObject<webrtc::ObjCFrameBuffer>(frame.buffer);
+        buffer = new rtc::RefCountedObject<webrtc::ObjCFrameBuffer>(videoFrame.buffer);
 
-        webrtc::VideoRotation rotation = static_cast<webrtc::VideoRotation>(frame.rotation);
+        webrtc::VideoRotation rotation = static_cast<webrtc::VideoRotation>(videoFrame.rotation);
 
         _uncroppedSink->OnFrame(webrtc::VideoFrame::Builder()
                                 .set_video_frame_buffer(buffer)
@@ -167,11 +160,7 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
                                 .set_timestamp_us(timestamp_us)
                                 .build());
     }
-
-
-    RTCVideoFrame *videoFrame = [[RTCVideoFrame alloc] initWithBuffer:rtcPixelBuffer
-                                                             rotation:RTCVideoRotation_0
-                                                          timeStampNs:timeStampNs];
+    
     getObjCVideoSource(_source)->OnCapturedFrame(videoFrame);
 }
 
@@ -208,7 +197,7 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
 - (void)setupCaptureWithDevice:(AVCaptureDevice *)device {
     
     _shouldBeMirrored = NO;
-    _capturer = [[TGCMIOCapturer alloc] initWithDeviceId:[device uniqueID]];
+    _capturer = [[TGCMIOCapturer alloc] initWithDeviceId:device];
 }
 
 - (void) render:(CMSampleBufferRef)sampleBuffer

@@ -14,19 +14,19 @@
 
 @implementation TGCMIOCapturer
 {
-    NSString * _deviceId;
+    AVCaptureDevice * _captureDevice;
     TGCMIODevice * _device;
 }
--(id)initWithDeviceId:(NSString *)deviceId {
+-(id)initWithDeviceId:(AVCaptureDevice *)device {
     if (self = [super init]) {
-        _deviceId = deviceId;
+        _captureDevice = device;
         
     }
     return self;
 }
 
 -(void)start:(renderBlock)renderBlock {
-    _device = [TGCMIODevice FindDeviceByUniqueId:_deviceId];
+    _device = [TGCMIODevice FindDeviceByUniqueId:_captureDevice];
    
     [_device run:^(CMSampleBufferRef sampleBuffer) {
         renderBlock(sampleBuffer);
