@@ -109,6 +109,9 @@ static const NSInteger kMaxInflightBuffers = 1;
   int _oldCropX;
   int _oldCropY;
   RTCVideoRotation _oldRotation;
+    
+  dispatch_semaphore_t _inflightSemaphore;
+
 }
 
 @synthesize rotationOverride = _rotationOverride;
@@ -132,7 +135,7 @@ static const NSInteger kMaxInflightBuffers = 1;
     _view = view;
     view.device = _device;
 
-
+    _inflightSemaphore = dispatch_semaphore_create(3);
     [self loadAssets];
 
     float vertexBufferArray[16] = {0};
@@ -272,11 +275,22 @@ static const NSInteger kMaxInflightBuffers = 1;
 
 - (void)render {
 
+    dispatch_semaphore_wait(_inflightSemaphore, DISPATCH_TIME_FOREVER);
+
     id<CAMetalDrawable> drawable = _view.nextDrawable;
 
     id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
     commandBuffer.label = commandBufferLabel;
+    
 
+    __weak TGRTCMTLRenderer *weakSelf = self;
+    [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> _Nonnull) {
+        __strong TGRTCMTLRenderer *strongSelf = weakSelf;
+        if (strongSelf)
+            dispatch_semaphore_signal(strongSelf->_inflightSemaphore);
+    }];
+
+    
     
     MTLRenderPassDescriptor *renderPassDescriptor = [[MTLRenderPassDescriptor alloc] init];
     renderPassDescriptor.colorAttachments[0].texture = drawable.texture;
