@@ -50,46 +50,37 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
 - (void)dealloc {
 }
 
-+ (void)passSampleBuffer:(CMSampleBufferRef)sampleBuffer toSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source {
-    if (CMSampleBufferGetNumSamples(sampleBuffer) != 1 || !CMSampleBufferIsValid(sampleBuffer) ||
-        !CMSampleBufferDataIsReady(sampleBuffer)) {
-        return;
-    }
-
-    CVPixelBufferRef pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
-    if (pixelBuffer == nil) {
-        return;
-    }
-
-    TGRTCCVPixelBuffer *rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:pixelBuffer];
-
-    /*int width = rtcPixelBuffer.width / 4;
-    int height = rtcPixelBuffer.height / 4;
-
-    CVPixelBufferRef outputPixelBufferRef = NULL;
-    OSType pixelFormat = CVPixelBufferGetPixelFormatType(rtcPixelBuffer.pixelBuffer);
-    CVPixelBufferCreate(NULL, width, height, pixelFormat, NULL, &outputPixelBufferRef);
-    if (outputPixelBufferRef) {
-        int bufferSize = [rtcPixelBuffer bufferSizeForCroppingAndScalingToWidth:width height:height];
-        std::vector<uint8_t> croppingBuffer;
-        if (croppingBuffer.size() < bufferSize) {
-            croppingBuffer.resize(bufferSize);
-        }
-        if ([rtcPixelBuffer cropAndScaleTo:outputPixelBufferRef withTempBuffer:croppingBuffer.data()]) {
-            rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:outputPixelBufferRef];
-        }
-        CVPixelBufferRelease(outputPixelBufferRef);
-    }*/
-
-    int64_t timeStampNs = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer)) *
-    kNanosecondsPerSecond;
-    RTCVideoFrame *videoFrame = [[RTCVideoFrame alloc] initWithBuffer:rtcPixelBuffer rotation:RTCVideoRotation_0 timeStampNs:timeStampNs];
-
-    getObjCVideoSource(source)->OnCapturedFrame(videoFrame);
-}
-
 + (void)passPixelBuffer:(CVPixelBufferRef)pixelBuffer rotation:(RTCVideoRotation)rotation toSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source croppingBuffer:(std::vector<uint8_t> &)croppingBuffer {
     TGRTCCVPixelBuffer *rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:pixelBuffer];
+
+    int width = rtcPixelBuffer.width;
+    int height = rtcPixelBuffer.height;
+
+    int w = width % 4;
+    int h = height % 4;
+
+    if (w != 0) {
+        width -= (4 - w);
+    }
+    if (h != 0) {
+        height -= (4 - h);
+    }
+
+    if (width != rtcPixelBuffer.width || height != rtcPixelBuffer.height) {
+        CVPixelBufferRef outputPixelBufferRef = NULL;
+        OSType pixelFormat = CVPixelBufferGetPixelFormatType(rtcPixelBuffer.pixelBuffer);
+        CVPixelBufferCreate(NULL, width, height, pixelFormat, NULL, &outputPixelBufferRef);
+        if (outputPixelBufferRef) {
+            int bufferSize = [rtcPixelBuffer bufferSizeForCroppingAndScalingToWidth:width height:height];
+            if (croppingBuffer.size() < bufferSize) {
+                croppingBuffer.resize(bufferSize);
+            }
+            if ([rtcPixelBuffer cropAndScaleTo:outputPixelBufferRef withTempBuffer:croppingBuffer.data()]) {
+                rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:outputPixelBufferRef];
+            }
+            CVPixelBufferRelease(outputPixelBufferRef);
+        }
+    }
 
     int64_t timeStampNs = CACurrentMediaTime() * kNanosecondsPerSecond;
     RTCVideoFrame *videoFrame = [[RTCVideoFrame alloc] initWithBuffer:(id<RTCVideoFrameBuffer>)[rtcPixelBuffer toI420] rotation:rotation timeStampNs:timeStampNs];
@@ -97,9 +88,5 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
     getObjCVideoSource(source)->OnCapturedFrame(videoFrame);
 }
 
-- (void)addSampleBuffer:(CMSampleBufferRef)sampleBuffer {
-    [CustomExternalCapturer passSampleBuffer:sampleBuffer toSource:_source];
-}
-
 @end
-//
+
