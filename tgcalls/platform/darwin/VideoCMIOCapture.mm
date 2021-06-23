@@ -133,7 +133,7 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
     int width = (int)CVPixelBufferGetWidth(pixelBuffer);
     int height = (int)CVPixelBufferGetHeight(pixelBuffer);
 
-    FrameSize fittedSize = AspectFitted({ 1920, 1080 }, { width, height });
+    FrameSize fittedSize = AspectFitted({ 1280, 720 }, { width, height });
     
     fittedSize.width -= (fittedSize.width % 4);
     fittedSize.height -= (fittedSize.height % 4);
