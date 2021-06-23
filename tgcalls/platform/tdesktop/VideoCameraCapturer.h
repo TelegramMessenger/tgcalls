@@ -25,6 +25,7 @@ public:
 	void setState(VideoState state);
 	void setDeviceId(std::string deviceId);
 	void setPreferredCaptureAspectRatio(float aspectRatio);
+	void setOnFatalError(std::function<void()> error);
 
 	std::pair<int, int> resolution() const;
 
@@ -36,6 +37,7 @@ private:
 		webrtc::VideoCaptureModule::DeviceInfo *info,
 		const std::string &deviceId);
 	void destroy();
+	void failed();
 
 	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _sink;
 	rtc::scoped_refptr<webrtc::VideoCaptureModule> _module;
@@ -44,7 +46,9 @@ private:
 	VideoState _state = VideoState::Inactive;
 	std::string _requestedDeviceId;
 	std::pair<int, int> _dimensions;
+	std::function<void()> _error;
 	float _aspectRatio = 0.;
+	bool _failed = false;
 
 };
 

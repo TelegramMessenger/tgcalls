@@ -125,6 +125,9 @@ void VideoCapturerInterfaceImpl::setOnFatalError(std::function<void()> error) {
 		error();
 	}
 #endif // TGCALLS_UWP_DESKTOP_CAPTURE
+	if (_cameraCapturer) {
+		_cameraCapturer->setOnFatalError(std::move(error));
+	}
 }
 
 void VideoCapturerInterfaceImpl::setOnPause(std::function<void(bool)> pause) {

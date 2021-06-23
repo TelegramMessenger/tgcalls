@@ -14,9 +14,6 @@
 
 - (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source;
 
-- (void)addSampleBuffer:(CMSampleBufferRef)sampleBuffer;
-
-+ (void)passSampleBuffer:(CMSampleBufferRef)sampleBuffer toSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source;
 + (void)passPixelBuffer:(CVPixelBufferRef)pixelBuffer rotation:(RTCVideoRotation)rotation toSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source croppingBuffer:(std::vector<uint8_t> &)croppingBuffer;
 
 @end

@@ -30,13 +30,16 @@ VideoCameraCapturer::~VideoCameraCapturer() {
 }
 
 void VideoCameraCapturer::create() {
+	_failed = false;
 	const auto info = std::unique_ptr<webrtc::VideoCaptureModule::DeviceInfo>(
 		webrtc::VideoCaptureFactory::CreateDeviceInfo());
 	if (!info) {
+		failed();
 		return;
 	}
 	const auto count = info->NumberOfDevices();
 	if (count <= 0) {
+		failed();
 		return;
 	}
 	const auto getId = [&](int index) {
@@ -63,6 +66,14 @@ void VideoCameraCapturer::create() {
 		if (create(info.get(), getId(i))) {
 			return;
 		}
+	}
+	failed();
+}
+
+void VideoCameraCapturer::failed() {
+	_failed = true;
+	if (_error) {
+		_error();
 	}
 }
 
@@ -131,11 +142,19 @@ void VideoCameraCapturer::setPreferredCaptureAspectRatio(float aspectRatio) {
 	_aspectRatio = aspectRatio;
 }
 
+void VideoCameraCapturer::setOnFatalError(std::function<void()> error) {
+	_error = std::move(error);
+	if (_failed && _error) {
+		_error();
+	}
+}
+
 std::pair<int, int> VideoCameraCapturer::resolution() const {
 	return _dimensions;
 }
 
 void VideoCameraCapturer::destroy() {
+	_failed = false;
 	if (!_module) {
 		return;
 	}

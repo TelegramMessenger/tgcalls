@@ -170,9 +170,8 @@ void SourceFrameCallbackImpl::OnCaptureResult(
         size_,
         { frameSize.width(), frameSize.height() });
 
-    fittedSize.width -= (fittedSize.width % 16);
-    fittedSize.height = frameSize.height() * fittedSize.width / frameSize.width();
-    fittedSize.height -= (fittedSize.height % 2);
+    fittedSize.width -= (fittedSize.width % 4);
+    fittedSize.height -= (fittedSize.height % 4);
 
     const auto outputSize = webrtc::DesktopSize{
         fittedSize.width,
