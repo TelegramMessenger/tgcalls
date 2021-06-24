@@ -109,6 +109,10 @@ static NSString *const shaderSource = MTL_STRINGIFY(
   *cropY = 0;
 }
 
+-(NSArray<id<MTLTexture>> *)textures {
+    return @[_yTexture, _uTexture, _vTexture];
+}
+
 - (BOOL)setupTexturesForFrame:(nonnull RTC_OBJC_TYPE(RTCVideoFrame) *)frame {
   if (![super setupTexturesForFrame:frame]) {
     return NO;

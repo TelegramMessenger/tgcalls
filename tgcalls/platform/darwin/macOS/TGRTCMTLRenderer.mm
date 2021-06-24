@@ -12,7 +12,7 @@
 
 #import <Metal/Metal.h>
 #import <MetalKit/MetalKit.h>
-
+#import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 #import "base/RTCLogging.h"
 #import "base/RTCVideoFrame.h"
 #import "base/RTCVideoFrameBuffer.h"
@@ -28,6 +28,9 @@ static NSString *const pipelineDescriptorLabel = @"RTCPipeline";
 static NSString *const commandBufferLabel = @"RTCCommandBuffer";
 static NSString *const renderEncoderLabel = @"RTCEncoder";
 static NSString *const renderEncoderDebugGroup = @"RTCDrawFrame";
+
+static dispatch_semaphore_t semaphore = dispatch_semaphore_create(1);
+
 
 // Computes the texture coordinates given rotation and cropping.
 static inline void getCubeVertexData(int cropX,
@@ -110,7 +113,6 @@ static const NSInteger kMaxInflightBuffers = 1;
   int _oldCropY;
   RTCVideoRotation _oldRotation;
     
-  dispatch_semaphore_t _inflightSemaphore;
 
 }
 
@@ -135,7 +137,6 @@ static const NSInteger kMaxInflightBuffers = 1;
     _view = view;
     view.device = _device;
 
-    _inflightSemaphore = dispatch_semaphore_create(3);
     [self loadAssets];
 
     float vertexBufferArray[16] = {0};
@@ -159,6 +160,9 @@ static const NSInteger kMaxInflightBuffers = 1;
 
 - (void)uploadTexturesToRenderEncoder:(id<MTLRenderCommandEncoder>)renderEncoder {
   RTC_NOTREACHED() << "Virtual method not implemented in subclass.";
+}
+-(NSArray<id<MTLTexture>> *)textures {
+    RTC_NOTREACHED() << "Virtual method not implemented in subclass.";
 }
 
 - (void)getWidth:(int *)width
@@ -275,20 +279,13 @@ static const NSInteger kMaxInflightBuffers = 1;
 
 - (void)render {
 
-    dispatch_semaphore_wait(_inflightSemaphore, DISPATCH_TIME_FOREVER);
 
     id<CAMetalDrawable> drawable = _view.nextDrawable;
 
     id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
     commandBuffer.label = commandBufferLabel;
     
-
-    __weak TGRTCMTLRenderer *weakSelf = self;
-    [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> _Nonnull) {
-        __strong TGRTCMTLRenderer *strongSelf = weakSelf;
-        if (strongSelf)
-            dispatch_semaphore_signal(strongSelf->_inflightSemaphore);
-    }];
+    
 
     
     
@@ -314,12 +311,21 @@ static const NSInteger kMaxInflightBuffers = 1;
                     instanceCount:1];
     [renderEncoder popDebugGroup];
     [renderEncoder endEncoding];
+      
 
     [commandBuffer presentDrawable:drawable];
+      
   }
 
   // CPU work is completed, GPU work can be started.
   [commandBuffer commit];
+    
+  [commandBuffer waitUntilCompleted];
+
+}
+
+-(void)dealloc {
+    
 }
 
 #pragma mark - RTCMTLRenderer
