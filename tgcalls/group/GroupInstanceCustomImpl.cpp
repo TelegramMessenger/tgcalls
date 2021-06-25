@@ -216,6 +216,11 @@ struct VideoSsrcs {
     }
 };
 
+struct InternalGroupLevelValue {
+    GroupLevelValue value;
+    int64_t timestamp = 0;
+};
+
 struct ChannelId {
   uint32_t networkSsrc = 0;
   uint32_t actualSsrc = 0;
@@ -722,9 +727,10 @@ public:
             outgoingAudioDescription.reset();
             incomingAudioDescription.reset();
 
-            std::unique_ptr<AudioSinkImpl> audioLevelSink(new AudioSinkImpl(std::move(onAudioLevelUpdated), _ssrc, std::move(onAudioFrame)));
-
-            _audioChannel->media_channel()->SetRawAudioSink(ssrc.networkSsrc, std::move(audioLevelSink));
+            if (_ssrc.actualSsrc != 1) {
+                std::unique_ptr<AudioSinkImpl> audioLevelSink(new AudioSinkImpl(std::move(onAudioLevelUpdated), _ssrc, std::move(onAudioFrame)));
+                _audioChannel->media_channel()->SetRawAudioSink(ssrc.networkSsrc, std::move(audioLevelSink));
+            }
         });
 
         //_audioChannel->SignalSentPacket().connect(this, &IncomingAudioChannel::OnSentPacket_w);
@@ -1023,6 +1029,9 @@ public:
         _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this] {
             _workerThreadSafery = webrtc::PendingTaskSafetyFlag::Create();
         });
+        _threads->getNetworkThread()->Invoke<void>(RTC_FROM_HERE, [this] {
+            _networkThreadSafery = webrtc::PendingTaskSafetyFlag::Create();
+        });
 
         if (_videoCapture) {
           assert(!_getVideoSource);
@@ -1101,6 +1110,13 @@ public:
                     threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, message]() {
                         if (const auto strong = weak.lock()) {
                             strong->receiveDataChannelMessage(message);
+                        }
+                    });
+                },
+                [=](uint32_t ssrc, uint8_t audioLevel, bool isSpeech) {
+                    threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, ssrc, audioLevel, isSpeech]() {
+                        if (const auto strong = weak.lock()) {
+                            strong->updateSsrcAudioLevel(ssrc, audioLevel, isSpeech);
                         }
                     });
                 }, threads);
@@ -1468,6 +1484,31 @@ public:
     void stop() {
     }
 
+    void updateSsrcAudioLevel(uint32_t ssrc, uint8_t audioLevel, bool isSpeech) {
+        float mappedLevel = ((float)audioLevel) / (float)(0x7f);
+        mappedLevel = (fabs(1.0f - mappedLevel)) * 1.0f;
+
+        auto it = _audioLevels.find(ChannelId(ssrc));
+        if (it != _audioLevels.end()) {
+            it->second.value.level = fmax(it->second.value.level, mappedLevel);
+            if (isSpeech) {
+                it->second.value.voice = true;
+            }
+            it->second.timestamp = rtc::TimeMillis();
+        } else {
+            InternalGroupLevelValue updated;
+            updated.value.level = mappedLevel;
+            updated.value.voice = isSpeech;
+            updated.timestamp = rtc::TimeMillis();
+            _audioLevels.insert(std::make_pair(ChannelId(ssrc), std::move(updated)));
+        }
+
+        auto audioChannel = _incomingAudioChannels.find(ChannelId(ssrc));
+        if (audioChannel != _incomingAudioChannels.end()) {
+            audioChannel->second->updateActivity();
+        }
+    }
+
     void beginLevelsTimer(int timeoutMs) {
         const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
         _threads->getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
@@ -1476,10 +1517,13 @@ public:
                 return;
             }
 
+            int64_t timestamp = rtc::TimeMillis();
+            int64_t maxSampleTimeout = 400;
+
             GroupLevelsUpdate levelsUpdate;
             levelsUpdate.updates.reserve(strong->_audioLevels.size() + 1);
             for (auto &it : strong->_audioLevels) {
-                if (it.second.level > 0.001f) {
+                if (it.second.value.level > 0.001f && it.second.timestamp > timestamp - maxSampleTimeout) {
                     uint32_t effectiveSsrc = it.first.actualSsrc;
                     if (std::find_if(levelsUpdate.updates.begin(), levelsUpdate.updates.end(), [&](GroupLevelUpdate const &item) {
                         return item.ssrc == effectiveSsrc;
@@ -1488,24 +1532,32 @@ public:
                     }
                     levelsUpdate.updates.push_back(GroupLevelUpdate{
                         effectiveSsrc,
-                        it.second,
+                        it.second.value,
                         });
-                    if (it.second.level > 0.001f) {
+                    if (it.second.value.level > 0.001f) {
                         auto audioChannel = strong->_incomingAudioChannels.find(it.first);
                         if (audioChannel != strong->_incomingAudioChannels.end()) {
                             audioChannel->second->updateActivity();
                         }
                     }
+
+                    it.second.value.level *= 0.5f;
+                    it.second.value.voice = false;
                 }
             }
+
             auto myAudioLevel = strong->_myAudioLevel;
             myAudioLevel.isMuted = strong->_isMuted;
             levelsUpdate.updates.push_back(GroupLevelUpdate{ 0, myAudioLevel });
 
-            strong->_audioLevels.clear();
             if (strong->_audioLevelsUpdated) {
                 strong->_audioLevelsUpdated(levelsUpdate);
             }
+
+            bool isSpeech = myAudioLevel.voice && !myAudioLevel.isMuted;
+            strong->_networkManager->perform(RTC_FROM_HERE, [isSpeech = isSpeech](GroupNetworkManager *networkManager) {
+                networkManager->setOutgoingVoiceActivity(isSpeech);
+            });
 
             strong->beginLevelsTimer(100);
         }, timeoutMs);
@@ -2645,7 +2697,7 @@ public:
         const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
 
         std::function<void(AudioSinkImpl::Update)> onAudioSinkUpdate;
-        if (_audioLevelsUpdated) {
+        /*if (_audioLevelsUpdated) {
           onAudioSinkUpdate = [weak, ssrc = ssrc, threads = _threads](AudioSinkImpl::Update update) {
             threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, ssrc, update]() {
               auto strong = weak.lock();
@@ -2658,7 +2710,7 @@ public:
               strong->_audioLevels[ssrc] = mappedUpdate;
             });
           };
-        }
+        }*/
 
         std::unique_ptr<IncomingAudioChannel> channel(new IncomingAudioChannel(
           _channelManager.get(),
@@ -2933,7 +2985,7 @@ private:
     int _pendingOutgoingVideoConstraint = -1;
     int _pendingOutgoingVideoConstraintRequestId = 0;
 
-    std::map<ChannelId, GroupLevelValue> _audioLevels;
+    std::map<ChannelId, InternalGroupLevelValue> _audioLevels;
     GroupLevelValue _myAudioLevel;
 
     bool _isMuted = true;
@@ -2967,6 +3019,7 @@ private:
     GroupNetworkState _effectiveNetworkState;
 
     rtc::scoped_refptr<webrtc::PendingTaskSafetyFlag> _workerThreadSafery;
+    rtc::scoped_refptr<webrtc::PendingTaskSafetyFlag> _networkThreadSafery;
 };
 
 GroupInstanceCustomImpl::GroupInstanceCustomImpl(GroupInstanceDescriptor &&descriptor) {
