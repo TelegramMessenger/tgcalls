@@ -250,7 +250,7 @@ static void updateHeaderWithVoiceActivity(rtc::CopyOnWriteBuffer *packet, const 
     }
 }
 
-static void readHeaderVoiceActivity(const uint8_t* ptrRTPDataExtensionEnd, const uint8_t* ptr, uint8_t &audioLevel, bool &voiceActivity) {
+static void readHeaderVoiceActivity(const uint8_t* ptrRTPDataExtensionEnd, const uint8_t* ptr, bool &didRead, uint8_t &audioLevel, bool &voiceActivity) {
     while (ptrRTPDataExtensionEnd - ptr > 0) {
         //  0
         //  0 1 2 3 4 5 6 7
@@ -283,6 +283,7 @@ static void readHeaderVoiceActivity(const uint8_t* ptrRTPDataExtensionEnd, const
         }
 
         if (id == 1) { // kAudioLevelUri
+            didRead = true;
             audioLevel = ptr[0] & 0x7f;
             voiceActivity = (ptr[0] & 0x80) != 0;
 
@@ -369,7 +370,7 @@ static void maybeUpdateRtpVoiceActivity(rtc::CopyOnWriteBuffer *packet, bool voi
     }
 }
 
-static void maybeReadRtpVoiceActivity(rtc::CopyOnWriteBuffer *packet, uint32_t &ssrc, uint8_t &audioLevel, bool &voiceActivity) {
+static void maybeReadRtpVoiceActivity(rtc::CopyOnWriteBuffer *packet, bool &didRead, uint32_t &ssrc, uint8_t &audioLevel, bool &voiceActivity) {
     const uint8_t *_ptrRTPDataBegin = packet->data();
     const uint8_t *_ptrRTPDataEnd = packet->data() + packet->size();
 
@@ -440,7 +441,7 @@ static void maybeReadRtpVoiceActivity(rtc::CopyOnWriteBuffer *packet, uint32_t &
       static constexpr uint16_t kRtpOneByteHeaderExtensionId = 0xBEDE;
       if (definedByProfile == kRtpOneByteHeaderExtensionId) {
           const uint8_t* ptrRTPDataExtensionEnd = ptr + XLen;
-          readHeaderVoiceActivity(ptrRTPDataExtensionEnd, ptr, audioLevel, voiceActivity);
+          readHeaderVoiceActivity(ptrRTPDataExtensionEnd, ptr, didRead, audioLevel, voiceActivity);
       }
     }
 }
@@ -729,11 +730,12 @@ void GroupNetworkManager::transportPacketReceived(rtc::PacketTransportInternal *
 }
 
 void GroupNetworkManager::RtpPacketReceived_n(rtc::CopyOnWriteBuffer *packet, int64_t packet_time_us, bool isUnresolved) {
+    bool didRead = false;
     uint32_t ssrc = 0;
     uint8_t audioLevel = 0;
     bool isSpeech = false;
-    maybeReadRtpVoiceActivity(packet, ssrc, audioLevel, isSpeech);
-    if (ssrc != 0) {
+    maybeReadRtpVoiceActivity(packet, didRead, ssrc, audioLevel, isSpeech);
+    if (didRead && ssrc != 0) {
         if (_audioActivityUpdated) {
             _audioActivityUpdated(ssrc, audioLevel, isSpeech);
         }
