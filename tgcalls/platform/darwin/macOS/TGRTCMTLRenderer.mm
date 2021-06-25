@@ -12,7 +12,6 @@
 
 #import <Metal/Metal.h>
 #import <MetalKit/MetalKit.h>
-#import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 #import "base/RTCLogging.h"
 #import "base/RTCVideoFrame.h"
 #import "base/RTCVideoFrameBuffer.h"
