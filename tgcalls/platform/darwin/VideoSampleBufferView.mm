@@ -432,6 +432,20 @@ static bool CopyNV12VideoFrameToNV12PixelBuffer(const webrtc::NV12BufferInterfac
                 }
                 break;
             }
+            case webrtc::VideoFrameBuffer::Type::kNative: {
+                id<RTC_OBJC_TYPE(RTCVideoFrameBuffer)> nativeBuffer = static_cast<webrtc::ObjCFrameBuffer *>(frame->video_frame_buffer().get())->wrapped_frame_buffer();
+                if ([nativeBuffer isKindOfClass:[RTC_OBJC_TYPE(RTCCVPixelBuffer) class]]) {
+                    RTCCVPixelBuffer *pixelBuffer = (RTCCVPixelBuffer *)nativeBuffer;
+                    CMSampleBufferRef sampleBuffer = [self createSampleBufferFromPixelBuffer:pixelBuffer.pixelBuffer];
+                    if (sampleBuffer) {
+                        [layer enqueueSampleBuffer:sampleBuffer];
+                        [cloneLayer enqueueSampleBuffer:sampleBuffer];
+
+                        CFRelease(sampleBuffer);
+                    }
+                }
+                break;
+            }
             default: {
                 break;
             }

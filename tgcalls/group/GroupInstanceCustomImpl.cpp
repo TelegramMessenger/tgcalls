@@ -148,7 +148,8 @@ static std::vector<OutgoingVideoFormat> assignPayloadTypes(std::vector<webrtc::S
 
     std::vector<std::string> filterCodecNames = {
         cricket::kVp8CodecName,
-        cricket::kVp9CodecName
+        cricket::kVp9CodecName,
+        cricket::kH264CodecName,
     };
 
     for (const auto &codecName : filterCodecNames) {
@@ -1926,6 +1927,10 @@ public:
                 codecName = cricket::kVp9CodecName;
                 break;
             }
+            case VideoCodecName::H264: {
+                codecName = cricket::kH264CodecName;
+                break;
+            }
             default: {
                 break;
             }
@@ -1935,6 +1940,7 @@ public:
             }
         }
         std::vector<std::string> defaultCodecPriorities = {
+            cricket::kH264CodecName,
             cricket::kVp8CodecName,
             cricket::kVp9CodecName
         };
