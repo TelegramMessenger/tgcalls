@@ -1288,9 +1288,6 @@ public:
 
         _videoBitrateAllocatorFactory = webrtc::CreateBuiltinVideoBitrateAllocatorFactory();
 
-        configureVideoParams();
-        createOutgoingVideoChannel();
-
         if (_audioLevelsUpdated) {
             beginLevelsTimer(100);
         }
@@ -1351,7 +1348,6 @@ public:
             return;
         }
 
-        _videoSourceGroups.clear();
         cricket::StreamParams videoSendStreamParams;
 
         std::vector<uint32_t> simulcastGroupSsrcs;
@@ -1372,7 +1368,6 @@ public:
             GroupJoinPayloadVideoSourceGroup payloadSimulcastGroup;
             payloadSimulcastGroup.semantics = "SIM";
             payloadSimulcastGroup.ssrcs = simulcastGroupSsrcs;
-            _videoSourceGroups.push_back(payloadSimulcastGroup);
         }
 
         for (auto fidGroup : fidGroups) {
@@ -1381,7 +1376,6 @@ public:
             GroupJoinPayloadVideoSourceGroup payloadFidGroup;
             payloadFidGroup.semantics = "FID";
             payloadFidGroup.ssrcs = fidGroup.ssrcs;
-            _videoSourceGroups.push_back(payloadFidGroup);
         }
 
         videoSendStreamParams.cname = "cname";
@@ -1912,6 +1906,9 @@ public:
     }
 
     void configureVideoParams() {
+        if (!_sharedVideoInformation) {
+            return;
+        }
         if (_selectedPayloadType) {
             // Already configured.
             return;
@@ -1991,10 +1988,21 @@ public:
             }
         }
         std::vector<std::string> defaultCodecPriorities = {
-            cricket::kH264CodecName,
             cricket::kVp8CodecName,
             cricket::kVp9CodecName
         };
+
+        bool enableH264 = false;
+        for (const auto &payloadType : _sharedVideoInformation->payloadTypes) {
+            if (payloadType.name == cricket::kH264CodecName) {
+                enableH264 = true;
+                break;
+            }
+        }
+        if (enableH264) {
+            defaultCodecPriorities.insert(defaultCodecPriorities.begin(), cricket::kH264CodecName);
+        }
+
         for (const auto &name : defaultCodecPriorities) {
             if (std::find(codecPriorities.begin(), codecPriorities.end(), name) == codecPriorities.end()) {
                 codecPriorities.push_back(name);
@@ -2480,6 +2488,32 @@ public:
         for (int layerIndex = 0; layerIndex < numVideoSimulcastLayers; layerIndex++) {
             _outgoingVideoSsrcs.simulcastLayers.push_back(VideoSsrcs::SimulcastLayer(outgoingVideoSsrcBase + layerIndex * 2 + 0, outgoingVideoSsrcBase + layerIndex * 2 + 1));
         }
+
+        _videoSourceGroups.clear();
+
+        std::vector<uint32_t> simulcastGroupSsrcs;
+        std::vector<cricket::SsrcGroup> fidGroups;
+        for (const auto &layer : _outgoingVideoSsrcs.simulcastLayers) {
+            simulcastGroupSsrcs.push_back(layer.ssrc);
+
+            cricket::SsrcGroup fidGroup(cricket::kFidSsrcGroupSemantics, { layer.ssrc, layer.fidSsrc });
+            fidGroups.push_back(fidGroup);
+        }
+        if (simulcastGroupSsrcs.size() > 1) {
+            cricket::SsrcGroup simulcastGroup(cricket::kSimSsrcGroupSemantics, simulcastGroupSsrcs);
+
+            GroupJoinPayloadVideoSourceGroup payloadSimulcastGroup;
+            payloadSimulcastGroup.semantics = "SIM";
+            payloadSimulcastGroup.ssrcs = simulcastGroupSsrcs;
+            _videoSourceGroups.push_back(payloadSimulcastGroup);
+        }
+
+        for (auto fidGroup : fidGroups) {
+            GroupJoinPayloadVideoSourceGroup payloadFidGroup;
+            payloadFidGroup.semantics = "FID";
+            payloadFidGroup.ssrcs = fidGroup.ssrcs;
+            _videoSourceGroups.push_back(payloadFidGroup);
+        }
     }
 
     void emitJoinPayload(std::function<void(GroupJoinPayload const &)> completion) {
@@ -2601,6 +2635,9 @@ public:
 
             networkManager->setRemoteParams(remoteIceParameters, iceCandidates, fingerprint.get());
         });
+
+        configureVideoParams();
+        createOutgoingVideoChannel();
 
         adjustBitratePreferences(true);
 
