@@ -191,6 +191,7 @@ static std::vector<webrtc::SdpVideoFormat> filterSupportedVideoFormats(std::vect
         cricket::kH264CodecName
     };
 
+    std::vector<webrtc::SdpVideoFormat> vp9Formats;
     std::vector<webrtc::SdpVideoFormat> h264Formats;
 
     for (const auto &format : formats) {
@@ -198,10 +199,34 @@ static std::vector<webrtc::SdpVideoFormat> filterSupportedVideoFormats(std::vect
             continue;
         }
 
-        if (format.name == cricket::kH264CodecName) {
+        if (format.name == cricket::kVp9CodecName) {
+            vp9Formats.push_back(format);
+        } else if (format.name == cricket::kH264CodecName) {
             h264Formats.push_back(format);
         } else {
             filteredFormats.push_back(format);
+        }
+    }
+
+    if (!vp9Formats.empty()) {
+        bool added = false;
+        for (const auto &format : vp9Formats) {
+            if (added) {
+                break;
+            }
+            for (const auto &parameter : format.parameters) {
+                if (parameter.first == "profile-id") {
+                    if (parameter.second == "0") {
+                        filteredFormats.push_back(format);
+                        added = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!added) {
+            filteredFormats.push_back(vp9Formats[0]);
         }
     }
 
