@@ -134,6 +134,109 @@ static void addDefaultFeedbackParams(cricket::VideoCodec *codec) {
     codec->AddFeedbackParam(cricket::FeedbackParam(cricket::kRtcpFbParamNack, cricket::kRtcpFbNackParamPli));
 }
 
+struct H264FormatParameters {
+    std::string profileLevelId;
+    std::string packetizationMode;
+    std::string levelAssymetryAllowed;
+};
+
+H264FormatParameters parseH264FormatParameters(webrtc::SdpVideoFormat const &format) {
+    H264FormatParameters result;
+
+    for (const auto &parameter : format.parameters) {
+        if (parameter.first == "profile-level-id") {
+            result.profileLevelId = parameter.second;
+        } else if (parameter.first == "packetization-mode") {
+            result.packetizationMode = parameter.second;
+        } else if (parameter.first == "level-asymmetry-allowed") {
+            result.levelAssymetryAllowed = parameter.second;
+        }
+    }
+
+    return result;
+}
+
+static int getH264ProfileLevelIdPriority(std::string const &profileLevelId) {
+    if (profileLevelId == cricket::kH264ProfileLevelConstrainedHigh) {
+        return 0;
+    } else if (profileLevelId == cricket::kH264ProfileLevelConstrainedBaseline) {
+        return 1;
+    } else {
+        return 2;
+    }
+}
+
+static int getH264PacketizationModePriority(std::string const &packetizationMode) {
+    if (packetizationMode == "1") {
+        return 0;
+    } else {
+        return 1;
+    }
+}
+
+static int getH264LevelAssymetryAllowedPriority(std::string const &levelAssymetryAllowed) {
+    if (levelAssymetryAllowed == "1") {
+        return 0;
+    } else {
+        return 1;
+    }
+}
+
+static std::vector<webrtc::SdpVideoFormat> filterSupportedVideoFormats(std::vector<webrtc::SdpVideoFormat> const &formats) {
+    std::vector<webrtc::SdpVideoFormat> filteredFormats;
+
+    std::vector<std::string> filterCodecNames = {
+        cricket::kVp8CodecName,
+        cricket::kVp9CodecName,
+        cricket::kH264CodecName
+    };
+
+    std::vector<webrtc::SdpVideoFormat> h264Formats;
+
+    for (const auto &format : formats) {
+        if (std::find(filterCodecNames.begin(), filterCodecNames.end(), format.name) == filterCodecNames.end()) {
+            continue;
+        }
+
+        if (format.name == cricket::kH264CodecName) {
+            h264Formats.push_back(format);
+        } else {
+            filteredFormats.push_back(format);
+        }
+    }
+
+    if (!h264Formats.empty()) {
+        std::sort(h264Formats.begin(), h264Formats.end(), [](const webrtc::SdpVideoFormat &lhs, const webrtc::SdpVideoFormat &rhs) {
+            auto lhsParameters = parseH264FormatParameters(lhs);
+            auto rhsParameters = parseH264FormatParameters(rhs);
+
+            int lhsLevelIdPriority = getH264ProfileLevelIdPriority(lhsParameters.profileLevelId);
+            int lhsPacketizationModePriority = getH264PacketizationModePriority(lhsParameters.packetizationMode);
+            int lhsLevelAssymetryAllowedPriority = getH264LevelAssymetryAllowedPriority(lhsParameters.levelAssymetryAllowed);
+
+            int rhsLevelIdPriority = getH264ProfileLevelIdPriority(rhsParameters.profileLevelId);
+            int rhsPacketizationModePriority = getH264PacketizationModePriority(rhsParameters.packetizationMode);
+            int rhsLevelAssymetryAllowedPriority = getH264LevelAssymetryAllowedPriority(rhsParameters.levelAssymetryAllowed);
+
+            if (lhsLevelIdPriority != rhsLevelIdPriority) {
+                return lhsLevelIdPriority < rhsLevelIdPriority;
+            }
+            if (lhsPacketizationModePriority != rhsPacketizationModePriority) {
+                return lhsPacketizationModePriority < rhsPacketizationModePriority;
+            }
+            if (lhsLevelAssymetryAllowedPriority != rhsLevelAssymetryAllowedPriority) {
+                return lhsLevelAssymetryAllowedPriority < rhsLevelAssymetryAllowedPriority;
+            }
+
+            return true;
+        });
+
+        filteredFormats.push_back(h264Formats[0]);
+    }
+
+    return filteredFormats;
+}
+
 static std::vector<OutgoingVideoFormat> assignPayloadTypes(std::vector<webrtc::SdpVideoFormat> const &formats) {
     if (formats.empty()) {
         return {};
@@ -1151,7 +1254,7 @@ public:
             }
             mediaDeps.adm = _audioDeviceModule;
 
-            _availableVideoFormats = mediaDeps.video_encoder_factory->GetSupportedFormats();
+            _availableVideoFormats = filterSupportedVideoFormats(mediaDeps.video_encoder_factory->GetSupportedFormats());
 
             std::unique_ptr<cricket::MediaEngineInterface> mediaEngine = cricket::CreateMediaEngine(std::move(mediaDeps));
 
