@@ -222,6 +222,36 @@ static inline void getCubeVertexData(size_t frameWidth,
     return rgbTexture;
 }
 
+- (id<MTLTexture>)scaleAndBlur:(id<MTLTexture>)inputTexture scale:(simd_float2)scale {
+    id<MTLTexture> rgbTexture = _rgbTexture;
+
+    id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
+    
+    id<MTLRenderCommandEncoder> renderEncoder = [self createRenderEncoderForTarget: _rgbScaledAndBlurredTexture with: commandBuffer];
+    [renderEncoder pushDebugGroup:renderEncoderDebugGroup];
+    [renderEncoder setRenderPipelineState:_context.pipelineScaleAndBlur];
+
+    [renderEncoder setFragmentTexture:inputTexture atIndex:0];
+    
+    [renderEncoder setVertexBuffer:_vertexBuffer offset:0 atIndex:0];
+
+    [renderEncoder setFragmentBytes:&scale length:sizeof(scale) atIndex:0];
+    [renderEncoder setFragmentSamplerState:_context.sampler atIndex:0];
+
+    
+    [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
+                    vertexStart:0
+                    vertexCount:4
+                    instanceCount:1];
+    [renderEncoder popDebugGroup];
+    [renderEncoder endEncoding];
+
+    [commandBuffer commit];
+    [commandBuffer waitUntilCompleted];
+    
+    return _rgbScaledAndBlurredTexture;
+}
+
 - (void)mergeYUVTexturesInTarget:(id<MTLTexture>)targetTexture foregroundTexture: (id<MTLTexture>)foregroundTexture backgroundTexture:(id<MTLTexture>)backgroundTexture scale1:(simd_float2)scale1 scale2:(simd_float2)scale2 {
     id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
 
@@ -282,10 +312,11 @@ static inline void getCubeVertexData(size_t frameWidth,
     
     _rgbTexture = [self convertYUVtoRGV];
 
+    _rgbScaledAndBlurredTexture = [self scaleAndBlur:_rgbTexture scale:simd_make_float2(MIN(1.0, widthAspectScale), MIN(1.0, heightAspectScale))];
     
     [self mergeYUVTexturesInTarget: targetTexture
                     foregroundTexture: _rgbTexture
-                    backgroundTexture: _rgbTexture
+                    backgroundTexture: _rgbScaledAndBlurredTexture
                     scale1:simd_make_float2(MAX(1.0, widthAspectScale), MAX(1.0, heightAspectScale))
                     scale2:simd_make_float2(MIN(1.0, widthAspectScale), MIN(1.0, heightAspectScale))];
     
