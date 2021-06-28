@@ -177,7 +177,7 @@ private:
 #pragma mark - Private
 
 + (BOOL)isMetalAvailable {
-    return CGDirectDisplayCopyCurrentMetalDevice(CGMainDisplayID()) != nil;
+    return initMetal();
 }
 
 + (CAMetalLayer *)createMetalView:(CGRect)frame {

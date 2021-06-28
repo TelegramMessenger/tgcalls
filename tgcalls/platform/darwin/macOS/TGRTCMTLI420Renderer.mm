@@ -45,9 +45,6 @@
   *height = frame.height;
 }
 
--(NSArray<id<MTLTexture>> *)textures {
-    return @[_yTexture, _uTexture, _vTexture];
-}
 
 - (BOOL)setupTexturesForFrame:(nonnull RTC_OBJC_TYPE(RTCVideoFrame) *)frame {
   if (![super setupTexturesForFrame:frame]) {
@@ -112,22 +109,3 @@
 
 @end
 
-
-/*
- 
- -(id<MTLTexture>)gaussBlurWithTexture:(id<MTLTexture>)input commandBuffer:(id<MTLCommandBuffer>) commandBuffer scale:(float)scale
- {
-     MTLTextureDescriptor *textureDescriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:input.pixelFormat width:input.width height:input.height mipmapped:NO];
-     
-     id<MTLDevice> device = [self currentMetalDevice];
-
-     
-     id<MTLTexture> output = [device newTextureWithDescriptor:textureDescriptor];
-     MPSImageGaussianBlur* blur = [[MPSImageGaussianBlur alloc] initWithDevice:device sigma:scale];
-     
-     [blur encodeToCommandBuffer:commandBuffer sourceTexture:input destinationTexture:output];
-         
-     
-     return output;
- }
- */
