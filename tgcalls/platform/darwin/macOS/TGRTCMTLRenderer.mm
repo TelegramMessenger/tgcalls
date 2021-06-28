@@ -12,6 +12,7 @@
 
 #import <Metal/Metal.h>
 #import <MetalKit/MetalKit.h>
+#import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 #import "base/RTCLogging.h"
 #import "base/RTCVideoFrame.h"
 #import "base/RTCVideoFrameBuffer.h"
@@ -19,24 +20,23 @@
 #include "api/video/video_rotation.h"
 #include "rtc_base/checks.h"
 
-// As defined in shaderSource.
 static NSString *const vertexFunctionName = @"vertexPassthrough";
 static NSString *const fragmentFunctionName = @"fragmentColorConversion";
+static NSString *const fragmentDoTransformFilter = @"doTransformFilter";
+static NSString *const twoInputVertexName = @"twoInputVertex";
+static NSString *const normalBlendFragmentName = @"normalBlendFragment";
+static NSString *const gaussianBlurFragmentName = @"gaussianBlurFragment";
+
 
 static NSString *const pipelineDescriptorLabel = @"RTCPipeline";
 static NSString *const commandBufferLabel = @"RTCCommandBuffer";
 static NSString *const renderEncoderLabel = @"RTCEncoder";
 static NSString *const renderEncoderDebugGroup = @"RTCDrawFrame";
 
-static dispatch_semaphore_t semaphore = dispatch_semaphore_create(1);
+static CGFloat const kBlurTextureSizeFactor = 4.;
 
 
-// Computes the texture coordinates given rotation and cropping.
-static inline void getCubeVertexData(int cropX,
-                                     int cropY,
-                                     int cropWidth,
-                                     int cropHeight,
-                                     size_t frameWidth,
+static inline void getCubeVertexData(size_t frameWidth,
                                      size_t frameHeight,
                                      RTCVideoRotation rotation,
                                      float *buffer) {
@@ -45,43 +45,16 @@ static inline void getCubeVertexData(int cropX,
   // left/top edge.
   // For the right and bottom, 1.0 means no cropping and e.g. 0.8 means we're skipping 20% of the
   // right/bottom edge (i.e. render up to 80% of the width/height).
-  float cropLeft = cropX / (float)frameWidth;
-  float cropRight = (cropX + cropWidth) / (float)frameWidth;
-  float cropTop = cropY / (float)frameHeight;
-  float cropBottom = (cropY + cropHeight) / (float)frameHeight;
+  float cropLeft = 0;
+  float cropRight = 1;
+  float cropTop = 0;
+  float cropBottom = 1;
 
-  // These arrays map the view coordinates to texture coordinates, taking cropping and rotation
-  // into account. The first two columns are view coordinates, the last two are texture coordinates.
-  switch (rotation) {
-    case RTCVideoRotation_0: {
-      float values[16] = {-1.0, -1.0, cropLeft, cropBottom,
-                           1.0, -1.0, cropRight, cropBottom,
-                          -1.0,  1.0, cropLeft, cropTop,
-                           1.0,  1.0, cropRight, cropTop};
-      memcpy(buffer, &values, sizeof(values));
-    } break;
-    case RTCVideoRotation_90: {
-      float values[16] = {-1.0, -1.0, cropRight, cropBottom,
-                           1.0, -1.0, cropRight, cropTop,
-                          -1.0,  1.0, cropLeft, cropBottom,
-                           1.0,  1.0, cropLeft, cropTop};
-      memcpy(buffer, &values, sizeof(values));
-    } break;
-    case RTCVideoRotation_180: {
-      float values[16] = {-1.0, -1.0, cropRight, cropTop,
-                           1.0, -1.0, cropLeft, cropTop,
-                          -1.0,  1.0, cropRight, cropBottom,
-                           1.0,  1.0, cropLeft, cropBottom};
-      memcpy(buffer, &values, sizeof(values));
-    } break;
-    case RTCVideoRotation_270: {
-      float values[16] = {-1.0, -1.0, cropLeft, cropTop,
-                           1.0, -1.0, cropLeft, cropBottom,
-                          -1.0, 1.0, cropRight, cropTop,
-                           1.0, 1.0, cropRight, cropBottom};
-      memcpy(buffer, &values, sizeof(values));
-    } break;
-  }
+  float values[16] = {-1.0, -1.0, cropLeft, cropBottom,
+                         1.0, -1.0, cropRight, cropBottom,
+                        -1.0,  1.0, cropLeft, cropTop,
+                         1.0,  1.0, cropRight, cropTop};
+    memcpy(buffer, &values, sizeof(values));
 }
 
 // The max number of command buffers in flight (submitted to GPU).
@@ -98,14 +71,16 @@ static const NSInteger kMaxInflightBuffers = 1;
   id<MTLDevice> _device;
   id<MTLCommandQueue> _commandQueue;
   id<MTLLibrary> _defaultLibrary;
-  id<MTLRenderPipelineState> _pipelineState;
+  id<MTLRenderPipelineState> _pipelineStateYUVtoRGB;
+  id<MTLRenderPipelineState> _pipelineStateTransform;
+  id<MTLRenderPipelineState> _pipelineStateNormalBlend;
 
   // Buffers.
   id<MTLBuffer> _vertexBuffer;
 
   // Values affecting the vertex buffer. Stored for comparison to avoid unnecessary recreation.
-  int _oldFrameWidth;
-  int _oldFrameHeight;
+  int _frameWidth;
+  int _frameHeight;
   int _oldCropWidth;
   int _oldCropHeight;
   int _oldCropX;
@@ -135,7 +110,7 @@ static const NSInteger kMaxInflightBuffers = 1;
   if ([self setupMetal]) {
     _view = view;
     view.device = _device;
-
+      
     [self loadAssets];
 
     float vertexBufferArray[16] = {0};
@@ -152,10 +127,6 @@ static const NSInteger kMaxInflightBuffers = 1;
   return _device;
 }
 
-- (NSString *)shaderSource {
-  RTC_NOTREACHED() << "Virtual method not implemented in subclass.";
-  return nil;
-}
 
 - (void)uploadTexturesToRenderEncoder:(id<MTLRenderCommandEncoder>)renderEncoder {
   RTC_NOTREACHED() << "Virtual method not implemented in subclass.";
@@ -166,60 +137,32 @@ static const NSInteger kMaxInflightBuffers = 1;
 
 - (void)getWidth:(int *)width
           height:(int *)height
-       cropWidth:(int *)cropWidth
-      cropHeight:(int *)cropHeight
-           cropX:(int *)cropX
-           cropY:(int *)cropY
          ofFrame:(nonnull RTC_OBJC_TYPE(RTCVideoFrame) *)frame {
   RTC_NOTREACHED() << "Virtual method not implemented in subclass.";
 }
 
 - (BOOL)setupTexturesForFrame:(nonnull RTC_OBJC_TYPE(RTCVideoFrame) *)frame {
-  // Apply rotation override if set.
   RTCVideoRotation rotation;
   NSValue *rotationOverride = self.rotationOverride;
   if (rotationOverride) {
-#if defined(__IPHONE_11_0) && defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && \
-    (__IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_11_0)
-    if (@available(iOS 11, *)) {
-      [rotationOverride getValue:&rotation size:sizeof(rotation)];
-    } else
-#endif
-    {
       [rotationOverride getValue:&rotation];
-    }
   } else {
-    rotation = frame.rotation;
+      rotation = frame.rotation;
   }
 
-  int frameWidth, frameHeight, cropWidth, cropHeight, cropX, cropY;
+  int frameWidth, frameHeight;
   [self getWidth:&frameWidth
           height:&frameHeight
-       cropWidth:&cropWidth
-      cropHeight:&cropHeight
-           cropX:&cropX
-           cropY:&cropY
          ofFrame:frame];
 
-  // Recompute the texture cropping and recreate vertexBuffer if necessary.
-  if (cropX != _oldCropX || cropY != _oldCropY || cropWidth != _oldCropWidth ||
-      cropHeight != _oldCropHeight || rotation != _oldRotation || frameWidth != _oldFrameWidth ||
-      frameHeight != _oldFrameHeight) {
-    getCubeVertexData(cropX,
-                      cropY,
-                      cropWidth,
-                      cropHeight,
-                      frameWidth,
+  if (frameWidth != _frameWidth ||
+      frameHeight != _frameHeight) {
+    getCubeVertexData(frameWidth,
                       frameHeight,
                       rotation,
                       (float *)_vertexBuffer.contents);
-    _oldCropX = cropX;
-    _oldCropY = cropY;
-    _oldCropWidth = cropWidth;
-    _oldCropHeight = cropHeight;
-    _oldRotation = rotation;
-    _oldFrameWidth = frameWidth;
-    _oldFrameHeight = frameHeight;
+    _frameWidth = frameWidth;
+    _frameHeight = frameHeight;
   }
 
   return YES;
@@ -236,91 +179,225 @@ static const NSInteger kMaxInflightBuffers = 1;
 
   // Create a new command queue.
   _commandQueue = [_device newCommandQueue];
-
-  // Load metal library from source.
-  NSError *libraryError = nil;
-  NSString *shaderSource = [self shaderSource];
-
-  id<MTLLibrary> sourceLibrary =
-      [_device newLibraryWithSource:shaderSource options:NULL error:&libraryError];
-
-  if (libraryError) {
-    RTCLogError(@"Metal: Library with source failed\n%@", libraryError);
-    return NO;
-  }
-
-  if (!sourceLibrary) {
-    RTCLogError(@"Metal: Failed to load library. %@", libraryError);
-    return NO;
-  }
-  _defaultLibrary = sourceLibrary;
+  _defaultLibrary = [_device newDefaultLibrary];
 
   return YES;
 }
 
 - (void)loadAssets {
-  id<MTLFunction> vertexFunction = [_defaultLibrary newFunctionWithName:vertexFunctionName];
-  id<MTLFunction> fragmentFunction = [_defaultLibrary newFunctionWithName:fragmentFunctionName];
+ 
+    {
+        id<MTLFunction> vertexFunction = [_defaultLibrary newFunctionWithName:vertexFunctionName];
+        id<MTLFunction> fragmentFunction = [_defaultLibrary newFunctionWithName:fragmentFunctionName];
 
-  MTLRenderPipelineDescriptor *pipelineDescriptor = [[MTLRenderPipelineDescriptor alloc] init];
-  pipelineDescriptor.label = pipelineDescriptorLabel;
-  pipelineDescriptor.vertexFunction = vertexFunction;
-  pipelineDescriptor.fragmentFunction = fragmentFunction;
-  pipelineDescriptor.colorAttachments[0].pixelFormat = _view.pixelFormat;
-  pipelineDescriptor.depthAttachmentPixelFormat = MTLPixelFormatInvalid;
-  NSError *error = nil;
-  _pipelineState = [_device newRenderPipelineStateWithDescriptor:pipelineDescriptor error:&error];
+        MTLRenderPipelineDescriptor *pipelineDescriptor = [[MTLRenderPipelineDescriptor alloc] init];
+        pipelineDescriptor.label = pipelineDescriptorLabel;
+        pipelineDescriptor.vertexFunction = vertexFunction;
+        pipelineDescriptor.fragmentFunction = fragmentFunction;
+        pipelineDescriptor.colorAttachments[0].pixelFormat = _view.pixelFormat;
+        pipelineDescriptor.depthAttachmentPixelFormat = MTLPixelFormatInvalid;
+        NSError *error = nil;
+        _pipelineStateYUVtoRGB = [_device newRenderPipelineStateWithDescriptor:pipelineDescriptor error:&error];
+    }
 
-  if (!_pipelineState) {
-    RTCLogError(@"Metal: Failed to create pipeline state. %@", error);
-  }
+    {
+        id<MTLFunction> vertexFunction = [_defaultLibrary newFunctionWithName:vertexFunctionName];
+        id<MTLFunction> fragmentFunction = [_defaultLibrary newFunctionWithName:fragmentDoTransformFilter];
+        
+        MTLRenderPipelineDescriptor *pipelineDescriptor = [[MTLRenderPipelineDescriptor alloc] init];
+        pipelineDescriptor.label = @"transformInputLabel";
+        pipelineDescriptor.vertexFunction = vertexFunction;
+        pipelineDescriptor.fragmentFunction = fragmentFunction;
+        pipelineDescriptor.colorAttachments[0].pixelFormat = _view.pixelFormat;
+        pipelineDescriptor.depthAttachmentPixelFormat = MTLPixelFormatInvalid;
+        _pipelineStateTransform = [_device newRenderPipelineStateWithDescriptor:pipelineDescriptor error:nil];
+    }
+    
+    {
+        id<MTLFunction> vertexFunction = [_defaultLibrary newFunctionWithName:twoInputVertexName];
+        id<MTLFunction> fragmentFunction = [_defaultLibrary newFunctionWithName:normalBlendFragmentName];
+        
+        MTLRenderPipelineDescriptor *pipelineDescriptor = [[MTLRenderPipelineDescriptor alloc] init];
+        pipelineDescriptor.label = @"twoInputLabel";
+        pipelineDescriptor.vertexFunction = vertexFunction;
+        pipelineDescriptor.fragmentFunction = fragmentFunction;
+        pipelineDescriptor.colorAttachments[0].pixelFormat = _view.pixelFormat;
+        pipelineDescriptor.depthAttachmentPixelFormat = MTLPixelFormatInvalid;
+        _pipelineStateNormalBlend = [_device newRenderPipelineStateWithDescriptor:pipelineDescriptor error:nil];
+    }
 }
 
-- (void)render {
+- (id<MTLTexture>)createTextureWithUsage:(MTLTextureUsage) usage {
+    MTLTextureDescriptor *rgbTextureDescriptor = [MTLTextureDescriptor
+                                                  texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                  width:_frameWidth
+                                                  height:_frameHeight
+                                                  mipmapped:YES];
+    rgbTextureDescriptor.usage = usage;
+    return [_device newTextureWithDescriptor:rgbTextureDescriptor];
+}
 
-
-    id<CAMetalDrawable> drawable = _view.nextDrawable;
-
-    id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
-    commandBuffer.label = commandBufferLabel;
-    
-    
-
-    
-    
+- (id<MTLRenderCommandEncoder>)createRenderEncoderForTarget: (id<MTLTexture>)texture with: (id<MTLCommandBuffer>)commandBuffer {
     MTLRenderPassDescriptor *renderPassDescriptor = [[MTLRenderPassDescriptor alloc] init];
-    renderPassDescriptor.colorAttachments[0].texture = drawable.texture;
+    renderPassDescriptor.colorAttachments[0].texture = texture;
     renderPassDescriptor.colorAttachments[0].loadAction = MTLLoadActionClear;
     renderPassDescriptor.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0);
     
-  if (renderPassDescriptor) {  // Valid drawable.
-    id<MTLRenderCommandEncoder> renderEncoder =
-        [commandBuffer renderCommandEncoderWithDescriptor:renderPassDescriptor];
+    id<MTLRenderCommandEncoder> renderEncoder = [commandBuffer renderCommandEncoderWithDescriptor:renderPassDescriptor];
     renderEncoder.label = renderEncoderLabel;
+    
+    return renderEncoder;
+}
 
-    // Set context state.
+- (id<MTLSamplerState>)defaultSamplerState {
+    MTLSamplerDescriptor *samplerDescriptor = [[MTLSamplerDescriptor alloc] init];
+    samplerDescriptor.minFilter = MTLSamplerMinMagFilterNearest;
+    samplerDescriptor.magFilter = MTLSamplerMinMagFilterNearest;
+    samplerDescriptor.sAddressMode = MTLSamplerAddressModeClampToZero;
+    samplerDescriptor.tAddressMode = MTLSamplerAddressModeClampToZero;
+
+    return [_device newSamplerStateWithDescriptor:samplerDescriptor];
+}
+
+- (id<MTLTexture>)convertYUVtoRGV {
+    id<MTLTexture> rgbTexture = [self createTextureWithUsage: MTLTextureUsageShaderRead|MTLTextureUsageRenderTarget];
+
+    id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
+
+    id<MTLRenderCommandEncoder> renderEncoder = [self createRenderEncoderForTarget: rgbTexture with: commandBuffer];
     [renderEncoder pushDebugGroup:renderEncoderDebugGroup];
-    [renderEncoder setRenderPipelineState:_pipelineState];
+    [renderEncoder setRenderPipelineState:_pipelineStateYUVtoRGB];
     [renderEncoder setVertexBuffer:_vertexBuffer offset:0 atIndex:0];
     [self uploadTexturesToRenderEncoder:renderEncoder];
-
+    [renderEncoder setFragmentSamplerState:self.defaultSamplerState atIndex:0];
+    
     [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
-                      vertexStart:0
-                      vertexCount:4
+                    vertexStart:0
+                    vertexCount:4
                     instanceCount:1];
     [renderEncoder popDebugGroup];
     [renderEncoder endEncoding];
-      
 
-    [commandBuffer presentDrawable:drawable];
-      
-  }
-
-  // CPU work is completed, GPU work can be started.
-  [commandBuffer commit];
+    [commandBuffer commit];
+    [commandBuffer waitUntilCompleted];
     
-  [commandBuffer waitUntilCompleted];
+    return rgbTexture;
+}
 
+- (id<MTLTexture>)blurInputTexture: (id<MTLTexture>)inputTexture {
+    id<MTLTexture> blurTexture = [self createTextureWithUsage: MTLTextureUsageShaderWrite|MTLTextureUsageShaderRead|MTLTextureUsageRenderTarget];
+    
+    id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
+    
+    if (@available(macOS 10.13, *)) {
+        MPSImageGaussianBlur *blur = [[MPSImageGaussianBlur alloc] initWithDevice:_device sigma: 60.0];
+        
+        [blur encodeToCommandBuffer:commandBuffer sourceTexture:inputTexture destinationTexture:blurTexture];
+        [commandBuffer commit];
+        [commandBuffer waitUntilCompleted];
+    } else {
+        // Fallback on earlier versions
+    }
+    
+    return blurTexture;
+}
+
+- (id<MTLTexture>)transformTextureWithInputTexture: (id<MTLTexture>)inputTexture scaleX: (CGFloat) inputScaleX scaleY: (CGFloat) inputScaleY {
+    id<MTLTexture> texture = [self createTextureWithUsage: MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget];;
+    
+    id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
+
+    id<MTLRenderCommandEncoder> renderEncoder = [self createRenderEncoderForTarget:texture with:commandBuffer];
+    [renderEncoder pushDebugGroup:renderEncoderDebugGroup];
+    [renderEncoder setRenderPipelineState:_pipelineStateTransform];
+    [renderEncoder setVertexBuffer:_vertexBuffer offset:0 atIndex:0];
+    [renderEncoder setFragmentTexture:inputTexture atIndex:0];
+
+    simd_float2 scale = simd_make_float2(inputScaleX, inputScaleY);
+    [renderEncoder setFragmentBytes:&scale length:sizeof(scale) atIndex:0];
+
+    simd_float2 translate = simd_make_float2(0, 0);
+    [renderEncoder setFragmentBytes:&translate length:sizeof(translate) atIndex:1];
+
+    [renderEncoder setFragmentSamplerState:self.defaultSamplerState atIndex:0];
+
+    [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
+                    vertexStart:0
+                    vertexCount:4
+                    instanceCount:1];
+    [renderEncoder popDebugGroup];
+    [renderEncoder endEncoding];
+
+    [commandBuffer commit];
+    [commandBuffer waitUntilCompleted];
+    
+    return texture;
+}
+
+- (void)mergeTexturesWithInputTextures: (NSArray<id<MTLTexture>>*)inputTextures target:(id<MTLTexture>)target {
+    id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
+
+    id<MTLRenderCommandEncoder> renderEncoder = [self createRenderEncoderForTarget:target with:commandBuffer];
+
+    [renderEncoder pushDebugGroup:renderEncoderDebugGroup];
+    [renderEncoder setRenderPipelineState:_pipelineStateNormalBlend];
+
+    float verts[8] = {-1.0, 1.0, 1.0, 1.0, -1.0, -1.0, 1.0, -1.0}; //Metal uses a top-left origin, rotate 0
+
+    id<MTLBuffer> vertexBuffer = [_device newBufferWithBytes:verts length:sizeof(verts) options:0];
+    [renderEncoder setVertexBuffer:vertexBuffer offset:0 atIndex:0];
+    
+    for (int i = 0; i < inputTextures.count; i++) {
+        id<MTLTexture> currentTexture = inputTextures[i];
+
+        float values[8] = {0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0}; //rotate 0 quad
+
+        id<MTLBuffer> vertexBuffer = [_device newBufferWithBytes:values
+                                                          length:sizeof(values)
+                                                         options:0];
+        vertexBuffer.label = @"Texture Coordinates";
+
+        [renderEncoder setVertexBuffer:vertexBuffer offset:0 atIndex:1 + i];
+        [renderEncoder setFragmentTexture:currentTexture atIndex:i];
+     }
+
+    [renderEncoder setFragmentSamplerState:self.defaultSamplerState atIndex:0];
+
+    [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
+                    vertexStart:0
+                    vertexCount:4
+                    instanceCount:1];
+    [renderEncoder popDebugGroup];
+    [renderEncoder endEncoding];
+
+    [commandBuffer commit];
+    [commandBuffer waitUntilCompleted];
+}
+
+- (void)render {
+    id<CAMetalDrawable> drawable = _view.nextDrawable;
+    
+    CGSize viewPortSize = NSZeroSize;
+    viewPortSize = _view.bounds.size;
+
+    id<MTLTexture> rgbTexture = [self convertYUVtoRGV];
+    
+    float ratio = (float)_frameHeight / (float)_frameWidth;
+    CGFloat heightAspectScale = viewPortSize.height / (viewPortSize.width * ratio);
+    CGFloat widthAspectScale = viewPortSize.width / (viewPortSize.height * (1.0/ratio));
+    
+    id<MTLTexture> frontTexture = [self transformTextureWithInputTexture:rgbTexture scaleX:MAX(1.0, widthAspectScale) scaleY:MAX(1.0, heightAspectScale)];
+    
+    id<MTLTexture> backgroundTexture = [self transformTextureWithInputTexture:rgbTexture scaleX:MIN(1.0, widthAspectScale) scaleY:MIN(1.0, heightAspectScale)];
+
+    id<MTLTexture> blurredBackgroundTexture = [self blurInputTexture: backgroundTexture];
+    
+    [self mergeTexturesWithInputTextures:@[frontTexture, blurredBackgroundTexture] target:drawable.texture];
+    
+    id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
+    [commandBuffer presentDrawable:drawable];
+    [commandBuffer commit];
+    [commandBuffer waitUntilCompleted];
 }
 
 -(void)dealloc {

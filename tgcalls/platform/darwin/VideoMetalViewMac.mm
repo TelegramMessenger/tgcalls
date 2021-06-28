@@ -171,7 +171,7 @@ private:
 }
 
 - (void)setVideoContentMode:(CALayerContentsGravity)mode {
-    _metalView.contentsGravity = mode;
+   // _metalView.contentsGravity = mode;
 }
 
 #pragma mark - Private
@@ -200,7 +200,7 @@ private:
 
     _metalView.cornerRadius = 4;
     _metalView.backgroundColor = [NSColor clearColor].CGColor;
-    _metalView.contentsGravity = kCAGravityResizeAspect;//UIViewContentModeScaleAspectFill;
+    _metalView.contentsGravity = kCAGravityResizeAspectFill;//UIViewContentModeScaleAspectFill;
     _videoFrameSize = CGSizeZero;
     
     CAMetalLayer *layer = _metalView;
@@ -258,20 +258,7 @@ private:
 }
 
 - (CGSize)drawableSize {
-    // Flip width/height if the rotations are not the same.
-    CGSize videoFrameSize = _videoFrameSize;
-    RTCVideoRotation frameRotation = [self rtcFrameRotation];
-    
-    BOOL useLandscape =
-    (frameRotation == RTCVideoRotation_0) || (frameRotation == RTCVideoRotation_180);
-    BOOL sizeIsLandscape = (_videoFrame.rotation == RTCVideoRotation_0) ||
-    (_videoFrame.rotation == RTCVideoRotation_180);
-    
-    if (useLandscape == sizeIsLandscape) {
-        return videoFrameSize;
-    } else {
-        return CGSizeMake(videoFrameSize.height, videoFrameSize.width);
-    }
+    return self.bounds.size;
 }
 
 #pragma mark - RTCVideoRenderer
