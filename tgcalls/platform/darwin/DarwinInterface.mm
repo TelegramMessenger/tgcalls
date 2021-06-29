@@ -17,6 +17,7 @@
 
 #ifdef WEBRTC_IOS
 #include "sdk/objc/components/audio/RTCAudioSession.h"
+#include "sdk/objc/components/audio/RTCAudioSessionConfiguration.h"
 #import <UIKit/UIKit.h>
 #endif // WEBRTC_IOS
 
@@ -53,6 +54,10 @@ std::unique_ptr<rtc::NetworkMonitorFactory> DarwinInterface::createNetworkMonito
 
 void DarwinInterface::configurePlatformAudio() {
 #ifdef WEBRTC_IOS
+    RTCAudioSessionConfiguration *sharedConfiguration = [RTCAudioSessionConfiguration webRTCConfiguration];
+    sharedConfiguration.categoryOptions |= AVAudioSessionCategoryOptionMixWithOthers;
+    [RTCAudioSessionConfiguration setWebRTCConfiguration:sharedConfiguration];
+
     [RTCAudioSession sharedInstance].useManualAudio = true;
     [[RTCAudioSession sharedInstance] audioSessionDidActivate:[AVAudioSession sharedInstance]];
     [RTCAudioSession sharedInstance].isAudioEnabled = true;
