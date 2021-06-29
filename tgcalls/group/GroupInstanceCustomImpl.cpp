@@ -134,6 +134,134 @@ static void addDefaultFeedbackParams(cricket::VideoCodec *codec) {
     codec->AddFeedbackParam(cricket::FeedbackParam(cricket::kRtcpFbParamNack, cricket::kRtcpFbNackParamPli));
 }
 
+struct H264FormatParameters {
+    std::string profileLevelId;
+    std::string packetizationMode;
+    std::string levelAssymetryAllowed;
+};
+
+H264FormatParameters parseH264FormatParameters(webrtc::SdpVideoFormat const &format) {
+    H264FormatParameters result;
+
+    for (const auto &parameter : format.parameters) {
+        if (parameter.first == "profile-level-id") {
+            result.profileLevelId = parameter.second;
+        } else if (parameter.first == "packetization-mode") {
+            result.packetizationMode = parameter.second;
+        } else if (parameter.first == "level-asymmetry-allowed") {
+            result.levelAssymetryAllowed = parameter.second;
+        }
+    }
+
+    return result;
+}
+
+static int getH264ProfileLevelIdPriority(std::string const &profileLevelId) {
+    if (profileLevelId == cricket::kH264ProfileLevelConstrainedHigh) {
+        return 0;
+    } else if (profileLevelId == cricket::kH264ProfileLevelConstrainedBaseline) {
+        return 1;
+    } else {
+        return 2;
+    }
+}
+
+static int getH264PacketizationModePriority(std::string const &packetizationMode) {
+    if (packetizationMode == "1") {
+        return 0;
+    } else {
+        return 1;
+    }
+}
+
+static int getH264LevelAssymetryAllowedPriority(std::string const &levelAssymetryAllowed) {
+    if (levelAssymetryAllowed == "1") {
+        return 0;
+    } else {
+        return 1;
+    }
+}
+
+static std::vector<webrtc::SdpVideoFormat> filterSupportedVideoFormats(std::vector<webrtc::SdpVideoFormat> const &formats) {
+    std::vector<webrtc::SdpVideoFormat> filteredFormats;
+
+    std::vector<std::string> filterCodecNames = {
+        cricket::kVp8CodecName,
+        cricket::kVp9CodecName,
+        cricket::kH264CodecName
+    };
+
+    std::vector<webrtc::SdpVideoFormat> vp9Formats;
+    std::vector<webrtc::SdpVideoFormat> h264Formats;
+
+    for (const auto &format : formats) {
+        if (std::find(filterCodecNames.begin(), filterCodecNames.end(), format.name) == filterCodecNames.end()) {
+            continue;
+        }
+
+        if (format.name == cricket::kVp9CodecName) {
+            vp9Formats.push_back(format);
+        } else if (format.name == cricket::kH264CodecName) {
+            h264Formats.push_back(format);
+        } else {
+            filteredFormats.push_back(format);
+        }
+    }
+
+    if (!vp9Formats.empty()) {
+        bool added = false;
+        for (const auto &format : vp9Formats) {
+            if (added) {
+                break;
+            }
+            for (const auto &parameter : format.parameters) {
+                if (parameter.first == "profile-id") {
+                    if (parameter.second == "0") {
+                        filteredFormats.push_back(format);
+                        added = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!added) {
+            filteredFormats.push_back(vp9Formats[0]);
+        }
+    }
+
+    if (!h264Formats.empty()) {
+        std::sort(h264Formats.begin(), h264Formats.end(), [](const webrtc::SdpVideoFormat &lhs, const webrtc::SdpVideoFormat &rhs) {
+            auto lhsParameters = parseH264FormatParameters(lhs);
+            auto rhsParameters = parseH264FormatParameters(rhs);
+
+            int lhsLevelIdPriority = getH264ProfileLevelIdPriority(lhsParameters.profileLevelId);
+            int lhsPacketizationModePriority = getH264PacketizationModePriority(lhsParameters.packetizationMode);
+            int lhsLevelAssymetryAllowedPriority = getH264LevelAssymetryAllowedPriority(lhsParameters.levelAssymetryAllowed);
+
+            int rhsLevelIdPriority = getH264ProfileLevelIdPriority(rhsParameters.profileLevelId);
+            int rhsPacketizationModePriority = getH264PacketizationModePriority(rhsParameters.packetizationMode);
+            int rhsLevelAssymetryAllowedPriority = getH264LevelAssymetryAllowedPriority(rhsParameters.levelAssymetryAllowed);
+
+            if (lhsLevelIdPriority != rhsLevelIdPriority) {
+                return lhsLevelIdPriority < rhsLevelIdPriority;
+            }
+            if (lhsPacketizationModePriority != rhsPacketizationModePriority) {
+                return lhsPacketizationModePriority < rhsPacketizationModePriority;
+            }
+            if (lhsLevelAssymetryAllowedPriority != rhsLevelAssymetryAllowedPriority) {
+                return lhsLevelAssymetryAllowedPriority < rhsLevelAssymetryAllowedPriority;
+            }
+
+            return true;
+        });
+
+        filteredFormats.push_back(h264Formats[0]);
+    }
+
+    return filteredFormats;
+}
+
 static std::vector<OutgoingVideoFormat> assignPayloadTypes(std::vector<webrtc::SdpVideoFormat> const &formats) {
     if (formats.empty()) {
         return {};
@@ -1167,7 +1295,7 @@ public:
             }
             mediaDeps.adm = _audioDeviceModule;
 
-            _availableVideoFormats = mediaDeps.video_encoder_factory->GetSupportedFormats();
+            _availableVideoFormats = filterSupportedVideoFormats(mediaDeps.video_encoder_factory->GetSupportedFormats());
 
             std::unique_ptr<cricket::MediaEngineInterface> mediaEngine = cricket::CreateMediaEngine(std::move(mediaDeps));
 
@@ -1200,9 +1328,6 @@ public:
         });
 
         _videoBitrateAllocatorFactory = webrtc::CreateBuiltinVideoBitrateAllocatorFactory();
-
-        configureVideoParams();
-        createOutgoingVideoChannel();
 
         if (_audioLevelsUpdated) {
             beginLevelsTimer(100);
@@ -1264,7 +1389,6 @@ public:
             return;
         }
 
-        _videoSourceGroups.clear();
         cricket::StreamParams videoSendStreamParams;
 
         std::vector<uint32_t> simulcastGroupSsrcs;
@@ -1285,7 +1409,6 @@ public:
             GroupJoinPayloadVideoSourceGroup payloadSimulcastGroup;
             payloadSimulcastGroup.semantics = "SIM";
             payloadSimulcastGroup.ssrcs = simulcastGroupSsrcs;
-            _videoSourceGroups.push_back(payloadSimulcastGroup);
         }
 
         for (auto fidGroup : fidGroups) {
@@ -1294,7 +1417,6 @@ public:
             GroupJoinPayloadVideoSourceGroup payloadFidGroup;
             payloadFidGroup.semantics = "FID";
             payloadFidGroup.ssrcs = fidGroup.ssrcs;
-            _videoSourceGroups.push_back(payloadFidGroup);
         }
 
         videoSendStreamParams.cname = "cname";
@@ -1861,6 +1983,9 @@ public:
     }
 
     void configureVideoParams() {
+        if (!_sharedVideoInformation) {
+            return;
+        }
         if (_selectedPayloadType) {
             // Already configured.
             return;
@@ -1940,10 +2065,21 @@ public:
             }
         }
         std::vector<std::string> defaultCodecPriorities = {
-            cricket::kH264CodecName,
             cricket::kVp8CodecName,
             cricket::kVp9CodecName
         };
+
+        bool enableH264 = false;
+        for (const auto &payloadType : _sharedVideoInformation->payloadTypes) {
+            if (payloadType.name == cricket::kH264CodecName) {
+                enableH264 = true;
+                break;
+            }
+        }
+        if (enableH264) {
+            defaultCodecPriorities.insert(defaultCodecPriorities.begin(), cricket::kH264CodecName);
+        }
+
         for (const auto &name : defaultCodecPriorities) {
             if (std::find(codecPriorities.begin(), codecPriorities.end(), name) == codecPriorities.end()) {
                 codecPriorities.push_back(name);
@@ -2429,6 +2565,32 @@ public:
         for (int layerIndex = 0; layerIndex < numVideoSimulcastLayers; layerIndex++) {
             _outgoingVideoSsrcs.simulcastLayers.push_back(VideoSsrcs::SimulcastLayer(outgoingVideoSsrcBase + layerIndex * 2 + 0, outgoingVideoSsrcBase + layerIndex * 2 + 1));
         }
+
+        _videoSourceGroups.clear();
+
+        std::vector<uint32_t> simulcastGroupSsrcs;
+        std::vector<cricket::SsrcGroup> fidGroups;
+        for (const auto &layer : _outgoingVideoSsrcs.simulcastLayers) {
+            simulcastGroupSsrcs.push_back(layer.ssrc);
+
+            cricket::SsrcGroup fidGroup(cricket::kFidSsrcGroupSemantics, { layer.ssrc, layer.fidSsrc });
+            fidGroups.push_back(fidGroup);
+        }
+        if (simulcastGroupSsrcs.size() > 1) {
+            cricket::SsrcGroup simulcastGroup(cricket::kSimSsrcGroupSemantics, simulcastGroupSsrcs);
+
+            GroupJoinPayloadVideoSourceGroup payloadSimulcastGroup;
+            payloadSimulcastGroup.semantics = "SIM";
+            payloadSimulcastGroup.ssrcs = simulcastGroupSsrcs;
+            _videoSourceGroups.push_back(payloadSimulcastGroup);
+        }
+
+        for (auto fidGroup : fidGroups) {
+            GroupJoinPayloadVideoSourceGroup payloadFidGroup;
+            payloadFidGroup.semantics = "FID";
+            payloadFidGroup.ssrcs = fidGroup.ssrcs;
+            _videoSourceGroups.push_back(payloadFidGroup);
+        }
     }
 
     void emitJoinPayload(std::function<void(GroupJoinPayload const &)> completion) {
@@ -2550,6 +2712,9 @@ public:
 
             networkManager->setRemoteParams(remoteIceParameters, iceCandidates, fingerprint.get());
         });
+
+        configureVideoParams();
+        createOutgoingVideoChannel();
 
         adjustBitratePreferences(true);
 
