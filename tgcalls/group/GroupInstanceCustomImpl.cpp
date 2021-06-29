@@ -134,6 +134,134 @@ static void addDefaultFeedbackParams(cricket::VideoCodec *codec) {
     codec->AddFeedbackParam(cricket::FeedbackParam(cricket::kRtcpFbParamNack, cricket::kRtcpFbNackParamPli));
 }
 
+struct H264FormatParameters {
+    std::string profileLevelId;
+    std::string packetizationMode;
+    std::string levelAssymetryAllowed;
+};
+
+H264FormatParameters parseH264FormatParameters(webrtc::SdpVideoFormat const &format) {
+    H264FormatParameters result;
+
+    for (const auto &parameter : format.parameters) {
+        if (parameter.first == "profile-level-id") {
+            result.profileLevelId = parameter.second;
+        } else if (parameter.first == "packetization-mode") {
+            result.packetizationMode = parameter.second;
+        } else if (parameter.first == "level-asymmetry-allowed") {
+            result.levelAssymetryAllowed = parameter.second;
+        }
+    }
+
+    return result;
+}
+
+static int getH264ProfileLevelIdPriority(std::string const &profileLevelId) {
+    if (profileLevelId == cricket::kH264ProfileLevelConstrainedHigh) {
+        return 0;
+    } else if (profileLevelId == cricket::kH264ProfileLevelConstrainedBaseline) {
+        return 1;
+    } else {
+        return 2;
+    }
+}
+
+static int getH264PacketizationModePriority(std::string const &packetizationMode) {
+    if (packetizationMode == "1") {
+        return 0;
+    } else {
+        return 1;
+    }
+}
+
+static int getH264LevelAssymetryAllowedPriority(std::string const &levelAssymetryAllowed) {
+    if (levelAssymetryAllowed == "1") {
+        return 0;
+    } else {
+        return 1;
+    }
+}
+
+static std::vector<webrtc::SdpVideoFormat> filterSupportedVideoFormats(std::vector<webrtc::SdpVideoFormat> const &formats) {
+    std::vector<webrtc::SdpVideoFormat> filteredFormats;
+
+    std::vector<std::string> filterCodecNames = {
+        cricket::kVp8CodecName,
+        cricket::kVp9CodecName,
+        cricket::kH264CodecName
+    };
+
+    std::vector<webrtc::SdpVideoFormat> vp9Formats;
+    std::vector<webrtc::SdpVideoFormat> h264Formats;
+
+    for (const auto &format : formats) {
+        if (std::find(filterCodecNames.begin(), filterCodecNames.end(), format.name) == filterCodecNames.end()) {
+            continue;
+        }
+
+        if (format.name == cricket::kVp9CodecName) {
+            vp9Formats.push_back(format);
+        } else if (format.name == cricket::kH264CodecName) {
+            h264Formats.push_back(format);
+        } else {
+            filteredFormats.push_back(format);
+        }
+    }
+
+    if (!vp9Formats.empty()) {
+        bool added = false;
+        for (const auto &format : vp9Formats) {
+            if (added) {
+                break;
+            }
+            for (const auto &parameter : format.parameters) {
+                if (parameter.first == "profile-id") {
+                    if (parameter.second == "0") {
+                        filteredFormats.push_back(format);
+                        added = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!added) {
+            filteredFormats.push_back(vp9Formats[0]);
+        }
+    }
+
+    if (!h264Formats.empty()) {
+        std::sort(h264Formats.begin(), h264Formats.end(), [](const webrtc::SdpVideoFormat &lhs, const webrtc::SdpVideoFormat &rhs) {
+            auto lhsParameters = parseH264FormatParameters(lhs);
+            auto rhsParameters = parseH264FormatParameters(rhs);
+
+            int lhsLevelIdPriority = getH264ProfileLevelIdPriority(lhsParameters.profileLevelId);
+            int lhsPacketizationModePriority = getH264PacketizationModePriority(lhsParameters.packetizationMode);
+            int lhsLevelAssymetryAllowedPriority = getH264LevelAssymetryAllowedPriority(lhsParameters.levelAssymetryAllowed);
+
+            int rhsLevelIdPriority = getH264ProfileLevelIdPriority(rhsParameters.profileLevelId);
+            int rhsPacketizationModePriority = getH264PacketizationModePriority(rhsParameters.packetizationMode);
+            int rhsLevelAssymetryAllowedPriority = getH264LevelAssymetryAllowedPriority(rhsParameters.levelAssymetryAllowed);
+
+            if (lhsLevelIdPriority != rhsLevelIdPriority) {
+                return lhsLevelIdPriority < rhsLevelIdPriority;
+            }
+            if (lhsPacketizationModePriority != rhsPacketizationModePriority) {
+                return lhsPacketizationModePriority < rhsPacketizationModePriority;
+            }
+            if (lhsLevelAssymetryAllowedPriority != rhsLevelAssymetryAllowedPriority) {
+                return lhsLevelAssymetryAllowedPriority < rhsLevelAssymetryAllowedPriority;
+            }
+
+            return true;
+        });
+
+        filteredFormats.push_back(h264Formats[0]);
+    }
+
+    return filteredFormats;
+}
+
 static std::vector<OutgoingVideoFormat> assignPayloadTypes(std::vector<webrtc::SdpVideoFormat> const &formats) {
     if (formats.empty()) {
         return {};
@@ -148,7 +276,8 @@ static std::vector<OutgoingVideoFormat> assignPayloadTypes(std::vector<webrtc::S
 
     std::vector<std::string> filterCodecNames = {
         cricket::kVp8CodecName,
-        cricket::kVp9CodecName
+        cricket::kVp9CodecName,
+        cricket::kH264CodecName,
     };
 
     for (const auto &codecName : filterCodecNames) {
@@ -214,6 +343,11 @@ struct VideoSsrcs {
     VideoSsrcs(const VideoSsrcs &other) :
         simulcastLayers(other.simulcastLayers) {
     }
+};
+
+struct InternalGroupLevelValue {
+    GroupLevelValue value;
+    int64_t timestamp = 0;
 };
 
 struct ChannelId {
@@ -722,9 +856,10 @@ public:
             outgoingAudioDescription.reset();
             incomingAudioDescription.reset();
 
-            std::unique_ptr<AudioSinkImpl> audioLevelSink(new AudioSinkImpl(std::move(onAudioLevelUpdated), _ssrc, std::move(onAudioFrame)));
-
-            _audioChannel->media_channel()->SetRawAudioSink(ssrc.networkSsrc, std::move(audioLevelSink));
+            if (_ssrc.actualSsrc != 1) {
+                std::unique_ptr<AudioSinkImpl> audioLevelSink(new AudioSinkImpl(std::move(onAudioLevelUpdated), _ssrc, std::move(onAudioFrame)));
+                _audioChannel->media_channel()->SetRawAudioSink(ssrc.networkSsrc, std::move(audioLevelSink));
+            }
         });
 
         //_audioChannel->SignalSentPacket().connect(this, &IncomingAudioChannel::OnSentPacket_w);
@@ -1023,6 +1158,9 @@ public:
         _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this] {
             _workerThreadSafery = webrtc::PendingTaskSafetyFlag::Create();
         });
+        _threads->getNetworkThread()->Invoke<void>(RTC_FROM_HERE, [this] {
+            _networkThreadSafery = webrtc::PendingTaskSafetyFlag::Create();
+        });
 
         if (_videoCapture) {
           assert(!_getVideoSource);
@@ -1103,6 +1241,13 @@ public:
                             strong->receiveDataChannelMessage(message);
                         }
                     });
+                },
+                [=](uint32_t ssrc, uint8_t audioLevel, bool isSpeech) {
+                    threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, ssrc, audioLevel, isSpeech]() {
+                        if (const auto strong = weak.lock()) {
+                            strong->updateSsrcAudioLevel(ssrc, audioLevel, isSpeech);
+                        }
+                    });
                 }, threads);
         }));
 
@@ -1150,7 +1295,7 @@ public:
             }
             mediaDeps.adm = _audioDeviceModule;
 
-            _availableVideoFormats = mediaDeps.video_encoder_factory->GetSupportedFormats();
+            _availableVideoFormats = filterSupportedVideoFormats(mediaDeps.video_encoder_factory->GetSupportedFormats());
 
             std::unique_ptr<cricket::MediaEngineInterface> mediaEngine = cricket::CreateMediaEngine(std::move(mediaDeps));
 
@@ -1183,9 +1328,6 @@ public:
         });
 
         _videoBitrateAllocatorFactory = webrtc::CreateBuiltinVideoBitrateAllocatorFactory();
-
-        configureVideoParams();
-        createOutgoingVideoChannel();
 
         if (_audioLevelsUpdated) {
             beginLevelsTimer(100);
@@ -1247,7 +1389,6 @@ public:
             return;
         }
 
-        _videoSourceGroups.clear();
         cricket::StreamParams videoSendStreamParams;
 
         std::vector<uint32_t> simulcastGroupSsrcs;
@@ -1268,7 +1409,6 @@ public:
             GroupJoinPayloadVideoSourceGroup payloadSimulcastGroup;
             payloadSimulcastGroup.semantics = "SIM";
             payloadSimulcastGroup.ssrcs = simulcastGroupSsrcs;
-            _videoSourceGroups.push_back(payloadSimulcastGroup);
         }
 
         for (auto fidGroup : fidGroups) {
@@ -1277,7 +1417,6 @@ public:
             GroupJoinPayloadVideoSourceGroup payloadFidGroup;
             payloadFidGroup.semantics = "FID";
             payloadFidGroup.ssrcs = fidGroup.ssrcs;
-            _videoSourceGroups.push_back(payloadFidGroup);
         }
 
         videoSendStreamParams.cname = "cname";
@@ -1468,6 +1607,31 @@ public:
     void stop() {
     }
 
+    void updateSsrcAudioLevel(uint32_t ssrc, uint8_t audioLevel, bool isSpeech) {
+        float mappedLevel = ((float)audioLevel) / (float)(0x7f);
+        mappedLevel = (fabs(1.0f - mappedLevel)) * 1.0f;
+
+        auto it = _audioLevels.find(ChannelId(ssrc));
+        if (it != _audioLevels.end()) {
+            it->second.value.level = fmax(it->second.value.level, mappedLevel);
+            if (isSpeech) {
+                it->second.value.voice = true;
+            }
+            it->second.timestamp = rtc::TimeMillis();
+        } else {
+            InternalGroupLevelValue updated;
+            updated.value.level = mappedLevel;
+            updated.value.voice = isSpeech;
+            updated.timestamp = rtc::TimeMillis();
+            _audioLevels.insert(std::make_pair(ChannelId(ssrc), std::move(updated)));
+        }
+
+        auto audioChannel = _incomingAudioChannels.find(ChannelId(ssrc));
+        if (audioChannel != _incomingAudioChannels.end()) {
+            audioChannel->second->updateActivity();
+        }
+    }
+
     void beginLevelsTimer(int timeoutMs) {
         const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
         _threads->getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
@@ -1476,10 +1640,13 @@ public:
                 return;
             }
 
+            int64_t timestamp = rtc::TimeMillis();
+            int64_t maxSampleTimeout = 400;
+
             GroupLevelsUpdate levelsUpdate;
             levelsUpdate.updates.reserve(strong->_audioLevels.size() + 1);
             for (auto &it : strong->_audioLevels) {
-                if (it.second.level > 0.001f) {
+                if (it.second.value.level > 0.001f && it.second.timestamp > timestamp - maxSampleTimeout) {
                     uint32_t effectiveSsrc = it.first.actualSsrc;
                     if (std::find_if(levelsUpdate.updates.begin(), levelsUpdate.updates.end(), [&](GroupLevelUpdate const &item) {
                         return item.ssrc == effectiveSsrc;
@@ -1488,24 +1655,32 @@ public:
                     }
                     levelsUpdate.updates.push_back(GroupLevelUpdate{
                         effectiveSsrc,
-                        it.second,
+                        it.second.value,
                         });
-                    if (it.second.level > 0.001f) {
+                    if (it.second.value.level > 0.001f) {
                         auto audioChannel = strong->_incomingAudioChannels.find(it.first);
                         if (audioChannel != strong->_incomingAudioChannels.end()) {
                             audioChannel->second->updateActivity();
                         }
                     }
+
+                    it.second.value.level *= 0.5f;
+                    it.second.value.voice = false;
                 }
             }
+
             auto myAudioLevel = strong->_myAudioLevel;
             myAudioLevel.isMuted = strong->_isMuted;
             levelsUpdate.updates.push_back(GroupLevelUpdate{ 0, myAudioLevel });
 
-            strong->_audioLevels.clear();
             if (strong->_audioLevelsUpdated) {
                 strong->_audioLevelsUpdated(levelsUpdate);
             }
+
+            bool isSpeech = myAudioLevel.voice && !myAudioLevel.isMuted;
+            strong->_networkManager->perform(RTC_FROM_HERE, [isSpeech = isSpeech](GroupNetworkManager *networkManager) {
+                networkManager->setOutgoingVoiceActivity(isSpeech);
+            });
 
             strong->beginLevelsTimer(100);
         }, timeoutMs);
@@ -1808,6 +1983,9 @@ public:
     }
 
     void configureVideoParams() {
+        if (!_sharedVideoInformation) {
+            return;
+        }
         if (_selectedPayloadType) {
             // Already configured.
             return;
@@ -1874,6 +2052,10 @@ public:
                 codecName = cricket::kVp9CodecName;
                 break;
             }
+            case VideoCodecName::H264: {
+                codecName = cricket::kH264CodecName;
+                break;
+            }
             default: {
                 break;
             }
@@ -1886,6 +2068,18 @@ public:
             cricket::kVp8CodecName,
             cricket::kVp9CodecName
         };
+
+        bool enableH264 = false;
+        for (const auto &payloadType : _sharedVideoInformation->payloadTypes) {
+            if (payloadType.name == cricket::kH264CodecName) {
+                enableH264 = true;
+                break;
+            }
+        }
+        if (enableH264) {
+            defaultCodecPriorities.insert(defaultCodecPriorities.begin(), cricket::kH264CodecName);
+        }
+
         for (const auto &name : defaultCodecPriorities) {
             if (std::find(codecPriorities.begin(), codecPriorities.end(), name) == codecPriorities.end()) {
                 codecPriorities.push_back(name);
@@ -2371,6 +2565,32 @@ public:
         for (int layerIndex = 0; layerIndex < numVideoSimulcastLayers; layerIndex++) {
             _outgoingVideoSsrcs.simulcastLayers.push_back(VideoSsrcs::SimulcastLayer(outgoingVideoSsrcBase + layerIndex * 2 + 0, outgoingVideoSsrcBase + layerIndex * 2 + 1));
         }
+
+        _videoSourceGroups.clear();
+
+        std::vector<uint32_t> simulcastGroupSsrcs;
+        std::vector<cricket::SsrcGroup> fidGroups;
+        for (const auto &layer : _outgoingVideoSsrcs.simulcastLayers) {
+            simulcastGroupSsrcs.push_back(layer.ssrc);
+
+            cricket::SsrcGroup fidGroup(cricket::kFidSsrcGroupSemantics, { layer.ssrc, layer.fidSsrc });
+            fidGroups.push_back(fidGroup);
+        }
+        if (simulcastGroupSsrcs.size() > 1) {
+            cricket::SsrcGroup simulcastGroup(cricket::kSimSsrcGroupSemantics, simulcastGroupSsrcs);
+
+            GroupJoinPayloadVideoSourceGroup payloadSimulcastGroup;
+            payloadSimulcastGroup.semantics = "SIM";
+            payloadSimulcastGroup.ssrcs = simulcastGroupSsrcs;
+            _videoSourceGroups.push_back(payloadSimulcastGroup);
+        }
+
+        for (auto fidGroup : fidGroups) {
+            GroupJoinPayloadVideoSourceGroup payloadFidGroup;
+            payloadFidGroup.semantics = "FID";
+            payloadFidGroup.ssrcs = fidGroup.ssrcs;
+            _videoSourceGroups.push_back(payloadFidGroup);
+        }
     }
 
     void emitJoinPayload(std::function<void(GroupJoinPayload const &)> completion) {
@@ -2492,6 +2712,9 @@ public:
 
             networkManager->setRemoteParams(remoteIceParameters, iceCandidates, fingerprint.get());
         });
+
+        configureVideoParams();
+        createOutgoingVideoChannel();
 
         adjustBitratePreferences(true);
 
@@ -2645,7 +2868,7 @@ public:
         const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
 
         std::function<void(AudioSinkImpl::Update)> onAudioSinkUpdate;
-        if (_audioLevelsUpdated) {
+        /*if (_audioLevelsUpdated) {
           onAudioSinkUpdate = [weak, ssrc = ssrc, threads = _threads](AudioSinkImpl::Update update) {
             threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, ssrc, update]() {
               auto strong = weak.lock();
@@ -2658,7 +2881,7 @@ public:
               strong->_audioLevels[ssrc] = mappedUpdate;
             });
           };
-        }
+        }*/
 
         std::unique_ptr<IncomingAudioChannel> channel(new IncomingAudioChannel(
           _channelManager.get(),
@@ -2933,7 +3156,7 @@ private:
     int _pendingOutgoingVideoConstraint = -1;
     int _pendingOutgoingVideoConstraintRequestId = 0;
 
-    std::map<ChannelId, GroupLevelValue> _audioLevels;
+    std::map<ChannelId, InternalGroupLevelValue> _audioLevels;
     GroupLevelValue _myAudioLevel;
 
     bool _isMuted = true;
@@ -2967,6 +3190,7 @@ private:
     GroupNetworkState _effectiveNetworkState;
 
     rtc::scoped_refptr<webrtc::PendingTaskSafetyFlag> _workerThreadSafery;
+    rtc::scoped_refptr<webrtc::PendingTaskSafetyFlag> _networkThreadSafery;
 };
 
 GroupInstanceCustomImpl::GroupInstanceCustomImpl(GroupInstanceDescriptor &&descriptor) {

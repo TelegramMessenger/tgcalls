@@ -88,7 +88,8 @@ enum class VideoContentType {
 
 enum class VideoCodecName {
     VP8,
-    VP9
+    VP9,
+    H264
 };
 
 class RequestMediaChannelDescriptionTask {

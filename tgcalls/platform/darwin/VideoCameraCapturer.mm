@@ -648,7 +648,7 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
         });
     }
 
-    auto i420Buffer = [self prepareNV12Buffer:[rtcPixelBuffer pixelBuffer]];
+    auto i420Buffer = [self prepareI420Buffer:[rtcPixelBuffer pixelBuffer]];
     
     if (!_isPaused && i420Buffer) {
         auto videoFrame = webrtc::VideoFrame::Builder()

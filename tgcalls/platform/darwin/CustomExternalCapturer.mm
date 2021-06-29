@@ -56,15 +56,8 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
     int width = rtcPixelBuffer.width;
     int height = rtcPixelBuffer.height;
 
-    int w = width % 4;
-    int h = height % 4;
-
-    if (w != 0) {
-        width -= (4 - w);
-    }
-    if (h != 0) {
-        height -= (4 - h);
-    }
+    width -= width % 4;
+    height -= height % 4;
 
     if (width != rtcPixelBuffer.width || height != rtcPixelBuffer.height) {
         CVPixelBufferRef outputPixelBufferRef = NULL;
