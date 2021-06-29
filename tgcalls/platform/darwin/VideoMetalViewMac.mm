@@ -192,15 +192,15 @@ private:
 - (void)configure {
     NSAssert([VideoMetalView isMetalAvailable], @"Metal not availiable on this device");
     self.wantsLayer = YES;
-    self.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
+    self.layerContentsRedrawPolicy = NSViewLayerContentsRedrawNever;
     _metalView = [VideoMetalView createMetalView:self.bounds];
     self.layer = _metalView;
     _metalView.framebufferOnly = true;
     _metalView.opaque = false;
-
+    _metalView.needsDisplayOnBoundsChange = true;
     _metalView.cornerRadius = 4;
     _metalView.backgroundColor = [NSColor clearColor].CGColor;
-    _metalView.contentsGravity = kCAGravityResizeAspectFill;//UIViewContentModeScaleAspectFill;
+    _metalView.contentsGravity = kCAGravityResizeAspect;//UIViewContentModeScaleAspectFill;
     _videoFrameSize = CGSizeZero;
     
     CAMetalLayer *layer = _metalView;
@@ -215,9 +215,6 @@ private:
 
 -(void)setFrameSize:(NSSize)newSize {
     [super setFrameSize:newSize];
-}
-- (void)layout {
-    [super layout];
     
     CGRect bounds = self.bounds;
     _metalView.frame = bounds;
@@ -226,6 +223,10 @@ private:
     } else {
         _metalView.drawableSize = bounds.size;
     }
+}
+- (void)layout {
+    [super layout];
+
 }
 
 
@@ -258,7 +259,18 @@ private:
 }
 
 - (CGSize)drawableSize {
-    return self.bounds.size;
+    
+    MTLFrameSize from;
+    MTLFrameSize to;
+    
+    from.width = _videoFrameSize.width;
+    from.height = _videoFrameSize.height;
+    
+    to.width = self.layer.bounds.size.width;
+    to.height = self.layer.bounds.size.height;
+
+    MTLFrameSize size = MTLAspectFilled(to, from);
+    return CGSizeMake(size.width, size.height);
 }
 
 #pragma mark - RTCVideoRenderer
@@ -289,7 +301,7 @@ private:
     
     RTCVideoFrame *videoFrame = _videoFrame;
     // Skip rendering if we've already rendered this frame.
-    if (!videoFrame || videoFrame.timeStampNs == _lastFrameTimeNs) {
+    if (!videoFrame) {
         return;
     }
         

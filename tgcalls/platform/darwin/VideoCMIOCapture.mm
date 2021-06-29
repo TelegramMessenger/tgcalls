@@ -31,12 +31,12 @@
 #include "third_party/libyuv/include/libyuv.h"
 #include "DarwinVideoSource.h"
 
-struct FrameSize {
+struct MTLFrameSize {
     int width = 0;
     int height = 0;
 };
 
-FrameSize AspectFitted(FrameSize from, FrameSize to) {
+MTLFrameSize AspectFitted(MTLFrameSize from, MTLFrameSize to) {
     double scale = std::min(
         from.width / std::max(1., double(to.width)),
         from.height / std::max(1., double(to.height)));
@@ -133,7 +133,7 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
     int width = (int)CVPixelBufferGetWidth(pixelBuffer);
     int height = (int)CVPixelBufferGetHeight(pixelBuffer);
 
-    FrameSize fittedSize = AspectFitted({ 1280, 720 }, { width, height });
+    MTLFrameSize fittedSize = AspectFitted({ 1280, 720 }, { width, height });
     
     fittedSize.width -= (fittedSize.width % 4);
     fittedSize.height -= (fittedSize.height % 4);

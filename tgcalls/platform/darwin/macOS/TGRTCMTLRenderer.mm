@@ -22,7 +22,27 @@
 #include "rtc_base/checks.h"
 
 
+MTLFrameSize MTLAspectFitted(MTLFrameSize from, MTLFrameSize to) {
+    double scale = std::min(
+        from.width / std::max(1., double(to.width)),
+        from.height / std::max(1., double(to.height)));
+    return {
+        float(std::ceil(to.width * scale)),
+        float(std::ceil(to.height * scale))
+    };
+}
 
+MTLFrameSize MTLAspectFilled(MTLFrameSize from, MTLFrameSize to) {
+    //        let scale = max(size.width / max(1.0, self.width), size.height / max(1.0, self.height))
+
+    double scale = std::max(
+        to.width / std::max(1., double(from.width)),
+        to.height / std::max(1., double(from.height)));
+    return {
+        float(std::ceil(from.width * scale)),
+        float(std::ceil(from.height * scale))
+    };
+}
 
 
 static NSString *const pipelineDescriptorLabel = @"RTCPipeline";
@@ -71,8 +91,9 @@ static inline void getCubeVertexData(size_t frameWidth,
     id<MTLCommandQueue> _commandQueue;
     id<MTLBuffer> _vertexBuffer;
 
-    int _frameWidth;
-    int _frameHeight;
+    MTLFrameSize _frameSize;
+    MTLFrameSize _scaledSize;
+
     
     id<MTLTexture> _rgbTexture;
     id<MTLTexture> _rgbScaledAndBlurredTexture;
@@ -138,24 +159,29 @@ static inline void getCubeVertexData(size_t frameWidth,
       rotation = frame.rotation;
   }
 
+    
   int frameWidth, frameHeight;
   [self getWidth:&frameWidth
           height:&frameHeight
          ofFrame:frame];
 
-  if (frameWidth != _frameWidth || frameHeight != _frameHeight) {
+  if (frameWidth != _frameSize.width || frameHeight != _frameSize.height) {
     getCubeVertexData(frameWidth,
                       frameHeight,
                       rotation,
                       (float *)_vertexBuffer.contents);
       
-      _frameWidth = frameWidth;
-      _frameHeight = frameHeight;
+      _frameSize.width = frameWidth;
+      _frameSize.height = frameHeight;
       
+      MTLFrameSize small;
+      small.width = _frameSize.width / 2;
+      small.height = _frameSize.height / 2;
+
+      _scaledSize = MTLAspectFitted(small, _frameSize);
+      _rgbTexture = [self createTextureWithUsage: MTLTextureUsageShaderRead|MTLTextureUsageRenderTarget size:_frameSize];
       
-      _rgbTexture = [self createTextureWithUsage: MTLTextureUsageShaderRead|MTLTextureUsageRenderTarget size:CGSizeMake(_frameWidth, _frameHeight)];
-      
-      _rgbScaledAndBlurredTexture = [self createTextureWithUsage:MTLTextureUsageShaderRead|MTLTextureUsageRenderTarget size:CGSizeMake(_frameWidth, _frameHeight)];
+      _rgbScaledAndBlurredTexture = [self createTextureWithUsage:MTLTextureUsageShaderRead|MTLTextureUsageRenderTarget size:_scaledSize];
   }
 
   return YES;
@@ -174,7 +200,7 @@ static inline void getCubeVertexData(size_t frameWidth,
   return YES;
 }
 
-- (id<MTLTexture>)createTextureWithUsage:(MTLTextureUsage) usage size:(CGSize)size {
+- (id<MTLTexture>)createTextureWithUsage:(MTLTextureUsage) usage size:(MTLFrameSize)size {
     MTLTextureDescriptor *rgbTextureDescriptor = [MTLTextureDescriptor
                                                   texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
                                                   width:size.width
@@ -223,7 +249,6 @@ static inline void getCubeVertexData(size_t frameWidth,
 }
 
 - (id<MTLTexture>)scaleAndBlur:(id<MTLTexture>)inputTexture scale:(simd_float2)scale {
-    id<MTLTexture> rgbTexture = _rgbTexture;
 
     id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
     
@@ -302,23 +327,49 @@ static inline void getCubeVertexData(size_t frameWidth,
 - (void)render {
     id<CAMetalDrawable> drawable = _view.nextDrawable;
     
-    CGSize viewPortSize = _view.bounds.size;
+    CGSize drawableSize = _view.drawableSize;
 
+    MTLFrameSize from;
+    MTLFrameSize to;
+    
+    from.width = _view.bounds.size.width;
+    from.height = _view.bounds.size.height;
+
+    to.width = drawableSize.width;
+    to.height = drawableSize.height;
+    
+    MTLFrameSize viewSize = MTLAspectFilled(to, from);
+    
+    MTLFrameSize fitted = MTLAspectFitted(from, to);
+
+    
+    CGSize viewPortSize = CGSizeMake(viewSize.width, viewSize.height);
+    
+    
     id<MTLTexture> targetTexture = drawable.texture;
     
-    float ratio = (float)_frameHeight / (float)_frameWidth;
-    CGFloat heightAspectScale = viewPortSize.height / (viewPortSize.width * ratio);
-    CGFloat widthAspectScale = viewPortSize.width / (viewPortSize.height * (1.0/ratio));
-    
+    float ratio = (float)_frameSize.height / (float)_frameSize.width;
+    CGFloat heightAspectScale = viewPortSize.height / (fitted.width * ratio);
+    CGFloat widthAspectScale = viewPortSize.width / (fitted.height * (1.0/ratio));
+
     _rgbTexture = [self convertYUVtoRGV];
 
-    _rgbScaledAndBlurredTexture = [self scaleAndBlur:_rgbTexture scale:simd_make_float2(MIN(1.0, widthAspectScale), MIN(1.0, heightAspectScale))];
+    simd_float2 smallScale = simd_make_float2(_scaledSize.width / _frameSize.width, _scaledSize.height / _frameSize.height);
     
+    _rgbScaledAndBlurredTexture = [self scaleAndBlur:_rgbTexture scale:smallScale];
+    
+    simd_float2 scale1 = simd_make_float2(MAX(1.0, widthAspectScale), MAX(1.0, heightAspectScale));
+    
+    float bgRatio_w = _scaledSize.width / _frameSize.width;
+    float bgRatio_h = _scaledSize.height / _frameSize.height;
+
+    simd_float2 scale2 = simd_make_float2(MIN(bgRatio_w, widthAspectScale * bgRatio_w), MIN(bgRatio_h, heightAspectScale * bgRatio_h));
+
     [self mergeYUVTexturesInTarget: targetTexture
                     foregroundTexture: _rgbTexture
                     backgroundTexture: _rgbScaledAndBlurredTexture
-                    scale1:simd_make_float2(MAX(1.0, widthAspectScale), MAX(1.0, heightAspectScale))
-                    scale2:simd_make_float2(MIN(1.0, widthAspectScale), MIN(1.0, heightAspectScale))];
+                    scale1:scale1
+                    scale2:scale2];
     
     id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
     [commandBuffer presentDrawable:drawable];

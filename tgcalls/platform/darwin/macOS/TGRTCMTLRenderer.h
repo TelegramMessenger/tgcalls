@@ -16,6 +16,13 @@
 
 bool initMetal();
 
+struct MTLFrameSize {
+    float width = 0;
+    float height = 0;
+};
+MTLFrameSize MTLAspectFilled(MTLFrameSize from, MTLFrameSize to);
+MTLFrameSize MTLAspectFitted(MTLFrameSize from, MTLFrameSize to);
+
 NS_ASSUME_NONNULL_BEGIN
 
 @protocol TGRTCMTLRenderer <NSObject>
