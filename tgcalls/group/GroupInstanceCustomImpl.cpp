@@ -34,6 +34,7 @@
 #include "audio/audio_state.h"
 #include "modules/audio_coding/neteq/default_neteq_factory.h"
 #include "modules/audio_coding/include/audio_coding_module.h"
+#include "common_audio/include/audio_util.h"
 
 #include "AudioFrame.h"
 #include "ThreadLocalObject.h"
@@ -657,9 +658,11 @@ struct NoiseSuppressionConfiguration {
 #if USE_RNNOISE
 class AudioCapturePostProcessor : public webrtc::CustomProcessing {
 public:
-    AudioCapturePostProcessor(std::function<void(GroupLevelValue const &)> updated, std::shared_ptr<NoiseSuppressionConfiguration> noiseSuppressionConfiguration) :
+    AudioCapturePostProcessor(std::function<void(GroupLevelValue const &)> updated, std::shared_ptr<NoiseSuppressionConfiguration> noiseSuppressionConfiguration, std::vector<float> *externalAudioSamples, webrtc::Mutex *externalAudioSamplesMutex) :
     _updated(updated),
-    _noiseSuppressionConfiguration(noiseSuppressionConfiguration) {
+    _noiseSuppressionConfiguration(noiseSuppressionConfiguration),
+    _externalAudioSamples(externalAudioSamples),
+    _externalAudioSamplesMutex(externalAudioSamplesMutex) {
         int frameSize = rnnoise_get_frame_size();
         _frameSamples.resize(frameSize);
 
@@ -765,6 +768,24 @@ private:
                 });
             }
         }
+
+        _externalAudioSamplesMutex->Lock();
+        if (!_externalAudioSamples->empty()) {
+            float *bufferData = buffer->channels()[0];
+            int takenSamples = 0;
+            for (int i = 0; i < _externalAudioSamples->size() && i < _frameSamples.size(); i++) {
+                float sample = (*_externalAudioSamples)[i];
+                sample += bufferData[i];
+                sample = std::min(sample, 32768.f);
+                sample = std::max(sample, -32768.f);
+                bufferData[i] = sample;
+                takenSamples++;
+            }
+            if (takenSamples != 0) {
+                _externalAudioSamples->erase(_externalAudioSamples->begin(), _externalAudioSamples->begin() + takenSamples);
+            }
+        }
+        _externalAudioSamplesMutex->Unlock();
     }
 
     virtual std::string ToString() const override {
@@ -784,6 +805,9 @@ private:
     float _peak = 0;
     VadHistory _history;
     SparseVad _vad;
+
+    std::vector<float> *_externalAudioSamples = nullptr;
+    webrtc::Mutex *_externalAudioSamplesMutex = nullptr;
 };
 #endif
 
@@ -1264,7 +1288,7 @@ public:
                 }
                 strong->_myAudioLevel = level;
             });
-        }, _noiseSuppressionConfiguration);
+        }, _noiseSuppressionConfiguration, &_externalAudioSamples, &_externalAudioSamplesMutex);
 #endif
 
         _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this
@@ -2663,6 +2687,23 @@ public:
 #endif // WEBRTC_IOS
     }
 
+    void addExternalAudioSamples(std::vector<uint8_t> &&samples) {
+        if (samples.size() % 2 != 0) {
+            return;
+        }
+        _externalAudioSamplesMutex.Lock();
+
+        size_t previousSize = _externalAudioSamples.size();
+        _externalAudioSamples.resize(_externalAudioSamples.size() + samples.size() / 2);
+        webrtc::S16ToFloatS16((const int16_t *)samples.data(), samples.size() / 2, _externalAudioSamples.data() + previousSize);
+
+        if (_externalAudioSamples.size() > 2 * 48000) {
+            _externalAudioSamples.erase(_externalAudioSamples.begin(), _externalAudioSamples.begin() + (_externalAudioSamples.size() - 2 * 48000));
+        }
+
+        _externalAudioSamplesMutex.Unlock();
+    }
+
     void setJoinResponsePayload(std::string const &payload) {
         RTC_LOG(LS_INFO) << formatTimestampMillis(rtc::TimeMillis()) << ": " << "setJoinResponsePayload";
 
@@ -3183,6 +3224,9 @@ private:
     absl::optional<RequestedBroadcastPart> _currentRequestedBroadcastPart;
     int64_t _lastBroadcastPartReceivedTimestamp = 0;
 
+    std::vector<float> _externalAudioSamples;
+    webrtc::Mutex _externalAudioSamplesMutex;
+
     bool _isRtcConnected = false;
     bool _isBroadcastConnected = false;
     absl::optional<int64_t> _broadcastEnabledUntilRtcIsConnectedAtTimestamp;
@@ -3293,6 +3337,12 @@ void GroupInstanceCustomImpl::setAudioOutputDevice(std::string id) {
 void GroupInstanceCustomImpl::setAudioInputDevice(std::string id) {
     _internal->perform(RTC_FROM_HERE, [id](GroupInstanceCustomInternal *internal) {
         internal->setAudioInputDevice(id);
+    });
+}
+
+void GroupInstanceCustomImpl::addExternalAudioSamples(std::vector<uint8_t> &&samples) {
+    _internal->perform(RTC_FROM_HERE, [samples = std::move(samples)](GroupInstanceCustomInternal *internal) mutable {
+        internal->addExternalAudioSamples(std::move(samples));
     });
 }
 
