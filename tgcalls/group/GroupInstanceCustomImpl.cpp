@@ -34,6 +34,7 @@
 #include "audio/audio_state.h"
 #include "modules/audio_coding/neteq/default_neteq_factory.h"
 #include "modules/audio_coding/include/audio_coding_module.h"
+#include "common_audio/include/audio_util.h"
 
 #include "AudioFrame.h"
 #include "ThreadLocalObject.h"
@@ -596,7 +597,8 @@ private:
 
 class VideoSinkImpl : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
 public:
-    VideoSinkImpl() {
+    VideoSinkImpl(std::string const &endpointId) :
+    _endpointId(endpointId) {
     }
 
     virtual ~VideoSinkImpl() {
@@ -604,6 +606,21 @@ public:
 
     virtual void OnFrame(const webrtc::VideoFrame& frame) override {
         std::unique_lock<std::mutex> lock{ _mutex };
+        int64_t timestamp = rtc::TimeMillis();
+        if (_lastFrame) {
+            if (_lastFrame->video_frame_buffer()->width() != frame.video_frame_buffer()->width()) {
+                int64_t deltaTime = std::abs(_lastFrameSizeChangeTimestamp - timestamp);
+                if (deltaTime < 200) {
+                    RTC_LOG(LS_WARNING) << "VideoSinkImpl: frequent frame size change detected for " << _endpointId << ": " << _lastFrameSizeChangeHeight << " -> " << _lastFrame->video_frame_buffer()->height() << " -> " << frame.video_frame_buffer()->height() << " in " << deltaTime << " ms";
+                }
+
+                _lastFrameSizeChangeHeight = _lastFrame->video_frame_buffer()->height();
+                _lastFrameSizeChangeTimestamp = timestamp;
+            }
+        } else {
+            _lastFrameSizeChangeHeight = 0;
+            _lastFrameSizeChangeTimestamp = timestamp;
+        }
         _lastFrame = frame;
         for (int i = (int)(_sinks.size()) - 1; i >= 0; i--) {
             auto strong = _sinks[i].lock();
@@ -642,6 +659,9 @@ private:
     std::vector<std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>> _sinks;
     absl::optional<webrtc::VideoFrame> _lastFrame;
     std::mutex _mutex;
+    int64_t _lastFrameSizeChangeTimestamp = 0;
+    int _lastFrameSizeChangeHeight = 0;
+    std::string _endpointId;
 
 };
 
@@ -657,9 +677,11 @@ struct NoiseSuppressionConfiguration {
 #if USE_RNNOISE
 class AudioCapturePostProcessor : public webrtc::CustomProcessing {
 public:
-    AudioCapturePostProcessor(std::function<void(GroupLevelValue const &)> updated, std::shared_ptr<NoiseSuppressionConfiguration> noiseSuppressionConfiguration) :
+    AudioCapturePostProcessor(std::function<void(GroupLevelValue const &)> updated, std::shared_ptr<NoiseSuppressionConfiguration> noiseSuppressionConfiguration, std::vector<float> *externalAudioSamples, webrtc::Mutex *externalAudioSamplesMutex) :
     _updated(updated),
-    _noiseSuppressionConfiguration(noiseSuppressionConfiguration) {
+    _noiseSuppressionConfiguration(noiseSuppressionConfiguration),
+    _externalAudioSamples(externalAudioSamples),
+    _externalAudioSamplesMutex(externalAudioSamplesMutex) {
         int frameSize = rnnoise_get_frame_size();
         _frameSamples.resize(frameSize);
 
@@ -765,6 +787,24 @@ private:
                 });
             }
         }
+
+        _externalAudioSamplesMutex->Lock();
+        if (!_externalAudioSamples->empty()) {
+            float *bufferData = buffer->channels()[0];
+            int takenSamples = 0;
+            for (int i = 0; i < _externalAudioSamples->size() && i < _frameSamples.size(); i++) {
+                float sample = (*_externalAudioSamples)[i];
+                sample += bufferData[i];
+                sample = std::min(sample, 32768.f);
+                sample = std::max(sample, -32768.f);
+                bufferData[i] = sample;
+                takenSamples++;
+            }
+            if (takenSamples != 0) {
+                _externalAudioSamples->erase(_externalAudioSamples->begin(), _externalAudioSamples->begin() + takenSamples);
+            }
+        }
+        _externalAudioSamplesMutex->Unlock();
     }
 
     virtual std::string ToString() const override {
@@ -784,6 +824,9 @@ private:
     float _peak = 0;
     VadHistory _history;
     SparseVad _vad;
+
+    std::vector<float> *_externalAudioSamples = nullptr;
+    webrtc::Mutex *_externalAudioSamplesMutex = nullptr;
 };
 #endif
 
@@ -926,7 +969,7 @@ public:
     _call(call),
     _requestedMinQuality(minQuality),
     _requestedMaxQuality(maxQuality) {
-        _videoSink.reset(new VideoSinkImpl());
+        _videoSink.reset(new VideoSinkImpl(_endpointId));
 
         _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this, rtpTransport, &availableVideoFormats, &description, randomIdGenerator]() mutable {
             uint32_t mid = randomIdGenerator->GenerateId();
@@ -1138,7 +1181,7 @@ public:
     _requestMediaChannelDescriptions(descriptor.requestMediaChannelDescriptions),
     _requestBroadcastPart(descriptor.requestBroadcastPart),
     _videoCapture(descriptor.videoCapture),
-    _videoCaptureSink(new VideoSinkImpl()),
+    _videoCaptureSink(new VideoSinkImpl("VideoCapture")),
     _getVideoSource(descriptor.getVideoSource),
     _disableIncomingChannels(descriptor.disableIncomingChannels),
     _useDummyChannel(descriptor.useDummyChannel),
@@ -1264,7 +1307,7 @@ public:
                 }
                 strong->_myAudioLevel = level;
             });
-        }, _noiseSuppressionConfiguration);
+        }, _noiseSuppressionConfiguration, &_externalAudioSamples, &_externalAudioSamplesMutex);
 #endif
 
         _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this
@@ -1470,6 +1513,44 @@ public:
                         } else if (i == 1) {
                             rtpParameters.encodings[i].max_bitrate_bps = 150000;
                             rtpParameters.encodings[i].max_bitrate_bps = 200000;
+                            rtpParameters.encodings[i].scale_resolution_down_by = 2.0;
+                            rtpParameters.encodings[i].active = _outgoingVideoConstraint >= 360;
+                        } else if (i == 2) {
+                            rtpParameters.encodings[i].min_bitrate_bps = 300000;
+                            rtpParameters.encodings[i].max_bitrate_bps = 800000 + 100000;
+                            rtpParameters.encodings[i].active = _outgoingVideoConstraint >= 720;
+                        }
+                    }
+                } else if (rtpParameters.encodings.size() == 2) {
+                    for (int i = 0; i < (int)rtpParameters.encodings.size(); i++) {
+                        if (i == 0) {
+                            rtpParameters.encodings[i].min_bitrate_bps = 50000;
+                            rtpParameters.encodings[i].max_bitrate_bps = 100000;
+                            rtpParameters.encodings[i].scale_resolution_down_by = 4.0;
+                        } else if (i == 1) {
+                            rtpParameters.encodings[i].min_bitrate_bps = 200000;
+                            rtpParameters.encodings[i].max_bitrate_bps = 900000 + 100000;
+                        }
+                    }
+                } else {
+                    rtpParameters.encodings[0].max_bitrate_bps = (800000 + 100000) * 2;
+                }
+
+                _outgoingVideoChannel->media_channel()->SetRtpSendParameters(_outgoingVideoSsrcs.simulcastLayers[0].ssrc, rtpParameters);
+            });
+        } else {
+            _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this]() {
+                webrtc::RtpParameters rtpParameters = _outgoingVideoChannel->media_channel()->GetRtpSendParameters(_outgoingVideoSsrcs.simulcastLayers[0].ssrc);
+                if (rtpParameters.encodings.size() == 3) {
+                    for (int i = 0; i < (int)rtpParameters.encodings.size(); i++) {
+                        if (i == 0) {
+                            rtpParameters.encodings[i].min_bitrate_bps = 50000;
+                            rtpParameters.encodings[i].max_bitrate_bps = 60000;
+                            rtpParameters.encodings[i].scale_resolution_down_by = 4.0;
+                            rtpParameters.encodings[i].active = _outgoingVideoConstraint >= 180;
+                        } else if (i == 1) {
+                            rtpParameters.encodings[i].max_bitrate_bps = 100000;
+                            rtpParameters.encodings[i].max_bitrate_bps = 110000;
                             rtpParameters.encodings[i].scale_resolution_down_by = 2.0;
                             rtpParameters.encodings[i].active = _outgoingVideoConstraint >= 360;
                         } else if (i == 2) {
@@ -2130,7 +2211,7 @@ public:
             if (_videoContentType == VideoContentType::Screencast) {
                 preferences.max_bitrate_bps = std::max(preferences.min_bitrate_bps, (1020 + 32) * 1000);
             } else {
-                preferences.max_bitrate_bps = std::max(preferences.min_bitrate_bps, (700 + 32) * 1000);
+                preferences.max_bitrate_bps = std::max(preferences.min_bitrate_bps, (1020 + 32) * 1000);
             }
         } else {
             preferences.min_bitrate_bps = 32000;
@@ -2663,6 +2744,23 @@ public:
 #endif // WEBRTC_IOS
     }
 
+    void addExternalAudioSamples(std::vector<uint8_t> &&samples) {
+        if (samples.size() % 2 != 0) {
+            return;
+        }
+        _externalAudioSamplesMutex.Lock();
+
+        size_t previousSize = _externalAudioSamples.size();
+        _externalAudioSamples.resize(_externalAudioSamples.size() + samples.size() / 2);
+        webrtc::S16ToFloatS16((const int16_t *)samples.data(), samples.size() / 2, _externalAudioSamples.data() + previousSize);
+
+        if (_externalAudioSamples.size() > 2 * 48000) {
+            _externalAudioSamples.erase(_externalAudioSamples.begin(), _externalAudioSamples.begin() + (_externalAudioSamples.size() - 2 * 48000));
+        }
+
+        _externalAudioSamplesMutex.Unlock();
+    }
+
     void setJoinResponsePayload(std::string const &payload) {
         RTC_LOG(LS_INFO) << formatTimestampMillis(rtc::TimeMillis()) << ": " << "setJoinResponsePayload";
 
@@ -3183,6 +3281,9 @@ private:
     absl::optional<RequestedBroadcastPart> _currentRequestedBroadcastPart;
     int64_t _lastBroadcastPartReceivedTimestamp = 0;
 
+    std::vector<float> _externalAudioSamples;
+    webrtc::Mutex _externalAudioSamplesMutex;
+
     bool _isRtcConnected = false;
     bool _isBroadcastConnected = false;
     absl::optional<int64_t> _broadcastEnabledUntilRtcIsConnectedAtTimestamp;
@@ -3293,6 +3394,12 @@ void GroupInstanceCustomImpl::setAudioOutputDevice(std::string id) {
 void GroupInstanceCustomImpl::setAudioInputDevice(std::string id) {
     _internal->perform(RTC_FROM_HERE, [id](GroupInstanceCustomInternal *internal) {
         internal->setAudioInputDevice(id);
+    });
+}
+
+void GroupInstanceCustomImpl::addExternalAudioSamples(std::vector<uint8_t> &&samples) {
+    _internal->perform(RTC_FROM_HERE, [samples = std::move(samples)](GroupInstanceCustomInternal *internal) mutable {
+        internal->addExternalAudioSamples(std::move(samples));
     });
 }
 
