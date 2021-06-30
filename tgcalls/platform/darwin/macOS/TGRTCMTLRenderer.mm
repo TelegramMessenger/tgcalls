@@ -382,18 +382,18 @@ static inline void getCubeVertexData(size_t frameWidth,
     [commandBuffer presentDrawable:drawable];
     
     
-//    dispatch_semaphore_t inflight = _inflight;
-//
-//    [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> _Nonnull) {
-//        dispatch_semaphore_signal(inflight);
-//    }];
-//
-//    dispatch_async(dispatch_get_main_queue(), ^{
-//        [commandBuffer commit];
-//    });
-//    dispatch_semaphore_wait(_inflight, DISPATCH_TIME_FOREVER);
-//
-    [commandBuffer commit];
+    dispatch_semaphore_t inflight = _inflight;
+
+    [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> _Nonnull) {
+        dispatch_semaphore_signal(inflight);
+    }];
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [commandBuffer commit];
+    });
+    dispatch_semaphore_wait(_inflight, DISPATCH_TIME_FOREVER);
+
+//    [commandBuffer commit];
     
 }
 
