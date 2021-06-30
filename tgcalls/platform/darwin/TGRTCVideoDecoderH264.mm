@@ -150,7 +150,7 @@ static void decompressionOutputCallback(void *decoderRef,
     return WEBRTC_VIDEO_CODEC_ERROR;
   }
   RTC_DCHECK(sampleBuffer);
-  VTDecodeFrameFlags decodeFlags = kVTDecodeFrame_EnableAsynchronousDecompression;
+  VTDecodeFrameFlags decodeFlags = kVTDecodeFrame_EnableAsynchronousDecompression | kVTDecodeFrame_1xRealTimePlayback;
   std::unique_ptr<RTCFrameDecodeParams> frameDecodeParams;
   frameDecodeParams.reset(new RTCFrameDecodeParams(_callback, inputImage.timeStamp));
   OSStatus status = VTDecompressionSessionDecodeFrame(

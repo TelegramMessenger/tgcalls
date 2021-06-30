@@ -202,7 +202,7 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
 
 - (void) render:(CMSampleBufferRef)sampleBuffer
 {
-    VTDecodeFrameFlags flags = kVTDecodeFrame_EnableAsynchronousDecompression;
+    VTDecodeFrameFlags flags = kVTDecodeFrame_EnableAsynchronousDecompression | kVTDecodeFrame_1xRealTimePlayback;
     VTDecodeInfoFlags flagOut;
     NSDate* currentTime = [NSDate date];
     VTDecompressionSessionDecodeFrame(_decompressionSession, sampleBuffer, flags,

@@ -28,7 +28,7 @@ NS_ASSUME_NONNULL_BEGIN
 @protocol TGRTCMTLRenderer <NSObject>
 
 - (void)drawFrame:(RTC_OBJC_TYPE(RTCVideoFrame) *)frame;
-- (BOOL)addRenderingDestination:(__kindof CAMetalLayer *)view;
+- (BOOL)setRenderingDestination:(__kindof CAMetalLayer *)view;
 
 @end
 

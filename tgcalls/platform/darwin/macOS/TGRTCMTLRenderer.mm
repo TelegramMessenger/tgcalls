@@ -97,6 +97,12 @@ static inline void getCubeVertexData(size_t frameWidth,
     
     id<MTLTexture> _rgbTexture;
     id<MTLTexture> _rgbScaledAndBlurredTexture;
+    
+    id<MTLBuffer> _vertexBuffer0;
+    id<MTLBuffer> _vertexBuffer1;
+    id<MTLBuffer> _vertexBuffer2;
+    
+    dispatch_semaphore_t _inflight;
 
 }
 
@@ -104,12 +110,19 @@ static inline void getCubeVertexData(size_t frameWidth,
 
 - (instancetype)init {
   if (self = [super init]) {
+      _inflight = dispatch_semaphore_create(0);
+      
+      float vertexBufferArray[16] = {0};
+      _vertexBuffer = [metalContext.device newBufferWithBytes:vertexBufferArray
+                                           length:sizeof(vertexBufferArray)
+                                          options:MTLResourceCPUCacheModeWriteCombined];
+
   }
 
   return self;
 }
 
-- (BOOL)addRenderingDestination:(__kindof CAMetalLayer *)view {
+- (BOOL)setRenderingDestination:(__kindof CAMetalLayer *)view {
   return [self setupWithView:view];
 }
 
@@ -119,16 +132,8 @@ static inline void getCubeVertexData(size_t frameWidth,
     BOOL success = NO;
     if ([self setupMetal]) {
         _view = view;
-          
         view.device = metalContext.device;
-
-        
         _context = metalContext;
-
-        float vertexBufferArray[16] = {0};
-        _vertexBuffer = [metalContext.device newBufferWithBytes:vertexBufferArray
-                                             length:sizeof(vertexBufferArray)
-                                            options:MTLResourceCPUCacheModeWriteCombined];
         success = YES;
     }
     return success;
@@ -182,6 +187,20 @@ static inline void getCubeVertexData(size_t frameWidth,
       _rgbTexture = [self createTextureWithUsage: MTLTextureUsageShaderRead|MTLTextureUsageRenderTarget size:_frameSize];
       
       _rgbScaledAndBlurredTexture = [self createTextureWithUsage:MTLTextureUsageShaderRead|MTLTextureUsageRenderTarget size:_scaledSize];
+      
+      float verts[8] = {-1.0, 1.0, 1.0, 1.0, -1.0, -1.0, 1.0, -1.0}; //Metal uses a top-left origin, rotate 0
+      
+      _vertexBuffer0 = [_context.device newBufferWithBytes:verts length:sizeof(verts) options:0];
+      
+      float values[8] = {0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0}; //rotate 0 quad
+      
+      _vertexBuffer1 = [_context.device newBufferWithBytes:values
+                                                        length:sizeof(values)
+                                                       options:0];
+      
+      _vertexBuffer2 = [_context.device newBufferWithBytes:values
+                                                         length:sizeof(values)
+                                                        options:0];
   }
 
   return YES;
@@ -195,7 +214,7 @@ static inline void getCubeVertexData(size_t frameWidth,
   if (!_context.device) {
     return NO;
   }
-  _commandQueue = [_context.device newCommandQueue];
+  _commandQueue = [_context.device newCommandQueueWithMaxCommandBufferCount:3];
 
   return YES;
 }
@@ -243,7 +262,7 @@ static inline void getCubeVertexData(size_t frameWidth,
     [renderEncoder endEncoding];
 
     [commandBuffer commit];
-    [commandBuffer waitUntilCompleted];
+//    [commandBuffer waitUntilCompleted];
     
     return rgbTexture;
 }
@@ -263,6 +282,9 @@ static inline void getCubeVertexData(size_t frameWidth,
     [renderEncoder setFragmentBytes:&scale length:sizeof(scale) atIndex:0];
     [renderEncoder setFragmentSamplerState:_context.sampler atIndex:0];
 
+    bool vertical = true;
+    [renderEncoder setFragmentBytes:&vertical length:sizeof(vertical) atIndex:1];
+
     
     [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
                     vertexStart:0
@@ -272,7 +294,7 @@ static inline void getCubeVertexData(size_t frameWidth,
     [renderEncoder endEncoding];
 
     [commandBuffer commit];
-    [commandBuffer waitUntilCompleted];
+//    [commandBuffer waitUntilCompleted];
     
     return _rgbScaledAndBlurredTexture;
 }
@@ -284,25 +306,10 @@ static inline void getCubeVertexData(size_t frameWidth,
     [renderEncoder pushDebugGroup:renderEncoderDebugGroup];
     [renderEncoder setRenderPipelineState:_context.pipelineTransformAndBlend];
     
-    float verts[8] = {-1.0, 1.0, 1.0, 1.0, -1.0, -1.0, 1.0, -1.0}; //Metal uses a top-left origin, rotate 0
     
-    id<MTLBuffer> vertexBuffer = [_context.device newBufferWithBytes:verts length:sizeof(verts) options:0];
-    [renderEncoder setVertexBuffer:vertexBuffer offset:0 atIndex:0];
-    
-    float values[8] = {0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0}; //rotate 0 quad
-    
-    id<MTLBuffer> vertexBuffer1 = [_context.device newBufferWithBytes:values
-                                                      length:sizeof(values)
-                                                     options:0];
-    vertexBuffer1.label = @"Texture Coordinates 1";
-    
-    id<MTLBuffer> vertexBuffer2 = [_context.device newBufferWithBytes:values
-                                                       length:sizeof(values)
-                                                      options:0];
-    vertexBuffer2.label = @"Texture Coordinates 2";
-    
-    [renderEncoder setVertexBuffer:vertexBuffer1 offset:0 atIndex:1];
-    [renderEncoder setVertexBuffer:vertexBuffer2 offset:0 atIndex:2];
+    [renderEncoder setVertexBuffer:_vertexBuffer0 offset:0 atIndex:0];
+    [renderEncoder setVertexBuffer:_vertexBuffer1 offset:0 atIndex:1];
+    [renderEncoder setVertexBuffer:_vertexBuffer2 offset:0 atIndex:2];
     
     [renderEncoder setFragmentTexture:foregroundTexture atIndex:0];
     [renderEncoder setFragmentTexture:backgroundTexture atIndex:1];
@@ -321,7 +328,7 @@ static inline void getCubeVertexData(size_t frameWidth,
     [renderEncoder endEncoding];
 
     [commandBuffer commit];
-    [commandBuffer waitUntilCompleted];
+//    [commandBuffer waitUntilCompleted];
 }
 
 - (void)render {
@@ -354,7 +361,7 @@ static inline void getCubeVertexData(size_t frameWidth,
 
     _rgbTexture = [self convertYUVtoRGV];
 
-    simd_float2 smallScale = simd_make_float2(_scaledSize.width / _frameSize.width, _scaledSize.height / _frameSize.height);
+    simd_float2 smallScale = simd_make_float2(_frameSize.width / _scaledSize.width, _frameSize.height / _scaledSize.height);
     
     _rgbScaledAndBlurredTexture = [self scaleAndBlur:_rgbTexture scale:smallScale];
     
@@ -373,12 +380,25 @@ static inline void getCubeVertexData(size_t frameWidth,
     
     id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
     [commandBuffer presentDrawable:drawable];
+    
+    
+//    dispatch_semaphore_t inflight = _inflight;
+//
+//    [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> _Nonnull) {
+//        dispatch_semaphore_signal(inflight);
+//    }];
+//
+//    dispatch_async(dispatch_get_main_queue(), ^{
+//        [commandBuffer commit];
+//    });
+//    dispatch_semaphore_wait(_inflight, DISPATCH_TIME_FOREVER);
+//
     [commandBuffer commit];
-    [commandBuffer waitUntilCompleted];
+    
 }
 
 -(void)dealloc {
-    
+    dispatch_semaphore_signal(_inflight);
 }
 
 #pragma mark - RTCMTLRenderer

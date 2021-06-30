@@ -62,14 +62,25 @@ private:
 
 }
 
+@interface TGCAMetalLayer : CAMetalLayer
+
+@end
+
+@implementation TGCAMetalLayer
 
 
-@interface VideoMetalView () <MTKViewDelegate> {
+-(void)dealloc {
+    int bp = 0;
+    bp += 1;
+}
+@end
+
+@interface VideoMetalView () {
     SQueueLocalObject *_rendererI420;
 
     CAMetalLayer *_metalView;
-    RTCVideoFrame *_videoFrame;
     CGSize _videoFrameSize;
+    RTCVideoRotation _rotation;
     int64_t _lastFrameTimeNs;
     
     CGSize _currentSize;
@@ -83,6 +94,12 @@ private:
     bool _didSetShouldBeMirrored;
     bool _shouldBeMirrored;
     bool _forceMirrored;
+    
+    bool _isPaused;
+    
+    NSMutableArray<RTCVideoFrame *> *_frames;
+    RTCVideoFrame *_videoFrame;
+    BOOL _drawing;
 }
 
 @end
@@ -99,8 +116,9 @@ private:
         [self configure];
         _lastFrameTimeNs = INT32_MAX;
         _currentSize = CGSizeZero;
-        
-       
+        _frames = [[NSMutableArray alloc] init];
+        _drawing = false;
+        _isPaused = false;
         
         __weak VideoMetalView *weakSelf = self;
         _sink.reset(new VideoRendererAdapterImpl(^(CGSize size, RTCVideoFrame *videoFrame, RTCVideoRotation rotation) {
@@ -113,6 +131,7 @@ private:
                     strongSelf->_currentSize = size;
                     [strongSelf setSize:size];
                 }
+                strongSelf->_rotation = videoFrame.rotation;
                 
                 int mappedValue = 0;
                 switch (rotation) {
@@ -159,11 +178,23 @@ private:
 }
 
 - (BOOL)isEnabled {
-    return YES;
+    return !_isPaused;
 }
 
 - (void)setEnabled:(BOOL)enabled {
-    
+    _isPaused = enabled;
+}
+-(void)setIsPaused:(bool)paused {
+    _isPaused = paused;
+}
+-(void)renderToSize:(NSSize)size animated: (bool)animated {
+    _metalView.drawableSize = [self drawableSize:size];
+
+    RTCVideoFrame *frame = [_frames lastObject];
+    if (frame == nil) {
+        frame = _videoFrame;
+    }
+    [self renderFrame:frame];
 }
 
 - (CALayerContentsGravity)videoContentMode {
@@ -181,7 +212,22 @@ private:
 }
 
 + (CAMetalLayer *)createMetalView:(CGRect)frame {
-    return [[CAMetalLayer alloc] init];
+    CAMetalLayer *layer = [[TGCAMetalLayer alloc] init];
+    [CATransaction begin];
+    [CATransaction setDisableActions:true];
+    layer.framebufferOnly = true;
+    layer.opaque = false;
+//    layer.cornerRadius = 4;
+    if (@available(macOS 10.13, *)) {
+        layer.displaySyncEnabled = NO;
+    }
+//    layer.presentsWithTransaction = YES;
+    layer.backgroundColor = [NSColor clearColor].CGColor;
+    layer.contentsGravity = kCAGravityResizeAspectFill;
+    layer.frame = frame;
+
+    [CATransaction commit];
+    return layer;
 }
 
 + (TGRTCMTLI420Renderer *)createI420Renderer {
@@ -192,22 +238,16 @@ private:
 - (void)configure {
     NSAssert([VideoMetalView isMetalAvailable], @"Metal not availiable on this device");
     self.wantsLayer = YES;
-    self.layerContentsRedrawPolicy = NSViewLayerContentsRedrawNever;
+    self.layerContentsRedrawPolicy = NSViewLayerContentsRedrawOnSetNeedsDisplay;
     _metalView = [VideoMetalView createMetalView:self.bounds];
     self.layer = _metalView;
-    _metalView.framebufferOnly = true;
-    _metalView.opaque = false;
-    _metalView.needsDisplayOnBoundsChange = true;
-    _metalView.cornerRadius = 4;
-    _metalView.backgroundColor = [NSColor clearColor].CGColor;
-    _metalView.contentsGravity = kCAGravityResizeAspect;//UIViewContentModeScaleAspectFill;
     _videoFrameSize = CGSizeZero;
     
     CAMetalLayer *layer = _metalView;
     
     _rendererI420 = [[SQueueLocalObject alloc] initWithQueue:renderQueue generate: ^{
         TGRTCMTLI420Renderer *renderer = [VideoMetalView createI420Renderer];
-        [renderer addRenderingDestination:layer];
+        [renderer setRenderingDestination:layer];
         return renderer;
     }];
 }
@@ -216,17 +256,30 @@ private:
 -(void)setFrameSize:(NSSize)newSize {
     [super setFrameSize:newSize];
     
-    CGRect bounds = self.bounds;
-    _metalView.frame = bounds;
-    if (!CGSizeEqualToSize(_videoFrameSize, CGSizeZero)) {
-        _metalView.drawableSize = [self drawableSize];
-    } else {
-        _metalView.drawableSize = bounds.size;
+    
+    [self updateDrawingSize: newSize];
+    
+    RTCVideoFrame *frame = [_frames lastObject];
+    if (frame == nil) {
+        frame = _videoFrame;
     }
+    if (frame) {
+        [self renderFrame:frame];
+    }
+
 }
 - (void)layout {
     [super layout];
+    [self updateDrawingSize: self.frame.size];
+}
 
+-(void)updateDrawingSize:(NSSize)size {
+    _metalView.frame = CGRectMake(0, 0, size.width, size.height);
+    if (!CGSizeEqualToSize(_videoFrameSize, CGSizeZero)) {
+        _metalView.drawableSize = [self drawableSize:size];
+    } else {
+        _metalView.drawableSize = size;
+    }
 }
 
 
@@ -240,7 +293,6 @@ private:
 - (void)setRotationOverride:(NSValue *)rotationOverride {
     _rotationOverride = rotationOverride;
     
-    _metalView.drawableSize = [self drawableSize];
     [self setNeedsLayout:YES];
 }
 
@@ -255,10 +307,10 @@ private:
         return rotation;
     }
     
-    return _videoFrame.rotation;
+    return _rotation;
 }
 
-- (CGSize)drawableSize {
+- (CGSize)drawableSize:(NSSize)forSize {
     
     MTLFrameSize from;
     MTLFrameSize to;
@@ -266,8 +318,13 @@ private:
     from.width = _videoFrameSize.width;
     from.height = _videoFrameSize.height;
     
-    to.width = self.layer.bounds.size.width;
-    to.height = self.layer.bounds.size.height;
+    if (CGSizeEqualToSize(CGSizeZero, forSize)) {
+        to.width = _videoFrameSize.width;
+        to.height = _videoFrameSize.height;
+    } else {
+        to.width = forSize.width;
+        to.height = forSize.height;
+    }
 
     MTLFrameSize size = MTLAspectFilled(to, from);
     return CGSizeMake(size.width, size.height);
@@ -279,8 +336,6 @@ private:
     assert([NSThread isMainThread]);
            
    _videoFrameSize = size;
-   CGSize drawableSize = [self drawableSize];
-   _metalView.drawableSize = drawableSize;
    [self setNeedsLayout:YES];
     
     _internalAspect = _videoFrameSize.width / _videoFrameSize.height;
@@ -297,9 +352,8 @@ private:
         RTCLogInfo(@"Incoming frame is nil. Exiting render callback.");
         return;
     }
-    _videoFrame = frame;
     
-    RTCVideoFrame *videoFrame = _videoFrame;
+    RTCVideoFrame *videoFrame = frame;
     // Skip rendering if we've already rendered this frame.
     if (!videoFrame) {
         return;
@@ -317,18 +371,52 @@ private:
     if ((self.window.occlusionState & NSWindowOcclusionStateVisible) == 0) {
         return;
     }
-            
+   
     
+    if (_frames.count >= 5) {
+        [_frames removeAllObjects];
+        [_frames addObject:videoFrame];
+        [self enqueue];
+        return;
+    }
     
-    NSValue * rotationOverride = _rotationOverride;
-    
-    [_rendererI420 with:^(TGRTCMTLI420Renderer * object) {
-        object.rotationOverride = rotationOverride;
-        [object drawFrame:videoFrame];
-    }];
-    
-    _lastFrameTimeNs = videoFrame.timeStampNs;
+    [_frames addObject:videoFrame];
+        
+    [self enqueue];
 
+}
+
+-(void)enqueue {
+    if(_frames.count > 0 && !_drawing) {
+        RTCVideoFrame *videoFrame = [_frames firstObject];
+        
+        NSValue * rotationOverride = _rotationOverride;
+        
+        
+        int64_t timeStampNs = videoFrame.timeStampNs;
+        
+        __weak VideoMetalView *weakSelf = self;
+        dispatch_block_t completion = ^{
+            __strong VideoMetalView *strongSelf = weakSelf;
+            if (strongSelf && strongSelf->_frames.count > 0) {
+                [strongSelf->_frames removeObjectAtIndex:0];
+                strongSelf->_drawing = false;
+                strongSelf->_lastFrameTimeNs = timeStampNs;
+                [strongSelf enqueue];
+            }
+        };
+        
+        _videoFrame = videoFrame;
+        
+        self->_drawing = true;        
+        
+        [_rendererI420 with:^(TGRTCMTLI420Renderer * object) {
+            object.rotationOverride = rotationOverride;
+            [object drawFrame:videoFrame];
+            dispatch_async(dispatch_get_main_queue(), completion);
+        }];
+        
+    }
 }
 
 - (std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)getSink {
