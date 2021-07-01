@@ -186,9 +186,10 @@ private:
 }
 -(void)setIsPaused:(bool)paused {
     _isPaused = paused;
+    [self updateDrawingSize:self.frame.size];
 }
 -(void)renderToSize:(NSSize)size animated: (bool)animated {
-  
+    [self updateDrawingSize:size];
 }
 
 - (CALayerContentsGravity)videoContentMode {
@@ -234,6 +235,7 @@ private:
     self.wantsLayer = YES;
     self.layerContentsRedrawPolicy = NSViewLayerContentsRedrawOnSetNeedsDisplay;
     _metalView = [VideoMetalView createMetalView:self.bounds];
+
     self.layer = _metalView;
     _videoFrameSize = CGSizeZero;
     
@@ -249,30 +251,34 @@ private:
 
 -(void)setFrameSize:(NSSize)newSize {
     [super setFrameSize:newSize];
-    
-    
+    _metalView.frame = CGRectMake(0, 0, newSize.width, newSize.height);
+
     [self updateDrawingSize: newSize];
     
-    RTCVideoFrame *frame = [_frames lastObject];
-    if (frame == nil) {
-        frame = _videoFrame;
-    }
-    if (frame) {
-        [self renderFrame:frame];
-    }
-
 }
 - (void)layout {
     [super layout];
-    [self updateDrawingSize: self.frame.size];
 }
 
 -(void)updateDrawingSize:(NSSize)size {
-    _metalView.frame = CGRectMake(0, 0, size.width, size.height);
+    if (_isPaused) {
+        return;
+    }
+    
     if (!CGSizeEqualToSize(_videoFrameSize, CGSizeZero)) {
         _metalView.drawableSize = [self drawableSize:size];
     } else {
         _metalView.drawableSize = size;
+    }
+    
+    if(!_isPaused) {
+        RTCVideoFrame *frame = [_frames lastObject];
+        if (frame == nil) {
+            frame = _videoFrame;
+        }
+        if (frame) {
+            [self renderFrame:frame];
+        }
     }
 }
 
@@ -406,9 +412,15 @@ private:
         
         self->_drawing = true;        
         
+        CGSize viewPortSize = CGSizeZero;
+        CGSize drawableSize = CGSizeZero;
+
+        viewPortSize = self.layer.frame.size;
+        drawableSize = _metalView.drawableSize;
+        
         [_rendererI420 with:^(TGRTCMTLI420Renderer * object) {
             object.rotationOverride = rotationOverride;
-            [object drawFrame:videoFrame];
+            [object drawFrame:videoFrame viewPortSize:viewPortSize drawableSize:drawableSize];
             dispatch_async(dispatch_get_main_queue(), completion);
         }];
         

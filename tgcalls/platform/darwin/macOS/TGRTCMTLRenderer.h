@@ -27,7 +27,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 @protocol TGRTCMTLRenderer <NSObject>
 
-- (void)drawFrame:(RTC_OBJC_TYPE(RTCVideoFrame) *)frame;
+- (void)drawFrame:(RTC_OBJC_TYPE(RTCVideoFrame) *)frame viewPortSize:(NSSize)viewPortSize drawableSize:(NSSize)drawableSize;
 - (BOOL)setRenderingDestination:(__kindof CAMetalLayer *)view;
 
 @end

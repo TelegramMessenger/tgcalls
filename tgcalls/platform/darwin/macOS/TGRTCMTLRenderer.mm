@@ -33,8 +33,6 @@ MTLFrameSize MTLAspectFitted(MTLFrameSize from, MTLFrameSize to) {
 }
 
 MTLFrameSize MTLAspectFilled(MTLFrameSize from, MTLFrameSize to) {
-    //        let scale = max(size.width / max(1.0, self.width), size.height / max(1.0, self.height))
-
     double scale = std::max(
         to.width / std::max(1., double(from.width)),
         to.height / std::max(1., double(from.height)));
@@ -94,7 +92,9 @@ static inline void getCubeVertexData(size_t frameWidth,
 
     MTLFrameSize _frameSize;
     MTLFrameSize _scaledSize;
-
+    
+    RTCVideoFrame *_frame;
+    bool _frameIsUpdated;
     
     RTCVideoRotation _rotation;
     bool _rotationInited;
@@ -176,19 +176,21 @@ static inline void getCubeVertexData(size_t frameWidth,
 }
 
 - (BOOL)setupTexturesForFrame:(nonnull RTC_OBJC_TYPE(RTCVideoFrame) *)frame {
-  RTCVideoRotation rotation;
-  NSValue *rotationOverride = self.rotationOverride;
-  if (rotationOverride) {
-      [rotationOverride getValue:&rotation];
-  } else {
-      rotation = frame.rotation;
-  }
-
+    RTCVideoRotation rotation;
+    NSValue *rotationOverride = self.rotationOverride;
+    if (rotationOverride) {
+        [rotationOverride getValue:&rotation];
+    } else {
+        rotation = frame.rotation;
+    }
     
-  int frameWidth, frameHeight;
-  [self getWidth:&frameWidth
-          height:&frameHeight
-         ofFrame:frame];
+    _frameIsUpdated = _frame.timeStampNs != frame.timeStampNs;
+    _frame = frame;
+    
+    int frameWidth, frameHeight;
+    [self getWidth:&frameWidth
+            height:&frameHeight
+           ofFrame:frame];
 
     if (frameWidth != _frameSize.width || frameHeight != _frameSize.height || _rotation != rotation || !_rotationInited) {
         
@@ -197,7 +199,7 @@ static inline void getCubeVertexData(size_t frameWidth,
         _rotation = rotation;
         _frameSize.width = frameWidth;
         _frameSize.height = frameHeight;
-
+        _frameIsUpdated = true;
 
       
         MTLFrameSize small;
@@ -264,7 +266,7 @@ static inline void getCubeVertexData(size_t frameWidth,
                                                   texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
                                                   width:size.width
                                                   height:size.height
-                                                  mipmapped:YES];
+                                                  mipmapped:NO];
     rgbTextureDescriptor.usage = usage;
     return [metalContext.device newTextureWithDescriptor:rgbTextureDescriptor];
 }
@@ -284,25 +286,25 @@ static inline void getCubeVertexData(size_t frameWidth,
 
 - (id<MTLTexture>)convertYUVtoRGV {
     id<MTLTexture> rgbTexture = _rgbTexture;
+    if (_frameIsUpdated) {
+        id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
+        
+        id<MTLRenderCommandEncoder> renderEncoder = [self createRenderEncoderForTarget: rgbTexture with: commandBuffer];
+        [renderEncoder pushDebugGroup:renderEncoderDebugGroup];
+        [renderEncoder setRenderPipelineState:_context.pipelineYuvRgb];
+        [renderEncoder setVertexBuffer:_vertexBuffer offset:0 atIndex:0];
+        [self uploadTexturesToRenderEncoder:renderEncoder];
+        [renderEncoder setFragmentSamplerState:_context.sampler atIndex:0];
+        
+        [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
+                        vertexStart:0
+                        vertexCount:4
+                        instanceCount:1];
+        [renderEncoder popDebugGroup];
+        [renderEncoder endEncoding];
 
-    id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
-    
-    id<MTLRenderCommandEncoder> renderEncoder = [self createRenderEncoderForTarget: rgbTexture with: commandBuffer];
-    [renderEncoder pushDebugGroup:renderEncoderDebugGroup];
-    [renderEncoder setRenderPipelineState:_context.pipelineYuvRgb];
-    [renderEncoder setVertexBuffer:_vertexBuffer offset:0 atIndex:0];
-    [self uploadTexturesToRenderEncoder:renderEncoder];
-    [renderEncoder setFragmentSamplerState:_context.sampler atIndex:0];
-    
-    [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
-                    vertexStart:0
-                    vertexCount:4
-                    instanceCount:1];
-    [renderEncoder popDebugGroup];
-    [renderEncoder endEncoding];
-
-    [commandBuffer commit];
-//    [commandBuffer waitUntilCompleted];
+        [commandBuffer commit];
+    }
     
     return rgbTexture;
 }
@@ -371,7 +373,7 @@ static inline void getCubeVertexData(size_t frameWidth,
 //    [commandBuffer waitUntilCompleted];
 }
 
-- (void)render {
+- (void)render:(NSSize)vs drawableSize:(NSSize)ds {
     id<CAMetalDrawable> drawable = _view.nextDrawable;
     
     CGSize drawableSize = _view.drawableSize;
@@ -389,22 +391,14 @@ static inline void getCubeVertexData(size_t frameWidth,
 
     to.width = drawableSize.width;
     to.height = drawableSize.height;
+    
+    bool swap = _rotation == RTCVideoRotation_90 || _rotation == RTCVideoRotation_270;
 
-    switch (_rotation) {
-        case RTCVideoRotation_90:
-            frameSize.width = _frameSize.height;
-            frameSize.height = _frameSize.width;
-            scaledSize.width = _scaledSize.height;
-            scaledSize.height = _scaledSize.width;
-            break;
-        case RTCVideoRotation_270:
-            frameSize.width = _frameSize.height;
-            frameSize.height = _frameSize.width;
-            scaledSize.width = _scaledSize.height;
-            scaledSize.height = _scaledSize.width;
-            break;
-        default:
-            break;
+    if (swap) {
+        frameSize.width = _frameSize.height;
+        frameSize.height = _frameSize.width;
+        scaledSize.width = _scaledSize.height;
+        scaledSize.height = _scaledSize.width;
     }
     
     float ratio = (float)frameSize.height / (float)frameSize.width;
@@ -442,17 +436,9 @@ static inline void getCubeVertexData(size_t frameWidth,
     simd_float2 scale2 = simd_make_float2(MIN(bgRatio_w, widthAspectScale * bgRatio_w), MIN(bgRatio_h, heightAspectScale * bgRatio_h));
     
     
-    switch (_rotation) {
-        case RTCVideoRotation_90:
-            scale1 = simd_make_float2(MAX(1.0, heightAspectScale), MAX(1.0, widthAspectScale));
-            scale2 = simd_make_float2(MIN(1, heightAspectScale * 1), MIN(bgRatio_h, widthAspectScale * bgRatio_h));
-            break;
-        case RTCVideoRotation_270:
-            scale1 = simd_make_float2(MAX(1.0, heightAspectScale), MAX(1.0, widthAspectScale));
-            scale2 = simd_make_float2(MIN(1, heightAspectScale * 1), MIN(bgRatio_h, widthAspectScale * bgRatio_h));
-            break;
-        default:
-            break;
+    if (swap) {
+        scale1 = simd_make_float2(MAX(1.0, heightAspectScale), MAX(1.0, widthAspectScale));
+        scale2 = simd_make_float2(MIN(1, heightAspectScale * 1), MIN(bgRatio_h, widthAspectScale * bgRatio_h));
     }
 
     [self mergeYUVTexturesInTarget: targetTexture
@@ -486,32 +472,12 @@ static inline void getCubeVertexData(size_t frameWidth,
 
 #pragma mark - RTCMTLRenderer
 
-- (void)drawFrame:(RTC_OBJC_TYPE(RTCVideoFrame) *)frame {
+- (void)drawFrame:(RTC_OBJC_TYPE(RTCVideoFrame) *)frame viewPortSize:(NSSize)viewPortSize drawableSize:(NSSize)drawableSize {
   @autoreleasepool {
       if ([self setupTexturesForFrame:frame]) {
-          [self render];
+          [self render:viewPortSize drawableSize: drawableSize];
       }
   }
 }
 
 @end
-
-
-//
-//- (id<MTLTexture>)blurInputTexture: (id<MTLTexture>)inputTexture {
-//    id<MTLTexture> blurTexture = [self createTextureWithUsage: MTLTextureUsageShaderWrite|MTLTextureUsageShaderRead|MTLTextureUsageRenderTarget];
-//
-//    id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
-//
-//    if (@available(macOS 10.13, *)) {
-//        MPSImageGaussianBlur *blur = [[MPSImageGaussianBlur alloc] initWithDevice:metalContext.device sigma: 60.0];
-//
-//        [blur encodeToCommandBuffer:commandBuffer sourceTexture:inputTexture destinationTexture:blurTexture];
-//        [commandBuffer commit];
-//        [commandBuffer waitUntilCompleted];
-//    } else {
-//        // Fallback on earlier versions
-//    }
-//
-//    return blurTexture;
-//}
