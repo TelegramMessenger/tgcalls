@@ -323,7 +323,6 @@ private:
 
     MTLFrameSize size = MTLAspectFilled(to, from);
     
-    NSLog(@"size: %f:%f", size.width, size.height);
     return CGSizeMake(size.width, size.height);
 }
 
