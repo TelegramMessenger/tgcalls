@@ -75,12 +75,13 @@ static inline void getCubeVertexData(size_t frameWidth,
   float cropRight = 1;
   float cropTop = 0;
   float cropBottom = 1;
-
-  float values[16] = {-1.0, -1.0, cropLeft, cropBottom,
+    
+    float values[16] = {-1.0, -1.0, cropLeft, cropBottom,
                          1.0, -1.0, cropRight, cropBottom,
                         -1.0,  1.0, cropLeft, cropTop,
                          1.0,  1.0, cropRight, cropTop};
     memcpy(buffer, &values, sizeof(values));
+
 }
 
 @implementation TGRTCMTLRenderer {
@@ -95,6 +96,9 @@ static inline void getCubeVertexData(size_t frameWidth,
     MTLFrameSize _scaledSize;
 
     
+    RTCVideoRotation _rotation;
+    bool _rotationInited;
+
     id<MTLTexture> _rgbTexture;
     id<MTLTexture> _rgbScaledAndBlurredTexture;
     
@@ -117,6 +121,20 @@ static inline void getCubeVertexData(size_t frameWidth,
                                            length:sizeof(vertexBufferArray)
                                           options:MTLResourceCPUCacheModeWriteCombined];
 
+      float verts[8] = {-1.0, 1.0, 1.0, 1.0, -1.0, -1.0, 1.0, -1.0};
+    
+      _vertexBuffer0 = [metalContext.device newBufferWithBytes:verts length:sizeof(verts) options:0];
+    
+      float values[8] = {0};
+      
+      _vertexBuffer1 = [metalContext.device newBufferWithBytes:values
+                                                      length:sizeof(values)
+                                                     options:0];
+    
+      _vertexBuffer2 = [metalContext.device newBufferWithBytes:values
+                                                       length:sizeof(values)
+                                                      options:0];
+      
   }
 
   return self;
@@ -135,6 +153,8 @@ static inline void getCubeVertexData(size_t frameWidth,
         view.device = metalContext.device;
         _context = metalContext;
         success = YES;
+        _rotationInited = false;
+
     }
     return success;
 }
@@ -170,40 +190,60 @@ static inline void getCubeVertexData(size_t frameWidth,
           height:&frameHeight
          ofFrame:frame];
 
-  if (frameWidth != _frameSize.width || frameHeight != _frameSize.height) {
-    getCubeVertexData(frameWidth,
-                      frameHeight,
-                      rotation,
-                      (float *)_vertexBuffer.contents);
-      
-      _frameSize.width = frameWidth;
-      _frameSize.height = frameHeight;
-      
-      MTLFrameSize small;
-      small.width = _frameSize.width / 2;
-      small.height = _frameSize.height / 2;
+    if (frameWidth != _frameSize.width || frameHeight != _frameSize.height || _rotation != rotation || !_rotationInited) {
+        
+        bool rotationIsUpdated = _rotation != rotation || !_rotationInited;
+          
+        _rotation = rotation;
+        _frameSize.width = frameWidth;
+        _frameSize.height = frameHeight;
 
-      _scaledSize = MTLAspectFitted(small, _frameSize);
-      _rgbTexture = [self createTextureWithUsage: MTLTextureUsageShaderRead|MTLTextureUsageRenderTarget size:_frameSize];
-      
-      _rgbScaledAndBlurredTexture = [self createTextureWithUsage:MTLTextureUsageShaderRead|MTLTextureUsageRenderTarget size:_scaledSize];
-      
-      float verts[8] = {-1.0, 1.0, 1.0, 1.0, -1.0, -1.0, 1.0, -1.0}; //Metal uses a top-left origin, rotate 0
-      
-      _vertexBuffer0 = [_context.device newBufferWithBytes:verts length:sizeof(verts) options:0];
-      
-      float values[8] = {0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0}; //rotate 0 quad
-      
-      _vertexBuffer1 = [_context.device newBufferWithBytes:values
-                                                        length:sizeof(values)
-                                                       options:0];
-      
-      _vertexBuffer2 = [_context.device newBufferWithBytes:values
-                                                         length:sizeof(values)
-                                                        options:0];
-  }
 
-  return YES;
+      
+        MTLFrameSize small;
+        small.width = _frameSize.width / 2;
+        small.height = _frameSize.height / 2;
+
+        _scaledSize = MTLAspectFitted(small, _frameSize);
+        _rgbTexture = [self createTextureWithUsage: MTLTextureUsageShaderRead|MTLTextureUsageRenderTarget size:_frameSize];
+      
+        _rgbScaledAndBlurredTexture = [self createTextureWithUsage:MTLTextureUsageShaderRead|MTLTextureUsageRenderTarget size:_scaledSize];
+      
+        
+        if (rotationIsUpdated) {
+            getCubeVertexData(frameWidth,
+                              frameHeight,
+                              rotation,
+                              (float *)_vertexBuffer.contents);
+            
+           
+
+            switch (rotation) {
+                case RTCVideoRotation_0: {
+                    float values[8] = {0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0};
+                    memcpy((float *)_vertexBuffer1.contents, &values, sizeof(values));
+                    memcpy((float *)_vertexBuffer2.contents, &values, sizeof(values));
+                } break;
+                case RTCVideoRotation_90: {
+                    float values[8] = {0.0, 1, 0, 0.0, 1, 1.0, 1.0, 0}; //rotate 0 quad
+                    memcpy((float *)_vertexBuffer1.contents, &values, sizeof(values));
+                    memcpy((float *)_vertexBuffer2.contents, &values, sizeof(values));
+                } break;
+                case RTCVideoRotation_180: {
+                    float values[8] = {0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0};
+                    memcpy(_vertexBuffer1.contents, &values, sizeof(values));
+                    memcpy(_vertexBuffer2.contents, &values, sizeof(values));
+                } break;
+                case RTCVideoRotation_270: {
+                    float values[8] = {1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
+                    memcpy(_vertexBuffer1.contents, &values, sizeof(values));
+                    memcpy(_vertexBuffer2.contents, &values, sizeof(values));
+                } break;
+            }
+            _rotationInited = true;
+        }
+    }
+    return YES;
 }
 
 #pragma mark - GPU methods
@@ -339,11 +379,37 @@ static inline void getCubeVertexData(size_t frameWidth,
     MTLFrameSize from;
     MTLFrameSize to;
     
+    MTLFrameSize frameSize = _frameSize;
+    MTLFrameSize scaledSize = _scaledSize;
+    
+    
+    
     from.width = _view.bounds.size.width;
     from.height = _view.bounds.size.height;
 
     to.width = drawableSize.width;
     to.height = drawableSize.height;
+
+    switch (_rotation) {
+        case RTCVideoRotation_90:
+            frameSize.width = _frameSize.height;
+            frameSize.height = _frameSize.width;
+            scaledSize.width = _scaledSize.height;
+            scaledSize.height = _scaledSize.width;
+            break;
+        case RTCVideoRotation_270:
+            frameSize.width = _frameSize.height;
+            frameSize.height = _frameSize.width;
+            scaledSize.width = _scaledSize.height;
+            scaledSize.height = _scaledSize.width;
+            break;
+        default:
+            break;
+    }
+    
+    float ratio = (float)frameSize.height / (float)frameSize.width;
+
+    
     
     MTLFrameSize viewSize = MTLAspectFilled(to, from);
     
@@ -352,25 +418,42 @@ static inline void getCubeVertexData(size_t frameWidth,
     
     CGSize viewPortSize = CGSizeMake(viewSize.width, viewSize.height);
     
+
     
     id<MTLTexture> targetTexture = drawable.texture;
     
-    float ratio = (float)_frameSize.height / (float)_frameSize.width;
+    
     CGFloat heightAspectScale = viewPortSize.height / (fitted.width * ratio);
     CGFloat widthAspectScale = viewPortSize.width / (fitted.height * (1.0/ratio));
 
     _rgbTexture = [self convertYUVtoRGV];
 
-    simd_float2 smallScale = simd_make_float2(_frameSize.width / _scaledSize.width, _frameSize.height / _scaledSize.height);
+    simd_float2 smallScale = simd_make_float2(frameSize.width / scaledSize.width, frameSize.height / scaledSize.height);
     
     _rgbScaledAndBlurredTexture = [self scaleAndBlur:_rgbTexture scale:smallScale];
     
     simd_float2 scale1 = simd_make_float2(MAX(1.0, widthAspectScale), MAX(1.0, heightAspectScale));
     
-    float bgRatio_w = _scaledSize.width / _frameSize.width;
-    float bgRatio_h = _scaledSize.height / _frameSize.height;
+    float bgRatio_w = scaledSize.width / frameSize.width;
+    float bgRatio_h = scaledSize.height / frameSize.height;
 
+    
+    
     simd_float2 scale2 = simd_make_float2(MIN(bgRatio_w, widthAspectScale * bgRatio_w), MIN(bgRatio_h, heightAspectScale * bgRatio_h));
+    
+    
+    switch (_rotation) {
+        case RTCVideoRotation_90:
+            scale1 = simd_make_float2(MAX(1.0, heightAspectScale), MAX(1.0, widthAspectScale));
+            scale2 = simd_make_float2(MIN(1, heightAspectScale * 1), MIN(bgRatio_h, widthAspectScale * bgRatio_h));
+            break;
+        case RTCVideoRotation_270:
+            scale1 = simd_make_float2(MAX(1.0, heightAspectScale), MAX(1.0, widthAspectScale));
+            scale2 = simd_make_float2(MIN(1, heightAspectScale * 1), MIN(bgRatio_h, widthAspectScale * bgRatio_h));
+            break;
+        default:
+            break;
+    }
 
     [self mergeYUVTexturesInTarget: targetTexture
                     foregroundTexture: _rgbTexture

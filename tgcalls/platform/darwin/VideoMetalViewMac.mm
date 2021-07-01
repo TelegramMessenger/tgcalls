@@ -127,12 +127,12 @@ private:
                 if (strongSelf == nil) {
                     return;
                 }
+                strongSelf->_rotation = videoFrame.rotation;
                 if (!CGSizeEqualToSize(size, strongSelf->_currentSize)) {
                     strongSelf->_currentSize = size;
                     [strongSelf setSize:size];
                 }
-                strongSelf->_rotation = videoFrame.rotation;
-                
+
                 int mappedValue = 0;
                 switch (rotation) {
                     case RTCVideoRotation_90:
@@ -188,13 +188,7 @@ private:
     _isPaused = paused;
 }
 -(void)renderToSize:(NSSize)size animated: (bool)animated {
-    _metalView.drawableSize = [self drawableSize:size];
-
-    RTCVideoFrame *frame = [_frames lastObject];
-    if (frame == nil) {
-        frame = _videoFrame;
-    }
-    [self renderFrame:frame];
+  
 }
 
 - (CALayerContentsGravity)videoContentMode {
@@ -314,7 +308,7 @@ private:
     
     MTLFrameSize from;
     MTLFrameSize to;
-    
+        
     from.width = _videoFrameSize.width;
     from.height = _videoFrameSize.height;
     
@@ -325,8 +319,11 @@ private:
         to.width = forSize.width;
         to.height = forSize.height;
     }
+    
 
     MTLFrameSize size = MTLAspectFilled(to, from);
+    
+    NSLog(@"size: %f:%f", size.width, size.height);
     return CGSizeMake(size.width, size.height);
 }
 
@@ -336,7 +333,7 @@ private:
     assert([NSThread isMainThread]);
            
    _videoFrameSize = size;
-   [self setNeedsLayout:YES];
+   [self updateDrawingSize:self.frame.size];
     
     _internalAspect = _videoFrameSize.width / _videoFrameSize.height;
 }
