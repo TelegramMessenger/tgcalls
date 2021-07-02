@@ -25,10 +25,16 @@ MTLFrameSize MTLAspectFitted(MTLFrameSize from, MTLFrameSize to);
 
 NS_ASSUME_NONNULL_BEGIN
 
+typedef enum {
+    TGRTCMTLRenderModeSinge,
+    TGRTCMTLRenderModeDouble
+} TGRTCMTLRenderMode;
+
 @protocol TGRTCMTLRenderer <NSObject>
 
-- (void)drawFrame:(RTC_OBJC_TYPE(RTCVideoFrame) *)frame viewPortSize:(NSSize)viewPortSize drawableSize:(NSSize)drawableSize;
-- (BOOL)setRenderingDestination:(__kindof CAMetalLayer *)view;
+- (void)drawFrame:(RTC_OBJC_TYPE(RTCVideoFrame) *)frame;
+- (BOOL)setSingleRendering:(__kindof CAMetalLayer *)view;
+- (BOOL)setDoubleRendering:(__kindof CAMetalLayer *)view foreground: (__kindof CAMetalLayer *)foreground;
 
 @end
 

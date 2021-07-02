@@ -17,6 +17,7 @@ NS_ASSUME_NONNULL_BEGIN
 -(id<MTLRenderPipelineState>)pipelineYuvRgb;
 -(id<MTLRenderPipelineState>)pipelineTransformAndBlend;
 -(id<MTLRenderPipelineState>)pipelineScaleAndBlur;
+-(id<MTLRenderPipelineState>)pipelineThrough;
 -(id<MTLSamplerState>)sampler;
 -(CGDirectDisplayID)displayId;
 @end

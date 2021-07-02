@@ -14,6 +14,8 @@ static NSString *const fragmentDoTransformFilter = @"doTransformFilter";
 static NSString *const twoInputVertexName = @"twoInputVertex";
 static NSString *const transformAndBlendName = @"transformAndBlend";
 static NSString *const scaleAndBlurName = @"scaleAndBlur";
+static NSString *const fragmentPlainName = @"fragmentPlain";
+
 
 
 @implementation TGRTCMetalContextHolder
@@ -23,7 +25,8 @@ static NSString *const scaleAndBlurName = @"scaleAndBlur";
     id<MTLRenderPipelineState> _pipelineYuvRgb;
     id<MTLRenderPipelineState> _pipelineTransformAndBlend;
     id<MTLRenderPipelineState> _pipelineScaleAndBlur;
-
+    id<MTLRenderPipelineState> _pipelineThrough;
+    
     id<MTLSamplerState> _sampler;
     id<MTLLibrary> _defaultLibrary;
 
@@ -70,6 +73,18 @@ static NSString *const scaleAndBlurName = @"scaleAndBlur";
         NSError *error = nil;
         _pipelineYuvRgb = [_device newRenderPipelineStateWithDescriptor:pipelineDescriptor error:&error];
     }
+    {
+        id<MTLFunction> vertexFunction = [_defaultLibrary newFunctionWithName:vertexFunctionName];
+        id<MTLFunction> fragmentFunction = [_defaultLibrary newFunctionWithName:fragmentPlainName];
+
+        MTLRenderPipelineDescriptor *pipelineDescriptor = [[MTLRenderPipelineDescriptor alloc] init];
+        pipelineDescriptor.vertexFunction = vertexFunction;
+        pipelineDescriptor.fragmentFunction = fragmentFunction;
+        pipelineDescriptor.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+        pipelineDescriptor.depthAttachmentPixelFormat = MTLPixelFormatInvalid;
+        NSError *error = nil;
+        _pipelineThrough = [_device newRenderPipelineStateWithDescriptor:pipelineDescriptor error:&error];
+    }
     
     {
         id<MTLFunction> vertexFunction = [_defaultLibrary newFunctionWithName:twoInputVertexName];
@@ -108,6 +123,9 @@ static NSString *const scaleAndBlurName = @"scaleAndBlur";
 }
 -(id<MTLRenderPipelineState>)pipelineScaleAndBlur {
     return _pipelineScaleAndBlur;
+}
+-(id<MTLRenderPipelineState>)pipelineThrough {
+    return _pipelineThrough;
 }
 -(id<MTLSamplerState>)sampler {
     return _sampler;

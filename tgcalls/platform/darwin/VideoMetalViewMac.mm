@@ -79,6 +79,8 @@ private:
     SQueueLocalObject *_rendererI420;
 
     CAMetalLayer *_metalView;
+    NSView *_foregroundView;
+
     CGSize _videoFrameSize;
     RTCVideoRotation _rotation;
     int64_t _lastFrameTimeNs;
@@ -100,6 +102,8 @@ private:
     NSMutableArray<RTCVideoFrame *> *_frames;
     RTCVideoFrame *_videoFrame;
     BOOL _drawing;
+    
+    BOOL _deleteForegroundOnNextDrawing;
 }
 
 @end
@@ -119,7 +123,7 @@ private:
         _frames = [[NSMutableArray alloc] init];
         _drawing = false;
         _isPaused = false;
-        
+        _deleteForegroundOnNextDrawing = false;
         __weak VideoMetalView *weakSelf = self;
         _sink.reset(new VideoRendererAdapterImpl(^(CGSize size, RTCVideoFrame *videoFrame, RTCVideoRotation rotation) {
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -189,7 +193,35 @@ private:
     [self updateDrawingSize:self.frame.size];
 }
 -(void)renderToSize:(NSSize)size animated: (bool)animated {
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    if (animated) {
+        if (!_foregroundView) {
+            _foregroundView = [[NSView alloc] initWithFrame:self.bounds];
+            _foregroundView.wantsLayer = YES;
+            _foregroundView.autoresizingMask = 0;
+            _foregroundView.layer = [VideoMetalView createMetalView:self.bounds];
+            _foregroundView.layer.contentsGravity = kCAGravityResizeAspect;
+            [self addSubview:_foregroundView];
+        }
+        
+        CAMetalLayer *layer = _metalView;
+        CAMetalLayer *foreground = (CAMetalLayer *)_foregroundView.layer;
+
+        [_rendererI420 with:^(TGRTCMTLI420Renderer * renderer) {
+            [renderer setDoubleRendering:layer foreground:foreground];
+        }];
+        _deleteForegroundOnNextDrawing = false;
+    } else {
+        _deleteForegroundOnNextDrawing = true;
+        CAMetalLayer *layer = _metalView;
+        
+        [_rendererI420 with:^(TGRTCMTLI420Renderer * renderer) {
+            [renderer setSingleRendering:layer];
+        }];
+    }
     [self updateDrawingSize:size];
+    [CATransaction commit];
 }
 
 - (CALayerContentsGravity)videoContentMode {
@@ -236,14 +268,15 @@ private:
     self.layerContentsRedrawPolicy = NSViewLayerContentsRedrawOnSetNeedsDisplay;
     _metalView = [VideoMetalView createMetalView:self.bounds];
 
+    
     self.layer = _metalView;
     _videoFrameSize = CGSizeZero;
-    
+        
     CAMetalLayer *layer = _metalView;
-    
+
     _rendererI420 = [[SQueueLocalObject alloc] initWithQueue:renderQueue generate: ^{
         TGRTCMTLI420Renderer *renderer = [VideoMetalView createI420Renderer];
-        [renderer setRenderingDestination:layer];
+        [renderer setSingleRendering:layer];
         return renderer;
     }];
 }
@@ -251,8 +284,7 @@ private:
 
 -(void)setFrameSize:(NSSize)newSize {
     [super setFrameSize:newSize];
-    _metalView.frame = CGRectMake(0, 0, newSize.width, newSize.height);
-
+    
     [self updateDrawingSize: newSize];
     
 }
@@ -264,11 +296,14 @@ private:
     if (_isPaused) {
         return;
     }
-    
+    _metalView.frame = CGRectMake(0, 0, size.width, size.height);
+    _foregroundView.frame = self.bounds;
     if (!CGSizeEqualToSize(_videoFrameSize, CGSizeZero)) {
         _metalView.drawableSize = [self drawableSize:size];
+        ((CAMetalLayer *)_foregroundView.layer).drawableSize = _videoFrameSize;
     } else {
         _metalView.drawableSize = size;
+        ((CAMetalLayer *)_foregroundView.layer).drawableSize = size;
     }
     
     if(!_isPaused) {
@@ -404,6 +439,11 @@ private:
                 [strongSelf->_frames removeObjectAtIndex:0];
                 strongSelf->_drawing = false;
                 strongSelf->_lastFrameTimeNs = timeStampNs;
+                if (strongSelf->_deleteForegroundOnNextDrawing) {
+                    [strongSelf->_foregroundView removeFromSuperview];
+                    strongSelf->_foregroundView = nil;
+                    strongSelf->_deleteForegroundOnNextDrawing = false;
+                }
                 [strongSelf enqueue];
             }
         };
@@ -412,15 +452,9 @@ private:
         
         self->_drawing = true;        
         
-        CGSize viewPortSize = CGSizeZero;
-        CGSize drawableSize = CGSizeZero;
-
-        viewPortSize = self.layer.frame.size;
-        drawableSize = _metalView.drawableSize;
-        
         [_rendererI420 with:^(TGRTCMTLI420Renderer * object) {
             object.rotationOverride = rotationOverride;
-            [object drawFrame:videoFrame viewPortSize:viewPortSize drawableSize:drawableSize];
+            [object drawFrame:videoFrame];
             dispatch_async(dispatch_get_main_queue(), completion);
         }];
         

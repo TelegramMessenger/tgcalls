@@ -43,6 +43,8 @@ MTLFrameSize MTLAspectFilled(MTLFrameSize from, MTLFrameSize to) {
 }
 
 
+
+
 static NSString *const pipelineDescriptorLabel = @"RTCPipeline";
 static NSString *const commandBufferLabel = @"RTCCommandBuffer";
 static NSString *const renderEncoderLabel = @"RTCEncoder";
@@ -50,6 +52,8 @@ static NSString *const renderEncoderDebugGroup = @"RTCDrawFrame";
 
 
 static TGRTCMetalContextHolder *metalContext = nil;
+
+
 
 bool initMetal() {
     if (metalContext == nil) {
@@ -85,6 +89,9 @@ static inline void getCubeVertexData(size_t frameWidth,
 @implementation TGRTCMTLRenderer {
     __kindof CAMetalLayer *_view;
 
+    __kindof CAMetalLayer *_foreground;
+
+    
     TGRTCMetalContextHolder* _context;
     
     id<MTLCommandQueue> _commandQueue;
@@ -106,7 +113,8 @@ static inline void getCubeVertexData(size_t frameWidth,
     id<MTLBuffer> _vertexBuffer1;
     id<MTLBuffer> _vertexBuffer2;
     
-    dispatch_semaphore_t _inflight;
+    dispatch_semaphore_t _inflight1;
+    dispatch_semaphore_t _inflight2;
 
 }
 
@@ -114,7 +122,12 @@ static inline void getCubeVertexData(size_t frameWidth,
 
 - (instancetype)init {
   if (self = [super init]) {
-      _inflight = dispatch_semaphore_create(0);
+      _inflight1 = dispatch_semaphore_create(0);
+      _inflight2 = dispatch_semaphore_create(0);
+
+      _context = metalContext;
+      _commandQueue = [_context.device newCommandQueueWithMaxCommandBufferCount:3];
+
       
       float vertexBufferArray[16] = {0};
       _vertexBuffer = [metalContext.device newBufferWithBytes:vertexBufferArray
@@ -135,28 +148,30 @@ static inline void getCubeVertexData(size_t frameWidth,
                                                        length:sizeof(values)
                                                       options:0];
       
+      
+      
   }
 
   return self;
 }
 
-- (BOOL)setRenderingDestination:(__kindof CAMetalLayer *)view {
-  return [self setupWithView:view];
+- (BOOL)setSingleRendering:(__kindof CAMetalLayer *)view {
+  return [self setupWithView:view foreground: nil];
+}
+- (BOOL)setDoubleRendering:(__kindof CAMetalLayer *)view foreground:(nonnull __kindof CAMetalLayer *)foreground {
+  return [self setupWithView:view foreground: foreground];
 }
 
 #pragma mark - Private
 
-- (BOOL)setupWithView:(__kindof CAMetalLayer *)view {
-    BOOL success = NO;
-    if ([self setupMetal]) {
-        _view = view;
-        view.device = metalContext.device;
-        _context = metalContext;
-        success = YES;
-        _rotationInited = false;
-
-    }
-    return success;
+- (BOOL)setupWithView:(__kindof CAMetalLayer *)view foreground: (__kindof CAMetalLayer *)foreground {
+    _view = view;
+    _foreground = foreground;
+    view.device = metalContext.device;
+    foreground.device = metalContext.device;
+    _context = metalContext;
+    _rotationInited = false;
+    return YES;
 }
 #pragma mark - Inheritance
 
@@ -250,16 +265,6 @@ static inline void getCubeVertexData(size_t frameWidth,
 
 #pragma mark - GPU methods
 
-- (BOOL)setupMetal {
-    _context = metalContext;
-  // Set the view to use the default device.
-  if (!_context.device) {
-    return NO;
-  }
-  _commandQueue = [_context.device newCommandQueueWithMaxCommandBufferCount:3];
-
-  return YES;
-}
 
 - (id<MTLTexture>)createTextureWithUsage:(MTLTextureUsage) usage size:(MTLFrameSize)size {
     MTLTextureDescriptor *rgbTextureDescriptor = [MTLTextureDescriptor
@@ -373,7 +378,74 @@ static inline void getCubeVertexData(size_t frameWidth,
 //    [commandBuffer waitUntilCompleted];
 }
 
-- (void)render:(NSSize)vs drawableSize:(NSSize)ds {
+- (void)doubleRender {
+    id<CAMetalDrawable> background = _view.nextDrawable;
+    id<CAMetalDrawable> foreground = _foreground.nextDrawable;
+
+    _rgbTexture = [self convertYUVtoRGV];
+
+    
+    _rgbScaledAndBlurredTexture = [self scaleAndBlur:_rgbTexture scale:simd_make_float2(_frameSize.width / _scaledSize.width, _frameSize.height/ _scaledSize.height)];
+
+    id<MTLCommandBuffer> commandBuffer_b = [_commandQueue commandBuffer];
+    {
+        id<MTLRenderCommandEncoder> renderEncoder = [self createRenderEncoderForTarget: background.texture with: commandBuffer_b];
+        [renderEncoder pushDebugGroup:renderEncoderDebugGroup];
+        [renderEncoder setRenderPipelineState:_context.pipelineScaleAndBlur];
+        [renderEncoder setFragmentTexture:_rgbScaledAndBlurredTexture atIndex:0];
+        [renderEncoder setVertexBuffer:_vertexBuffer offset:0 atIndex:0];
+        simd_float2 scale = simd_make_float2(_scaledSize.width / _frameSize.width, _scaledSize.height / _frameSize.height);
+        [renderEncoder setFragmentBytes:&scale length:sizeof(scale) atIndex:0];
+        bool vertical = false;
+        [renderEncoder setFragmentBytes:&vertical length:sizeof(vertical) atIndex:1];
+        [renderEncoder setFragmentSamplerState:_context.sampler atIndex:0];
+        [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
+                        vertexStart:0
+                        vertexCount:4
+                        instanceCount:1];
+        [renderEncoder popDebugGroup];
+        [renderEncoder endEncoding];
+    }
+    
+
+    id<MTLCommandBuffer> commandBuffer_f = [_commandQueue commandBuffer];
+    {
+        id<MTLRenderCommandEncoder> renderEncoder = [self createRenderEncoderForTarget: foreground.texture with: commandBuffer_f];
+        [renderEncoder pushDebugGroup:renderEncoderDebugGroup];
+        [renderEncoder setRenderPipelineState:_context.pipelineThrough];
+        [renderEncoder setFragmentTexture:_rgbTexture atIndex:0];
+        [renderEncoder setVertexBuffer:_vertexBuffer offset:0 atIndex:0];
+        [renderEncoder setFragmentSamplerState:_context.sampler atIndex:0];
+        [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
+                        vertexStart:0
+                        vertexCount:4
+                        instanceCount:1];
+        [renderEncoder popDebugGroup];
+        [renderEncoder endEncoding];
+    }
+    
+
+    [commandBuffer_b presentDrawable:background];
+    [commandBuffer_f presentDrawable:foreground];
+    
+    dispatch_semaphore_t inflight = _inflight2;
+
+    [commandBuffer_f addCompletedHandler:^(id<MTLCommandBuffer> _Nonnull) {
+        dispatch_semaphore_signal(inflight);
+    }];
+    [commandBuffer_b addCompletedHandler:^(id<MTLCommandBuffer> _Nonnull) {
+        dispatch_semaphore_signal(inflight);
+    }];
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [commandBuffer_f commit];
+        [commandBuffer_b commit];
+    });
+    dispatch_semaphore_wait(inflight, DISPATCH_TIME_FOREVER);
+    dispatch_semaphore_wait(inflight, DISPATCH_TIME_FOREVER);
+
+}
+- (void)singleRender {
     id<CAMetalDrawable> drawable = _view.nextDrawable;
     
     CGSize drawableSize = _view.drawableSize;
@@ -451,7 +523,7 @@ static inline void getCubeVertexData(size_t frameWidth,
     [commandBuffer presentDrawable:drawable];
     
     
-    dispatch_semaphore_t inflight = _inflight;
+    dispatch_semaphore_t inflight = _inflight1;
 
     [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> _Nonnull) {
         dispatch_semaphore_signal(inflight);
@@ -460,22 +532,29 @@ static inline void getCubeVertexData(size_t frameWidth,
     dispatch_async(dispatch_get_main_queue(), ^{
         [commandBuffer commit];
     });
-    dispatch_semaphore_wait(_inflight, DISPATCH_TIME_FOREVER);
+    dispatch_semaphore_wait(inflight, DISPATCH_TIME_FOREVER);
 
 //    [commandBuffer commit];
     
 }
 
 -(void)dealloc {
-    dispatch_semaphore_signal(_inflight);
+    dispatch_semaphore_signal(_inflight1);
+    dispatch_semaphore_signal(_inflight2);
+    dispatch_semaphore_signal(_inflight2);
+
 }
 
 #pragma mark - RTCMTLRenderer
 
-- (void)drawFrame:(RTC_OBJC_TYPE(RTCVideoFrame) *)frame viewPortSize:(NSSize)viewPortSize drawableSize:(NSSize)drawableSize {
+- (void)drawFrame:(RTC_OBJC_TYPE(RTCVideoFrame) *)frame {
   @autoreleasepool {
       if ([self setupTexturesForFrame:frame]) {
-          [self render:viewPortSize drawableSize: drawableSize];
+          if (_foreground) {
+              [self doubleRender];
+          } else {
+              [self singleRender];
+          }
       }
   }
 }
