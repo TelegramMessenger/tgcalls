@@ -203,8 +203,8 @@ static inline void getCubeVertexData(size_t frameWidth,
 
       
         MTLFrameSize small;
-        small.width = _frameSize.width / 2;
-        small.height = _frameSize.height / 2;
+        small.width = _frameSize.width / 4;
+        small.height = _frameSize.height / 4;
 
         _scaledSize = MTLAspectFitted(small, _frameSize);
         _rgbTexture = [self createTextureWithUsage: MTLTextureUsageShaderRead|MTLTextureUsageRenderTarget size:_frameSize];
