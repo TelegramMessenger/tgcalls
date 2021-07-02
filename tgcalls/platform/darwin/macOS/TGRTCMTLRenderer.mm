@@ -218,8 +218,8 @@ static inline void getCubeVertexData(size_t frameWidth,
 
       
         MTLFrameSize small;
-        small.width = _frameSize.width / 4;
-        small.height = _frameSize.height / 4;
+        small.width = _frameSize.width / 2;
+        small.height = _frameSize.height / 2;
 
         _scaledSize = MTLAspectFitted(small, _frameSize);
         _rgbTexture = [self createTextureWithUsage: MTLTextureUsageShaderRead|MTLTextureUsageRenderTarget size:_frameSize];
@@ -242,7 +242,7 @@ static inline void getCubeVertexData(size_t frameWidth,
                     memcpy((float *)_vertexBuffer2.contents, &values, sizeof(values));
                 } break;
                 case RTCVideoRotation_90: {
-                    float values[8] = {0.0, 1, 0, 0.0, 1, 1.0, 1.0, 0}; //rotate 0 quad
+                    float values[8] = {0.0, 1, 0, 0.0, 1, 1.0, 1.0, 0};
                     memcpy((float *)_vertexBuffer1.contents, &values, sizeof(values));
                     memcpy((float *)_vertexBuffer2.contents, &values, sizeof(values));
                 } break;

@@ -70,7 +70,7 @@ private:
         }));
 
         tgcalls::DesktopCaptureSourceData data{
-	        /*.aspectSize = */{ 1280, 720 },
+	        /*.aspectSize = */{ 1920, 1080 },
 	        /*.fps = */25,
 	        /*.captureMouse = */true,
         };

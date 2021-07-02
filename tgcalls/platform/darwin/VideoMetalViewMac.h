@@ -33,7 +33,6 @@
 - (void)setForceMirrored:(BOOL)forceMirrored;
 
 -(void)setIsPaused:(bool)paused;
-
 -(void)renderToSize:(NSSize)size animated: (bool)animated;
 
 @end
