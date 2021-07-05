@@ -483,26 +483,26 @@ _threads(std::move(threads)),
 _stateUpdated(std::move(stateUpdated)),
 _transportMessageReceived(std::move(transportMessageReceived)),
 _dataChannelStateUpdated(dataChannelStateUpdated),
-_audioActivityUpdated(audioActivityUpdated),
-_dataChannelMessageReceived(dataChannelMessageReceived) {
+_dataChannelMessageReceived(dataChannelMessageReceived),
+_audioActivityUpdated(audioActivityUpdated) {
     assert(_threads->getNetworkThread()->IsCurrent());
-    
+
     _localIceParameters = PeerIceParameters(rtc::CreateRandomString(cricket::ICE_UFRAG_LENGTH), rtc::CreateRandomString(cricket::ICE_PWD_LENGTH));
-    
+
     _localCertificate = rtc::RTCCertificateGenerator::GenerateCertificate(rtc::KeyParams(rtc::KT_ECDSA), absl::nullopt);
 
     _networkMonitorFactory = PlatformInterface::SharedInstance()->createNetworkMonitorFactory();
-    
+
     _socketFactory.reset(new rtc::BasicPacketSocketFactory(_threads->getNetworkThread()));
     _networkManager = std::make_unique<rtc::BasicNetworkManager>(_networkMonitorFactory.get());
     _asyncResolverFactory = std::make_unique<webrtc::BasicAsyncResolverFactory>();
-    
+
     _dtlsSrtpTransport = std::make_unique<WrappedDtlsSrtpTransport>(true);
     _dtlsSrtpTransport->SetDtlsTransports(nullptr, nullptr);
     _dtlsSrtpTransport->SetActiveResetSrtpParams(false);
     _dtlsSrtpTransport->SignalReadyToSend.connect(this, &GroupNetworkManager::DtlsReadyToSend);
     _dtlsSrtpTransport->SignalRtpPacketReceived.connect(this, &GroupNetworkManager::RtpPacketReceived_n);
-    
+
     resetDtlsSrtpTransport();
 }
 
@@ -560,7 +560,7 @@ void GroupNetworkManager::resetDtlsSrtpTransport() {
 
     _dtlsTransport->SetDtlsRole(rtc::SSLRole::SSL_SERVER);
     _dtlsTransport->SetLocalCertificate(_localCertificate);
-    
+
     _dtlsSrtpTransport->SetDtlsTransports(_dtlsTransport.get(), nullptr);
 }
 
@@ -593,21 +593,21 @@ void GroupNetworkManager::start() {
 void GroupNetworkManager::stop() {
     _transportChannel->SignalIceTransportStateChanged.disconnect(this);
     _transportChannel->SignalReadPacket.disconnect(this);
-    
+
     _dtlsTransport->SignalWritableState.disconnect(this);
     _dtlsTransport->SignalReceivingState.disconnect(this);
-    
+
     _dtlsSrtpTransport->SetDtlsTransports(nullptr, nullptr);
-    
+
     _dataChannelInterface.reset();
     _dtlsTransport.reset();
     _transportChannel.reset();
     _portAllocator.reset();
-    
+
     _localIceParameters = PeerIceParameters(rtc::CreateRandomString(cricket::ICE_UFRAG_LENGTH), rtc::CreateRandomString(cricket::ICE_PWD_LENGTH));
-    
+
     _localCertificate = rtc::RTCCertificateGenerator::GenerateCertificate(rtc::KeyParams(rtc::KT_ECDSA), absl::nullopt);
-    
+
     resetDtlsSrtpTransport();
 }
 
