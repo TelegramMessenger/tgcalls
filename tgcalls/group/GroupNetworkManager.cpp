@@ -44,11 +44,13 @@ public:
     SctpDataChannelProviderInterfaceImpl(
         cricket::DtlsTransport *transportChannel,
         std::function<void(bool)> onStateChanged,
+        std::function<void()> onTerminated,
         std::function<void(std::string const &)> onMessageReceived,
         std::shared_ptr<Threads> threads
     ) :
     _threads(std::move(threads)),
     _onStateChanged(onStateChanged),
+    _onTerminated(onTerminated),
     _onMessageReceived(onMessageReceived) {
         assert(_threads->getNetworkThread()->IsCurrent());
 
@@ -57,6 +59,7 @@ public:
         _sctpTransport = _sctpTransportFactory->CreateSctpTransport(transportChannel);
         _sctpTransport->SignalReadyToSendData.connect(this, &SctpDataChannelProviderInterfaceImpl::sctpReadyToSendData);
         _sctpTransport->SignalDataReceived.connect(this, &SctpDataChannelProviderInterfaceImpl::sctpDataReceived);
+        _sctpTransport->SignalClosedAbruptly.connect(this, &SctpDataChannelProviderInterfaceImpl::sctpClosedAbruptly);
 
         webrtc::InternalDataChannelInit dataChannelInit;
         dataChannelInit.id = 0;
@@ -134,6 +137,14 @@ public:
         _dataChannel->OnTransportReady(true);
     }
 
+    void sctpClosedAbruptly() {
+        assert(_threads->getNetworkThread()->IsCurrent());
+
+        if (_onTerminated) {
+            _onTerminated();
+        }
+    }
+
     void sctpDataReceived(const cricket::ReceiveDataParams& params, const rtc::CopyOnWriteBuffer& buffer) {
         assert(_threads->getNetworkThread()->IsCurrent());
 
@@ -181,6 +192,7 @@ public:
 private:
     std::shared_ptr<Threads> _threads;
     std::function<void(bool)> _onStateChanged;
+    std::function<void()> _onTerminated;
     std::function<void(std::string const &)> _onMessageReceived;
 
     std::unique_ptr<cricket::SctpTransportFactory> _sctpTransportFactory;
@@ -567,6 +579,12 @@ void GroupNetworkManager::resetDtlsSrtpTransport() {
 void GroupNetworkManager::start() {
     _transportChannel->MaybeStartGathering();
 
+    restartDataChannel();
+}
+
+void GroupNetworkManager::restartDataChannel() {
+    _dataChannelStateUpdated(false);
+
     const auto weak = std::weak_ptr<GroupNetworkManager>(shared_from_this());
     _dataChannelInterface.reset(new SctpDataChannelProviderInterfaceImpl(
         _dtlsTransport.get(),
@@ -578,6 +596,14 @@ void GroupNetworkManager::start() {
             }
             strong->_dataChannelStateUpdated(state);
         },
+        [weak, threads = _threads]() {
+            assert(threads->getNetworkThread()->IsCurrent());
+            const auto strong = weak.lock();
+            if (!strong) {
+                return;
+            }
+            strong->restartDataChannel();
+        },
         [weak, threads = _threads](std::string const &message) {
             assert(threads->getNetworkThread()->IsCurrent());
             const auto strong = weak.lock();
@@ -588,6 +614,8 @@ void GroupNetworkManager::start() {
         },
         _threads
     ));
+
+    _dataChannelInterface->updateIsConnected(_isConnected);
 }
 
 void GroupNetworkManager::stop() {
