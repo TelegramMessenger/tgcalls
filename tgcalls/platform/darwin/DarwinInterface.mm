@@ -12,6 +12,7 @@
 #include "api/video_track_source_proxy.h"
 #import "base/RTCLogging.h"
 #include "AudioDeviceModuleIOS.h"
+#include "AudioDeviceModuleMacos.h"
 #include "DarwinVideoSource.h"
 #include "objc_video_encoder_factory.h"
 
@@ -116,7 +117,11 @@ std::unique_ptr<VideoCapturerInterface> DarwinInterface::makeVideoCapturer(rtc::
 }
 
 rtc::scoped_refptr<WrappedAudioDeviceModule> DarwinInterface::wrapAudioDeviceModule(rtc::scoped_refptr<webrtc::AudioDeviceModule> module) {
+#ifdef WEBRTC_MAC
+    return new rtc::RefCountedObject<AudioDeviceModuleMacos>(module);
+#else
     return new rtc::RefCountedObject<AudioDeviceModuleIOS>(module);
+#endif
 }
 
 std::unique_ptr<PlatformInterface> CreatePlatformInterface() {
