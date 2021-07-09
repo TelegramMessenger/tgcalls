@@ -51,8 +51,8 @@ static NSString *const fragmentPlainName = @"fragmentPlain";
 
 - (id<MTLSamplerState>)defaultSamplerState:(id<MTLDevice>)device {
     MTLSamplerDescriptor *samplerDescriptor = [[MTLSamplerDescriptor alloc] init];
-    samplerDescriptor.minFilter = MTLSamplerMinMagFilterNearest;
-    samplerDescriptor.magFilter = MTLSamplerMinMagFilterNearest;
+    samplerDescriptor.minFilter = MTLSamplerMinMagFilterLinear;
+    samplerDescriptor.magFilter = MTLSamplerMinMagFilterLinear;
     samplerDescriptor.sAddressMode = MTLSamplerAddressModeClampToZero;
     samplerDescriptor.tAddressMode = MTLSamplerAddressModeClampToZero;
 
