@@ -79,6 +79,7 @@ public:
 
 private:
     void resetDtlsSrtpTransport();
+    void restartDataChannel();
     void checkConnectionTimeout();
     void candidateGathered(cricket::IceTransportInternal *transport, const cricket::Candidate &candidate);
     void candidateGatheringState(cricket::IceTransportInternal *transport);

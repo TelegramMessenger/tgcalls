@@ -44,11 +44,13 @@ public:
     SctpDataChannelProviderInterfaceImpl(
         cricket::DtlsTransport *transportChannel,
         std::function<void(bool)> onStateChanged,
+        std::function<void()> onTerminated,
         std::function<void(std::string const &)> onMessageReceived,
         std::shared_ptr<Threads> threads
     ) :
     _threads(std::move(threads)),
     _onStateChanged(onStateChanged),
+    _onTerminated(onTerminated),
     _onMessageReceived(onMessageReceived) {
         assert(_threads->getNetworkThread()->IsCurrent());
 
@@ -57,6 +59,7 @@ public:
         _sctpTransport = _sctpTransportFactory->CreateSctpTransport(transportChannel);
         _sctpTransport->SignalReadyToSendData.connect(this, &SctpDataChannelProviderInterfaceImpl::sctpReadyToSendData);
         _sctpTransport->SignalDataReceived.connect(this, &SctpDataChannelProviderInterfaceImpl::sctpDataReceived);
+        _sctpTransport->SignalClosedAbruptly.connect(this, &SctpDataChannelProviderInterfaceImpl::sctpClosedAbruptly);
 
         webrtc::InternalDataChannelInit dataChannelInit;
         dataChannelInit.id = 0;
@@ -134,6 +137,14 @@ public:
         _dataChannel->OnTransportReady(true);
     }
 
+    void sctpClosedAbruptly() {
+        assert(_threads->getNetworkThread()->IsCurrent());
+
+        if (_onTerminated) {
+            _onTerminated();
+        }
+    }
+
     void sctpDataReceived(const cricket::ReceiveDataParams& params, const rtc::CopyOnWriteBuffer& buffer) {
         assert(_threads->getNetworkThread()->IsCurrent());
 
@@ -181,6 +192,7 @@ public:
 private:
     std::shared_ptr<Threads> _threads;
     std::function<void(bool)> _onStateChanged;
+    std::function<void()> _onTerminated;
     std::function<void(std::string const &)> _onMessageReceived;
 
     std::unique_ptr<cricket::SctpTransportFactory> _sctpTransportFactory;
@@ -483,26 +495,26 @@ _threads(std::move(threads)),
 _stateUpdated(std::move(stateUpdated)),
 _transportMessageReceived(std::move(transportMessageReceived)),
 _dataChannelStateUpdated(dataChannelStateUpdated),
-_audioActivityUpdated(audioActivityUpdated),
-_dataChannelMessageReceived(dataChannelMessageReceived) {
+_dataChannelMessageReceived(dataChannelMessageReceived),
+_audioActivityUpdated(audioActivityUpdated) {
     assert(_threads->getNetworkThread()->IsCurrent());
-    
+
     _localIceParameters = PeerIceParameters(rtc::CreateRandomString(cricket::ICE_UFRAG_LENGTH), rtc::CreateRandomString(cricket::ICE_PWD_LENGTH));
-    
+
     _localCertificate = rtc::RTCCertificateGenerator::GenerateCertificate(rtc::KeyParams(rtc::KT_ECDSA), absl::nullopt);
 
     _networkMonitorFactory = PlatformInterface::SharedInstance()->createNetworkMonitorFactory();
-    
+
     _socketFactory.reset(new rtc::BasicPacketSocketFactory(_threads->getNetworkThread()));
     _networkManager = std::make_unique<rtc::BasicNetworkManager>(_networkMonitorFactory.get());
     _asyncResolverFactory = std::make_unique<webrtc::BasicAsyncResolverFactory>();
-    
+
     _dtlsSrtpTransport = std::make_unique<WrappedDtlsSrtpTransport>(true);
     _dtlsSrtpTransport->SetDtlsTransports(nullptr, nullptr);
     _dtlsSrtpTransport->SetActiveResetSrtpParams(false);
     _dtlsSrtpTransport->SignalReadyToSend.connect(this, &GroupNetworkManager::DtlsReadyToSend);
     _dtlsSrtpTransport->SignalRtpPacketReceived.connect(this, &GroupNetworkManager::RtpPacketReceived_n);
-    
+
     resetDtlsSrtpTransport();
 }
 
@@ -560,12 +572,18 @@ void GroupNetworkManager::resetDtlsSrtpTransport() {
 
     _dtlsTransport->SetDtlsRole(rtc::SSLRole::SSL_SERVER);
     _dtlsTransport->SetLocalCertificate(_localCertificate);
-    
+
     _dtlsSrtpTransport->SetDtlsTransports(_dtlsTransport.get(), nullptr);
 }
 
 void GroupNetworkManager::start() {
     _transportChannel->MaybeStartGathering();
+
+    restartDataChannel();
+}
+
+void GroupNetworkManager::restartDataChannel() {
+    _dataChannelStateUpdated(false);
 
     const auto weak = std::weak_ptr<GroupNetworkManager>(shared_from_this());
     _dataChannelInterface.reset(new SctpDataChannelProviderInterfaceImpl(
@@ -578,6 +596,14 @@ void GroupNetworkManager::start() {
             }
             strong->_dataChannelStateUpdated(state);
         },
+        [weak, threads = _threads]() {
+            assert(threads->getNetworkThread()->IsCurrent());
+            const auto strong = weak.lock();
+            if (!strong) {
+                return;
+            }
+            strong->restartDataChannel();
+        },
         [weak, threads = _threads](std::string const &message) {
             assert(threads->getNetworkThread()->IsCurrent());
             const auto strong = weak.lock();
@@ -588,26 +614,28 @@ void GroupNetworkManager::start() {
         },
         _threads
     ));
+
+    _dataChannelInterface->updateIsConnected(_isConnected);
 }
 
 void GroupNetworkManager::stop() {
     _transportChannel->SignalIceTransportStateChanged.disconnect(this);
     _transportChannel->SignalReadPacket.disconnect(this);
-    
+
     _dtlsTransport->SignalWritableState.disconnect(this);
     _dtlsTransport->SignalReceivingState.disconnect(this);
-    
+
     _dtlsSrtpTransport->SetDtlsTransports(nullptr, nullptr);
-    
+
     _dataChannelInterface.reset();
     _dtlsTransport.reset();
     _transportChannel.reset();
     _portAllocator.reset();
-    
+
     _localIceParameters = PeerIceParameters(rtc::CreateRandomString(cricket::ICE_UFRAG_LENGTH), rtc::CreateRandomString(cricket::ICE_PWD_LENGTH));
-    
+
     _localCertificate = rtc::RTCCertificateGenerator::GenerateCertificate(rtc::KeyParams(rtc::KT_ECDSA), absl::nullopt);
-    
+
     resetDtlsSrtpTransport();
 }
 

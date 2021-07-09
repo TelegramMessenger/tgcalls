@@ -46,6 +46,7 @@
 #include "CodecSelectHelper.h"
 #include "StreamingPart.h"
 #include "AudioDeviceHelper.h"
+#include "FakeAudioDeviceModule.h"
 
 #include <mutex>
 #include <random>
@@ -830,6 +831,58 @@ private:
 };
 #endif
 
+class ExternalAudioRecorder : public FakeAudioDeviceModule::Recorder {
+public:
+    ExternalAudioRecorder(std::vector<float> *externalAudioSamples, webrtc::Mutex *externalAudioSamplesMutex) :
+    _externalAudioSamples(externalAudioSamples),
+    _externalAudioSamplesMutex(externalAudioSamplesMutex) {
+        _samples.resize(480);
+    }
+
+    virtual ~ExternalAudioRecorder() {
+    }
+
+    virtual AudioFrame Record() override {
+        AudioFrame result;
+
+        _externalAudioSamplesMutex->Lock();
+        if (!_externalAudioSamples->empty() && _externalAudioSamples->size() >= 480) {
+            size_t takenSamples = std::min(_samples.size(), _externalAudioSamples->size());
+            webrtc::FloatS16ToS16(_externalAudioSamples->data(), takenSamples, _samples.data());
+
+            result.num_samples = takenSamples;
+
+            if (takenSamples != 0) {
+                _externalAudioSamples->erase(_externalAudioSamples->begin(), _externalAudioSamples->begin() + takenSamples);
+            }
+        } else {
+            result.num_samples = 0;
+        }
+        _externalAudioSamplesMutex->Unlock();
+
+        result.audio_samples = _samples.data();
+        result.bytes_per_sample = 2;
+        result.num_channels = 1;
+        result.samples_per_sec = 48000;
+        result.elapsed_time_ms = 0;
+        result.ntp_time_ms = 0;
+
+        return result;
+    }
+
+    virtual int32_t WaitForUs() override {
+        _externalAudioSamplesMutex->Lock();
+        _externalAudioSamplesMutex->Unlock();
+
+        return 1000;
+    }
+
+private:
+    std::vector<float> *_externalAudioSamples = nullptr;
+    webrtc::Mutex *_externalAudioSamplesMutex = nullptr;
+    std::vector<int16_t> _samples;
+};
+
 class IncomingAudioChannel : public sigslot::has_slots<> {
 public:
     IncomingAudioChannel(
@@ -1212,6 +1265,8 @@ public:
         generateSsrcs();
 
         _noiseSuppressionConfiguration = std::make_shared<NoiseSuppressionConfiguration>(descriptor.initialEnableNoiseSuppression);
+
+        _externalAudioRecorder.reset(new ExternalAudioRecorder(&_externalAudioSamples, &_externalAudioSamplesMutex));
     }
 
     ~GroupInstanceCustomInternal() {
@@ -1294,26 +1349,24 @@ public:
                 }, threads);
         }));
 
+        std::unique_ptr<AudioCapturePostProcessor> audioProcessor = nullptr;
         if (_videoContentType != VideoContentType::Screencast) {
             PlatformInterface::SharedInstance()->configurePlatformAudio();
+
+    #if USE_RNNOISE
+            audioProcessor = std::make_unique<AudioCapturePostProcessor>([weak, threads = _threads](GroupLevelValue const &level) {
+                threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, level](){
+                    auto strong = weak.lock();
+                    if (!strong) {
+                        return;
+                    }
+                    strong->_myAudioLevel = level;
+                });
+            }, _noiseSuppressionConfiguration, &_externalAudioSamples, &_externalAudioSamplesMutex);
+    #endif
         }
 
-#if USE_RNNOISE
-        auto processor = std::make_unique<AudioCapturePostProcessor>([weak, threads = _threads](GroupLevelValue const &level) {
-            threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, level](){
-                auto strong = weak.lock();
-                if (!strong) {
-                    return;
-                }
-                strong->_myAudioLevel = level;
-            });
-        }, _noiseSuppressionConfiguration, &_externalAudioSamples, &_externalAudioSamplesMutex);
-#endif
-
-        _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this
-#if USE_RNNOISE
-            , processor = std::move(processor)
-#endif
+        _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this, audioProcessor = std::move(audioProcessor)
           ]() mutable {
             cricket::MediaEngineDependencies mediaDeps;
             mediaDeps.task_queue_factory = _taskQueueFactory.get();
@@ -1323,14 +1376,12 @@ public:
             mediaDeps.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory();
             mediaDeps.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactory();
 
-    #if USE_RNNOISE
-            if (_audioLevelsUpdated) {
+            if (_audioLevelsUpdated && audioProcessor) {
                 webrtc::AudioProcessingBuilder builder;
-                builder.SetCapturePostProcessing(std::move(processor));
+                builder.SetCapturePostProcessing(std::move(audioProcessor));
 
                 mediaDeps.audio_processing = builder.Create();
             }
-    #endif
 
             _audioDeviceModule = createAudioDeviceModule();
             if (!_audioDeviceModule) {
@@ -1382,6 +1433,10 @@ public:
 
         if (_useDummyChannel && _videoContentType != VideoContentType::Screencast) {
             addIncomingAudioChannel(ChannelId(1), true);
+        }
+
+        if (_videoContentType == VideoContentType::Screencast) {
+            setIsMuted(false);
         }
 
         /*if (_videoContentType != VideoContentType::Screencast) {
@@ -1611,13 +1666,12 @@ public:
     }
 
     void createOutgoingAudioChannel() {
-        if (_outgoingAudioChannel
-            || _videoContentType == VideoContentType::Screencast) {
+        if (_outgoingAudioChannel) {
             return;
         }
 
         cricket::AudioOptions audioOptions;
-        if (_disableOutgoingAudioProcessing) {
+        if (_disableOutgoingAudioProcessing || _videoContentType == VideoContentType::Screencast) {
             audioOptions.echo_cancellation = false;
             audioOptions.noise_suppression = false;
             audioOptions.auto_gain_control = false;
@@ -2890,6 +2944,12 @@ public:
     }
 
     void setIsMuted(bool isMuted) {
+        if (_videoContentType == VideoContentType::Screencast) {
+            if (isMuted) {
+                return;
+            }
+        }
+
         if (_isMuted == isMuted) {
             return;
         }
@@ -3190,6 +3250,10 @@ private:
             if (const auto result = check(_createAudioDeviceModule(_taskQueueFactory.get()))) {
                 return result;
             }
+        } else if (_videoContentType == VideoContentType::Screencast) {
+            FakeAudioDeviceModule::Options options;
+            options.num_channels = 1;
+            return check(FakeAudioDeviceModule::Creator(nullptr, _externalAudioRecorder, options)(_taskQueueFactory.get()));
         }
         return check(create(webrtc::AudioDeviceModule::kPlatformDefaultAudio));
     }
@@ -3283,6 +3347,7 @@ private:
 
     std::vector<float> _externalAudioSamples;
     webrtc::Mutex _externalAudioSamplesMutex;
+    std::shared_ptr<ExternalAudioRecorder> _externalAudioRecorder;
 
     bool _isRtcConnected = false;
     bool _isBroadcastConnected = false;
