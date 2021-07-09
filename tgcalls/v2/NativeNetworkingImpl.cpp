@@ -36,9 +36,9 @@ public:
     }
 };
 
-class SctpDataChannelProviderInterfaceImpl : public sigslot::has_slots<>, public webrtc::SctpDataChannelProviderInterface, public webrtc::DataChannelObserver {
+class SctpDataChannelProviderInterfaceImplV2 : public sigslot::has_slots<>, public webrtc::SctpDataChannelProviderInterface, public webrtc::DataChannelObserver {
 public:
-    SctpDataChannelProviderInterfaceImpl(
+    SctpDataChannelProviderInterfaceImplV2(
         cricket::DtlsTransport *transportChannel,
         bool isOutgoing,
         std::function<void(bool)> onStateChanged,
@@ -53,8 +53,8 @@ public:
         _sctpTransportFactory.reset(new cricket::SctpTransportFactory(_threads->getNetworkThread()));
 
         _sctpTransport = _sctpTransportFactory->CreateSctpTransport(transportChannel);
-        _sctpTransport->SignalReadyToSendData.connect(this, &SctpDataChannelProviderInterfaceImpl::sctpReadyToSendData);
-        _sctpTransport->SignalDataReceived.connect(this, &SctpDataChannelProviderInterfaceImpl::sctpDataReceived);
+        _sctpTransport->SignalReadyToSendData.connect(this, &SctpDataChannelProviderInterfaceImplV2::sctpReadyToSendData);
+        _sctpTransport->SignalDataReceived.connect(this, &SctpDataChannelProviderInterfaceImplV2::sctpDataReceived);
 
         webrtc::InternalDataChannelInit dataChannelInit;
         dataChannelInit.id = 0;
@@ -70,7 +70,7 @@ public:
         _dataChannel->RegisterObserver(this);
     }
 
-    virtual ~SctpDataChannelProviderInterfaceImpl() {
+    virtual ~SctpDataChannelProviderInterfaceImplV2() {
         assert(_threads->getNetworkThread()->IsCurrent());
 
         _dataChannel->UnregisterObserver();
@@ -344,7 +344,7 @@ void NativeNetworkingImpl::start() {
     _transportChannel->MaybeStartGathering();
 
     const auto weak = std::weak_ptr<NativeNetworkingImpl>(shared_from_this());
-    _dataChannelInterface.reset(new SctpDataChannelProviderInterfaceImpl(
+    _dataChannelInterface.reset(new SctpDataChannelProviderInterfaceImplV2(
         _dtlsTransport.get(),
         _isOutgoing,
         [weak, threads = _threads](bool state) {

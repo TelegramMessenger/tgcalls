@@ -44,7 +44,7 @@ class RtpTransport;
 namespace tgcalls {
 
 struct Message;
-class SctpDataChannelProviderInterfaceImpl;
+class SctpDataChannelProviderInterfaceImplV2;
 class Threads;
 
 class NativeNetworkingImpl : public sigslot::has_slots<>, public std::enable_shared_from_this<NativeNetworkingImpl> {
@@ -127,7 +127,7 @@ private:
     std::unique_ptr<cricket::DtlsTransport> _dtlsTransport;
     std::unique_ptr<webrtc::DtlsSrtpTransport> _dtlsSrtpTransport;
 
-    std::unique_ptr<SctpDataChannelProviderInterfaceImpl> _dataChannelInterface;
+    std::unique_ptr<SctpDataChannelProviderInterfaceImplV2> _dataChannelInterface;
 
     rtc::scoped_refptr<rtc::RTCCertificate> _localCertificate;
     PeerIceParameters _localIceParameters;
