@@ -549,11 +549,13 @@ static inline void getCubeVertexData(size_t frameWidth,
 
 - (void)drawFrame:(RTC_OBJC_TYPE(RTCVideoFrame) *)frame {
   @autoreleasepool {
-      if ([self setupTexturesForFrame:frame]) {
-          if (_foreground) {
-              [self doubleRender];
-          } else {
-              [self singleRender];
+      if (frame.width != 0 && frame.height != 0) {
+          if ([self setupTexturesForFrame:frame]) {
+              if (_foreground) {
+                  [self doubleRender];
+              } else {
+                  [self singleRender];
+              }
           }
       }
   }
