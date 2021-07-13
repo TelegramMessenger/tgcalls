@@ -2944,12 +2944,6 @@ public:
     }
 
     void setIsMuted(bool isMuted) {
-        if (_videoContentType == VideoContentType::Screencast) {
-            if (isMuted) {
-                return;
-            }
-        }
-
         if (_isMuted == isMuted) {
             return;
         }
