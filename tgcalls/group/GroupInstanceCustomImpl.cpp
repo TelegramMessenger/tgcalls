@@ -3026,20 +3026,23 @@ public:
         const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
 
         std::function<void(AudioSinkImpl::Update)> onAudioSinkUpdate;
-        /*if (_audioLevelsUpdated) {
-          onAudioSinkUpdate = [weak, ssrc = ssrc, threads = _threads](AudioSinkImpl::Update update) {
-            threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, ssrc, update]() {
-              auto strong = weak.lock();
-              if (!strong) {
-                return;
-              }
-              GroupLevelValue mappedUpdate;
-              mappedUpdate.level = update.level;
-              mappedUpdate.voice = update.hasSpeech;
-              strong->_audioLevels[ssrc] = mappedUpdate;
-            });
-          };
-        }*/
+        if (ssrc.actualSsrc != ssrc.networkSsrc) {
+            if (_audioLevelsUpdated) {
+                onAudioSinkUpdate = [weak, ssrc = ssrc, threads = _threads](AudioSinkImpl::Update update) {
+                    threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, ssrc, update]() {
+                        auto strong = weak.lock();
+                        if (!strong) {
+                            return;
+                        }
+                        InternalGroupLevelValue updated;
+                        updated.value.level = update.level;
+                        updated.value.voice = update.hasSpeech;
+                        updated.timestamp = rtc::TimeMillis();
+                        strong->_audioLevels.insert(std::make_pair(ChannelId(ssrc), std::move(updated)));
+                    });
+                };
+            }
+        }
 
         std::unique_ptr<IncomingAudioChannel> channel(new IncomingAudioChannel(
           _channelManager.get(),
