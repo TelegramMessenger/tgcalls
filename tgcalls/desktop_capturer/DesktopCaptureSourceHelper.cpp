@@ -33,8 +33,6 @@
 namespace tgcalls {
 namespace {
 
-int GlobalCount = 0;
-
 DesktopSize AspectFitted(DesktopSize from, DesktopSize to) {
     double scale = std::min(
         from.width / std::max(1., double(to.width)),
@@ -228,6 +226,7 @@ void SourceFrameCallbackImpl::OnCaptureResult(
 
 
 	assert(i420Result == 0);
+	(void)i420Result;
 	webrtc::VideoFrame nativeVideoFrame = webrtc::VideoFrame(
 		i420_buffer_,
 		webrtc::kVideoRotation_0,
