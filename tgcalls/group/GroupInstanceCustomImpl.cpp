@@ -656,6 +656,10 @@ public:
         }
     }
 
+    std::vector<std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>> getSinks() {
+        return _sinks;
+    }
+
 private:
     std::vector<std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>> _sinks;
     absl::optional<webrtc::VideoFrame> _lastFrame;
@@ -1112,6 +1116,10 @@ public:
 
     void addSink(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> impl) {
         _videoSink->addSink(impl);
+    }
+
+    std::vector<std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>> getSinks() {
+        return _videoSink->getSinks();
     }
 
     std::string const &endpointId() {
@@ -2912,35 +2920,9 @@ public:
     }
 
     void removeSsrcs(std::vector<uint32_t> ssrcs) {
-        /*bool updatedIncomingVideoChannels = false;
-
-        for (auto ssrc : ssrcs) {
-            auto it = _ssrcMapping.find(ssrc);
-            if (it != _ssrcMapping.end()) {
-                auto mainSsrc = it->second.ssrc;
-                auto audioChannel = _incomingAudioChannels.find(ChannelId(mainSsrc));
-                if (audioChannel != _incomingAudioChannels.end()) {
-                    _incomingAudioChannels.erase(audioChannel);
-                }
-                auto videoChannel = _incomingVideoChannels.find(mainSsrc);
-                if (videoChannel != _incomingVideoChannels.end()) {
-                    _incomingVideoChannels.erase(videoChannel);
-                    updatedIncomingVideoChannels = true;
-                }
-            }
-        }
-
-        if (updatedIncomingVideoChannels) {
-            updateIncomingVideoSources();
-        }*/
     }
 
     void removeIncomingVideoSource(uint32_t ssrc) {
-        /*auto videoChannel = _incomingVideoChannels.find(ssrc);
-        if (videoChannel != _incomingVideoChannels.end()) {
-            _incomingVideoChannels.erase(videoChannel);
-            updateIncomingVideoSources();
-        }*/
     }
 
     void setIsMuted(bool isMuted) {
@@ -3221,7 +3203,14 @@ public:
         }
 
         for (const auto &endpointId : removeEndpointIds) {
-            _incomingVideoChannels.erase(VideoChannelId(endpointId));
+            const auto it = _incomingVideoChannels.find(VideoChannelId(endpointId));
+            if (it != _incomingVideoChannels.end()) {
+                auto sinks = it->second->getSinks();
+                for (const auto &sink : sinks) {
+                    _pendingVideoSinks[VideoChannelId(endpointId)].push_back(sink);
+                }
+                _incomingVideoChannels.erase(it);
+            }
         }
 
         if (updated) {
