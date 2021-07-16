@@ -213,7 +213,7 @@ static void decompressionOutputCallback(void *decoderRef,
   static size_t const attributesSize = 3;
   CFTypeRef keys[attributesSize] = {
 #if defined(WEBRTC_IOS)
-    kCVPixelBufferOpenGLESCompatibilityKey,
+    kCVPixelBufferMetalCompatibilityKey,
 #elif defined(WEBRTC_MAC)
     kCVPixelBufferOpenGLCompatibilityKey,
 #endif
@@ -252,7 +252,8 @@ static void decompressionOutputCallback(void *decoderRef,
 - (void)configureDecompressionSession {
   RTC_DCHECK(_decompressionSession);
 #if defined(WEBRTC_IOS)
-  VTSessionSetProperty(_decompressionSession, kVTDecompressionPropertyKey_RealTime, kCFBooleanTrue);
+  VTSessionSetProperty(_decompressionSession, kVTDecompressionPropertyKey_RealTime, kCFBooleanFalse);
+  VTSessionSetProperty(_decompressionSession, kVTDecompressionPropertyKey_MaximizePowerEfficiency, kCFBooleanTrue);
 #endif
 }
 
