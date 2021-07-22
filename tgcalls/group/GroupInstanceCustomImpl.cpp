@@ -1574,7 +1574,7 @@ public:
                             rtpParameters.encodings[i].scale_resolution_down_by = 4.0;
                             rtpParameters.encodings[i].active = _outgoingVideoConstraint >= 180;
                         } else if (i == 1) {
-                            rtpParameters.encodings[i].max_bitrate_bps = 150000;
+                            rtpParameters.encodings[i].min_bitrate_bps = 150000;
                             rtpParameters.encodings[i].max_bitrate_bps = 200000;
                             rtpParameters.encodings[i].scale_resolution_down_by = 2.0;
                             rtpParameters.encodings[i].active = _outgoingVideoConstraint >= 360;
@@ -1612,7 +1612,7 @@ public:
                             rtpParameters.encodings[i].scale_resolution_down_by = 4.0;
                             rtpParameters.encodings[i].active = _outgoingVideoConstraint >= 180;
                         } else if (i == 1) {
-                            rtpParameters.encodings[i].max_bitrate_bps = 100000;
+                            rtpParameters.encodings[i].min_bitrate_bps = 100000;
                             rtpParameters.encodings[i].max_bitrate_bps = 110000;
                             rtpParameters.encodings[i].scale_resolution_down_by = 2.0;
                             rtpParameters.encodings[i].active = _outgoingVideoConstraint >= 360;
