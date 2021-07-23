@@ -70,6 +70,8 @@ public:
 	void setInputVolume(float level);
 	void setOutputVolume(float level);
 
+    void addExternalAudioSamples(std::vector<uint8_t> &&samples);
+
 private:
 	struct SSRC {
 		uint32_t incoming = 0;
@@ -165,13 +167,14 @@ private:
 
     float _currentAudioLevel = 0.0f;
     float _currentMyAudioLevel = 0.0f;
-    int _myAudioLevelPeakCount = 0;
-    int _myAudioLevelPeak = 0;
 
 	std::unique_ptr<MediaManager::NetworkInterfaceImpl> _audioNetworkInterface;
 	std::unique_ptr<MediaManager::NetworkInterfaceImpl> _videoNetworkInterface;
 
     std::vector<CallStatsBitrateRecord> _bitrateRecords;
+
+    std::vector<float> _externalAudioSamples;
+    webrtc::Mutex _externalAudioSamplesMutex;
 };
 
 } // namespace tgcalls
