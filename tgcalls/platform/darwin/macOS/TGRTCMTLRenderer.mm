@@ -218,8 +218,8 @@ static inline void getCubeVertexData(size_t frameWidth,
 
       
         MTLFrameSize small;
-        small.width = _frameSize.width / 2;
-        small.height = _frameSize.height / 2;
+        small.width = _frameSize.width / 4;
+        small.height = _frameSize.height / 4;
 
         _scaledSize = MTLAspectFitted(small, _frameSize);
         _rgbTexture = [self createTextureWithUsage: MTLTextureUsageShaderRead|MTLTextureUsageRenderTarget size:_frameSize];
@@ -520,7 +520,6 @@ static inline void getCubeVertexData(size_t frameWidth,
                     scale2:scale2];
     
     id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
-    [commandBuffer presentDrawable:drawable];
     
     
     dispatch_semaphore_t inflight = _inflight1;
@@ -529,9 +528,13 @@ static inline void getCubeVertexData(size_t frameWidth,
         dispatch_semaphore_signal(inflight);
     }];
 
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [commandBuffer commit];
-    });
+
+    [commandBuffer addScheduledHandler:^(id<MTLCommandBuffer> _Nonnull) {
+        [drawable present];
+    }];
+    
+    [commandBuffer commit];
+    
     dispatch_semaphore_wait(inflight, DISPATCH_TIME_FOREVER);
 
 //    [commandBuffer commit];
