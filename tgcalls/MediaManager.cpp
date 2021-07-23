@@ -66,6 +66,90 @@ public:
     virtual ~AudioCaptureAnalyzer() = default;
 };
 
+class AudioCapturePostProcessor : public webrtc::CustomProcessing {
+public:
+    AudioCapturePostProcessor(std::function<void(float)> updated, std::vector<float> *externalAudioSamples, webrtc::Mutex *externalAudioSamplesMutex) :
+    _updated(updated),
+    _externalAudioSamples(externalAudioSamples),
+    _externalAudioSamplesMutex(externalAudioSamplesMutex) {
+    }
+
+    virtual ~AudioCapturePostProcessor() {
+    }
+
+private:
+    virtual void Initialize(int sample_rate_hz, int num_channels) override {
+    }
+
+    virtual void Process(webrtc::AudioBuffer *buffer) override {
+        if (!buffer) {
+            return;
+        }
+        if (buffer->num_channels() != 1) {
+            return;
+        }
+
+        float peak = 0;
+        int peakCount = 0;
+        const float *samples = buffer->channels_const()[0];
+        for (int i = 0; i < buffer->num_frames(); i++) {
+            float sample = samples[i];
+            if (sample < 0) {
+                sample = -sample;
+            }
+            if (peak < sample) {
+                peak = sample;
+            }
+            peakCount += 1;
+        }
+
+        _peakCount += peakCount;
+        if (_peak < peak) {
+            _peak = peak;
+        }
+        if (_peakCount >= 1200) {
+            float level = _peak / 8000.0f;
+            _peak = 0;
+            _peakCount = 0;
+
+            _updated(level);
+        }
+
+        _externalAudioSamplesMutex->Lock();
+        if (!_externalAudioSamples->empty()) {
+            float *bufferData = buffer->channels()[0];
+            int takenSamples = 0;
+            for (int i = 0; i < _externalAudioSamples->size() && i < buffer->num_frames(); i++) {
+                float sample = (*_externalAudioSamples)[i];
+                sample += bufferData[i];
+                sample = std::min(sample, 32768.f);
+                sample = std::max(sample, -32768.f);
+                bufferData[i] = sample;
+                takenSamples++;
+            }
+            if (takenSamples != 0) {
+                _externalAudioSamples->erase(_externalAudioSamples->begin(), _externalAudioSamples->begin() + takenSamples);
+            }
+        }
+        _externalAudioSamplesMutex->Unlock();
+    }
+
+    virtual std::string ToString() const override {
+        return "CustomPostProcessing";
+    }
+
+    virtual void SetRuntimeSetting(webrtc::AudioProcessing::RuntimeSetting setting) override {
+    }
+
+private:
+    std::function<void(float)> _updated;
+
+    int32_t _peakCount = 0;
+    float _peak = 0;
+
+    std::vector<float> *_externalAudioSamples = nullptr;
+    webrtc::Mutex *_externalAudioSamplesMutex = nullptr;
+};
 
 } // namespace
 
@@ -224,7 +308,7 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
         preferredCodecs);
 
     // [this] should outlive the analyzer
-    auto analyzer = new AudioCaptureAnalyzer([this](const webrtc::AudioBuffer* buffer) {
+    /*auto analyzer = new AudioCaptureAnalyzer([this](const webrtc::AudioBuffer* buffer) {
         if (!buffer) {
             return;
         }
@@ -260,11 +344,17 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
                 strong->_currentMyAudioLevel = level;
             }
         });
-    });
+    });*/
 
     webrtc::AudioProcessingBuilder builder;
-    builder.SetCaptureAnalyzer(std::unique_ptr<AudioCaptureAnalyzer>(analyzer));
-
+    //builder.SetCaptureAnalyzer(std::unique_ptr<AudioCaptureAnalyzer>(analyzer));
+    std::unique_ptr<AudioCapturePostProcessor> audioProcessor = std::make_unique<AudioCapturePostProcessor>([this](float level) {
+        this->_thread->PostTask(RTC_FROM_HERE, [this, level](){
+            auto strong = this;
+            strong->_currentMyAudioLevel = level;
+        });
+    }, &_externalAudioSamples, &_externalAudioSamplesMutex);
+    builder.SetCapturePostProcessing(std::move(audioProcessor));
     mediaDeps.audio_processing = builder.Create();
 
 	_audioDeviceModule = this->createAudioDeviceModule();
@@ -922,6 +1012,23 @@ void MediaManager::setOutputVolume(float level) {
 //	} else {
 //		RTC_LOG(LS_INFO) << "setOutputVolume(" << level << ") volume " << volume << " success.";
 //	}
+}
+
+void MediaManager::addExternalAudioSamples(std::vector<uint8_t> &&samples) {
+    if (samples.size() % 2 != 0) {
+        return;
+    }
+    _externalAudioSamplesMutex.Lock();
+
+    size_t previousSize = _externalAudioSamples.size();
+    _externalAudioSamples.resize(_externalAudioSamples.size() + samples.size() / 2);
+    webrtc::S16ToFloatS16((const int16_t *)samples.data(), samples.size() / 2, _externalAudioSamples.data() + previousSize);
+
+    if (_externalAudioSamples.size() > 2 * 48000) {
+        _externalAudioSamples.erase(_externalAudioSamples.begin(), _externalAudioSamples.begin() + (_externalAudioSamples.size() - 2 * 48000));
+    }
+
+    _externalAudioSamplesMutex.Unlock();
 }
 
 MediaManager::NetworkInterfaceImpl::NetworkInterfaceImpl(MediaManager *mediaManager, bool isVideo) :
