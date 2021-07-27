@@ -307,47 +307,7 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
 		mediaDeps.video_decoder_factory->GetSupportedFormats(),
         preferredCodecs);
 
-    // [this] should outlive the analyzer
-    /*auto analyzer = new AudioCaptureAnalyzer([this](const webrtc::AudioBuffer* buffer) {
-        if (!buffer) {
-            return;
-        }
-        if (buffer->num_channels() != 1) {
-            return;
-        }
-
-        float peak = 0;
-        int peakCount = 0;
-        const float *samples = buffer->channels_const()[0];
-        for (int i = 0; i < buffer->num_frames(); i++) {
-            float sample = samples[i];
-            if (sample < 0) {
-                sample = -sample;
-            }
-            if (peak < sample) {
-                peak = sample;
-            }
-            peakCount += 1;
-        }
-
-        this->_thread->PostTask(RTC_FROM_HERE, [this, peak, peakCount](){
-            auto strong = this;
-
-            strong->_myAudioLevelPeakCount += peakCount;
-            if (strong->_myAudioLevelPeak < peak) {
-                strong->_myAudioLevelPeak = peak;
-            }
-            if (strong->_myAudioLevelPeakCount >= 1200) {
-                float level = strong->_myAudioLevelPeak / 4000.0f;
-                strong->_myAudioLevelPeak = 0;
-                strong->_myAudioLevelPeakCount = 0;
-                strong->_currentMyAudioLevel = level;
-            }
-        });
-    });*/
-
     webrtc::AudioProcessingBuilder builder;
-    //builder.SetCaptureAnalyzer(std::unique_ptr<AudioCaptureAnalyzer>(analyzer));
     std::unique_ptr<AudioCapturePostProcessor> audioProcessor = std::make_unique<AudioCapturePostProcessor>([this](float level) {
         this->_thread->PostTask(RTC_FROM_HERE, [this, level](){
             auto strong = this;
@@ -674,6 +634,7 @@ void MediaManager::setSendVideo(std::shared_ptr<VideoCaptureInterface> videoCapt
     _videoCapture = videoCapture;
 	if (_videoCapture) {
         _videoCapture->setPreferredAspectRatio(_preferredAspectRatio);
+        _isScreenCapture = _videoCapture->isScreenCapture();
 
 		const auto thread = _thread;
 		const auto weak = std::weak_ptr<MediaManager>(shared_from_this());
@@ -686,7 +647,27 @@ void MediaManager::setSendVideo(std::shared_ptr<VideoCaptureInterface> videoCapt
 		});
         setOutgoingVideoState(VideoState::Active);
     } else {
+        _isScreenCapture = false;
+
         setOutgoingVideoState(VideoState::Inactive);
+    }
+
+    if (_enableFlexfec) {
+        _videoChannel->RemoveSendStream(_ssrcVideo.outgoing);
+        _videoChannel->RemoveSendStream(_ssrcVideo.fecOutgoing);
+    } else {
+        _videoChannel->RemoveSendStream(_ssrcVideo.outgoing);
+    }
+
+    if (_enableFlexfec) {
+        cricket::StreamParams videoSendStreamParams;
+        cricket::SsrcGroup videoSendSsrcGroup(cricket::kFecFrSsrcGroupSemantics, {_ssrcVideo.outgoing, _ssrcVideo.fecOutgoing});
+        videoSendStreamParams.ssrcs = {_ssrcVideo.outgoing};
+        videoSendStreamParams.ssrc_groups.push_back(videoSendSsrcGroup);
+        videoSendStreamParams.cname = "cname";
+        _videoChannel->AddSendStream(videoSendStreamParams);
+    } else {
+        _videoChannel->AddSendStream(cricket::StreamParams::CreateLegacy(_ssrcVideo.outgoing));
     }
 
     checkIsSendingVideoChanged(wasSending);
@@ -795,9 +776,16 @@ int MediaManager::getMaxAudioBitrate() const {
 void MediaManager::adjustBitratePreferences(bool resetStartBitrate) {
     if (computeIsSendingVideo()) {
         webrtc::BitrateConstraints preferences;
-        preferences.min_bitrate_bps = 64000;
-        if (resetStartBitrate) {
-            preferences.start_bitrate_bps = 400000;
+        if (_isScreenCapture) {
+            preferences.min_bitrate_bps = 700000;
+            if (resetStartBitrate) {
+                preferences.start_bitrate_bps = 700000;
+            }
+        } else {
+            preferences.min_bitrate_bps = 64000;
+            if (resetStartBitrate) {
+                preferences.start_bitrate_bps = 400000;
+            }
         }
         preferences.max_bitrate_bps = getMaxVideoBitrate();
 
