@@ -73,16 +73,43 @@ static inline void getCubeVertexData(size_t frameWidth,
   // left/top edge.
   // For the right and bottom, 1.0 means no cropping and e.g. 0.8 means we're skipping 20% of the
   // right/bottom edge (i.e. render up to 80% of the width/height).
-  float cropLeft = 0;
-  float cropRight = 1;
-  float cropTop = 0;
-  float cropBottom = 1;
-    
-    float values[16] = {-1.0, -1.0, cropLeft, cropBottom,
-                         1.0, -1.0, cropRight, cropBottom,
-                        -1.0,  1.0, cropLeft, cropTop,
-                         1.0,  1.0, cropRight, cropTop};
-    memcpy(buffer, &values, sizeof(values));
+    float cropLeft = 0;
+    float cropRight = 1;
+    float cropTop = 0;
+    float cropBottom = 1;
+
+    // These arrays map the view coordinates to texture coordinates, taking cropping and rotation
+    // into account. The first two columns are view coordinates, the last two are texture coordinates.
+    switch (rotation) {
+      case RTCVideoRotation_0: {
+        float values[16] = {-1.0, -1.0, cropLeft, cropBottom,
+                             1.0, -1.0, cropRight, cropBottom,
+                            -1.0,  1.0, cropLeft, cropTop,
+                             1.0,  1.0, cropRight, cropTop};
+        memcpy(buffer, &values, sizeof(values));
+      } break;
+      case RTCVideoRotation_90: {
+        float values[16] = {-1.0, -1.0, cropRight, cropBottom,
+                             1.0, -1.0, cropRight, cropTop,
+                            -1.0,  1.0, cropLeft, cropBottom,
+                             1.0,  1.0, cropLeft, cropTop};
+        memcpy(buffer, &values, sizeof(values));
+      } break;
+      case RTCVideoRotation_180: {
+        float values[16] = {-1.0, -1.0, cropRight, cropTop,
+                             1.0, -1.0, cropLeft, cropTop,
+                            -1.0,  1.0, cropRight, cropBottom,
+                             1.0,  1.0, cropLeft, cropBottom};
+        memcpy(buffer, &values, sizeof(values));
+      } break;
+      case RTCVideoRotation_270: {
+        float values[16] = {-1.0, -1.0, cropLeft, cropTop,
+                             1.0, -1.0, cropLeft, cropBottom,
+                            -1.0, 1.0, cropRight, cropTop,
+                             1.0, 1.0, cropRight, cropBottom};
+        memcpy(buffer, &values, sizeof(values));
+      } break;
+    }
 
 }
 
@@ -96,7 +123,7 @@ static inline void getCubeVertexData(size_t frameWidth,
     
     id<MTLCommandQueue> _commandQueue;
     id<MTLBuffer> _vertexBuffer;
-
+    id<MTLBuffer> _vertexBufferRotated;
     MTLFrameSize _frameSize;
     MTLFrameSize _scaledSize;
     
@@ -134,6 +161,11 @@ static inline void getCubeVertexData(size_t frameWidth,
                                            length:sizeof(vertexBufferArray)
                                           options:MTLResourceCPUCacheModeWriteCombined];
 
+      _vertexBufferRotated = [metalContext.device newBufferWithBytes:vertexBufferArray
+                                           length:sizeof(vertexBufferArray)
+                                          options:MTLResourceCPUCacheModeWriteCombined];
+
+      
       float verts[8] = {-1.0, 1.0, 1.0, 1.0, -1.0, -1.0, 1.0, -1.0};
     
       _vertexBuffer0 = [metalContext.device newBufferWithBytes:verts length:sizeof(verts) options:0];
@@ -230,9 +262,13 @@ static inline void getCubeVertexData(size_t frameWidth,
         if (rotationIsUpdated) {
             getCubeVertexData(frameWidth,
                               frameHeight,
-                              rotation,
+                              RTCVideoRotation_0,
                               (float *)_vertexBuffer.contents);
             
+            getCubeVertexData(frameWidth,
+                              frameHeight,
+                              rotation,
+                              (float *)_vertexBufferRotated.contents);
            
 
             switch (rotation) {
@@ -289,7 +325,7 @@ static inline void getCubeVertexData(size_t frameWidth,
 }
 
 
-- (id<MTLTexture>)convertYUVtoRGV {
+- (id<MTLTexture>)convertYUVtoRGV:(id<MTLBuffer>)buffer {
     id<MTLTexture> rgbTexture = _rgbTexture;
     if (_frameIsUpdated) {
         id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
@@ -297,7 +333,7 @@ static inline void getCubeVertexData(size_t frameWidth,
         id<MTLRenderCommandEncoder> renderEncoder = [self createRenderEncoderForTarget: rgbTexture with: commandBuffer];
         [renderEncoder pushDebugGroup:renderEncoderDebugGroup];
         [renderEncoder setRenderPipelineState:_context.pipelineYuvRgb];
-        [renderEncoder setVertexBuffer:_vertexBuffer offset:0 atIndex:0];
+        [renderEncoder setVertexBuffer:buffer offset:0 atIndex:0];
         [self uploadTexturesToRenderEncoder:renderEncoder];
         [renderEncoder setFragmentSamplerState:_context.sampler atIndex:0];
         
@@ -382,10 +418,34 @@ static inline void getCubeVertexData(size_t frameWidth,
     id<CAMetalDrawable> background = _view.nextDrawable;
     id<CAMetalDrawable> foreground = _foreground.nextDrawable;
 
-    _rgbTexture = [self convertYUVtoRGV];
+    _rgbTexture = [self convertYUVtoRGV:_vertexBufferRotated];
 
+    CGSize drawableSize = _view.drawableSize;
+
+    MTLFrameSize from;
+    MTLFrameSize to;
     
-    _rgbScaledAndBlurredTexture = [self scaleAndBlur:_rgbTexture scale:simd_make_float2(_frameSize.width / _scaledSize.width, _frameSize.height/ _scaledSize.height)];
+    MTLFrameSize frameSize = _frameSize;
+    MTLFrameSize scaledSize = _scaledSize;
+    
+    
+    
+    from.width = _view.bounds.size.width;
+    from.height = _view.bounds.size.height;
+
+    to.width = drawableSize.width;
+    to.height = drawableSize.height;
+    
+//    bool swap = _rotation == RTCVideoRotation_90 || _rotation == RTCVideoRotation_270;
+
+//    if (swap) {
+//        frameSize.width = _frameSize.height;
+//        frameSize.height = _frameSize.width;
+//        scaledSize.width = _scaledSize.height;
+//        scaledSize.height = _scaledSize.width;
+//    }
+    
+    _rgbScaledAndBlurredTexture = [self scaleAndBlur:_rgbTexture scale:simd_make_float2(frameSize.width / scaledSize.width, frameSize.height/ scaledSize.height)];
 
     id<MTLCommandBuffer> commandBuffer_b = [_commandQueue commandBuffer];
     {
@@ -394,7 +454,7 @@ static inline void getCubeVertexData(size_t frameWidth,
         [renderEncoder setRenderPipelineState:_context.pipelineScaleAndBlur];
         [renderEncoder setFragmentTexture:_rgbScaledAndBlurredTexture atIndex:0];
         [renderEncoder setVertexBuffer:_vertexBuffer offset:0 atIndex:0];
-        simd_float2 scale = simd_make_float2(_scaledSize.width / _frameSize.width, _scaledSize.height / _frameSize.height);
+        simd_float2 scale = simd_make_float2(scaledSize.width / frameSize.width, scaledSize.height / frameSize.height);
         [renderEncoder setFragmentBytes:&scale length:sizeof(scale) atIndex:0];
         bool vertical = false;
         [renderEncoder setFragmentBytes:&vertical length:sizeof(vertical) atIndex:1];
@@ -425,8 +485,7 @@ static inline void getCubeVertexData(size_t frameWidth,
     }
     
 
-    [commandBuffer_b presentDrawable:background];
-    [commandBuffer_f presentDrawable:foreground];
+   
     
     dispatch_semaphore_t inflight = _inflight2;
 
@@ -436,11 +495,18 @@ static inline void getCubeVertexData(size_t frameWidth,
     [commandBuffer_b addCompletedHandler:^(id<MTLCommandBuffer> _Nonnull) {
         dispatch_semaphore_signal(inflight);
     }];
+    
+    [commandBuffer_b addScheduledHandler:^(id<MTLCommandBuffer> _Nonnull) {
+        [background present];
+    }];
+    [commandBuffer_f addScheduledHandler:^(id<MTLCommandBuffer> _Nonnull) {
+        [foreground present];
+    }];
+        
 
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [commandBuffer_f commit];
-        [commandBuffer_b commit];
-    });
+    [commandBuffer_f commit];
+    [commandBuffer_b commit];
+    
     dispatch_semaphore_wait(inflight, DISPATCH_TIME_FOREVER);
     dispatch_semaphore_wait(inflight, DISPATCH_TIME_FOREVER);
 
@@ -492,7 +558,7 @@ static inline void getCubeVertexData(size_t frameWidth,
     CGFloat heightAspectScale = viewPortSize.height / (fitted.width * ratio);
     CGFloat widthAspectScale = viewPortSize.width / (fitted.height * (1.0/ratio));
 
-    _rgbTexture = [self convertYUVtoRGV];
+    _rgbTexture = [self convertYUVtoRGV:_vertexBuffer];
 
     simd_float2 smallScale = simd_make_float2(frameSize.width / scaledSize.width, frameSize.height / scaledSize.height);
     
