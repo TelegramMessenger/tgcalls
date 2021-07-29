@@ -157,6 +157,7 @@ private:
 	std::unique_ptr<cricket::VideoMediaChannel> _videoChannel;
 	std::unique_ptr<webrtc::VideoBitrateAllocatorFactory> _videoBitrateAllocatorFactory;
 	std::shared_ptr<VideoCaptureInterface> _videoCapture;
+    bool _isScreenCapture = false;
     std::shared_ptr<VideoSinkInterfaceProxyImpl> _incomingVideoSinkProxy;
 
     float _localPreferredVideoAspectRatio = 0.0f;
