@@ -829,6 +829,8 @@ private:
     std::vector<float> *_externalAudioSamples = nullptr;
     webrtc::Mutex *_externalAudioSamplesMutex = nullptr;
 };
+#else
+class AudioCapturePostProcessor : public webrtc::CustomProcessing {};
 #endif
 
 class ExternalAudioRecorder : public FakeAudioDeviceModule::Recorder {
