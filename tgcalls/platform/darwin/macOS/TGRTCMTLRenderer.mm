@@ -160,9 +160,9 @@ static inline void getCubeVertexData(size_t frameWidth,
       _vertexBuffer = [metalContext.device newBufferWithBytes:vertexBufferArray
                                            length:sizeof(vertexBufferArray)
                                           options:MTLResourceCPUCacheModeWriteCombined];
-
-      _vertexBufferRotated = [metalContext.device newBufferWithBytes:vertexBufferArray
-                                           length:sizeof(vertexBufferArray)
+      float vertexBufferArrayRotated[16] = {0};
+      _vertexBufferRotated = [metalContext.device newBufferWithBytes:vertexBufferArrayRotated
+                                           length:sizeof(vertexBufferArrayRotated)
                                           options:MTLResourceCPUCacheModeWriteCombined];
 
       
