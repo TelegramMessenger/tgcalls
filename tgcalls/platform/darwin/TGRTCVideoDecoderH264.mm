@@ -252,8 +252,7 @@ static void decompressionOutputCallback(void *decoderRef,
 - (void)configureDecompressionSession {
   RTC_DCHECK(_decompressionSession);
 #if defined(WEBRTC_IOS)
-  VTSessionSetProperty(_decompressionSession, kVTDecompressionPropertyKey_RealTime, kCFBooleanFalse);
-  VTSessionSetProperty(_decompressionSession, kVTDecompressionPropertyKey_MaximizePowerEfficiency, kCFBooleanTrue);
+  VTSessionSetProperty(_decompressionSession, kVTDecompressionPropertyKey_RealTime, kCFBooleanTrue);
 #endif
 }
 
