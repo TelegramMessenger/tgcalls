@@ -70,6 +70,21 @@ namespace tgcalls {
 
 namespace {
 
+template <typename Out>
+void splitString(const std::string &s, char delim, Out result) {
+    std::istringstream iss(s);
+    std::string item;
+    while (std::getline(iss, item, delim)) {
+        *result++ = item;
+    }
+}
+
+std::vector<std::string> splitString(const std::string &s, char delim) {
+    std::vector<std::string> elems;
+    splitString(s, delim, std::back_inserter(elems));
+    return elems;
+}
+
 static int stringToInt(std::string const &string) {
     std::stringstream stringStream(string);
     int value = 0;
@@ -1144,6 +1159,14 @@ public:
         _requestedMaxQuality = quality;
     }
 
+    void setStats(absl::optional<GroupInstanceStats::IncomingVideoStats> stats) {
+        _stats = stats;
+    }
+
+    absl::optional<GroupInstanceStats::IncomingVideoStats> getStats() {
+        return _stats;
+    }
+
 private:
     void OnSentPacket_w(const rtc::SentPacket& sent_packet) {
         //_call->OnSentPacket(sent_packet);
@@ -1164,6 +1187,8 @@ private:
 
     VideoChannelDescription::Quality _requestedMinQuality = VideoChannelDescription::Quality::Thumbnail;
     VideoChannelDescription::Quality _requestedMaxQuality = VideoChannelDescription::Quality::Thumbnail;
+
+    absl::optional<GroupInstanceStats::IncomingVideoStats> _stats;
 };
 
 class MissingSsrcPacketBuffer {
@@ -2485,6 +2510,58 @@ public:
                             }
                         }
                     }
+                } else if (messageType == "DebugMessage") {
+                    const auto message = json.object_items().find("message");
+                    if (message != json.object_items().end() && message->second.is_string()) {
+                        std::vector<std::string> parts = splitString(message->second.string_value(), '\n');
+                        for (const auto &part : parts) {
+                            std::string cleanString = part;
+                            std::size_t index = cleanString.find("=");
+                            if (index == std::string::npos) {
+                                continue;
+                            }
+                            cleanString.erase(cleanString.begin(), cleanString.begin() + index + 1);
+
+                            index = cleanString.find("target=");
+                            if (index == std::string::npos) {
+                                continue;
+                            }
+
+                            std::string endpointId = cleanString.substr(0, index);
+                            cleanString.erase(cleanString.begin(), cleanString.begin() + index + 7);
+
+                            index = cleanString.find("p/");
+                            if (index == std::string::npos) {
+                                continue;
+                            }
+
+                            std::string targetQuality = cleanString.substr(0, index);
+                            cleanString.erase(cleanString.begin(), cleanString.begin() + index + 2);
+
+                            index = cleanString.find("ideal=");
+                            if (index == std::string::npos) {
+                                continue;
+                            }
+
+                            cleanString.erase(cleanString.begin(), cleanString.begin() + index + 6);
+
+                            index = cleanString.find("p/");
+                            if (index == std::string::npos) {
+                                continue;
+                            }
+
+                            std::string availableQuality = cleanString.substr(0, index);
+
+                            for (const auto &it : _incomingVideoChannels) {
+                                if (it.second->endpointId() == endpointId) {
+                                    GroupInstanceStats::IncomingVideoStats incomingVideoStats;
+                                    incomingVideoStats.receivingQuality = stringToInt(targetQuality);
+                                    incomingVideoStats.availableQuality = stringToInt(availableQuality);
+                                    it.second->setStats(incomingVideoStats);
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -3227,6 +3304,19 @@ public:
         }
     }
 
+    void getStats(std::function<void(GroupInstanceStats)> completion) {
+        GroupInstanceStats result;
+
+        for (const auto &it : _incomingVideoChannels) {
+            const auto videoStats = it.second->getStats();
+            if (videoStats) {
+                result.incomingVideoStats.push_back(std::make_pair(it.second->endpointId(), videoStats.value()));
+            }
+        }
+
+        completion(result);
+    }
+
 private:
     rtc::scoped_refptr<WrappedAudioDeviceModule> createAudioDeviceModule() {
         const auto create = [&](webrtc::AudioDeviceModule::AudioLayer layer) {
@@ -3478,6 +3568,12 @@ void GroupInstanceCustomImpl::setVolume(uint32_t ssrc, double volume) {
 void GroupInstanceCustomImpl::setRequestedVideoChannels(std::vector<VideoChannelDescription> &&requestedVideoChannels) {
     _internal->perform(RTC_FROM_HERE, [requestedVideoChannels = std::move(requestedVideoChannels)](GroupInstanceCustomInternal *internal) mutable {
         internal->setRequestedVideoChannels(std::move(requestedVideoChannels));
+    });
+}
+
+void GroupInstanceCustomImpl::getStats(std::function<void(GroupInstanceStats)> completion) {
+    _internal->perform(RTC_FROM_HERE, [completion = std::move(completion)](GroupInstanceCustomInternal *internal) mutable {
+        internal->getStats(completion);
     });
 }
 
