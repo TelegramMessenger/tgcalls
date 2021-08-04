@@ -1823,27 +1823,32 @@ public:
             GroupLevelsUpdate levelsUpdate;
             levelsUpdate.updates.reserve(strong->_audioLevels.size() + 1);
             for (auto &it : strong->_audioLevels) {
-                if (it.second.value.level > 0.001f && it.second.timestamp > timestamp - maxSampleTimeout) {
-                    uint32_t effectiveSsrc = it.first.actualSsrc;
-                    if (std::find_if(levelsUpdate.updates.begin(), levelsUpdate.updates.end(), [&](GroupLevelUpdate const &item) {
-                        return item.ssrc == effectiveSsrc;
-                    }) != levelsUpdate.updates.end()) {
-                        continue;
-                    }
-                    levelsUpdate.updates.push_back(GroupLevelUpdate{
-                        effectiveSsrc,
-                        it.second.value,
-                        });
-                    if (it.second.value.level > 0.001f) {
-                        auto audioChannel = strong->_incomingAudioChannels.find(it.first);
-                        if (audioChannel != strong->_incomingAudioChannels.end()) {
-                            audioChannel->second->updateActivity();
-                        }
-                    }
-
-                    it.second.value.level *= 0.5f;
-                    it.second.value.voice = false;
+                if (it.second.value.level < 0.001f) {
+                    continue;
                 }
+                if (it.second.timestamp <= timestamp - maxSampleTimeout) {
+                    continue;
+                }
+
+                uint32_t effectiveSsrc = it.first.actualSsrc;
+                if (std::find_if(levelsUpdate.updates.begin(), levelsUpdate.updates.end(), [&](GroupLevelUpdate const &item) {
+                    return item.ssrc == effectiveSsrc;
+                }) != levelsUpdate.updates.end()) {
+                    continue;
+                }
+                levelsUpdate.updates.push_back(GroupLevelUpdate{
+                    effectiveSsrc,
+                    it.second.value,
+                    });
+                if (it.second.value.level > 0.001f) {
+                    auto audioChannel = strong->_incomingAudioChannels.find(it.first);
+                    if (audioChannel != strong->_incomingAudioChannels.end()) {
+                        audioChannel->second->updateActivity();
+                    }
+                }
+
+                it.second.value.level *= 0.5f;
+                it.second.value.voice = false;
             }
 
             auto myAudioLevel = strong->_myAudioLevel;
@@ -3096,11 +3101,21 @@ public:
                         if (!strong) {
                             return;
                         }
-                        InternalGroupLevelValue updated;
-                        updated.value.level = update.level;
-                        updated.value.voice = update.hasSpeech;
-                        updated.timestamp = rtc::TimeMillis();
-                        strong->_audioLevels.insert(std::make_pair(ChannelId(ssrc), std::move(updated)));
+
+                        auto it = strong->_audioLevels.find(ChannelId(ssrc));
+                        if (it != strong->_audioLevels.end()) {
+                            it->second.value.level = fmax(it->second.value.level, update.level);
+                            if (update.hasSpeech) {
+                                it->second.value.voice = true;
+                            }
+                            it->second.timestamp = rtc::TimeMillis();
+                        } else {
+                            InternalGroupLevelValue updated;
+                            updated.value.level = update.level;
+                            updated.value.voice = update.hasSpeech;
+                            updated.timestamp = rtc::TimeMillis();
+                            strong->_audioLevels.insert(std::make_pair(ChannelId(ssrc), std::move(updated)));
+                        }
                     });
                 };
             }
