@@ -23,7 +23,7 @@
 #import "TGRTCVideoDecoderH265.h"
 #endif
 
-#import "RTCWrappedNativeVideoDecoder.h"
+#import "sdk/objc/api/video_codec/RTCWrappedNativeVideoDecoder.h"
 #include "modules/video_coding/codecs/h264/include/h264.h"
 
 @implementation TGRTCDefaultVideoDecoderFactory
