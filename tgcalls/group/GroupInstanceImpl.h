@@ -154,7 +154,7 @@ struct GroupInstanceDescriptor {
     std::shared_ptr<VideoCaptureInterface> videoCapture; // deprecated
     std::function<webrtc::VideoTrackSourceInterface*()> getVideoSource;
     std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, std::function<void(BroadcastPart &&)>)> requestAudioBroadcastPart;
-    std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, std::function<void(BroadcastPart &&)>)> requestVideoBroadcastPart;
+    std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, int32_t, VideoChannelDescription::Quality, std::function<void(BroadcastPart &&)>)> requestVideoBroadcastPart;
     int outgoingAudioBitrateKbit{32};
     bool disableOutgoingAudioProcessing{false};
     VideoContentType videoContentType{VideoContentType::None};

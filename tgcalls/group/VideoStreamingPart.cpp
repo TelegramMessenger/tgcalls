@@ -162,11 +162,10 @@ private:
 
 class DecodableFrame {
 public:
-    DecodableFrame(MediaDataPacket packet, int64_t pts, int64_t dts, int64_t duration):
+    DecodableFrame(MediaDataPacket packet, int64_t pts, int64_t dts):
     _packet(std::move(packet)),
     _pts(pts),
-    _dts(dts),
-    _duration(duration) {
+    _dts(dts) {
     }
 
     ~DecodableFrame() {
@@ -184,15 +183,10 @@ public:
         return _dts;
     }
 
-    int64_t duration() {
-        return _duration;
-    }
-
 private:
     MediaDataPacket _packet;
-    int64_t _pts;
-    int64_t _dts;
-    int64_t _duration;
+    int64_t _pts = 0;
+    int64_t _dts = 0;
 };
 
 class Frame {
@@ -213,7 +207,23 @@ public:
     }
 
     AVFrame *frame() {
-        return  _frame;
+        return _frame;
+    }
+
+    double pts(AVStream *stream) {
+        int64_t framePts = _frame->pts;
+        double spf = av_q2d(stream->time_base);
+        return ((double)framePts) * spf;
+    }
+
+    double duration(AVStream *stream) {
+        int64_t frameDuration = _frame->pkt_duration;
+        double spf = av_q2d(stream->time_base);
+        if (frameDuration != 0) {
+            return ((double)frameDuration) * spf;
+        } else {
+            return spf;
+        }
     }
 
 private:
@@ -345,7 +355,7 @@ public:
             absl::optional<MediaDataPacket> packet = readPacket();
             if (packet) {
                 if (_videoStream && packet->packet()->stream_index == _videoStream->index) {
-                    return std::make_shared<DecodableFrame>(std::move(packet.value()), packet->packet()->pts, packet->packet()->dts, packet->packet()->duration);
+                    return std::make_shared<DecodableFrame>(std::move(packet.value()), packet->packet()->pts, packet->packet()->dts);
                 }
             } else {
                 return nullptr;
@@ -353,7 +363,7 @@ public:
         }
     }
 
-    absl::optional<webrtc::VideoFrame> convertCurrentFrame() {
+    absl::optional<VideoStreamingPartFrame> convertCurrentFrame() {
         rtc::scoped_refptr<webrtc::I420Buffer> i420Buffer = webrtc::I420Buffer::Copy(
             _frame.frame()->width,
             _frame.frame()->height,
@@ -367,15 +377,14 @@ public:
         if (i420Buffer) {
             auto videoFrame = webrtc::VideoFrame::Builder()
                 .set_video_frame_buffer(i420Buffer)
-                //.set_timestamp_us(timeStampNs)
                 .build();
-            return videoFrame;
+            return VideoStreamingPartFrame(videoFrame, _frame.pts(_videoStream), _frame.duration(_videoStream));
         } else {
             return absl::nullopt;
         }
     }
 
-    std::vector<webrtc::VideoFrame> getNextFrame() {
+    absl::optional<VideoStreamingPartFrame> getNextFrame() {
         if (!_codecContext) {
             return {};
         }
@@ -385,7 +394,7 @@ public:
                 if (!_finalFrames.empty()) {
                     auto frame = _finalFrames[0];
                     _finalFrames.erase(_finalFrames.begin());
-                    return { frame };
+                    return frame;
                 } else {
                     break;
                 }
@@ -399,7 +408,7 @@ public:
                             auto convertedFrame = convertCurrentFrame();
                             if (convertedFrame) {
                                 _frameIndex++;
-                                return { convertedFrame.value() };
+                                return convertedFrame;
                             }
                         } else if (status == -35) {
                             // more data needed
@@ -438,12 +447,11 @@ private:
     AVIOContextImpl _avIoContext;
 
     AVFormatContext *_inputFormatContext = nullptr;
-    AVPacket _packet;
     AVCodecContext *_codecContext = nullptr;
     AVStream *_videoStream = nullptr;
     Frame _frame;
 
-    std::vector<webrtc::VideoFrame> _finalFrames;
+    std::vector<VideoStreamingPartFrame> _finalFrames;
 
     int _frameIndex = 0;
     bool _didReadToEnd = false;
@@ -458,12 +466,32 @@ public:
     ~VideoStreamingPartState() {
     }
 
-    std::vector<webrtc::VideoFrame> getNextFrame() {
-        return _parsedPart.getNextFrame();
+    absl::optional<VideoStreamingPartFrame> getFrameAtRelativeTimestamp(double timestamp) {
+        while (true) {
+            if (!_currentFrame) {
+                auto result = _parsedPart.getNextFrame();
+                if (result) {
+                    _currentFrame = result;
+                    _relativeTimestamp += result->duration;
+                }
+            }
+
+            if (_currentFrame) {
+                if (timestamp <= _relativeTimestamp) {
+                    return _currentFrame;
+                } else {
+                    _currentFrame = absl::nullopt;
+                }
+            } else {
+                return absl::nullopt;
+            }
+        }
     }
 
 private:
     VideoStreamingPartInternal _parsedPart;
+    absl::optional<VideoStreamingPartFrame> _currentFrame;
+    double _relativeTimestamp = 0.0;
 };
 
 VideoStreamingPart::VideoStreamingPart(std::vector<uint8_t> &&data) {
@@ -478,10 +506,10 @@ VideoStreamingPart::~VideoStreamingPart() {
     }
 }
 
-std::vector<webrtc::VideoFrame> VideoStreamingPart::getNextFrame() {
+absl::optional<VideoStreamingPartFrame> VideoStreamingPart::getFrameAtRelativeTimestamp(double timestamp) {
     return _state
-        ? _state->getNextFrame()
-        : std::vector<webrtc::VideoFrame>();
+        ? _state->getFrameAtRelativeTimestamp(timestamp)
+        : absl::nullopt;
 }
 
 }

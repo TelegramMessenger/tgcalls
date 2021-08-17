@@ -6,10 +6,23 @@
 #include <stdint.h>
 
 #include "api/video/video_frame.h"
+#include "absl/types/optional.h"
 
 namespace tgcalls {
 
 class VideoStreamingPartState;
+
+struct VideoStreamingPartFrame {
+    webrtc::VideoFrame frame;
+    double pts = 0;
+    double duration = 0.0;
+
+    VideoStreamingPartFrame(webrtc::VideoFrame const &frame_, double pts_, double duration_) :
+    frame(frame_),
+    pts(pts_),
+    duration(duration_) {
+    }
+};
 
 class VideoStreamingPart {
 public:
@@ -24,7 +37,7 @@ public:
     VideoStreamingPart& operator=(const VideoStreamingPart&) = delete;
     VideoStreamingPart& operator=(VideoStreamingPart&&) = delete;
 
-    std::vector<webrtc::VideoFrame> getNextFrame();
+    absl::optional<VideoStreamingPartFrame> getFrameAtRelativeTimestamp(double timestamp);
     
 private:
     VideoStreamingPartState *_state = nullptr;
