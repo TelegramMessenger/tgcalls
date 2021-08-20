@@ -26,7 +26,8 @@ public:
     }
     AudioStreamingPart& operator=(const AudioStreamingPart&) = delete;
     AudioStreamingPart& operator=(AudioStreamingPart&&) = delete;
-    
+
+    uint32_t getVideoChannelMask() const;
     int getRemainingMilliseconds() const;
     std::vector<StreamingPartChannel> get10msPerChannel();
     

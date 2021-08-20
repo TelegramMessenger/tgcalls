@@ -17,6 +17,13 @@ namespace tgcalls {
 
 namespace {
 
+static uint32_t stringToUInt32(std::string const &string) {
+    std::stringstream stringStream(string);
+    uint32_t value = 0;
+    stringStream >> value;
+    return value;
+}
+
 static absl::optional<uint32_t> readInt32(std::string const &data, int &offset) {
     if (offset + 4 > data.length()) {
         return absl::nullopt;
@@ -201,6 +208,12 @@ public:
                         _channelUpdates = parseChannelUpdates(result, offset);
                     }
                 }
+
+                entry = av_dict_get(inStream->metadata, "ACTIVE_MASK", nullptr, 0);
+                if (entry && entry->value) {
+                    std::string sourceString = (const char *)entry->value;
+                    _videoChannelMask = stringToUInt32(sourceString);
+                }
             }
 
             break;
@@ -285,6 +298,10 @@ public:
 
     std::vector<ChannelUpdate> const &getChannelUpdates() {
         return _channelUpdates;
+    }
+
+    uint32_t getVideoChannelMask() const {
+        return _videoChannelMask;
     }
 
 private:
@@ -399,6 +416,7 @@ private:
     int _channelCount = 0;
 
     std::vector<ChannelUpdate> _channelUpdates;
+    uint32_t _videoChannelMask = 0;
 
     std::vector<int16_t> _pcmBuffer;
     int _pcmBufferSampleOffset = 0;
@@ -432,6 +450,10 @@ public:
     }
 
     ~AudioStreamingPartState() {
+    }
+
+    uint32_t getVideoChannelMask() const {
+        return _parsedPart.getVideoChannelMask();
     }
 
     int getRemainingMilliseconds() const {
@@ -530,6 +552,10 @@ AudioStreamingPart::~AudioStreamingPart() {
     if (_state) {
         delete _state;
     }
+}
+
+uint32_t AudioStreamingPart::getVideoChannelMask() const {
+    return _state ? _state->getVideoChannelMask() : 0;
 }
 
 int AudioStreamingPart::getRemainingMilliseconds() const {

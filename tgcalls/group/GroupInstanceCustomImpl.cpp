@@ -1904,18 +1904,18 @@ public:
                 return;
             }
 
-            int64_t timestamp = rtc::TimeMillis();
-            int64_t maxSampleTimeout = 400;
+            //int64_t timestamp = rtc::TimeMillis();
+            //int64_t maxSampleTimeout = 400;
 
             GroupLevelsUpdate levelsUpdate;
             levelsUpdate.updates.reserve(strong->_audioLevels.size() + 1);
             for (auto &it : strong->_audioLevels) {
-                if (it.second.value.level < 0.001f) {
+                /*if (it.second.value.level < 0.001f) {
                     continue;
                 }
                 if (it.second.timestamp <= timestamp - maxSampleTimeout) {
                     continue;
-                }
+                }*/
 
                 uint32_t effectiveSsrc = it.first.actualSsrc;
                 if (std::find_if(levelsUpdate.updates.begin(), levelsUpdate.updates.end(), [&](GroupLevelUpdate const &item) {
@@ -1934,9 +1934,11 @@ public:
                     }
                 }
 
-                it.second.value.level *= 0.5f;
-                it.second.value.voice = false;
+                //it.second.value.level *= 0.5f;
+                //it.second.value.voice = false;
             }
+
+            strong->_audioLevels.clear();
 
             auto myAudioLevel = strong->_myAudioLevel;
             myAudioLevel.isMuted = strong->_isMuted;
@@ -2629,14 +2631,17 @@ public:
                     arguments.threads = _threads;
                     arguments.requestAudioBroadcastPart = _requestAudioBroadcastPart;
                     arguments.requestVideoBroadcastPart = _requestVideoBroadcastPart;
-                    arguments.displayVideoFrame = [weak, threads = _threads](webrtc::VideoFrame const &frame) {
-                        threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, frame]() {
+                    arguments.displayVideoFrame = [weak, threads = _threads](std::string const &endpointId, webrtc::VideoFrame const &frame) {
+                        threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, endpointId, frame]() {
                             auto strong = weak.lock();
                             if (!strong) {
                                 return;
                             }
 
                             for (const auto &sinkList : strong->_pendingVideoSinks) {
+                                if (sinkList.first.endpointId != endpointId) {
+                                    continue;
+                                }
                                 for (const auto &weakSink : sinkList.second) {
                                     const auto sink = weakSink.lock();
                                     if (sink) {
@@ -2645,6 +2650,20 @@ public:
                                 }
                             }
                         });
+                    };
+                    arguments.updateAudioLevel = [weak, threads = _threads](uint32_t ssrc, float level, bool isSpeech) {
+                        assert(threads->getMediaThread()->IsCurrent());
+
+                        auto strong = weak.lock();
+                        if (!strong) {
+                            return;
+                        }
+
+                        InternalGroupLevelValue updated;
+                        updated.value.level = level;
+                        updated.value.voice = isSpeech;
+                        updated.timestamp = rtc::TimeMillis();
+                        strong->_audioLevels.insert(std::make_pair(ChannelId(ssrc), std::move(updated)));
                     };
                     _streamingContext = std::make_shared<StreamingMediaContext>(std::move(arguments));
 

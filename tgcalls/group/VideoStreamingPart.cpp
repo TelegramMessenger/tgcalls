@@ -230,12 +230,181 @@ private:
     AVFrame *_frame = nullptr;
 };
 
+struct VideoStreamEvent {
+    int32_t fromFrame = 0;
+    std::string endpointId;
+    int32_t width = 0;
+    int32_t height = 0;
+};
+
+struct VideoStreamInfo {
+    int32_t codec = 0;
+    int32_t activeMask = 0;
+    std::vector<VideoStreamEvent> events;
+};
+
+/*
+ streamEvent from_frame:int endpoint:string width:int height:int = StreamEvent;
+ // codec:
+ // 3 - mp4+h264
+ // 2 - h264
+ header#a12e810d codec:int active_mask:int events:vector<streamEvent> = Header;
+ */
+
+absl::optional<int32_t> readInt32(std::vector<uint8_t> const &data, int &offset) {
+    if (offset + 4 > data.size()) {
+        return absl::nullopt;
+    }
+
+    int32_t value = 0;
+    memcpy(&value, data.data() + offset, 4);
+    offset += 4;
+
+    return value;
+}
+
+absl::optional<uint8_t> readBytesAsInt32(std::vector<uint8_t> const &data, int &offset, int count) {
+    if (offset + count > data.size()) {
+        return absl::nullopt;
+    }
+
+    if (count == 0) {
+        return absl::nullopt;
+    }
+
+    if (count <= 4) {
+        int32_t value = 0;
+        memcpy(&value, data.data() + offset, count);
+        offset += count;
+        return value;
+    } else {
+        return absl::nullopt;
+    }
+}
+
+int32_t roundUp(int32_t numToRound, int32_t multiple) {
+    if (multiple == 0) {
+        return numToRound;
+    }
+
+    int32_t remainder = numToRound % multiple;
+    if (remainder == 0) {
+        return numToRound;
+    }
+
+    return numToRound + multiple - remainder;
+}
+
+absl::optional<std::string> readSerializedString(std::vector<uint8_t> const &data, int &offset) {
+    if (const auto tmp = readBytesAsInt32(data, offset, 1)) {
+        int paddingBytes = 0;
+        int length = 0;
+        if (tmp.value() == 254) {
+            if (const auto len = readBytesAsInt32(data, offset, 3)) {
+                length = len.value();
+                paddingBytes = roundUp(length, 4) - length;
+            } else {
+                return absl::nullopt;
+            }
+        }
+        else {
+            length = tmp.value();
+            paddingBytes = roundUp(length + 1, 4) - (length + 1);
+        }
+
+        if (offset + length > data.size()) {
+            return absl::nullopt;
+        }
+
+        std::string result(data.data() + offset, data.data() + offset + length);
+
+        offset += length;
+        offset += paddingBytes;
+
+        return result;
+    } else {
+        return absl::nullopt;
+    }
+}
+
+absl::optional<VideoStreamEvent> readVideoStreamEvent(std::vector<uint8_t> const &data, int &offset) {
+    VideoStreamEvent event;
+
+    if (const auto fromFrame = readInt32(data, offset)) {
+        event.fromFrame = fromFrame.value();
+    } else {
+        return absl::nullopt;
+    }
+
+    if (const auto endpointId = readSerializedString(data, offset)) {
+        event.endpointId = endpointId.value();
+    } else {
+        return absl::nullopt;
+    }
+
+    if (const auto width = readInt32(data, offset)) {
+        event.width = width.value();
+    } else {
+        return absl::nullopt;
+    }
+
+    if (const auto height = readInt32(data, offset)) {
+        event.height = height.value();
+    } else {
+        return absl::nullopt;
+    }
+
+    return event;
+}
+
+absl::optional<VideoStreamInfo> readVideoStreamInfo(std::vector<uint8_t> &data) {
+    int offset = 0;
+    if (const auto signature = readInt32(data, offset)) {
+        if (signature.value() != 0xa12e810d) {
+            return absl::nullopt;
+        }
+    } else {
+        return absl::nullopt;
+    }
+
+    VideoStreamInfo info;
+
+    if (const auto codec = readInt32(data, offset)) {
+        info.codec = codec.value();
+    } else {
+        return absl::nullopt;
+    }
+
+    if (const auto activeMask = readInt32(data, offset)) {
+        info.activeMask = activeMask.value();
+    } else {
+        return absl::nullopt;
+    }
+
+    if (const auto eventCount = readInt32(data, offset)) {
+        if (const auto event = readVideoStreamEvent(data, offset)) {
+            info.events.push_back(event.value());
+        } else {
+            return absl::nullopt;
+        }
+    } else {
+        return absl::nullopt;
+    }
+
+    data.erase(data.begin(), data.begin() + offset);
+
+    return info;
+}
+
 }
 
 class VideoStreamingPartInternal {
 public:
-    VideoStreamingPartInternal(std::vector<uint8_t> &&fileData) :
-    _avIoContext(std::move(fileData)) {
+    VideoStreamingPartInternal(std::vector<uint8_t> &&fileData) {
+        _videoStreamInfo = readVideoStreamInfo(fileData);
+
+        _avIoContext = std::make_unique<AVIOContextImpl>(std::move(fileData));
+
         int ret = 0;
 
         AVInputFormat *inputFormat = av_find_input_format("mp4");
@@ -250,7 +419,7 @@ public:
             return;
         }
 
-        _inputFormatContext->pb = _avIoContext.getContext();
+        _inputFormatContext->pb = _avIoContext->getContext();
 
         if ((ret = avformat_open_input(&_inputFormatContext, "", inputFormat, nullptr)) < 0) {
             _didReadToEnd = true;
@@ -332,6 +501,16 @@ public:
         }
     }
 
+    absl::optional<std::string> getActiveEndpointId() {
+        if (!_videoStreamInfo) {
+            return absl::nullopt;
+        }
+        if (_videoStreamInfo->events.empty()) {
+            return absl::nullopt;
+        }
+        return _videoStreamInfo->events[0].endpointId;
+    }
+
     absl::optional<MediaDataPacket> readPacket() {
         if (_didReadToEnd) {
             return absl::nullopt;
@@ -364,6 +543,10 @@ public:
     }
 
     absl::optional<VideoStreamingPartFrame> convertCurrentFrame() {
+        if (!_videoStreamInfo) {
+            return absl::nullopt;
+        }
+
         rtc::scoped_refptr<webrtc::I420Buffer> i420Buffer = webrtc::I420Buffer::Copy(
             _frame.frame()->width,
             _frame.frame()->height,
@@ -378,7 +561,16 @@ public:
             auto videoFrame = webrtc::VideoFrame::Builder()
                 .set_video_frame_buffer(i420Buffer)
                 .build();
-            return VideoStreamingPartFrame(videoFrame, _frame.pts(_videoStream), _frame.duration(_videoStream));
+
+            std::string endpointId;
+            for (int i = (int)(_videoStreamInfo->events.size()) - 1; i >= 0; i--) {
+                if (_frameIndex >= _videoStreamInfo->events[i].fromFrame) {
+                    endpointId = _videoStreamInfo->events[i].endpointId;
+                    break;
+                }
+            }
+
+            return VideoStreamingPartFrame(endpointId, videoFrame, _frame.pts(_videoStream), _frame.duration(_videoStream));
         } else {
             return absl::nullopt;
         }
@@ -429,6 +621,7 @@ public:
                             if (status == 0) {
                                 auto convertedFrame = convertCurrentFrame();
                                 if (convertedFrame) {
+                                    _frameIndex += 1;
                                     _finalFrames.push_back(convertedFrame.value());
                                 }
                             } else {
@@ -444,7 +637,8 @@ public:
     }
 
 private:
-    AVIOContextImpl _avIoContext;
+    absl::optional<VideoStreamInfo> _videoStreamInfo;
+    std::unique_ptr<AVIOContextImpl> _avIoContext;
 
     AVFormatContext *_inputFormatContext = nullptr;
     AVCodecContext *_codecContext = nullptr;
@@ -488,6 +682,10 @@ public:
         }
     }
 
+    absl::optional<std::string> getActiveEndpointId() {
+        return _parsedPart.getActiveEndpointId();
+    }
+
 private:
     VideoStreamingPartInternal _parsedPart;
     absl::optional<VideoStreamingPartFrame> _currentFrame;
@@ -509,6 +707,12 @@ VideoStreamingPart::~VideoStreamingPart() {
 absl::optional<VideoStreamingPartFrame> VideoStreamingPart::getFrameAtRelativeTimestamp(double timestamp) {
     return _state
         ? _state->getFrameAtRelativeTimestamp(timestamp)
+        : absl::nullopt;
+}
+
+absl::optional<std::string> VideoStreamingPart::getActiveEndpointId() {
+    return _state
+        ? _state->getActiveEndpointId()
         : absl::nullopt;
 }
 

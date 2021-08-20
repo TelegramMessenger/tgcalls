@@ -26,7 +26,8 @@ public:
         std::shared_ptr<Threads> threads;
         std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, std::function<void(BroadcastPart &&)>)> requestAudioBroadcastPart;
         std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, int32_t, VideoChannelDescription::Quality, std::function<void(BroadcastPart &&)>)> requestVideoBroadcastPart;
-        std::function<void(webrtc::VideoFrame const &)> displayVideoFrame;
+        std::function<void(std::string const &, webrtc::VideoFrame const &)> displayVideoFrame;
+        std::function<void(uint32_t, float, bool)> updateAudioLevel;
     };
 
 public:

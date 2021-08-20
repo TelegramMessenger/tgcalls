@@ -13,11 +13,13 @@ namespace tgcalls {
 class VideoStreamingPartState;
 
 struct VideoStreamingPartFrame {
+    std::string endpointId;
     webrtc::VideoFrame frame;
     double pts = 0;
     double duration = 0.0;
 
-    VideoStreamingPartFrame(webrtc::VideoFrame const &frame_, double pts_, double duration_) :
+    VideoStreamingPartFrame(std::string endpointId_, webrtc::VideoFrame const &frame_, double pts_, double duration_) :
+    endpointId(endpointId_),
     frame(frame_),
     pts(pts_),
     duration(duration_) {
@@ -38,6 +40,7 @@ public:
     VideoStreamingPart& operator=(VideoStreamingPart&&) = delete;
 
     absl::optional<VideoStreamingPartFrame> getFrameAtRelativeTimestamp(double timestamp);
+    absl::optional<std::string> getActiveEndpointId();
     
 private:
     VideoStreamingPartState *_state = nullptr;
