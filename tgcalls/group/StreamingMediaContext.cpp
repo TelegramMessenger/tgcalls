@@ -254,9 +254,20 @@ public:
     void render() {
         int64_t absoluteTimestamp = rtc::TimeMillis();
 
-        while (getAvailableBufferDuration() > 1000) {
+        while (true) {
+            if (_waitForBufferredMillisecondsBeforeRendering) {
+                if (getAvailableBufferDuration() < _waitForBufferredMillisecondsBeforeRendering.value()) {
+                    break;
+                } else {
+                    _waitForBufferredMillisecondsBeforeRendering = absl::nullopt;
+                }
+            }
+
             if (_availableSegments.empty()) {
                 _playbackReferenceTimestamp = 0;
+
+                _waitForBufferredMillisecondsBeforeRendering = 2000;
+
                 break;
             }
 
@@ -714,6 +725,7 @@ private:
     const int64_t _segmentDuration = 500;
     int64_t _nextSegmentTimestamp = 0;
 
+    absl::optional<int> _waitForBufferredMillisecondsBeforeRendering;
     std::vector<std::shared_ptr<MediaSegment>> _availableSegments;
     std::shared_ptr<PendingMediaSegment> _pendingSegment;
 
