@@ -231,10 +231,10 @@ private:
 };
 
 struct VideoStreamEvent {
-    int32_t fromFrame = 0;
+    int32_t offset = 0;
     std::string endpointId;
-    int32_t width = 0;
-    int32_t height = 0;
+    int32_t rotation = 0;
+    int32_t extra = 0;
 };
 
 struct VideoStreamInfo {
@@ -330,8 +330,8 @@ absl::optional<std::string> readSerializedString(std::vector<uint8_t> const &dat
 absl::optional<VideoStreamEvent> readVideoStreamEvent(std::vector<uint8_t> const &data, int &offset) {
     VideoStreamEvent event;
 
-    if (const auto fromFrame = readInt32(data, offset)) {
-        event.fromFrame = fromFrame.value();
+    if (const auto offsetValue = readInt32(data, offset)) {
+        event.offset = offsetValue.value();
     } else {
         return absl::nullopt;
     }
@@ -342,14 +342,14 @@ absl::optional<VideoStreamEvent> readVideoStreamEvent(std::vector<uint8_t> const
         return absl::nullopt;
     }
 
-    if (const auto width = readInt32(data, offset)) {
-        event.width = width.value();
+    if (const auto rotation = readInt32(data, offset)) {
+        event.rotation = rotation.value();
     } else {
         return absl::nullopt;
     }
 
-    if (const auto height = readInt32(data, offset)) {
-        event.height = height.value();
+    if (const auto extra = readInt32(data, offset)) {
+        event.extra = extra.value();
     } else {
         return absl::nullopt;
     }
@@ -357,7 +357,7 @@ absl::optional<VideoStreamEvent> readVideoStreamEvent(std::vector<uint8_t> const
     return event;
 }
 
-absl::optional<VideoStreamInfo> readVideoStreamInfo(std::vector<uint8_t> &data) {
+absl::optional<VideoStreamInfo> consumeVideoStreamInfo(std::vector<uint8_t> &data) {
     int offset = 0;
     if (const auto signature = readInt32(data, offset)) {
         if (signature.value() != 0xa12e810d) {
@@ -400,9 +400,9 @@ absl::optional<VideoStreamInfo> readVideoStreamInfo(std::vector<uint8_t> &data) 
 
 class VideoStreamingPartInternal {
 public:
-    VideoStreamingPartInternal(std::vector<uint8_t> &&fileData) {
-        _videoStreamInfo = readVideoStreamInfo(fileData);
-
+    VideoStreamingPartInternal(std::string endpointId, webrtc::VideoRotation rotation, std::vector<uint8_t> &&fileData) :
+    _endpointId(endpointId),
+    _rotation(rotation) {
         _avIoContext = std::make_unique<AVIOContextImpl>(std::move(fileData));
 
         int ret = 0;
@@ -501,14 +501,8 @@ public:
         }
     }
 
-    absl::optional<std::string> getActiveEndpointId() {
-        if (!_videoStreamInfo) {
-            return absl::nullopt;
-        }
-        if (_videoStreamInfo->events.empty()) {
-            return absl::nullopt;
-        }
-        return _videoStreamInfo->events[0].endpointId;
+    std::string endpointId() {
+        return _endpointId;
     }
 
     absl::optional<MediaDataPacket> readPacket() {
@@ -543,10 +537,6 @@ public:
     }
 
     absl::optional<VideoStreamingPartFrame> convertCurrentFrame() {
-        if (!_videoStreamInfo) {
-            return absl::nullopt;
-        }
-
         rtc::scoped_refptr<webrtc::I420Buffer> i420Buffer = webrtc::I420Buffer::Copy(
             _frame.frame()->width,
             _frame.frame()->height,
@@ -560,17 +550,10 @@ public:
         if (i420Buffer) {
             auto videoFrame = webrtc::VideoFrame::Builder()
                 .set_video_frame_buffer(i420Buffer)
+                .set_rotation(_rotation)
                 .build();
 
-            std::string endpointId;
-            for (int i = (int)(_videoStreamInfo->events.size()) - 1; i >= 0; i--) {
-                if (_frameIndex >= _videoStreamInfo->events[i].fromFrame) {
-                    endpointId = _videoStreamInfo->events[i].endpointId;
-                    break;
-                }
-            }
-
-            return VideoStreamingPartFrame(endpointId, videoFrame, _frame.pts(_videoStream), _frame.duration(_videoStream));
+            return VideoStreamingPartFrame(_endpointId, videoFrame, _frame.pts(_videoStream), _frame.duration(_videoStream));
         } else {
             return absl::nullopt;
         }
@@ -637,7 +620,9 @@ public:
     }
 
 private:
-    absl::optional<VideoStreamInfo> _videoStreamInfo;
+    std::string _endpointId;
+    webrtc::VideoRotation _rotation = webrtc::VideoRotation::kVideoRotation_0;
+
     std::unique_ptr<AVIOContextImpl> _avIoContext;
 
     AVFormatContext *_inputFormatContext = nullptr;
@@ -653,8 +638,39 @@ private:
 
 class VideoStreamingPartState {
 public:
-    VideoStreamingPartState(std::vector<uint8_t> &&data) :
-    _parsedPart(std::move(data)) {
+    VideoStreamingPartState(std::vector<uint8_t> &&data) {
+        _videoStreamInfo = consumeVideoStreamInfo(data);
+        if (!_videoStreamInfo) {
+            return;
+        }
+
+        for (size_t i = 0; i < _videoStreamInfo->events.size(); i++) {
+            std::vector<uint8_t> dataSlice(data.begin() + _videoStreamInfo->events[i].offset, i == (_videoStreamInfo->events.size() - 1) ? data.end() : (data.begin() + _videoStreamInfo->events[i + 1].offset));
+            webrtc::VideoRotation rotation = webrtc::VideoRotation::kVideoRotation_0;
+            switch (_videoStreamInfo->events[i].rotation) {
+                case 0: {
+                    rotation = webrtc::VideoRotation::kVideoRotation_0;
+                    break;
+                }
+                case 90: {
+                    rotation = webrtc::VideoRotation::kVideoRotation_90;
+                    break;
+                }
+                case 180: {
+                    rotation = webrtc::VideoRotation::kVideoRotation_180;
+                    break;
+                }
+                case 270: {
+                    rotation = webrtc::VideoRotation::kVideoRotation_270;
+                    break;
+                }
+                default: {
+                    break;
+                }
+            }
+            auto part = std::make_unique<VideoStreamingPartInternal>(_videoStreamInfo->events[i].endpointId, rotation, std::move(dataSlice));
+            _parsedParts.push_back(std::move(part));
+        }
     }
 
     ~VideoStreamingPartState() {
@@ -663,10 +679,15 @@ public:
     absl::optional<VideoStreamingPartFrame> getFrameAtRelativeTimestamp(double timestamp) {
         while (true) {
             if (!_currentFrame) {
-                auto result = _parsedPart.getNextFrame();
-                if (result) {
-                    _currentFrame = result;
-                    _relativeTimestamp += result->duration;
+                if (!_parsedParts.empty()) {
+                    auto result = _parsedParts[0]->getNextFrame();
+                    if (result) {
+                        _currentFrame = result;
+                        _relativeTimestamp += result->duration;
+                    } else {
+                        _parsedParts.erase(_parsedParts.begin());
+                        continue;
+                    }
                 }
             }
 
@@ -682,12 +703,17 @@ public:
         }
     }
 
-    absl::optional<std::string> getActiveEndpointId() {
-        return _parsedPart.getActiveEndpointId();
+    absl::optional<std::string> getActiveEndpointId() const {
+        if (!_parsedParts.empty()) {
+            return _parsedParts[0]->endpointId();
+        } else {
+            return absl::nullopt;
+        }
     }
 
 private:
-    VideoStreamingPartInternal _parsedPart;
+    absl::optional<VideoStreamInfo> _videoStreamInfo;
+    std::vector<std::unique_ptr<VideoStreamingPartInternal>> _parsedParts;
     absl::optional<VideoStreamingPartFrame> _currentFrame;
     double _relativeTimestamp = 0.0;
 };
@@ -710,7 +736,7 @@ absl::optional<VideoStreamingPartFrame> VideoStreamingPart::getFrameAtRelativeTi
         : absl::nullopt;
 }
 
-absl::optional<std::string> VideoStreamingPart::getActiveEndpointId() {
+absl::optional<std::string> VideoStreamingPart::getActiveEndpointId() const {
     return _state
         ? _state->getActiveEndpointId()
         : absl::nullopt;

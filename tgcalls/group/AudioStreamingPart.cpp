@@ -17,11 +17,26 @@ namespace tgcalls {
 
 namespace {
 
-static uint32_t stringToUInt32(std::string const &string) {
+uint32_t stringToUInt32(std::string const &string) {
     std::stringstream stringStream(string);
     uint32_t value = 0;
     stringStream >> value;
     return value;
+}
+
+template <typename Out>
+void splitString(const std::string &s, char delim, Out result) {
+    std::istringstream iss(s);
+    std::string item;
+    while (std::getline(iss, item, delim)) {
+        *result++ = item;
+    }
+}
+
+std::vector<std::string> splitString(const std::string &s, char delim) {
+    std::vector<std::string> elems;
+    splitString(s, delim, std::back_inserter(elems));
+    return elems;
 }
 
 static absl::optional<uint32_t> readInt32(std::string const &data, int &offset) {
@@ -209,10 +224,29 @@ public:
                     }
                 }
 
+                uint32_t videoChannelMask = 0;
                 entry = av_dict_get(inStream->metadata, "ACTIVE_MASK", nullptr, 0);
                 if (entry && entry->value) {
                     std::string sourceString = (const char *)entry->value;
-                    _videoChannelMask = stringToUInt32(sourceString);
+                    videoChannelMask = stringToUInt32(sourceString);
+                }
+
+                std::vector<std::string> endpointList;
+                entry = av_dict_get(inStream->metadata, "ENDPOINTS", nullptr, 0);
+                if (entry && entry->value) {
+                    std::string sourceString = (const char *)entry->value;
+                    endpointList = splitString(sourceString, ' ');
+                }
+
+                std::bitset<32> videoChannels(videoChannelMask);
+                size_t endpointIndex = 0;
+                if (videoChannels.count() == endpointList.size()) {
+                    for (size_t i = 0; i < videoChannels.size(); i++) {
+                        if (videoChannels[i]) {
+                            _endpointMapping.insert(std::make_pair(endpointList[endpointIndex], i));
+                            endpointIndex++;
+                        }
+                    }
                 }
             }
 
@@ -296,12 +330,12 @@ public:
         return _channelCount;
     }
 
-    std::vector<ChannelUpdate> const &getChannelUpdates() {
+    std::vector<ChannelUpdate> const &getChannelUpdates() const {
         return _channelUpdates;
     }
 
-    uint32_t getVideoChannelMask() const {
-        return _videoChannelMask;
+    std::map<std::string, int32_t> getEndpointMapping() const {
+        return _endpointMapping;
     }
 
 private:
@@ -416,7 +450,7 @@ private:
     int _channelCount = 0;
 
     std::vector<ChannelUpdate> _channelUpdates;
-    uint32_t _videoChannelMask = 0;
+    std::map<std::string, int32_t> _endpointMapping;
 
     std::vector<int16_t> _pcmBuffer;
     int _pcmBufferSampleOffset = 0;
@@ -452,8 +486,8 @@ public:
     ~AudioStreamingPartState() {
     }
 
-    uint32_t getVideoChannelMask() const {
-        return _parsedPart.getVideoChannelMask();
+    std::map<std::string, int32_t> getEndpointMapping() const {
+        return _parsedPart.getEndpointMapping();
     }
 
     int getRemainingMilliseconds() const {
@@ -554,8 +588,8 @@ AudioStreamingPart::~AudioStreamingPart() {
     }
 }
 
-uint32_t AudioStreamingPart::getVideoChannelMask() const {
-    return _state ? _state->getVideoChannelMask() : 0;
+std::map<std::string, int32_t> AudioStreamingPart::getEndpointMapping() const {
+    return _state ? _state->getEndpointMapping() : std::map<std::string, int32_t>();
 }
 
 int AudioStreamingPart::getRemainingMilliseconds() const {

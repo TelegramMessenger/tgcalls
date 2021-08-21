@@ -402,25 +402,18 @@ public:
         audio->minRequestTimestamp = 0;
         _pendingSegment->parts.push_back(audio);
 
-        for (size_t i = 0; i < _currentActiveVideoChannelMask.size(); i++) {
-            if (_currentActiveVideoChannelMask[i]) {
-                int32_t channelId = (int32_t)(i + 1);
-                auto video = std::make_shared<PendingMediaSegmentPart>();
-                auto endpoint = _currentChannelIdToEndpointMapping.find(channelId);
-                auto quality = VideoChannelDescription::Quality::Thumbnail;
-                if (endpoint != _currentChannelIdToEndpointMapping.end()) {
-                    for (const auto &videoChannel : _activeVideoChannels) {
-                        if (videoChannel.endpoint == endpoint->second) {
-                            quality = videoChannel.quality;
-                            break;
-                        }
-                    }
-                }
-
-                video->typeData = PendingVideoSegmentData(channelId, quality);
-                video->minRequestTimestamp = 0;
-                _pendingSegment->parts.push_back(video);
+        for (const auto &videoChannel : _activeVideoChannels) {
+            auto channelIdIt = _currentEndpointMapping.find(videoChannel.endpoint);
+            if (channelIdIt == _currentEndpointMapping.end()) {
+                continue;
             }
+
+            int32_t channelId = channelIdIt->second + 1;
+
+            auto video = std::make_shared<PendingMediaSegmentPart>();
+            video->typeData = PendingVideoSegmentData(channelId, videoChannel.quality);
+            video->minRequestTimestamp = 0;
+            _pendingSegment->parts.push_back(video);
         }
 
         checkPendingSegment();
@@ -438,26 +431,14 @@ public:
         absl::optional<int32_t> updatedChannelId;
         absl::optional<VideoChannelDescription::Quality> updatedQuality;
 
-        for (size_t i = 0; i < _currentActiveVideoChannelMask.size(); i++) {
-            if (_currentActiveVideoChannelMask[i]) {
-                int32_t channelId = (int32_t)(i + 1);
-                auto video = std::make_shared<PendingMediaSegmentPart>();
-                auto endpoint = _currentChannelIdToEndpointMapping.find(channelId);
-
-                if (endpoint != _currentChannelIdToEndpointMapping.end()) {
-                    for (const auto &videoChannel : _activeVideoChannels) {
-                        if (videoChannel.endpoint == endpoint->second) {
-                            updatedChannelId = channelId;
-                            updatedQuality = videoChannel.quality;
-                            break;
-                        }
-                    }
-                }
-
-                if (updatedQuality) {
-                    break;
-                }
+        for (const auto &videoChannel : _activeVideoChannels) {
+            auto channelIdIt = _currentEndpointMapping.find(videoChannel.endpoint);
+            if (channelIdIt == _currentEndpointMapping.end()) {
+                continue;
             }
+
+            updatedChannelId = channelIdIt->second + 1;
+            updatedQuality = videoChannel.quality;
         }
 
         if (updatedChannelId && updatedQuality) {
@@ -634,14 +615,11 @@ public:
                 const auto typeData = &part->typeData;
                 if (const auto audioData = absl::get_if<PendingAudioSegmentData>(typeData)) {
                     segment->audio = std::make_shared<AudioStreamingPart>(std::move(part->result->data));
-                    _currentActiveVideoChannelMask = segment->audio->getVideoChannelMask();
+                    _currentEndpointMapping = segment->audio->getEndpointMapping();
                 } else if (const auto videoData = absl::get_if<PendingVideoSegmentData>(typeData)) {
                     auto videoSegment = std::make_shared<VideoSegment>();
                     videoSegment->quality = videoData->quality;
                     videoSegment->part = std::make_shared<VideoStreamingPart>(std::move(part->result->data));
-                    if (const auto endpointId = videoSegment->part->getActiveEndpointId()) {
-                        _currentChannelIdToEndpointMapping[videoData->channelId] = endpointId.value();
-                    }
                     segment->video.push_back(videoSegment);
                 }
             }
@@ -748,8 +726,7 @@ private:
     std::map<uint32_t, std::unique_ptr<SparseVad>> _audioVadMap;
 
     std::vector<StreamingMediaContext::VideoChannel> _activeVideoChannels;
-    std::bitset<32> _currentActiveVideoChannelMask;
-    std::map<int32_t, std::string> _currentChannelIdToEndpointMapping;
+    std::map<std::string, int32_t> _currentEndpointMapping;
 };
 
 StreamingMediaContext::StreamingMediaContext(StreamingMediaContextArguments &&arguments) {

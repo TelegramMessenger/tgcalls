@@ -40,7 +40,7 @@ public:
     VideoStreamingPart& operator=(VideoStreamingPart&&) = delete;
 
     absl::optional<VideoStreamingPartFrame> getFrameAtRelativeTimestamp(double timestamp);
-    absl::optional<std::string> getActiveEndpointId();
+    absl::optional<std::string> getActiveEndpointId() const;
     
 private:
     VideoStreamingPartState *_state = nullptr;

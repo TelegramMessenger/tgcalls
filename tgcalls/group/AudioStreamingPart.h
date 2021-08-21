@@ -3,6 +3,7 @@
 
 #include "absl/types/optional.h"
 #include <vector>
+#include <map>
 #include <stdint.h>
 
 namespace tgcalls {
@@ -27,7 +28,7 @@ public:
     AudioStreamingPart& operator=(const AudioStreamingPart&) = delete;
     AudioStreamingPart& operator=(AudioStreamingPart&&) = delete;
 
-    uint32_t getVideoChannelMask() const;
+    std::map<std::string, int32_t> getEndpointMapping() const;
     int getRemainingMilliseconds() const;
     std::vector<StreamingPartChannel> get10msPerChannel();
     
