@@ -243,14 +243,6 @@ struct VideoStreamInfo {
     std::vector<VideoStreamEvent> events;
 };
 
-/*
- streamEvent from_frame:int endpoint:string width:int height:int = StreamEvent;
- // codec:
- // 3 - mp4+h264
- // 2 - h264
- header#a12e810d codec:int active_mask:int events:vector<streamEvent> = Header;
- */
-
 absl::optional<int32_t> readInt32(std::vector<uint8_t> const &data, int &offset) {
     if (offset + 4 > data.size()) {
         return absl::nullopt;
