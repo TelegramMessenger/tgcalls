@@ -438,21 +438,6 @@ public:
             videoCodecParameters = inCodecpar;
             videoStream = inStream;
 
-            /*if (inStream->metadata) {
-                AVDictionaryEntry *entry = av_dict_get(inStream->metadata, "TG_META", nullptr, 0);
-                if (entry && entry->value) {
-                    std::string result;
-                    size_t data_used = 0;
-                    std::string sourceBase64 = (const char *)entry->value;
-                    rtc::Base64::Decode(sourceBase64, rtc::Base64::DO_LAX, &result, &data_used);
-
-                    if (result.size() != 0) {
-                        int offset = 0;
-                        _channelUpdates = parseChannelUpdates(result, offset);
-                    }
-                }
-            }*/
-
             break;
         }
 
