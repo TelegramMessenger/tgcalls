@@ -231,7 +231,7 @@ static inline void getCubeVertexData(size_t frameWidth,
         rotation = frame.rotation;
     }
     
-    _frameIsUpdated = _frame.timeStampNs != frame.timeStampNs;
+    _frameIsUpdated = true;//_frame.timeStampNs != frame.timeStampNs;
     _frame = frame;
     
     int frameWidth, frameHeight;
