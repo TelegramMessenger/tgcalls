@@ -10,6 +10,7 @@ extern "C" {
 }
 
 #include <string>
+#include <bitset>
 #include <set>
 #include <map>
 
