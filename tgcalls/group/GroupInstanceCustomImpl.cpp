@@ -2631,26 +2631,6 @@ public:
                     arguments.threads = _threads;
                     arguments.requestAudioBroadcastPart = _requestAudioBroadcastPart;
                     arguments.requestVideoBroadcastPart = _requestVideoBroadcastPart;
-                    arguments.displayVideoFrame = [weak, threads = _threads](std::string const &endpointId, webrtc::VideoFrame const &frame) {
-                        threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, endpointId, frame]() {
-                            auto strong = weak.lock();
-                            if (!strong) {
-                                return;
-                            }
-
-                            for (const auto &sinkList : strong->_pendingVideoSinks) {
-                                if (sinkList.first.endpointId != endpointId) {
-                                    continue;
-                                }
-                                for (const auto &weakSink : sinkList.second) {
-                                    const auto sink = weakSink.lock();
-                                    if (sink) {
-                                        sink->OnFrame(frame);
-                                    }
-                                }
-                            }
-                        });
-                    };
                     arguments.updateAudioLevel = [weak, threads = _threads](uint32_t ssrc, float level, bool isSpeech) {
                         assert(threads->getMediaThread()->IsCurrent());
 
@@ -2666,6 +2646,12 @@ public:
                         strong->_audioLevels.insert(std::make_pair(ChannelId(ssrc), std::move(updated)));
                     };
                     _streamingContext = std::make_shared<StreamingMediaContext>(std::move(arguments));
+
+                    for (const auto &it : _pendingVideoSinks) {
+                        for (const auto &sink : it.second) {
+                            _streamingContext->addVideoSink(it.first.endpointId, sink);
+                        }
+                    }
 
                     std::vector<StreamingMediaContext::VideoChannel> streamingVideoChannels;
                     for (const auto &it : _pendingRequestedVideo) {
@@ -2958,6 +2944,10 @@ public:
                 it->second->addSink(sink);
             } else {
                 _pendingVideoSinks[VideoChannelId(endpointId)].push_back(sink);
+            }
+
+            if (_streamingContext) {
+                _streamingContext->addVideoSink(endpointId, sink);
             }
         }
     }

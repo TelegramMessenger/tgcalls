@@ -238,7 +238,7 @@ struct VideoStreamEvent {
 };
 
 struct VideoStreamInfo {
-    int32_t codec = 0;
+    std::string container;
     int32_t activeMask = 0;
     std::vector<VideoStreamEvent> events;
 };
@@ -361,8 +361,8 @@ absl::optional<VideoStreamInfo> consumeVideoStreamInfo(std::vector<uint8_t> &dat
 
     VideoStreamInfo info;
 
-    if (const auto codec = readInt32(data, offset)) {
-        info.codec = codec.value();
+    if (const auto container = readSerializedString(data, offset)) {
+        info.container = container.value();
     } else {
         return absl::nullopt;
     }
@@ -392,14 +392,14 @@ absl::optional<VideoStreamInfo> consumeVideoStreamInfo(std::vector<uint8_t> &dat
 
 class VideoStreamingPartInternal {
 public:
-    VideoStreamingPartInternal(std::string endpointId, webrtc::VideoRotation rotation, std::vector<uint8_t> &&fileData) :
+    VideoStreamingPartInternal(std::string endpointId, webrtc::VideoRotation rotation, std::vector<uint8_t> &&fileData, std::string const &container) :
     _endpointId(endpointId),
     _rotation(rotation) {
         _avIoContext = std::make_unique<AVIOContextImpl>(std::move(fileData));
 
         int ret = 0;
 
-        AVInputFormat *inputFormat = av_find_input_format("mp4");
+        AVInputFormat *inputFormat = av_find_input_format(container.c_str());
         if (!inputFormat) {
             _didReadToEnd = true;
             return;
@@ -493,7 +493,6 @@ public:
         MediaDataPacket packet;
         int result = av_read_frame(_inputFormatContext, packet.packet());
         if (result < 0) {
-            _didReadToEnd = true;
             return absl::nullopt;
         }
 
@@ -530,7 +529,7 @@ public:
                 .set_rotation(_rotation)
                 .build();
 
-            return VideoStreamingPartFrame(_endpointId, videoFrame, _frame.pts(_videoStream), _frame.duration(_videoStream));
+            return VideoStreamingPartFrame(_endpointId, videoFrame, _frame.pts(_videoStream), _frame.duration(_videoStream), _frameIndex);
         } else {
             return absl::nullopt;
         }
@@ -581,7 +580,7 @@ public:
                             if (status == 0) {
                                 auto convertedFrame = convertCurrentFrame();
                                 if (convertedFrame) {
-                                    _frameIndex += 1;
+                                    _frameIndex++;
                                     _finalFrames.push_back(convertedFrame.value());
                                 }
                             } else {
@@ -645,7 +644,7 @@ public:
                     break;
                 }
             }
-            auto part = std::make_unique<VideoStreamingPartInternal>(_videoStreamInfo->events[i].endpointId, rotation, std::move(dataSlice));
+            auto part = std::make_unique<VideoStreamingPartInternal>(_videoStreamInfo->events[i].endpointId, rotation, std::move(dataSlice), _videoStreamInfo->container);
             _parsedParts.push_back(std::move(part));
         }
     }

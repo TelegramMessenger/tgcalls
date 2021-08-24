@@ -13,6 +13,7 @@
 #include "modules/audio_mixer/frame_combiner.h"
 #include "modules/audio_processing/agc2/vad_with_level.h"
 #include "modules/audio_processing/audio_buffer.h"
+#include "api/video/video_sink_interface.h"
 
 namespace tgcalls {
 
@@ -57,6 +58,7 @@ struct VideoSegment {
     VideoChannelDescription::Quality quality;
     std::shared_ptr<VideoStreamingPart> part;
     double lastFramePts = -1.0;
+    int _displayedFrames = 0;
     bool isPlaying = false;
     std::shared_ptr<PendingMediaSegmentPart> pendingVideoQualityUpdatePart;
 };
@@ -224,7 +226,6 @@ public:
     _threads(arguments.threads),
     _requestAudioBroadcastPart(arguments.requestAudioBroadcastPart),
     _requestVideoBroadcastPart(arguments.requestVideoBroadcastPart),
-    _displayVideoFrame(arguments.displayVideoFrame),
     _updateAudioLevel(arguments.updateAudioLevel),
     _audioRingBuffer(_audioDataRingBufferMaxSize),
     _audioFrameCombiner(false) {
@@ -247,7 +248,7 @@ public:
 
             strong->render();
 
-            strong->beginRenderTimer(16);
+            strong->beginRenderTimer((int)(1.0 * 1000.0 / 120.0));
         }, timeoutMs);
     }
 
@@ -288,7 +289,17 @@ public:
                 if (frame) {
                     if (videoSegment->lastFramePts != frame->pts) {
                         videoSegment->lastFramePts = frame->pts;
-                        _displayVideoFrame(frame->endpointId, frame->frame);
+                        videoSegment->_displayedFrames += 1;
+
+                        auto sinkList = _videoSinks.find(frame->endpointId);
+                        if (sinkList != _videoSinks.end()) {
+                            for (const auto &weakSink : sinkList->second) {
+                                auto sink = weakSink.lock();
+                                if (sink) {
+                                    sink->OnFrame(frame->frame);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -327,6 +338,11 @@ public:
 
                 if (segment->audio && segment->audio->getRemainingMilliseconds() > 0) {
                     RTC_LOG(LS_INFO) << "render: discarding " << segment->audio->getRemainingMilliseconds() << " ms of audio at the end of a segment";
+                }
+                if (!segment->video.empty()) {
+                    if (segment->video[0]->part->getActiveEndpointId()) {
+                        RTC_LOG(LS_INFO) << "render: discarding video frames at the end of a segment (displayed " << segment->video[0]->_displayedFrames << " frames)";
+                    }
                 }
 
                 _availableSegments.erase(_availableSegments.begin());
@@ -694,13 +710,13 @@ public:
     void setActiveVideoChannels(std::vector<StreamingMediaContext::VideoChannel> const &videoChannels) {
         _activeVideoChannels = videoChannels;
 
-#if DEBUG
+/*#if DEBUG
         for (auto &updatedVideoChannel : _activeVideoChannels) {
             if (updatedVideoChannel.quality == VideoChannelDescription::Quality::Medium) {
                 updatedVideoChannel.quality = VideoChannelDescription::Quality::Thumbnail;
             }
         }
-#endif
+#endif*/
 
         for (const auto &updatedVideoChannel : _activeVideoChannels) {
             for (const auto &segment : _availableSegments) {
@@ -715,11 +731,18 @@ public:
         }
     }
 
+    void addVideoSink(std::string const &endpointId, std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+        auto it = _videoSinks.find(endpointId);
+        if (it == _videoSinks.end()) {
+            _videoSinks.insert(std::make_pair(endpointId, std::vector<std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>>()));
+        }
+        _videoSinks[endpointId].push_back(sink);
+    }
+
 private:
     std::shared_ptr<Threads> _threads;
     std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, std::function<void(BroadcastPart &&)>)> _requestAudioBroadcastPart;
     std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, int32_t, VideoChannelDescription::Quality, std::function<void(BroadcastPart &&)>)> _requestVideoBroadcastPart;
-    std::function<void(std::string const &, webrtc::VideoFrame const &)> _displayVideoFrame;
     std::function<void(uint32_t, float, bool)> _updateAudioLevel;
 
     const int64_t _segmentDuration = 500;
@@ -738,6 +761,8 @@ private:
     std::map<uint32_t, std::unique_ptr<SparseVad>> _audioVadMap;
 
     std::vector<StreamingMediaContext::VideoChannel> _activeVideoChannels;
+    std::map<std::string, std::vector<std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>>> _videoSinks;
+
     std::map<std::string, int32_t> _currentEndpointMapping;
 };
 
@@ -751,6 +776,10 @@ StreamingMediaContext::~StreamingMediaContext() {
 
 void StreamingMediaContext::setActiveVideoChannels(std::vector<VideoChannel> const &videoChannels) {
     _private->setActiveVideoChannels(videoChannels);
+}
+
+void StreamingMediaContext::addVideoSink(std::string const &endpointId, std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+    _private->addVideoSink(endpointId, sink);
 }
 
 void StreamingMediaContext::getAudio(int16_t *audio_samples, const size_t num_samples, const uint32_t samples_per_sec) {
