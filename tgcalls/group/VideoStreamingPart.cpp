@@ -18,64 +18,6 @@ namespace tgcalls {
 
 namespace {
 
-static absl::optional<uint32_t> readInt32(std::string const &data, int &offset) {
-    if (offset + 4 > data.length()) {
-        return absl::nullopt;
-    }
-
-    int32_t value = 0;
-    memcpy(&value, data.data() + offset, 4);
-    offset += 4;
-
-    return value;
-}
-
-struct ChannelUpdate {
-    int frameIndex = 0;
-    int id = 0;
-    uint32_t ssrc = 0;
-};
-
-static std::vector<ChannelUpdate> parseChannelUpdates(std::string const &data, int &offset) {
-    std::vector<ChannelUpdate> result;
-
-    auto channels = readInt32(data, offset);
-    if (!channels) {
-        return {};
-    }
-
-    auto count = readInt32(data, offset);
-    if (!count) {
-        return {};
-    }
-
-    for (int i = 0; i < count.value(); i++) {
-        auto frameIndex = readInt32(data, offset);
-        if (!frameIndex) {
-            return {};
-        }
-
-        auto channelId = readInt32(data, offset);
-        if (!channelId) {
-            return {};
-        }
-
-        auto ssrc = readInt32(data, offset);
-        if (!ssrc) {
-            return {};
-        }
-
-        ChannelUpdate update;
-        update.frameIndex = frameIndex.value();
-        update.id = channelId.value();
-        update.ssrc = ssrc.value();
-
-        result.push_back(update);
-    }
-
-    return result;
-}
-
 class AVIOContextImpl {
 public:
     AVIOContextImpl(std::vector<uint8_t> &&fileData) :
@@ -135,20 +77,16 @@ private:
 
 class MediaDataPacket {
 public:
-    MediaDataPacket() {
-        _packet = new AVPacket();
-        av_init_packet(_packet);
+    MediaDataPacket() : _packet(av_packet_alloc()) {
     }
 
-    MediaDataPacket(MediaDataPacket &&other) {
-        _packet = other._packet;
+    MediaDataPacket(MediaDataPacket &&other) : _packet(other._packet) {
         other._packet = nullptr;
     }
 
     ~MediaDataPacket() {
         if (_packet) {
-            av_packet_unref(_packet);
-            delete _packet;
+            av_packet_free(&_packet);
         }
     }
 
