@@ -381,7 +381,7 @@ public:
 
         size_t readSamples = _audioRingBuffer.read(audio_samples, num_samples);
         if (readSamples < num_samples) {
-            memset(audio_samples + readSamples, 0, num_samples - readSamples);
+            memset(audio_samples + readSamples, 0, (num_samples - readSamples) * 2);
         }
 
         _audioDataMutex.Unlock();
