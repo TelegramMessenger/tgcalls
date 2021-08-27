@@ -225,6 +225,7 @@ class StreamingMediaContextPrivate : public std::enable_shared_from_this<Streami
 public:
     StreamingMediaContextPrivate(StreamingMediaContext::StreamingMediaContextArguments &&arguments) :
     _threads(arguments.threads),
+    _requestCurrentTime(arguments.requestCurrentTime),
     _requestAudioBroadcastPart(arguments.requestAudioBroadcastPart),
     _requestVideoBroadcastPart(arguments.requestVideoBroadcastPart),
     _updateAudioLevel(arguments.updateAudioLevel),
@@ -799,6 +800,7 @@ public:
 
 private:
     std::shared_ptr<Threads> _threads;
+    std::function<std::shared_ptr<BroadcastPartTask>(std::function<void(int64_t)>)> _requestCurrentTime;
     std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, std::function<void(BroadcastPart &&)>)> _requestAudioBroadcastPart;
     std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, int32_t, VideoChannelDescription::Quality, std::function<void(BroadcastPart &&)>)> _requestVideoBroadcastPart;
     std::function<void(uint32_t, float, bool)> _updateAudioLevel;

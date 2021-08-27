@@ -1342,6 +1342,7 @@ public:
     _audioLevelsUpdated(descriptor.audioLevelsUpdated),
     _onAudioFrame(descriptor.onAudioFrame),
     _requestMediaChannelDescriptions(descriptor.requestMediaChannelDescriptions),
+    _requestCurrentTime(descriptor.requestCurrentTime),
     _requestAudioBroadcastPart(descriptor.requestAudioBroadcastPart),
     _requestVideoBroadcastPart(descriptor.requestVideoBroadcastPart),
     _videoCapture(descriptor.videoCapture),
@@ -2626,6 +2627,7 @@ public:
                     StreamingMediaContext::StreamingMediaContextArguments arguments;
                     const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
                     arguments.threads = _threads;
+                    arguments.requestCurrentTime = _requestCurrentTime;
                     arguments.requestAudioBroadcastPart = _requestAudioBroadcastPart;
                     arguments.requestVideoBroadcastPart = _requestVideoBroadcastPart;
                     arguments.updateAudioLevel = [weak, threads = _threads](uint32_t ssrc, float level, bool isSpeech) {
@@ -3281,6 +3283,7 @@ private:
     std::function<void(GroupLevelsUpdate const &)> _audioLevelsUpdated;
     std::function<void(uint32_t, const AudioFrame &)> _onAudioFrame;
     std::function<std::shared_ptr<RequestMediaChannelDescriptionTask>(std::vector<uint32_t> const &, std::function<void(std::vector<MediaChannelDescription> &&)>)> _requestMediaChannelDescriptions;
+    std::function<std::shared_ptr<BroadcastPartTask>(std::function<void(int64_t)>)> _requestCurrentTime;
     std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, std::function<void(BroadcastPart &&)>)> _requestAudioBroadcastPart;
     std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, int32_t, VideoChannelDescription::Quality, std::function<void(BroadcastPart &&)>)> _requestVideoBroadcastPart;
     std::shared_ptr<VideoCaptureInterface> _videoCapture;
