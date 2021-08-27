@@ -2653,6 +2653,10 @@ public:
                         }
                     }
 
+                    for (const auto &it : _volumeBySsrc) {
+                        _streamingContext->setVolume(it.first, it.second);
+                    }
+
                     std::vector<StreamingMediaContext::VideoChannel> streamingVideoChannels;
                     for (const auto &it : _pendingRequestedVideo) {
                         streamingVideoChannels.emplace_back(it.maxQuality, it.endpointId);
@@ -3148,6 +3152,10 @@ public:
         it = _incomingAudioChannels.find(ChannelId(ssrc + 1000, ssrc));
         if (it != _incomingAudioChannels.end()) {
             it->second->setVolume(volume);
+        }
+
+        if (_streamingContext) {
+            _streamingContext->setVolume(ssrc, volume);
         }
     }
 

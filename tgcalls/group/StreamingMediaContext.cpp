@@ -14,6 +14,7 @@
 #include "modules/audio_processing/agc2/vad_with_level.h"
 #include "modules/audio_processing/audio_buffer.h"
 #include "api/video/video_sink_interface.h"
+#include "audio/utility/audio_frame_operations.h"
 
 namespace tgcalls {
 
@@ -267,7 +268,7 @@ public:
             if (_availableSegments.empty()) {
                 _playbackReferenceTimestamp = 0;
 
-                _waitForBufferredMillisecondsBeforeRendering = 2000;
+                _waitForBufferredMillisecondsBeforeRendering = _segmentBufferDuration + _segmentDuration;
 
                 break;
             }
@@ -317,6 +318,15 @@ public:
                     for (const auto &audioChannel : audioChannels) {
                         webrtc::AudioFrame *frame = new webrtc::AudioFrame();
                         frame->UpdateFrame(0, audioChannel.pcmData.data(), audioChannel.pcmData.size(), 48000, webrtc::AudioFrame::SpeechType::kNormalSpeech, webrtc::AudioFrame::VADActivity::kVadActive);
+
+                        auto volumeIt = _volumeBySsrc.find(audioChannel.ssrc);
+                        if (volumeIt != _volumeBySsrc.end()) {
+                            double outputGain = volumeIt->second;
+                            if (outputGain < 0.99f || outputGain > 1.01f) {
+                                webrtc::AudioFrameOperations::ScaleWithSat(outputGain, frame);
+                            }
+                        }
+
                         audioFrames.push_back(frame);
                         processAudioLevel(audioChannel.ssrc, audioChannel.pcmData);
                     }
@@ -351,7 +361,8 @@ public:
             break;
         }
 
-        requestSegmentIfNeeded();
+        requestSegmentsIfNeeded();
+        checkPendingSegments();
     }
 
     void processAudioLevel(uint32_t ssrc, std::vector<int16_t> const &samples) {
@@ -394,56 +405,69 @@ public:
             result += segment->duration;
         }
 
-        return result;
+        return (int)result;
     }
 
-    void discardPendingSegment() {
-        if (!_pendingSegment) {
-            return;
-        }
-
-        for (const auto &it : _pendingSegment->parts) {
-            if (it->task) {
-                it->task->cancel();
+    void discardAllPendingSegments() {
+        for (size_t i = 0; i < _pendingSegments.size(); i++) {
+            for (const auto &it : _pendingSegments[i]->parts) {
+                if (it->task) {
+                    it->task->cancel();
+                }
             }
         }
-        _pendingSegment.reset();
+
+        _pendingSegments.clear();
     }
 
-    void requestSegmentIfNeeded() {
-        if (_pendingSegment) {
-            return;
-        }
+    void requestSegmentsIfNeeded() {
+        while (true) {
+            if (_nextSegmentTimestamp == 0) {
+                if (_pendingSegments.size() >= 1) {
+                    break;
+                }
+            } else {
+                int64_t availableAndRequestedSegmentsDuration = 0;
+                availableAndRequestedSegmentsDuration += getAvailableBufferDuration();
+                availableAndRequestedSegmentsDuration += _pendingSegments.size() * _segmentDuration;
 
-        if (getAvailableBufferDuration() > 2000) {
-            return;
-        }
-
-        _pendingSegment = std::make_shared<PendingMediaSegment>();
-        _pendingSegment->timestamp = _nextSegmentTimestamp;
-
-        //RTC_LOG(LS_INFO) << "initialize pending segment at " << _pendingSegment->timestamp;
-
-        auto audio = std::make_shared<PendingMediaSegmentPart>();
-        audio->typeData = PendingAudioSegmentData();
-        audio->minRequestTimestamp = 0;
-        _pendingSegment->parts.push_back(audio);
-
-        for (const auto &videoChannel : _activeVideoChannels) {
-            auto channelIdIt = _currentEndpointMapping.find(videoChannel.endpoint);
-            if (channelIdIt == _currentEndpointMapping.end()) {
-                continue;
+                if (availableAndRequestedSegmentsDuration > _segmentBufferDuration) {
+                    break;
+                }
             }
 
-            int32_t channelId = channelIdIt->second + 1;
+            auto pendingSegment = std::make_shared<PendingMediaSegment>();
+            pendingSegment->timestamp = _nextSegmentTimestamp;
 
-            auto video = std::make_shared<PendingMediaSegmentPart>();
-            video->typeData = PendingVideoSegmentData(channelId, videoChannel.quality);
-            video->minRequestTimestamp = 0;
-            _pendingSegment->parts.push_back(video);
+            if (_nextSegmentTimestamp != 0) {
+                _nextSegmentTimestamp += _segmentDuration;
+            }
+
+            auto audio = std::make_shared<PendingMediaSegmentPart>();
+            audio->typeData = PendingAudioSegmentData();
+            audio->minRequestTimestamp = 0;
+            pendingSegment->parts.push_back(audio);
+
+            for (const auto &videoChannel : _activeVideoChannels) {
+                auto channelIdIt = _currentEndpointMapping.find(videoChannel.endpoint);
+                if (channelIdIt == _currentEndpointMapping.end()) {
+                    continue;
+                }
+
+                int32_t channelId = channelIdIt->second + 1;
+
+                auto video = std::make_shared<PendingMediaSegmentPart>();
+                video->typeData = PendingVideoSegmentData(channelId, videoChannel.quality);
+                video->minRequestTimestamp = 0;
+                pendingSegment->parts.push_back(video);
+            }
+
+            _pendingSegments.push_back(pendingSegment);
+
+            if (_nextSegmentTimestamp == 0) {
+                break;
+            }
         }
-
-        checkPendingSegment();
     }
 
     void requestPendingVideoQualityUpdate(std::shared_ptr<VideoSegment> segment, int64_t timestamp) {
@@ -525,45 +549,51 @@ public:
         segment->pendingVideoQualityUpdatePart.reset();
     }
 
-    void checkPendingSegment() {
-        if (!_pendingSegment) {
-            //RTC_LOG(LS_INFO) << "checkPendingSegment: _pendingSegment == nullptr";
-            return;
-        }
-
+    void checkPendingSegments() {
         const auto weak = std::weak_ptr<StreamingMediaContextPrivate>(shared_from_this());
-
-        auto segmentTimestamp = _pendingSegment->timestamp;
-
-        //RTC_LOG(LS_INFO) << "checkPendingSegment timestamp: " << segmentTimestamp;
 
         int64_t absoluteTimestamp = rtc::TimeMillis();
         int64_t minDelayedRequestTimeout = INT_MAX;
 
-        bool allPartsDone = true;
+        bool shouldRequestMoreSegments = false;
 
-        for (auto &part : _pendingSegment->parts) {
-            if (!part->result) {
-                allPartsDone = false;
-            }
+        for (int i = 0; i < _pendingSegments.size(); i++) {
+            auto pendingSegment = _pendingSegments[i];
+            auto segmentTimestamp = pendingSegment->timestamp;
 
-            if (!part->result && !part->task) {
-                if (part->minRequestTimestamp < absoluteTimestamp) {
+            bool allPartsDone = true;
+
+            for (auto &part : pendingSegment->parts) {
+                if (!part->result) {
+                    allPartsDone = false;
+                }
+
+                if (!part->result && !part->task) {
+                    if (part->minRequestTimestamp != 0) {
+                        if (i != 0) {
+                            continue;
+                        }
+                        if (part->minRequestTimestamp > absoluteTimestamp) {
+                            minDelayedRequestTimeout = std::min(minDelayedRequestTimeout, part->minRequestTimestamp - absoluteTimestamp);
+
+                            continue;
+                        }
+                    }
+
+                    const auto weakSegment = std::weak_ptr<PendingMediaSegment>(pendingSegment);
                     const auto weakPart = std::weak_ptr<PendingMediaSegmentPart>(part);
 
-                    std::function<void(BroadcastPart &&)> handleResult = [weak, weakPart, threads = _threads, segmentTimestamp](BroadcastPart &&part) {
-                        threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, weakPart, part = std::move(part), segmentTimestamp]() mutable {
+                    std::function<void(BroadcastPart &&)> handleResult = [weak, weakSegment, weakPart, threads = _threads, segmentTimestamp](BroadcastPart &&part) {
+                        threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, weakSegment, weakPart, part = std::move(part), segmentTimestamp]() mutable {
                             auto strong = weak.lock();
                             if (!strong) {
                                 return;
                             }
+                            auto strongSegment = weakSegment.lock();
+                            if (!strongSegment) {
+                                return;
+                            }
 
-                            if (!strong->_pendingSegment) {
-                                return;
-                            }
-                            if (strong->_pendingSegment->timestamp != segmentTimestamp) {
-                                return;
-                            }
                             auto pendingPart = weakPart.lock();
                             if (!pendingPart) {
                                 return;
@@ -574,7 +604,10 @@ public:
                             switch (part.status) {
                                 case BroadcastPart::Status::Success: {
                                     pendingPart->result = std::make_shared<PendingMediaSegmentPartResult>(std::move(part.data));
-                                    strong->checkPendingSegment();
+                                    if (strong->_nextSegmentTimestamp == 0) {
+                                        strong->_nextSegmentTimestamp = part.timestampMilliseconds + strong->_segmentDuration;
+                                    }
+                                    strong->checkPendingSegments();
                                     break;
                                 }
                                 case BroadcastPart::Status::NotReady: {
@@ -583,11 +616,12 @@ public:
                                         int64_t responseTimestampBoundary = (responseTimestampMilliseconds / strong->_segmentDuration) * strong->_segmentDuration;
 
                                         strong->_nextSegmentTimestamp = responseTimestampBoundary;
-                                        strong->discardPendingSegment();
-                                        strong->requestSegmentIfNeeded();
+                                        strong->discardAllPendingSegments();
+                                        strong->requestSegmentsIfNeeded();
+                                        strong->checkPendingSegments();
                                     } else {
                                         pendingPart->minRequestTimestamp = rtc::TimeMillis() + 100;
-                                        strong->checkPendingSegment();
+                                        strong->checkPendingSegments();
                                     }
                                     break;
                                 }
@@ -596,8 +630,9 @@ public:
                                     int64_t responseTimestampBoundary = (responseTimestampMilliseconds / strong->_segmentDuration) * strong->_segmentDuration;
 
                                     strong->_nextSegmentTimestamp = responseTimestampBoundary;
-                                    strong->discardPendingSegment();
-                                    strong->requestSegmentIfNeeded();
+                                    strong->discardAllPendingSegments();
+                                    strong->requestSegmentsIfNeeded();
+                                    strong->checkPendingSegments();
 
                                     break;
                                 }
@@ -615,48 +650,50 @@ public:
                     } else if (const auto videoData = absl::get_if<PendingVideoSegmentData>(typeData)) {
                         part->task = _requestVideoBroadcastPart(segmentTimestamp, _segmentDuration, videoData->channelId, videoData->quality, handleResult);
                     }
-                } else {
-                    minDelayedRequestTimeout = std::min(minDelayedRequestTimeout, part->minRequestTimestamp - absoluteTimestamp);
                 }
+            }
+
+            if (allPartsDone && i == 0) {
+                std::shared_ptr<MediaSegment> segment = std::make_shared<MediaSegment>();
+                segment->timestamp = pendingSegment->timestamp;
+                segment->duration = _segmentDuration;
+                for (auto &part : pendingSegment->parts) {
+                    const auto typeData = &part->typeData;
+                    if (const auto audioData = absl::get_if<PendingAudioSegmentData>(typeData)) {
+                        segment->audio = std::make_shared<AudioStreamingPart>(std::move(part->result->data));
+                        _currentEndpointMapping = segment->audio->getEndpointMapping();
+                    } else if (const auto videoData = absl::get_if<PendingVideoSegmentData>(typeData)) {
+                        auto videoSegment = std::make_shared<VideoSegment>();
+                        videoSegment->quality = videoData->quality;
+                        if (part->result->data.empty()) {
+                            RTC_LOG(LS_INFO) << "Video part " << segment->timestamp << " is empty";
+                        }
+                        videoSegment->part = std::make_shared<VideoStreamingPart>(std::move(part->result->data));
+                        segment->video.push_back(videoSegment);
+                    }
+                }
+                _availableSegments.push_back(segment);
+
+                shouldRequestMoreSegments = true;
+
+                _pendingSegments.erase(_pendingSegments.begin() + i);
+                i--;
             }
         }
 
         if (minDelayedRequestTimeout < INT32_MAX) {
-            //RTC_LOG(LS_INFO) << "delay next checkPendingSegment for " << minDelayedRequestTimeout << " ms";
-
             const auto weak = std::weak_ptr<StreamingMediaContextPrivate>(shared_from_this());
             _threads->getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
                 auto strong = weak.lock();
                 if (!strong) {
                     return;
                 }
-                strong->checkPendingSegment();
-            }, (int32_t)minDelayedRequestTimeout);
+                strong->checkPendingSegments();
+            }, std::max((int32_t)minDelayedRequestTimeout, 10));
         }
 
-        if (allPartsDone) {
-            std::shared_ptr<MediaSegment> segment = std::make_shared<MediaSegment>();
-            segment->timestamp = _pendingSegment->timestamp;
-            segment->duration = _segmentDuration;
-            for (auto &part : _pendingSegment->parts) {
-                const auto typeData = &part->typeData;
-                if (const auto audioData = absl::get_if<PendingAudioSegmentData>(typeData)) {
-                    segment->audio = std::make_shared<AudioStreamingPart>(std::move(part->result->data));
-                    _currentEndpointMapping = segment->audio->getEndpointMapping();
-                } else if (const auto videoData = absl::get_if<PendingVideoSegmentData>(typeData)) {
-                    auto videoSegment = std::make_shared<VideoSegment>();
-                    videoSegment->quality = videoData->quality;
-                    videoSegment->part = std::make_shared<VideoStreamingPart>(std::move(part->result->data));
-                    segment->video.push_back(videoSegment);
-                }
-            }
-            _availableSegments.push_back(segment);
-
-            //RTC_LOG(LS_INFO) << "commit segment " << segment->timestamp;
-
-            _nextSegmentTimestamp = _pendingSegment->timestamp + _segmentDuration;
-            discardPendingSegment();
-            requestSegmentIfNeeded();
+        if (shouldRequestMoreSegments) {
+            requestSegmentsIfNeeded();
         }
     }
 
@@ -707,6 +744,10 @@ public:
         }
     }
 
+    void setVolume(uint32_t ssrc, double volume) {
+        _volumeBySsrc[ssrc] = volume;
+    }
+
     void setActiveVideoChannels(std::vector<StreamingMediaContext::VideoChannel> const &videoChannels) {
         _activeVideoChannels = videoChannels;
 
@@ -745,12 +786,15 @@ private:
     std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, int32_t, VideoChannelDescription::Quality, std::function<void(BroadcastPart &&)>)> _requestVideoBroadcastPart;
     std::function<void(uint32_t, float, bool)> _updateAudioLevel;
 
-    const int64_t _segmentDuration = 500;
+    const int _segmentDuration = 1000;
+    const int _segmentBufferDuration = 2000;
+
     int64_t _nextSegmentTimestamp = 0;
 
     absl::optional<int> _waitForBufferredMillisecondsBeforeRendering;
     std::vector<std::shared_ptr<MediaSegment>> _availableSegments;
-    std::shared_ptr<PendingMediaSegment> _pendingSegment;
+
+    std::vector<std::shared_ptr<PendingMediaSegment>> _pendingSegments;
 
     int64_t _playbackReferenceTimestamp = 0;
 
@@ -760,6 +804,7 @@ private:
     webrtc::FrameCombiner _audioFrameCombiner;
     std::map<uint32_t, std::unique_ptr<SparseVad>> _audioVadMap;
 
+    std::map<uint32_t, double> _volumeBySsrc;
     std::vector<StreamingMediaContext::VideoChannel> _activeVideoChannels;
     std::map<std::string, std::vector<std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>>> _videoSinks;
 
@@ -776,6 +821,10 @@ StreamingMediaContext::~StreamingMediaContext() {
 
 void StreamingMediaContext::setActiveVideoChannels(std::vector<VideoChannel> const &videoChannels) {
     _private->setActiveVideoChannels(videoChannels);
+}
+
+void StreamingMediaContext::setVolume(uint32_t ssrc, double volume) {
+    _private->setVolume(ssrc, volume);
 }
 
 void StreamingMediaContext::addVideoSink(std::string const &endpointId, std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
