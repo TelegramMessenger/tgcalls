@@ -306,16 +306,22 @@ public:
                 }
             }
 
-            _audioDataMutex.Lock();
             if (segment->audio) {
-                while (_audioRingBuffer.availableForWriting() >= 480) {
+                const auto available = [&] {
+                    _audioDataMutex.Lock();
+                    const auto result = (_audioRingBuffer.availableForWriting() >= 480);
+                    _audioDataMutex.Unlock();
+
+                    return result;
+                };
+                while (available()) {
                     auto audioChannels = segment->audio->get10msPerChannel();
                     if (audioChannels.empty()) {
                         break;
                     }
 
                     std::vector<webrtc::AudioFrame *> audioFrames;
-                    
+
                     for (const auto &audioChannel : audioChannels) {
                         webrtc::AudioFrame *frame = new webrtc::AudioFrame();
                         frame->UpdateFrame(0, audioChannel.pcmData.data(), audioChannel.pcmData.size(), 48000, webrtc::AudioFrame::SpeechType::kNormalSpeech, webrtc::AudioFrame::VADActivity::kVadActive);
@@ -339,10 +345,11 @@ public:
                         delete frame;
                     }
 
+                    _audioDataMutex.Lock();
                     _audioRingBuffer.write(frameOut.data(), frameOut.samples_per_channel());
+                    _audioDataMutex.Unlock();
                 }
             }
-            _audioDataMutex.Unlock();
 
             if (relativeTimestamp >= segmentDuration) {
                 _playbackReferenceTimestamp += segment->duration;
@@ -389,31 +396,31 @@ public:
     }
 
     void getAudio(int16_t *audio_samples, const size_t num_samples, const size_t num_channels, const uint32_t samples_per_sec) {
-        _audioDataMutex.Lock();
+        int16_t *buffer = nullptr;
 
         if (num_channels == 1) {
-            size_t readSamples = _audioRingBuffer.read(audio_samples, num_samples);
-            if (readSamples < num_samples) {
-                memset(audio_samples + readSamples, 0, (num_samples - readSamples) * 2);
-            }
+            buffer = audio_samples;
         } else {
             if (_tempAudioBuffer.size() < num_samples) {
                 _tempAudioBuffer.resize(num_samples);
             }
+            buffer = _tempAudioBuffer.data();
+        }
 
-            size_t readSamples = _audioRingBuffer.read(_tempAudioBuffer.data(), num_samples);
+        _audioDataMutex.Lock();
+        size_t readSamples = _audioRingBuffer.read(buffer, num_samples);
+        _audioDataMutex.Unlock();
+
+        if (num_channels != 1) {
             for (size_t sampleIndex = 0; sampleIndex < readSamples; sampleIndex++) {
                 for (size_t channelIndex = 0; channelIndex < num_channels; channelIndex++) {
                     audio_samples[sampleIndex * num_channels + channelIndex] = _tempAudioBuffer[sampleIndex];
                 }
             }
-
-            if (readSamples < num_samples) {
-                memset(audio_samples + readSamples * num_channels, 0, (num_samples - readSamples) * num_channels * 2);
-            }
         }
-
-        _audioDataMutex.Unlock();
+        if (readSamples < num_samples) {
+            memset(audio_samples + readSamples * num_channels, 0, (num_samples - readSamples) * num_channels * sizeof(int16_t));
+        }
     }
 
     int64_t getAvailableBufferDuration() {
