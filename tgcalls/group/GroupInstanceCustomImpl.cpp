@@ -1275,27 +1275,19 @@ public:
     }
 
     void mixAudio(int16_t *audio_samples, const size_t num_samples, const size_t num_channels, const uint32_t samples_per_sec) {
-        const auto numSamplesOut = num_samples * num_channels;
-        const auto numBytesOut = sizeof(int16_t) * numSamplesOut;
         if (samples_per_sec != 48000) {
-            memset(audio_samples, 0, numBytesOut);
             return;
         }
 
-        if (_buffer.size() < numSamplesOut) {
-            _buffer.resize(numSamplesOut);
-        }
-
         _mutex.Lock();
-        const auto context = _streamingContext;
-        _mutex.Unlock();
-
-        if (context) {
-            context->getAudio(_buffer.data(), num_samples, num_channels, samples_per_sec);
-            memcpy(audio_samples, _buffer.data(), numBytesOut);
-        } else {
-            memset(audio_samples, 0, numBytesOut);
+        if (_buffer.size() < num_samples) {
+            _buffer.resize(num_samples);
         }
+        if (_streamingContext) {
+            _streamingContext->getAudio(_buffer.data(), num_samples, num_channels, samples_per_sec);
+            memcpy(audio_samples, _buffer.data(), sizeof(int16_t) * num_samples);
+        }
+        _mutex.Unlock();
     }
 
 private:

@@ -15,7 +15,7 @@ public:
     virtual ~AudioDeviceModuleMacos() {
     }
     virtual int32_t SetStereoPlayout(bool enable) override {
-        return WrappedInstance()->SetStereoPlayout(false);
+        return WrappedInstance()->SetStereoPlayout(enable);
     }
     
 
