@@ -40,7 +40,7 @@ public:
     void setVolume(uint32_t ssrc, double volume);
     void addVideoSink(std::string const &endpointId, std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
 
-    void getAudio(int16_t *audio_samples, const size_t num_samples, const uint32_t samples_per_sec);
+    void getAudio(int16_t *audio_samples, const size_t num_samples, const size_t num_channels, const uint32_t samples_per_sec);
     
 private:
     std::shared_ptr<StreamingMediaContextPrivate> _private;

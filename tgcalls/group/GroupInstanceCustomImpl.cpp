@@ -1274,7 +1274,7 @@ public:
         _mutex.Unlock();
     }
 
-    void mixAudio(int16_t *audio_samples, const size_t num_samples, const uint32_t samples_per_sec) {
+    void mixAudio(int16_t *audio_samples, const size_t num_samples, const size_t num_channels, const uint32_t samples_per_sec) {
         if (samples_per_sec != 48000) {
             return;
         }
@@ -1284,7 +1284,7 @@ public:
             _buffer.resize(num_samples);
         }
         if (_streamingContext) {
-            _streamingContext->getAudio(_buffer.data(), num_samples, samples_per_sec);
+            _streamingContext->getAudio(_buffer.data(), num_samples, num_channels, samples_per_sec);
             memcpy(audio_samples, _buffer.data(), sizeof(int16_t) * num_samples);
         }
         _mutex.Unlock();
@@ -1320,14 +1320,11 @@ public:
         if (samples_per_sec != 48000) {
             return;
         }
-        if (bytes_per_sample != 2) {
-            return;
-        }
-        if (num_channels != 1) {
+        if (bytes_per_sample != num_channels * 2) {
             return;
         }
         if (_shared) {
-            _shared->mixAudio((int16_t *)audio_samples, num_samples, samples_per_sec);
+            _shared->mixAudio((int16_t *)audio_samples, num_samples, num_channels, samples_per_sec);
         }
     }
 

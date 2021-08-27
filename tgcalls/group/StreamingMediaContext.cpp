@@ -387,12 +387,29 @@ public:
         _updateAudioLevel(ssrc, vadResult.first, vadResult.second);
     }
 
-    void getAudio(int16_t *audio_samples, const size_t num_samples, const uint32_t samples_per_sec) {
+    void getAudio(int16_t *audio_samples, const size_t num_samples, const size_t num_channels, const uint32_t samples_per_sec) {
         _audioDataMutex.Lock();
 
-        size_t readSamples = _audioRingBuffer.read(audio_samples, num_samples);
-        if (readSamples < num_samples) {
-            memset(audio_samples + readSamples, 0, (num_samples - readSamples) * 2);
+        if (num_channels == 1) {
+            size_t readSamples = _audioRingBuffer.read(audio_samples, num_samples);
+            if (readSamples < num_samples) {
+                memset(audio_samples + readSamples, 0, (num_samples - readSamples) * 2);
+            }
+        } else {
+            if (_tempAudioBuffer.size() < num_samples) {
+                _tempAudioBuffer.resize(num_samples);
+            }
+
+            size_t readSamples = _audioRingBuffer.read(_tempAudioBuffer.data(), num_samples);
+            for (size_t sampleIndex = 0; sampleIndex < readSamples; sampleIndex++) {
+                for (size_t channelIndex = 0; channelIndex < num_channels; channelIndex++) {
+                    audio_samples[sampleIndex * num_channels + channelIndex] = _tempAudioBuffer[sampleIndex];
+                }
+            }
+
+            if (readSamples < num_samples) {
+                memset(audio_samples + readSamples * num_channels, 0, (num_samples - readSamples) * num_channels * 2);
+            }
         }
 
         _audioDataMutex.Unlock();
@@ -801,6 +818,7 @@ private:
     const size_t _audioDataRingBufferMaxSize = 4800;
     webrtc::Mutex _audioDataMutex;
     SampleRingBuffer _audioRingBuffer;
+    std::vector<int16_t> _tempAudioBuffer;
     webrtc::FrameCombiner _audioFrameCombiner;
     std::map<uint32_t, std::unique_ptr<SparseVad>> _audioVadMap;
 
@@ -831,8 +849,8 @@ void StreamingMediaContext::addVideoSink(std::string const &endpointId, std::wea
     _private->addVideoSink(endpointId, sink);
 }
 
-void StreamingMediaContext::getAudio(int16_t *audio_samples, const size_t num_samples, const uint32_t samples_per_sec) {
-    _private->getAudio(audio_samples, num_samples, samples_per_sec);
+void StreamingMediaContext::getAudio(int16_t *audio_samples, const size_t num_samples, const size_t num_channels, const uint32_t samples_per_sec) {
+    _private->getAudio(audio_samples, num_samples, num_channels, samples_per_sec);
 }
 
 }
