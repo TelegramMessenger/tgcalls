@@ -1276,29 +1276,36 @@ public:
     }
 
     void mixAudio(int16_t *audio_samples, const size_t num_samples, const size_t num_channels, const uint32_t samples_per_sec) {
-        const auto numSamplesOut = num_samples * num_channels;
-        const auto numBytesOut = sizeof(int16_t) * numSamplesOut;
-        if (samples_per_sec != 48000) {
-            return;
-        }
-
-        if (_buffer.size() < numSamplesOut) {
-            _buffer.resize(numSamplesOut);
-        }
 
         _mutex.Lock();
         const auto context = _streamingContext;
         _mutex.Unlock();
 
         if (context) {
-            context->getAudio(_buffer.data(), num_samples, num_channels, samples_per_sec);
-            memcpy(audio_samples, _buffer.data(), numBytesOut);
+            if (_samplesToResample.size() < 480 * num_channels) {
+                _samplesToResample.resize(480 * num_channels);
+            }
+            memset(_samplesToResample.data(), 0, _samplesToResample.size() * sizeof(int16_t));
+
+            context->getAudio(_samplesToResample.data(), 480, num_channels, 48000);
+
+            if (_resamplerFrequency != samples_per_sec || _resamplerNumChannels != num_channels) {
+                _resamplerFrequency = samples_per_sec;
+                _resamplerNumChannels = num_channels;
+                _resampler = std::make_unique<webrtc::Resampler>(48000, samples_per_sec, num_channels);
+            }
+
+            size_t outLen = 0;
+            _resampler->Push(_samplesToResample.data(), _samplesToResample.size(), (int16_t *)audio_samples, num_samples * num_channels, outLen);
         }
     }
 
 private:
     webrtc::Mutex _mutex;
-    std::vector<int16_t> _buffer;
+    std::unique_ptr<webrtc::Resampler> _resampler;
+    uint32_t _resamplerFrequency = 0;
+    size_t _resamplerNumChannels = 0;
+    std::vector<int16_t> _samplesToResample;
     std::shared_ptr<StreamingMediaContext> _streamingContext;
 };
 
@@ -1334,33 +1341,12 @@ public:
         }
 
         if (_shared) {
-            if (_samplesToResample.size() < 480 * num_channels) {
-                _samplesToResample.resize(480 * num_channels);
-            }
-            memset(_samplesToResample.data(), 0, _samplesToResample.size() * sizeof(int16_t));
-
-            _shared->mixAudio(_samplesToResample.data(), 480, num_channels, 48000);
-
-            if (_resamplerFrequency != samples_per_sec || _resamplerNumChannels != num_channels) {
-                _resamplerFrequency = samples_per_sec;
-                _resamplerNumChannels = num_channels;
-                _resampler = std::make_unique<webrtc::Resampler>(48000, samples_per_sec, num_channels);
-            }
-
-            size_t outLen = 0;
-            int result = _resampler->Push(_samplesToResample.data(), _samplesToResample.size(), (int16_t *)audio_samples, num_samples * num_channels, outLen);
-            if (result != 0) {
-                //memset(_samplesToResample.data(), 0, _samplesToResample.size() * sizeof(int16_t));
-            }
+            _shared->mixAudio((int16_t *)audio_samples, num_samples, num_channels, samples_per_sec);
         }
     }
 
 private:
     std::shared_ptr<AudioDeviceDataObserverShared> _shared;
-    std::unique_ptr<webrtc::Resampler> _resampler;
-    uint32_t _resamplerFrequency = 0;
-    size_t _resamplerNumChannels = 0;
-    std::vector<int16_t> _samplesToResample;
 };
 
 } // namespace
