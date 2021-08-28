@@ -36,6 +36,7 @@
 #include "modules/audio_coding/include/audio_coding_module.h"
 #include "common_audio/include/audio_util.h"
 #include "modules/audio_device/include/audio_device_data_observer.h"
+#include "common_audio/resampler/include/resampler.h"
 
 #include "AudioFrame.h"
 #include "ThreadLocalObject.h"
@@ -1322,19 +1323,44 @@ public:
                               const size_t bytes_per_sample,
                               const size_t num_channels,
                               const uint32_t samples_per_sec) override {
-        if (samples_per_sec != 48000) {
-            return;
-        }
         if (bytes_per_sample != num_channels * 2) {
             return;
         }
+        if (samples_per_sec % 100 != 0) {
+            return;
+        }
+        if (num_samples != samples_per_sec / 100) {
+            return;
+        }
+
         if (_shared) {
-            _shared->mixAudio((int16_t *)audio_samples, num_samples, num_channels, samples_per_sec);
+            if (_samplesToResample.size() < 480 * num_channels) {
+                _samplesToResample.resize(480 * num_channels);
+            }
+            memset(_samplesToResample.data(), 0, _samplesToResample.size() * sizeof(int16_t));
+
+            _shared->mixAudio(_samplesToResample.data(), 480, num_channels, 48000);
+
+            if (_resamplerFrequency != samples_per_sec || _resamplerNumChannels != num_channels) {
+                _resamplerFrequency = samples_per_sec;
+                _resamplerNumChannels = num_channels;
+                _resampler = std::make_unique<webrtc::Resampler>(48000, samples_per_sec, num_channels);
+            }
+
+            size_t outLen = 0;
+            int result = _resampler->Push(_samplesToResample.data(), _samplesToResample.size(), (int16_t *)audio_samples, num_samples * num_channels, outLen);
+            if (result != 0) {
+                //memset(_samplesToResample.data(), 0, _samplesToResample.size() * sizeof(int16_t));
+            }
         }
     }
 
 private:
     std::shared_ptr<AudioDeviceDataObserverShared> _shared;
+    std::unique_ptr<webrtc::Resampler> _resampler;
+    uint32_t _resamplerFrequency = 0;
+    size_t _resamplerNumChannels = 0;
+    std::vector<int16_t> _samplesToResample;
 };
 
 } // namespace
