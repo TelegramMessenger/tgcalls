@@ -3,6 +3,7 @@
 
 #include "absl/types/optional.h"
 #include <vector>
+#include <string>
 #include <map>
 #include <stdint.h>
 
