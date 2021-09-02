@@ -448,9 +448,23 @@ public:
     void requestSegmentsIfNeeded() {
         while (true) {
             if (_nextSegmentTimestamp == 0) {
-                if (_pendingSegments.size() >= 1) {
-                    break;
+                if (!_pendingRequestTimeTask) {
+                    const auto weak = std::weak_ptr<StreamingMediaContextPrivate>(shared_from_this());
+                    _pendingRequestTimeTask = _requestCurrentTime([weak, threads = _threads](int64_t timestamp) {
+                        threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, timestamp]() {
+                            auto strong = weak.lock();
+                            if (!strong) {
+                                return;
+                            }
+
+                            strong->_pendingRequestTimeTask.reset();
+
+                            strong->_nextSegmentTimestamp = (timestamp / strong->_segmentDuration * strong->_segmentDuration) - strong->_segmentBufferDuration;
+                            strong->requestSegmentsIfNeeded();
+                        });
+                    });
                 }
+                break;
             } else {
                 int64_t availableAndRequestedSegmentsDuration = 0;
                 availableAndRequestedSegmentsDuration += getAvailableBufferDuration();
@@ -595,9 +609,6 @@ public:
 
                 if (!part->result && !part->task) {
                     if (part->minRequestTimestamp != 0) {
-                        if (i != 0) {
-                            continue;
-                        }
                         if (part->minRequestTimestamp > absoluteTimestamp) {
                             minDelayedRequestTimeout = std::min(minDelayedRequestTimeout, part->minRequestTimestamp - absoluteTimestamp);
 
@@ -819,6 +830,8 @@ private:
 
     absl::optional<int> _waitForBufferredMillisecondsBeforeRendering;
     std::vector<std::shared_ptr<MediaSegment>> _availableSegments;
+
+    std::shared_ptr<BroadcastPartTask> _pendingRequestTimeTask;
 
     std::vector<std::shared_ptr<PendingMediaSegment>> _pendingSegments;
 
