@@ -361,9 +361,9 @@ void GroupNetworkManager::resetDtlsSrtpTransport() {
     _transportChannel.reset(new cricket::P2PTransportChannel("transport", 0, _portAllocator.get(), _asyncResolverFactory.get(), nullptr));
 
     cricket::IceConfig iceConfig;
-    iceConfig.continual_gathering_policy = cricket::GATHER_ONCE;
+    iceConfig.continual_gathering_policy = cricket::GATHER_CONTINUALLY;
     iceConfig.prioritize_most_likely_candidate_pairs = true;
-    iceConfig.regather_on_failed_networks_interval = 8000;
+    iceConfig.regather_on_failed_networks_interval = 2000;
     _transportChannel->SetIceConfig(iceConfig);
 
     cricket::IceParameters localIceParameters(
