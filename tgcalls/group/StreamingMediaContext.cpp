@@ -142,7 +142,8 @@ private:
     VadHistory _history;
 
 public:
-    CombinedVad() {
+    CombinedVad() :
+    _vadWithLevel(40, webrtc::GetAvailableCpuFeatures()) {
     }
 
     ~CombinedVad() {

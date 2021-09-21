@@ -8,7 +8,7 @@
 #import "TGRTCCVPixelBuffer.h"
 #import "sdk/objc/native/src/objc_video_track_source.h"
 #import "sdk/objc/native/src/objc_frame_buffer.h"
-#import "api/video_track_source_proxy.h"
+//#import "api/video_track_source_proxy.h"
 
 #import "helpers/UIDevice+RTCDevice.h"
 
@@ -20,6 +20,7 @@
 #include "rtc_base/checks.h"
 #include "rtc_base/logging.h"
 #include "third_party/libyuv/include/libyuv.h"
+#include "pc/video_track_source_proxy.h"
 
 #include "DarwinVideoSource.h"
 

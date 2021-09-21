@@ -18,7 +18,7 @@
 #include "system_wrappers/include/field_trial.h"
 #include "api/video/builtin_video_bitrate_allocator_factory.h"
 #include "call/call.h"
-#include "modules/rtp_rtcp/source/rtp_utility.h"
+#include "modules/rtp_rtcp/source/rtp_util.h"
 #include "api/call/audio_sink.h"
 #include "modules/audio_processing/audio_buffer.h"
 #include "modules/audio_device/include/audio_device_factory.h"
@@ -905,24 +905,27 @@ void MediaManager::setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterfac
     _incomingVideoSinkProxy->setSink(sink);
 }
 
-static bool IsRtcp(const uint8_t* packet, size_t length) {
-    webrtc::RtpUtility::RtpHeaderParser rtp_parser(packet, length);
-    return rtp_parser.RTCP();
-}
-
 void MediaManager::receiveMessage(DecryptedMessage &&message) {
 	const auto data = &message.message.data;
 	if (const auto formats = absl::get_if<VideoFormatsMessage>(data)) {
 		setPeerVideoFormats(std::move(*formats));
 	} else if (const auto audio = absl::get_if<AudioDataMessage>(data)) {
-        if (IsRtcp(audio->data.data(), audio->data.size())) {
+        if (webrtc::IsRtcpPacket(audio->data)) {
             RTC_LOG(LS_VERBOSE) << "Deliver audio RTCP";
         }
-        _call->Receiver()->DeliverPacket(webrtc::MediaType::AUDIO, audio->data, -1);
+        if (webrtc::IsRtcpPacket(audio->data)) {
+            _call->Receiver()->DeliverPacket(webrtc::MediaType::ANY, audio->data, -1);
+        } else {
+            _call->Receiver()->DeliverPacket(webrtc::MediaType::AUDIO, audio->data, -1);
+        }
 	} else if (const auto video = absl::get_if<VideoDataMessage>(data)) {
 		if (_videoChannel) {
 			if (_readyToReceiveVideo) {
-                _call->Receiver()->DeliverPacket(webrtc::MediaType::VIDEO, video->data, -1);
+                if (webrtc::IsRtcpPacket(video->data)) {
+                    _call->Receiver()->DeliverPacket(webrtc::MediaType::ANY, video->data, -1);
+                } else {
+                    _call->Receiver()->DeliverPacket(webrtc::MediaType::VIDEO, video->data, -1);
+                }
 			} else {
 				// maybe we need to queue packets for some time?
 			}

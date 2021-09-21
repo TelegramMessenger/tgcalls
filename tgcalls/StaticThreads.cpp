@@ -60,12 +60,12 @@ class ThreadsImpl : public Threads {
 public:
   explicit ThreadsImpl(size_t i) {
     auto suffix = i == 0 ? "" : "#" + std::to_string(i);
-    network_ = create_network("tgc-net" + suffix);
-    network_->DisallowAllInvokes();
     media_ = create("tgc-media" + suffix);
     worker_ = create("tgc-work"  + suffix);
-    worker_->DisallowAllInvokes();
-    worker_->AllowInvokesToThread(network_.get());
+    network_ = create_network("tgc-net" + suffix);
+    //network_->DisallowAllInvokes();
+    //worker_->DisallowAllInvokes();
+    //worker_->AllowInvokesToThread(network_.get());
   }
 
   rtc::Thread *getNetworkThread() override {

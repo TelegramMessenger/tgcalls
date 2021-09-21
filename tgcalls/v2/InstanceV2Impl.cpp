@@ -21,13 +21,11 @@
 #include "system_wrappers/include/field_trial.h"
 #include "api/video/builtin_video_bitrate_allocator_factory.h"
 #include "call/call.h"
-#include "modules/rtp_rtcp/source/rtp_utility.h"
 #include "api/call/audio_sink.h"
 #include "modules/audio_processing/audio_buffer.h"
 #include "absl/strings/match.h"
 #include "modules/audio_processing/agc2/vad_with_level.h"
 #include "pc/channel_manager.h"
-#include "media/base/rtp_data_engine.h"
 #include "audio/audio_state.h"
 #include "modules/audio_coding/neteq/default_neteq_factory.h"
 #include "modules/audio_coding/include/audio_coding_module.h"
@@ -35,6 +33,7 @@
 #include "api/jsep_ice_candidate.h"
 #include "media/base/h264_profile_level_id.h"
 #include "pc/used_ids.h"
+#include "media/base/sdp_video_format_utils.h"
 
 #include "AudioFrame.h"
 #include "ThreadLocalObject.h"
@@ -52,13 +51,6 @@
 
 namespace tgcalls {
 namespace {
-
-static int stringToInt(std::string const &string) {
-    std::stringstream stringStream(string);
-    int value = 0;
-    stringStream >> value;
-    return value;
-}
 
 static std::string intToString(int value) {
     std::ostringstream stringStream;
@@ -181,7 +173,7 @@ static void NegotiateCodecs(const std::vector<C>& local_codecs,
         negotiated.SetParam(cricket::kCodecParamAssociatedPayloadType, apt_it->second);
       }
       if (absl::EqualsIgnoreCase(ours.name, cricket::kH264CodecName)) {
-        webrtc::H264::GenerateProfileLevelIdForAnswer(
+        webrtc::H264GenerateProfileLevelIdForAnswer(
             ours.params, theirs.params, &negotiated.params);
       }
       negotiated.id = theirs.id;
@@ -434,17 +426,20 @@ struct NegotiatedMediaContent {
 static bool FindByUri(const cricket::RtpHeaderExtensions& extensions,
                       const webrtc::RtpExtension& ext_to_match,
                       webrtc::RtpExtension* found_extension) {
-  // We assume that all URIs are given in a canonical format.
-  const webrtc::RtpExtension* found =
-    webrtc::RtpExtension::FindHeaderExtensionByUri(extensions,
-                                                     ext_to_match.uri);
-  if (!found) {
-    return false;
-  }
-  if (found_extension) {
-    *found_extension = *found;
-  }
-  return true;
+    // We assume that all URIs are given in a canonical format.
+    const webrtc::RtpExtension* found =
+    webrtc::RtpExtension::FindHeaderExtensionByUri(
+        extensions,
+        ext_to_match.uri,
+        webrtc::RtpExtension::Filter::kPreferEncryptedExtension
+    );
+    if (!found) {
+        return false;
+    }
+    if (found_extension) {
+        *found_extension = *found;
+    }
+    return true;
 }
 
 template <class C>
@@ -601,14 +596,14 @@ public:
         _outgoingAudioChannel->SetLocalContent(outgoingAudioDescription.get(), webrtc::SdpType::kOffer, nullptr);
         _outgoingAudioChannel->SetRemoteContent(incomingAudioDescription.get(), webrtc::SdpType::kAnswer, nullptr);
 
-        _outgoingAudioChannel->SignalSentPacket().connect(this, &OutgoingAudioChannel::OnSentPacket_w);
+        //_outgoingAudioChannel->SignalSentPacket().connect(this, &OutgoingAudioChannel::OnSentPacket_w);
         //_outgoingAudioChannel->UpdateRtpTransport(nullptr);
 
         setIsMuted(false);
     }
 
     ~OutgoingAudioChannel() {
-        _outgoingAudioChannel->SignalSentPacket().disconnect(this);
+        //_outgoingAudioChannel->SignalSentPacket().disconnect(this);
         _outgoingAudioChannel->media_channel()->SetAudioSend(_ssrc, false, nullptr, _audioSource);
         _outgoingAudioChannel->Enable(false);
         _channelManager->DestroyVoiceChannel(_outgoingAudioChannel);
@@ -696,14 +691,14 @@ public:
         //std::unique_ptr<AudioSinkImpl> audioLevelSink(new AudioSinkImpl(onAudioLevelUpdated, _ssrc, std::move(onAudioFrame)));
         //_audioChannel->media_channel()->SetRawAudioSink(ssrc.networkSsrc, std::move(audioLevelSink));
 
-        _audioChannel->SignalSentPacket().connect(this, &IncomingV2AudioChannel::OnSentPacket_w);
+        //_audioChannel->SignalSentPacket().connect(this, &IncomingV2AudioChannel::OnSentPacket_w);
         //_audioChannel->UpdateRtpTransport(nullptr);
 
         _audioChannel->Enable(true);
     }
 
     ~IncomingV2AudioChannel() {
-        _audioChannel->SignalSentPacket().disconnect(this);
+        //_audioChannel->SignalSentPacket().disconnect(this);
         _audioChannel->Enable(false);
         _channelManager->DestroyVoiceChannel(_audioChannel);
         _audioChannel = nullptr;
@@ -873,7 +868,7 @@ public:
 
         _outgoingVideoChannel->media_channel()->SetRtpSendParameters(mediaContent.ssrc, rtpParameters);
 
-        _outgoingVideoChannel->SignalSentPacket().connect(this, &OutgoingVideoChannel::OnSentPacket_w);
+        //_outgoingVideoChannel->SignalSentPacket().connect(this, &OutgoingVideoChannel::OnSentPacket_w);
         //_outgoingVideoChannel->UpdateRtpTransport(nullptr);
 
         _outgoingVideoChannel->Enable(false);
@@ -881,7 +876,7 @@ public:
     }
 
     ~OutgoingVideoChannel() {
-        _outgoingVideoChannel->SignalSentPacket().disconnect(this);
+        //_outgoingVideoChannel->SignalSentPacket().disconnect(this);
         _outgoingVideoChannel->media_channel()->SetVideoSend(_mainSsrc, nullptr, nullptr);
         _outgoingVideoChannel->Enable(false);
         _channelManager->DestroyVideoChannel(_outgoingVideoChannel);
@@ -1105,7 +1100,7 @@ public:
 
         _videoChannel->media_channel()->SetSink(_mainVideoSsrc, _videoSink.get());
 
-        _videoChannel->SignalSentPacket().connect(this, &IncomingV2VideoChannel::OnSentPacket_w);
+        //_videoChannel->SignalSentPacket().connect(this, &IncomingV2VideoChannel::OnSentPacket_w);
         //_videoChannel->UpdateRtpTransport(nullptr);
 
         _videoChannel->Enable(true);
@@ -1256,7 +1251,6 @@ public:
 
         _channelManager = cricket::ChannelManager::Create(
             std::move(mediaEngine),
-            std::make_unique<cricket::RtpDataEngine>(),
             true,
             _threads->getMediaThread(),
             _threads->getNetworkThread()

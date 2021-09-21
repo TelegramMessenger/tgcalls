@@ -9,7 +9,7 @@
 #include "TGRTCDefaultVideoDecoderFactory.h"
 #include "sdk/objc/native/api/video_encoder_factory.h"
 #include "sdk/objc/native/api/video_decoder_factory.h"
-#include "api/video_track_source_proxy.h"
+#include "pc/video_track_source_proxy.h"
 #import "base/RTCLogging.h"
 #include "AudioDeviceModuleIOS.h"
 #include "AudioDeviceModuleMacos.h"

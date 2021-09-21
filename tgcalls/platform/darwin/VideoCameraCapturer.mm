@@ -8,7 +8,7 @@
 #import "TGRTCCVPixelBuffer.h"
 #import "sdk/objc/native/src/objc_video_track_source.h"
 #import "sdk/objc/native/src/objc_frame_buffer.h"
-#import "api/video_track_source_proxy.h"
+#import "pc/video_track_source_proxy.h"
 
 #import "helpers/UIDevice+RTCDevice.h"
 

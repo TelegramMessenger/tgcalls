@@ -12,7 +12,7 @@
 #include "api/rtc_event_log/rtc_event_log_factory.h"
 #include "sdk/media_constraints.h"
 #include "api/peer_connection_interface.h"
-#include "api/video_track_source_proxy.h"
+#include "pc/video_track_source_proxy.h"
 #include "system_wrappers/include/field_trial.h"
 #include "api/stats/rtcstats_objects.h"
 

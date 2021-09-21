@@ -10,7 +10,7 @@
 #include "rtc_base/third_party/sigslot/sigslot.h"
 #include "api/candidate.h"
 #include "media/base/media_channel.h"
-#include "media/sctp/sctp_transport.h"
+#include "pc/sctp_transport.h"
 #include "pc/sctp_data_channel.h"
 
 #include <functional>

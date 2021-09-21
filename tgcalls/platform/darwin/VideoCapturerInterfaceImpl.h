@@ -4,7 +4,7 @@
 #include "VideoCapturerInterface.h"
 
 #include "sdk/objc/native/src/objc_video_track_source.h"
-#include "api/video_track_source_proxy.h"
+//#include "api/video_track_source_proxy.h"
 
 @interface VideoCapturerInterfaceImplHolder : NSObject
 
