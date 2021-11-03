@@ -70,6 +70,7 @@ private:
 
 
 -(void)dealloc {
+    assert([NSThread isMainThread]);
     int bp = 0;
     bp += 1;
 }
