@@ -5,11 +5,11 @@
 
 #include "api/video_codecs/builtin_video_encoder_factory.h"
 #include "api/video_codecs/builtin_video_decoder_factory.h"
-#include "api/video_track_source_proxy.h"
+#include "pc/video_track_source_proxy.h"
 
 namespace tgcalls {
 
-std::unique_ptr<webrtc::VideoEncoderFactory> DesktopInterface::makeVideoEncoderFactory() {
+std::unique_ptr<webrtc::VideoEncoderFactory> DesktopInterface::makeVideoEncoderFactory(bool preferHardwareEncoding) {
 	return webrtc::CreateBuiltinVideoEncoderFactory();
 }
 
