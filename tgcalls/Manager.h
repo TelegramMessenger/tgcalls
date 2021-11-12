@@ -16,8 +16,8 @@ private:
         bool isLowCost = false;
         bool isLowDataRequested = false;
 
-        bool operator==(const ResolvedNetworkStatus &rhs);
-        bool operator!=(const ResolvedNetworkStatus &rhs);
+        bool operator==(const ResolvedNetworkStatus &rhs) const;
+        bool operator!=(const ResolvedNetworkStatus &rhs) const;
     };
 
 public:
