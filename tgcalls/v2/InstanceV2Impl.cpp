@@ -621,7 +621,7 @@ public:
 
     void setIsMuted(bool isMuted) {
         if (_isMuted != isMuted) {
-            _isMuted = false;
+            _isMuted = isMuted;
 
             _outgoingAudioChannel->Enable(!_isMuted);
             _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [&]() {
