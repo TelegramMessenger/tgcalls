@@ -991,7 +991,7 @@ public:
         } else {
             _videoRotation = signaling::MediaStateMessage::VideoRotation::Rotation0;
             _outgoingVideoChannel->Enable(false);
-            
+
             _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [&]() {
                 _outgoingVideoChannel->media_channel()->SetVideoSend(_mainSsrc, NULL, nullptr);
             });
@@ -1217,7 +1217,7 @@ public:
         const auto weak = std::weak_ptr<InstanceV2ImplInternal>(shared_from_this());
 
         _networking.reset(new ThreadLocalObject<NativeNetworkingImpl>(_threads->getNetworkThread(), [weak, threads = _threads, isOutgoing = _encryptionKey.isOutgoing, rtcServers = _rtcServers]() {
-            return new NativeNetworkingImpl((NativeNetworkingImpl::Configuration){
+            return new NativeNetworkingImpl(NativeNetworkingImpl::Configuration{
                 .isOutgoing = isOutgoing,
                 .enableStunMarking = false,
                 .enableTCP = false,
@@ -1309,7 +1309,7 @@ public:
                 _threads->getWorkerThread(),
                 _threads->getNetworkThread()
             );
-            
+
             webrtc::Call::Config callConfig(_eventLog.get());
             callConfig.task_queue_factory = _taskQueueFactory.get();
             callConfig.trials = &_fieldTrials;
