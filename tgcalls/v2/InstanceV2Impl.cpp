@@ -1203,6 +1203,7 @@ public:
         _outgoingAudioChannel.reset();
         _outgoingVideoChannel.reset();
         _outgoingScreencastChannel.reset();
+        _currentSink.reset();
 
         _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [&]() {
             _channelManager.reset();
@@ -1612,6 +1613,7 @@ public:
                             "1",
                             _threads
                         ));
+                        _incomingVideoChannel->addSink(_currentSink);
                     }
                 } else {
                     const auto generatedOutgoingContent = OutgoingVideoChannel::createOutgoingContentDescription(_availableVideoFormats, false);
@@ -1639,6 +1641,7 @@ public:
                                 "1",
                                 _threads
                             ));
+                            _incomingVideoChannel->addSink(_currentSink);
                         }
                     }
                 }
@@ -1956,7 +1959,8 @@ public:
         }
     }
 
-    void setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+    void setIncomingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+        _currentSink = sink;
         if (_incomingVideoChannel) {
             _incomingVideoChannel->addSink(sink);
         }
@@ -2078,6 +2082,8 @@ private:
     std::unique_ptr<IncomingV2VideoChannel> _incomingVideoChannel;
     std::unique_ptr<IncomingV2VideoChannel> _incomingScreencastChannel;
 
+    std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _currentSink;
+
     std::shared_ptr<VideoCaptureInterface> _videoCapture;
     std::shared_ptr<VideoCaptureInterface> _screencastCapture;
 };
@@ -2135,7 +2141,7 @@ void InstanceV2Impl::setMuteMicrophone(bool muteMicrophone) {
     });
 }
 
-void InstanceV2Impl::setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+void InstanceV2Impl::setIncomingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
     _internal->perform(RTC_FROM_HERE, [sink](InstanceV2ImplInternal *internal) {
         internal->setIncomingVideoOutput(sink);
     });

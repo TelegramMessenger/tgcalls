@@ -331,7 +331,7 @@ void Manager::setMuteOutgoingAudio(bool mute) {
 	});
 }
 
-void Manager::setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+void Manager::setIncomingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
 	_mediaManager->perform(RTC_FROM_HERE, [sink](MediaManager *mediaManager) {
 		mediaManager->setIncomingVideoOutput(sink);
 	});

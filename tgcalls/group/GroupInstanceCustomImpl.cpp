@@ -666,11 +666,10 @@ public:
     }
 
     void addSink(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> impl) {
-        std::unique_lock<std::mutex> lock{ _mutex };
-        _sinks.push_back(impl);
-        if (_lastFrame) {
-            auto strong = impl.lock();
-            if (strong) {
+        if (const auto strong = impl.lock()) {
+            std::unique_lock<std::mutex> lock{ _mutex };
+            _sinks.push_back(impl);
+            if (_lastFrame) {
                 strong->OnFrame(_lastFrame.value());
             }
         }

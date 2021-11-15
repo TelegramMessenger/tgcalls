@@ -163,30 +163,30 @@ public:
     }
 
     virtual void OnFrame(const webrtc::VideoFrame& frame) override {
-        if (_impl) {
+        if (const auto strong = _impl.lock()) {
             if (_rewriteRotation) {
                 webrtc::VideoFrame updatedFrame = frame;
                 //updatedFrame.set_rotation(webrtc::VideoRotation::kVideoRotation_90);
-                _impl->OnFrame(updatedFrame);
+                strong->OnFrame(updatedFrame);
             } else {
-                _impl->OnFrame(frame);
+                strong->OnFrame(frame);
             }
         }
     }
 
     virtual void OnDiscardedFrame() override {
-        if (_impl) {
-            _impl->OnDiscardedFrame();
+        if (const auto strong = _impl.lock()) {
+            strong->OnDiscardedFrame();
         }
     }
 
-    void setSink(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> impl) {
+    void setSink(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> impl) {
         _impl = impl;
     }
 
 private:
     bool _rewriteRotation = false;
-    std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _impl;
+    std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _impl;
 
 };
 
@@ -901,7 +901,7 @@ void MediaManager::setOutgoingVideoState(VideoState state) {
 	sendOutgoingMediaStateMessage();
 }
 
-void MediaManager::setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+void MediaManager::setIncomingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
     _incomingVideoSinkProxy->setSink(sink);
 }
 

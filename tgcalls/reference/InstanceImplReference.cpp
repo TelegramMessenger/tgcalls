@@ -384,11 +384,8 @@ public:
         changeAudioState(muteMicrophone ? AudioState::Muted : AudioState::Active);
     }
 
-    void setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
-        if (!sink) {
-            return;
-        }
-        _currentSink = sink;
+    void setIncomingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+        _currentSink = sink.lock();
         if (_remoteVideoTrack) {
             _remoteVideoTrack->AddOrUpdateSink(_currentSink.get(), rtc::VideoSinkWants());
         }
@@ -952,7 +949,7 @@ void InstanceImplReference::setRequestedVideoAspect(float aspect) {
     });
 }
 
-void InstanceImplReference::setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+void InstanceImplReference::setIncomingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
     internal_->perform(RTC_FROM_HERE, [sink](InstanceImplReferenceInternal *internal) {
         internal->setIncomingVideoOutput(sink);
     });
