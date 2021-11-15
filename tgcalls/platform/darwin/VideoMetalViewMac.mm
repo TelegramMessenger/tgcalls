@@ -13,13 +13,13 @@
 #import "api/media_stream_interface.h"
 #import "rtc_base/time_utils.h"
 
-#import <SSignalKit/SSignalKit.h>
+#import "SQueueLocalObject.h"
 
 
 #import "api/video/video_sink_interface.h"
 #import "api/media_stream_interface.h"
 
-#import "TGRTCMTLI420Renderer.h"
+#import "tgcalls/platform/darwin/macOS/TGRTCMTLI420Renderer.h"
 
 #define MTKViewClass NSClassFromString(@"MTKView")
 #define TGRTCMTLI420RendererClass NSClassFromString(@"TGRTCMTLI420Renderer")
@@ -70,8 +70,6 @@ private:
 
 
 -(void)dealloc {
-    int bp = 0;
-    bp += 1;
 }
 @end
 
