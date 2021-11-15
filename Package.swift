@@ -64,5 +64,5 @@ let package = Package(
                 .define("TGVOIP_NAMESPACE", to: "tgvoip_webrtc", nil),
             ]),
     ],
-    cxxLanguageStandard: .cxx14
+    cxxLanguageStandard: .cxx20
 )
