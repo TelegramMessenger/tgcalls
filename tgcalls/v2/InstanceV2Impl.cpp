@@ -1671,6 +1671,7 @@ public:
                             "2",
                             _threads
                         ));
+                        _incomingScreencastChannel->addSink(_currentSink);
                     }
                 } else {
                     const auto generatedOutgoingContent = OutgoingVideoChannel::createOutgoingContentDescription(_availableVideoFormats, true);
@@ -1698,6 +1699,7 @@ public:
                                 "2",
                                 _threads
                             ));
+                            _incomingScreencastChannel->addSink(_currentSink);
                         }
                     }
                 }
