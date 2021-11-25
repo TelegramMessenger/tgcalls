@@ -60,6 +60,7 @@ let package = Package(
                 
                 .define("WEBRTC_POSIX", to: "1", nil),
                 .define("WEBRTC_MAC", to: "1", nil),
+                .define("NDEBUG", to: "1", nil),
                 .define("RTC_ENABLE_VP9", to: "1", nil),
                 .define("TGVOIP_NAMESPACE", to: "tgvoip_webrtc", nil),
             ]),

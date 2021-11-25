@@ -646,6 +646,7 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
     _outputPixelFormat = _preferredOutputPixelFormat;
     videoDataOutput.videoSettings = @{(NSString *)kCVPixelBufferPixelFormatTypeKey : pixelFormat};
     videoDataOutput.alwaysDiscardsLateVideoFrames = YES;
+    
     [videoDataOutput setSampleBufferDelegate:self queue:self.frameQueue];
     _videoDataOutput = videoDataOutput;
 }
@@ -676,6 +677,7 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
 //             @"updateDeviceCaptureFormat must be called on the capture queue.");
     @try {
         _currentDevice.activeFormat = format;
+        _currentDevice.activeVideoMaxFrameDuration = CMTimeMake(1, 24);
     } @catch (NSException *exception) {
         RTCLogError(@"Failed to set active format!\n User info:%@", exception.userInfo);
         return;

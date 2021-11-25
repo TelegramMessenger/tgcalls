@@ -7,9 +7,9 @@
 		<key>TgVoipWebrtc.xcscheme_^#shared#^_</key>
 		<dict>
 			<key>isShown</key>
-			<true/>
+			<false/>
 			<key>orderHint</key>
-			<integer>0</integer>
+			<integer>1</integer>
 		</dict>
 		<key>tgcalls.xcscheme_^#shared#^_</key>
 		<dict>
