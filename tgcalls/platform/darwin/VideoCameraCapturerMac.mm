@@ -677,6 +677,24 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
 //             @"updateDeviceCaptureFormat must be called on the capture queue.");
     @try {
         _currentDevice.activeFormat = format;
+        if (format.videoSupportedFrameRateRanges.count > 0) {
+            int target = 24;
+            int closest = -1;
+            int result = 0;
+            for (int i = 0; i < format.videoSupportedFrameRateRanges.count; i++) {
+                int current = format.videoSupportedFrameRateRanges[i].maxFrameRate;
+                int gap = abs(format.videoSupportedFrameRateRanges[i].maxFrameRate - target);
+                if (gap <= closest || closest == -1) {
+                    closest = gap;
+                    result = current;
+                }
+            }
+            if (result > 0) {
+                _currentDevice.activeVideoMaxFrameDuration = CMTimeMake(1, result);
+            }
+        }
+       
+        if (format.videoSupportedFrameRateRanges)
         _currentDevice.activeVideoMaxFrameDuration = CMTimeMake(1, 24);
     } @catch (NSException *exception) {
         RTCLogError(@"Failed to set active format!\n User info:%@", exception.userInfo);
