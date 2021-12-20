@@ -288,7 +288,7 @@ static std::vector<OutgoingVideoFormat> generateAvailableVideoFormats(std::vecto
 
     std::vector<OutgoingVideoFormat> result;
 
-    bool codecSelected = false;
+    //bool codecSelected = false;
 
     for (const auto &format : formats) {
         /*if (codecSelected) {
@@ -313,7 +313,7 @@ static std::vector<OutgoingVideoFormat> generateAvailableVideoFormats(std::vecto
         addDefaultFeedbackParams(&codec);
 
         resultFormat.videoCodec = codec;
-        codecSelected = true;
+        //codecSelected = true;
 
         // Increment payload type.
         ++payload_type;
@@ -1883,6 +1883,7 @@ public:
         std::string serialized;
         const auto success = iceCandidate.ToString(&serialized);
         assert(success);
+        (void)success;
 
         serializedCandidate.sdpString = serialized;
 
