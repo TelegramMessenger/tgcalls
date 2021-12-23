@@ -680,17 +680,17 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
         if (format.videoSupportedFrameRateRanges.count > 0) {
             int target = 24;
             int closest = -1;
-            int result = 0;
+            CMTime result;
             for (int i = 0; i < format.videoSupportedFrameRateRanges.count; i++) {
-                int current = format.videoSupportedFrameRateRanges[i].maxFrameRate;
-                int gap = abs(format.videoSupportedFrameRateRanges[i].maxFrameRate - target);
+                const auto rateRange = format.videoSupportedFrameRateRanges[i];
+                int gap = abs(rateRange.minFrameRate - target);
                 if (gap <= closest || closest == -1) {
                     closest = gap;
-                    result = current;
+                    result = rateRange.maxFrameDuration;
                 }
             }
-            if (result > 0) {
-                _currentDevice.activeVideoMaxFrameDuration = CMTimeMake(1, result);
+            if (closest >= 0) {
+                _currentDevice.activeVideoMaxFrameDuration = result;
             }
         }
     } @catch (NSException *exception) {
