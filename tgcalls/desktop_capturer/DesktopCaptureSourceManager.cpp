@@ -10,7 +10,7 @@
 
 #include "modules/desktop_capture/desktop_and_cursor_composer.h"
 #include "modules/desktop_capture/desktop_capturer_differ_wrapper.h"
-#include "third_party/libyuv/include/libyuv.h"
+#include "libyuv.h"
 #include "api/video/i420_buffer.h"
 #include "tgcalls/desktop_capturer/DesktopCaptureSourceHelper.h"
 
