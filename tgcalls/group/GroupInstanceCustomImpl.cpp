@@ -2968,7 +2968,7 @@ public:
             return;
         }
 
-        if (_incomingAudioChannels.size() > 5) {
+        if (_incomingAudioChannels.size() > 10) {
             auto timestamp = rtc::TimeMillis();
 
             int64_t minActivity = INT64_MAX;
@@ -2989,7 +2989,7 @@ public:
                 removeIncomingAudioChannel(minActivityChannelId);
             }
 
-            if (_incomingAudioChannels.size() > 5) {
+            if (_incomingAudioChannels.size() > 10) {
                 // Wait until there is a channel that hasn't been active in 1 second
                 return;
             }
