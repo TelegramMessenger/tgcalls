@@ -288,7 +288,7 @@ static std::vector<OutgoingVideoFormat> generateAvailableVideoFormats(std::vecto
 
     std::vector<OutgoingVideoFormat> result;
 
-    bool codecSelected = false;
+    //bool codecSelected = false;
 
     for (const auto &format : formats) {
         /*if (codecSelected) {
@@ -313,7 +313,7 @@ static std::vector<OutgoingVideoFormat> generateAvailableVideoFormats(std::vecto
         addDefaultFeedbackParams(&codec);
 
         resultFormat.videoCodec = codec;
-        codecSelected = true;
+        //codecSelected = true;
 
         // Increment payload type.
         ++payload_type;
@@ -621,7 +621,7 @@ public:
 
     void setIsMuted(bool isMuted) {
         if (_isMuted != isMuted) {
-            _isMuted = false;
+            _isMuted = isMuted;
 
             _outgoingAudioChannel->Enable(!_isMuted);
             _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [&]() {
@@ -991,7 +991,7 @@ public:
         } else {
             _videoRotation = signaling::MediaStateMessage::VideoRotation::Rotation0;
             _outgoingVideoChannel->Enable(false);
-            
+
             _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [&]() {
                 _outgoingVideoChannel->media_channel()->SetVideoSend(_mainSsrc, NULL, nullptr);
             });
@@ -1203,6 +1203,7 @@ public:
         _outgoingAudioChannel.reset();
         _outgoingVideoChannel.reset();
         _outgoingScreencastChannel.reset();
+        _currentSink.reset();
 
         _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [&]() {
             _channelManager.reset();
@@ -1217,7 +1218,7 @@ public:
         const auto weak = std::weak_ptr<InstanceV2ImplInternal>(shared_from_this());
 
         _networking.reset(new ThreadLocalObject<NativeNetworkingImpl>(_threads->getNetworkThread(), [weak, threads = _threads, isOutgoing = _encryptionKey.isOutgoing, rtcServers = _rtcServers]() {
-            return new NativeNetworkingImpl((NativeNetworkingImpl::Configuration){
+            return new NativeNetworkingImpl(NativeNetworkingImpl::Configuration{
                 .isOutgoing = isOutgoing,
                 .enableStunMarking = false,
                 .enableTCP = false,
@@ -1309,7 +1310,7 @@ public:
                 _threads->getWorkerThread(),
                 _threads->getNetworkThread()
             );
-            
+
             webrtc::Call::Config callConfig(_eventLog.get());
             callConfig.task_queue_factory = _taskQueueFactory.get();
             callConfig.trials = &_fieldTrials;
@@ -1612,6 +1613,7 @@ public:
                             "1",
                             _threads
                         ));
+                        _incomingVideoChannel->addSink(_currentSink);
                     }
                 } else {
                     const auto generatedOutgoingContent = OutgoingVideoChannel::createOutgoingContentDescription(_availableVideoFormats, false);
@@ -1639,6 +1641,7 @@ public:
                                 "1",
                                 _threads
                             ));
+                            _incomingVideoChannel->addSink(_currentSink);
                         }
                     }
                 }
@@ -1668,6 +1671,7 @@ public:
                             "2",
                             _threads
                         ));
+                        _incomingScreencastChannel->addSink(_currentSink);
                     }
                 } else {
                     const auto generatedOutgoingContent = OutgoingVideoChannel::createOutgoingContentDescription(_availableVideoFormats, true);
@@ -1695,6 +1699,7 @@ public:
                                 "2",
                                 _threads
                             ));
+                            _incomingScreencastChannel->addSink(_currentSink);
                         }
                     }
                 }
@@ -1878,6 +1883,7 @@ public:
         std::string serialized;
         const auto success = iceCandidate.ToString(&serialized);
         assert(success);
+        (void)success;
 
         serializedCandidate.sdpString = serialized;
 
@@ -1956,7 +1962,8 @@ public:
         }
     }
 
-    void setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+    void setIncomingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+        _currentSink = sink;
         if (_incomingVideoChannel) {
             _incomingVideoChannel->addSink(sink);
         }
@@ -2078,6 +2085,8 @@ private:
     std::unique_ptr<IncomingV2VideoChannel> _incomingVideoChannel;
     std::unique_ptr<IncomingV2VideoChannel> _incomingScreencastChannel;
 
+    std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _currentSink;
+
     std::shared_ptr<VideoCaptureInterface> _videoCapture;
     std::shared_ptr<VideoCaptureInterface> _screencastCapture;
 };
@@ -2135,7 +2144,7 @@ void InstanceV2Impl::setMuteMicrophone(bool muteMicrophone) {
     });
 }
 
-void InstanceV2Impl::setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+void InstanceV2Impl::setIncomingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
     _internal->perform(RTC_FROM_HERE, [sink](InstanceV2ImplInternal *internal) {
         internal->setIncomingVideoOutput(sink);
     });

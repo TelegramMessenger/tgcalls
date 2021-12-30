@@ -145,6 +145,7 @@ static inline void getCubeVertexData(size_t frameWidth,
 
 }
 
+
 @synthesize rotationOverride = _rotationOverride;
 
 - (instancetype)init {
@@ -611,7 +612,13 @@ static inline void getCubeVertexData(size_t frameWidth,
     dispatch_semaphore_signal(_inflight1);
     dispatch_semaphore_signal(_inflight2);
     dispatch_semaphore_signal(_inflight2);
-
+    __block CAMetalLayer *view = _view;
+    __block CAMetalLayer *foreground = _foreground;
+    
+    dispatch_async(dispatch_get_main_queue(), ^{
+        view = nil;
+        foreground = nil;
+    });
 }
 
 #pragma mark - RTCMTLRenderer

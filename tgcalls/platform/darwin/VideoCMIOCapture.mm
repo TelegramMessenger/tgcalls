@@ -17,7 +17,6 @@
 #import "components/video_frame_buffer/RTCCVPixelBuffer.h"
 #import "sdk/objc/native/src/objc_video_track_source.h"
 #import "sdk/objc/native/src/objc_frame_buffer.h"
-#import "api/video_track_source_proxy.h"
 
 #import <CoreMediaIO/CMIOHardware.h>
 
@@ -26,6 +25,7 @@
 #import "base/RTCVideoFrame.h"
 
 #include "common_video/libyuv/include/webrtc_libyuv.h"
+#include "pc/video_track_source_proxy.h"
 #include "rtc_base/checks.h"
 #include "rtc_base/logging.h"
 #include "third_party/libyuv/include/libyuv.h"

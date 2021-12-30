@@ -7,7 +7,7 @@
 #include "tgcalls/desktop_capturer/DesktopCaptureSourceHelper.h"
 #endif // TGCALLS_DISABLE_DESKTOP_CAPTURE
 
-#include "api/video_track_source_proxy.h"
+#include "pc/video_track_source_proxy.h"
 
 namespace tgcalls {
 namespace {

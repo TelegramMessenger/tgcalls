@@ -92,7 +92,7 @@ void InstanceImpl::setMuteMicrophone(bool muteMicrophone) {
 	});
 }
 
-void InstanceImpl::setIncomingVideoOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+void InstanceImpl::setIncomingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
 	_manager->perform(RTC_FROM_HERE, [sink](Manager *manager) {
 		manager->setIncomingVideoOutput(sink);
 	});

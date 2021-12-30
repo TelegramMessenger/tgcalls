@@ -354,6 +354,18 @@ void compressionOutputCallback(void* encoder,
   return WEBRTC_VIDEO_CODEC_OK;
 }
 
+- (NSInteger)resolutionAlignment {
+  return 1;
+}
+
+- (BOOL)applyAlignmentToAllSimulcastLayers {
+  return NO;
+}
+
+- (BOOL)supportsNativeHandle {
+  return YES;
+}
+
 #pragma mark - Private
 
 - (NSInteger)releaseEncoder {
