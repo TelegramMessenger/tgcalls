@@ -16,7 +16,7 @@
 #import "base/RTCVideoEncoder.h"
 #import "base/RTCVideoEncoderFactory.h"
 #import "components/video_codec/RTCCodecSpecificInfoH264+Private.h"
-#ifndef DISABLE_H265
+#ifndef WEBRTC_DISABLE_H265
 #import "components/video_codec/RTCCodecSpecificInfoH265+Private.h"
 #endif
 #import "sdk/objc/api/peerconnection/RTCEncodedImage+Private.h"
@@ -33,6 +33,8 @@
 #include "modules/video_coding/include/video_error_codes.h"
 #include "rtc_base/logging.h"
 #include "sdk/objc/native/src/objc_video_frame.h"
+
+#include "CustomSimulcastEncoderAdapter.h"
 
 namespace webrtc {
 
@@ -62,7 +64,7 @@ class ObjCVideoEncoder : public VideoEncoder {
       if ([NSStringFromClass([info class]) isEqual:@"RTCCodecSpecificInfoH264"]) {
         // if ([info isKindOfClass:[RTCCodecSpecificInfoH264 class]]) {
         codecSpecificInfo = [(RTCCodecSpecificInfoH264 *)info nativeCodecSpecificInfo];
-#ifndef DISABLE_H265
+#ifndef WEBRTC_DISABLE_H265
       } else if ([NSStringFromClass([info class]) isEqual:@"RTCCodecSpecificInfoH265"]) {
         // if ([info isKindOfClass:[RTCCodecSpecificInfoH265 class]]) {
         codecSpecificInfo = [(RTCCodecSpecificInfoH265 *)info nativeCodecSpecificInfo];
@@ -202,6 +204,29 @@ std::unique_ptr<VideoEncoderFactory::EncoderSelectorInterface>
     }
   }
   return nullptr;
+}
+
+SimulcastVideoEncoderFactory::SimulcastVideoEncoderFactory(std::unique_ptr<CustomObjCVideoEncoderFactory> softwareFactory, std::unique_ptr<CustomObjCVideoEncoderFactory> hardwareFactory) :
+    _softwareFactory(std::move(softwareFactory)),
+    _hardwareFactory(std::move(hardwareFactory)){
+}
+SimulcastVideoEncoderFactory::~SimulcastVideoEncoderFactory() {
+}
+    
+std::vector<SdpVideoFormat> SimulcastVideoEncoderFactory::GetSupportedFormats() const {
+    return _hardwareFactory->GetSupportedFormats();
+}
+
+std::vector<SdpVideoFormat> SimulcastVideoEncoderFactory::GetImplementations() const {
+    return _hardwareFactory->GetImplementations();
+}
+
+std::unique_ptr<VideoEncoder> SimulcastVideoEncoderFactory::CreateVideoEncoder(const SdpVideoFormat& format) {
+    return std::make_unique<webrtc::CustomSimulcastEncoderAdapter>(_softwareFactory.get(), _hardwareFactory.get(), format);
+}
+
+std::unique_ptr<VideoEncoderFactory::EncoderSelectorInterface> SimulcastVideoEncoderFactory::GetEncoderSelector() const {
+    return _hardwareFactory->GetEncoderSelector();
 }
 
 }  // namespace webrtc

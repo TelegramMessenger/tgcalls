@@ -9,6 +9,8 @@
  *
  */
 
+#ifndef WEBRTC_DISABLE_H265
+
 #import "TGRTCVideoEncoderH265.h"
 
 #import <VideoToolbox/VideoToolbox.h>
@@ -620,3 +622,5 @@ void compressionOutputCallback(void* encoder,
 }
 
 @end
+
+#endif

@@ -24,14 +24,12 @@
 #include "api/call/audio_sink.h"
 #include "modules/audio_processing/audio_buffer.h"
 #include "absl/strings/match.h"
-#include "modules/audio_processing/agc2/vad_with_level.h"
 #include "pc/channel_manager.h"
 #include "audio/audio_state.h"
 #include "modules/audio_coding/neteq/default_neteq_factory.h"
 #include "modules/audio_coding/include/audio_coding_module.h"
 #include "api/candidate.h"
 #include "api/jsep_ice_candidate.h"
-#include "media/base/h264_profile_level_id.h"
 #include "pc/used_ids.h"
 #include "media/base/sdp_video_format_utils.h"
 
@@ -769,7 +767,9 @@ public:
         if (isScreencast) {
             formatPreferences.push_back(cricket::kVp8CodecName);
         } else {
+#ifndef WEBRTC_DISABLE_H265
             formatPreferences.push_back(cricket::kH265CodecName);
+#endif
             formatPreferences.push_back(cricket::kH264CodecName);
         }
 

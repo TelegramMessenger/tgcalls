@@ -8,6 +8,8 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
+#ifndef WEBRTC_DISABLE_H265
+
 #import <Foundation/Foundation.h>
 
 #import "RTCMacros.h"
@@ -21,3 +23,5 @@ API_AVAILABLE(ios(11.0))
 - (instancetype)initWithCodecInfo:(RTCVideoCodecInfo *)codecInfo;
 
 @end
+
+#endif

@@ -74,7 +74,12 @@ void DarwinInterface::configurePlatformAudio() {
 }
 
 std::unique_ptr<webrtc::VideoEncoderFactory> DarwinInterface::makeVideoEncoderFactory(bool preferHardwareEncoding) {
-    return std::make_unique<webrtc::CustomObjCVideoEncoderFactory>([[TGRTCDefaultVideoEncoderFactory alloc] initWithPreferHardwareH264:preferHardwareEncoding]);
+    auto nativeFactory = std::make_unique<webrtc::CustomObjCVideoEncoderFactory>([[TGRTCDefaultVideoEncoderFactory alloc] initWithPreferHardwareH264:preferHardwareEncoding]);
+    if (!preferHardwareEncoding) {
+        auto nativeHardwareFactory = std::make_unique<webrtc::CustomObjCVideoEncoderFactory>([[TGRTCDefaultVideoEncoderFactory alloc] initWithPreferHardwareH264:true]);
+        return std::make_unique<webrtc::SimulcastVideoEncoderFactory>(std::move(nativeFactory), std::move(nativeHardwareFactory));
+    }
+    return nativeFactory;
 }
 
 std::unique_ptr<webrtc::VideoDecoderFactory> DarwinInterface::makeVideoDecoderFactory() {
@@ -82,7 +87,10 @@ std::unique_ptr<webrtc::VideoDecoderFactory> DarwinInterface::makeVideoDecoderFa
 }
 
 bool DarwinInterface::supportsEncoding(const std::string &codecName) {
-	if (codecName == cricket::kH265CodecName) {
+    if (false) {
+    }
+#ifndef WEBRTC_DISABLE_H265
+    else if (codecName == cricket::kH265CodecName) {
 #ifdef WEBRTC_IOS
 		if (@available(iOS 11.0, *)) {
 			return [[AVAssetExportSession allExportPresets] containsObject:AVAssetExportPresetHEVCHighestQuality];
@@ -95,7 +103,9 @@ bool DarwinInterface::supportsEncoding(const std::string &codecName) {
         return YES;
 #endif
 #endif // WEBRTC_IOS || WEBRTC_MAC
-    } else if (codecName == cricket::kH264CodecName) {
+    }
+#endif
+    else if (codecName == cricket::kH264CodecName) {
 #ifdef __x86_64__
         return YES;
 #else

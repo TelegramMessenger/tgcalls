@@ -28,7 +28,7 @@
 #include "api/call/audio_sink.h"
 #include "modules/audio_processing/audio_buffer.h"
 #include "absl/strings/match.h"
-#include "modules/audio_processing/agc2/vad_with_level.h"
+#include "modules/audio_processing/agc2/vad_wrapper.h"
 #include "pc/channel_manager.h"
 #include "audio/audio_state.h"
 #include "modules/audio_coding/neteq/default_neteq_factory.h"
@@ -472,12 +472,12 @@ public:
 
 class CombinedVad {
 private:
-    webrtc::VadLevelAnalyzer _vadWithLevel;
+    webrtc::VoiceActivityDetectorWrapper _vadWithLevel;
     VadHistory _history;
 
 public:
     CombinedVad() :
-    _vadWithLevel(40, webrtc::GetAvailableCpuFeatures()){
+    _vadWithLevel(500, webrtc::GetAvailableCpuFeatures(), webrtc::AudioProcessing::kSampleRate48kHz) {
     }
 
     ~CombinedVad() {
@@ -487,7 +487,7 @@ public:
         if (buffer->num_channels() <= 0) {
             return _history.update(0.0f);
         }
-        webrtc::AudioFrameView<float> frameView(buffer->channels(), buffer->num_channels(), buffer->num_frames());
+        webrtc::AudioFrameView<float> frameView(buffer->channels(), (int)(buffer->num_channels()), (int)(buffer->num_frames()));
         float peak = 0.0f;
         for (const auto &x : frameView.channel(0)) {
             peak = std::max(std::fabs(x), peak);
@@ -496,9 +496,9 @@ public:
             return _history.update(false);
         }
 
-        auto result = _vadWithLevel.AnalyzeFrame(frameView);
+        auto result = _vadWithLevel.Analyze(frameView);
 
-        return _history.update(result.speech_probability);
+        return _history.update(result);
     }
 
     bool update() {
