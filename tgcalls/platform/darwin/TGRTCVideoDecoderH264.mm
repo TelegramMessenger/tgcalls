@@ -29,14 +29,6 @@
 #include "rtc_base/time_utils.h"
 #include "sdk/objc/components/video_codec/nalu_rewriter.h"
 
-@interface MarkedDecodedH264RTCCVPixelBuffer : RTCCVPixelBuffer
-
-@end
-
-@implementation MarkedDecodedH264RTCCVPixelBuffer
-
-@end
-
 // Struct that we pass to the decoder per frame to decode. We receive it again
 // in the decoder callback.
 struct RTCFrameDecodeParams {
@@ -45,8 +37,8 @@ struct RTCFrameDecodeParams {
   int64_t timestamp;
 };
 
-@interface TGRTCVideoDecoderH264 ()
-- (void)setError:(OSStatus)error;
+@interface RTC_OBJC_TYPE (TGRTCVideoDecoderH264)
+() - (void)setError : (OSStatus)error;
 @end
 
 // This is the callback function that VideoToolbox calls when decode is
@@ -61,25 +53,27 @@ static void decompressionOutputCallback(void *decoderRef,
   std::unique_ptr<RTCFrameDecodeParams> decodeParams(
       reinterpret_cast<RTCFrameDecodeParams *>(params));
   if (status != noErr) {
-    TGRTCVideoDecoderH264 *decoder = (__bridge TGRTCVideoDecoderH264 *)decoderRef;
+    RTC_OBJC_TYPE(TGRTCVideoDecoderH264) *decoder =
+        (__bridge RTC_OBJC_TYPE(TGRTCVideoDecoderH264) *)decoderRef;
     [decoder setError:status];
     RTC_LOG(LS_ERROR) << "Failed to decode frame. Status: " << status;
     return;
   }
   // TODO(tkchin): Handle CVO properly.
   @autoreleasepool {
-      RTCCVPixelBuffer *frameBuffer = [[MarkedDecodedH264RTCCVPixelBuffer alloc] initWithPixelBuffer:imageBuffer];
-      RTCVideoFrame *decodedFrame =
-          [[RTCVideoFrame alloc] initWithBuffer:frameBuffer
-                                       rotation:RTCVideoRotation_0
-                                    timeStampNs:CMTimeGetSeconds(timestamp) * rtc::kNumNanosecsPerSec];
-      decodedFrame.timeStamp = (int32_t)decodeParams->timestamp;
-      decodeParams->callback(decodedFrame);
+  RTC_OBJC_TYPE(RTCCVPixelBuffer) *frameBuffer =
+      [[RTC_OBJC_TYPE(RTCCVPixelBuffer) alloc] initWithPixelBuffer:imageBuffer];
+  RTC_OBJC_TYPE(RTCVideoFrame) *decodedFrame = [[RTC_OBJC_TYPE(RTCVideoFrame) alloc]
+      initWithBuffer:frameBuffer
+            rotation:RTCVideoRotation_0
+         timeStampNs:CMTimeGetSeconds(timestamp) * rtc::kNumNanosecsPerSec];
+  decodedFrame.timeStamp = decodeParams->timestamp;
+  decodeParams->callback(decodedFrame);
   }
 }
 
 // Decoder.
-@implementation TGRTCVideoDecoderH264 {
+@implementation RTC_OBJC_TYPE (TGRTCVideoDecoderH264) {
   CMVideoFormatDescriptionRef _videoFormat;
   CMMemoryPoolRef _memoryPool;
   VTDecompressionSessionRef _decompressionSession;
@@ -106,9 +100,9 @@ static void decompressionOutputCallback(void *decoderRef,
   return WEBRTC_VIDEO_CODEC_OK;
 }
 
-- (NSInteger)decode:(RTCEncodedImage *)inputImage
+- (NSInteger)decode:(RTC_OBJC_TYPE(RTCEncodedImage) *)inputImage
         missingFrames:(BOOL)missingFrames
-    codecSpecificInfo:(nullable id<RTCCodecSpecificInfo>)info
+    codecSpecificInfo:(nullable id<RTC_OBJC_TYPE(RTCCodecSpecificInfo)>)info
          renderTimeMs:(int64_t)renderTimeMs {
   RTC_DCHECK(inputImage.buffer);
 
@@ -150,7 +144,7 @@ static void decompressionOutputCallback(void *decoderRef,
     return WEBRTC_VIDEO_CODEC_ERROR;
   }
   RTC_DCHECK(sampleBuffer);
-  VTDecodeFrameFlags decodeFlags = kVTDecodeFrame_EnableAsynchronousDecompression | kVTDecodeFrame_1xRealTimePlayback;
+  VTDecodeFrameFlags decodeFlags = kVTDecodeFrame_EnableAsynchronousDecompression;
   std::unique_ptr<RTCFrameDecodeParams> frameDecodeParams;
   frameDecodeParams.reset(new RTCFrameDecodeParams(_callback, inputImage.timeStamp));
   OSStatus status = VTDecompressionSessionDecodeFrame(
@@ -210,20 +204,31 @@ static void decompressionOutputCallback(void *decoderRef,
   // CVPixelBuffers directly to the renderer.
   // TODO(tkchin): Maybe only set OpenGL/IOSurface keys if we know that that
   // we can pass CVPixelBuffers as native handles in decoder output.
+#if TARGET_OS_SIMULATOR
+  static size_t const attributesSize = 2;
+#else
   static size_t const attributesSize = 3;
+#endif
+
   CFTypeRef keys[attributesSize] = {
 #if defined(WEBRTC_IOS)
-    kCVPixelBufferMetalCompatibilityKey,
+      kCVPixelBufferMetalCompatibilityKey,
 #elif defined(WEBRTC_MAC)
-    kCVPixelBufferOpenGLCompatibilityKey,
+      kCVPixelBufferOpenGLCompatibilityKey,
 #endif
-    kCVPixelBufferIOSurfacePropertiesKey,
-    kCVPixelBufferPixelFormatTypeKey
-  };
+#if !(TARGET_OS_SIMULATOR)
+      kCVPixelBufferIOSurfacePropertiesKey,
+#endif
+      kCVPixelBufferPixelFormatTypeKey};
   CFDictionaryRef ioSurfaceValue = CreateCFTypeDictionary(nullptr, nullptr, 0);
   int64_t nv12type = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
   CFNumberRef pixelFormat = CFNumberCreate(nullptr, kCFNumberLongType, &nv12type);
+#if TARGET_OS_SIMULATOR
+  CFTypeRef values[attributesSize] = {kCFBooleanTrue, pixelFormat};
+#else
   CFTypeRef values[attributesSize] = {kCFBooleanTrue, ioSurfaceValue, pixelFormat};
+#endif
+
   CFDictionaryRef attributes = CreateCFTypeDictionary(keys, values, attributesSize);
   if (ioSurfaceValue) {
     CFRelease(ioSurfaceValue);

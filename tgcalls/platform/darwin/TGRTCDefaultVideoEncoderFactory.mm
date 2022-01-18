@@ -126,7 +126,7 @@
 #ifdef WEBRTC_IOS
   if (@available(iOS 11, *)) {
     if ([info.name isEqualToString:kRTCVideoCodecH265Name]) {
-      return [[TGRTCVideoEncoderH265 alloc] initWithCodecInfo:info];
+      return [[RTCVideoEncoderH265 alloc] initWithCodecInfo:info];
     }
   }
 #else // WEBRTC_IOS
