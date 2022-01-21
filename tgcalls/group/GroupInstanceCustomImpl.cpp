@@ -1349,6 +1349,24 @@ private:
     std::shared_ptr<AudioDeviceDataObserverShared> _shared;
 };
 
+class CustomNetEqFactory: public webrtc::NetEqFactory {
+public:
+    virtual ~CustomNetEqFactory() = default;
+    
+    std::unique_ptr<webrtc::NetEq> CreateNetEq(
+        const webrtc::NetEq::Config& config,
+        const rtc::scoped_refptr<webrtc::AudioDecoderFactory>& decoder_factory, webrtc::Clock* clock
+    ) const override {
+        webrtc::NetEq::Config updatedConfig = config;
+        updatedConfig.sample_rate_hz = 48000;
+        return webrtc::DefaultNetEqFactory().CreateNetEq(updatedConfig, decoder_factory, clock);
+    }
+};
+
+std::unique_ptr<webrtc::NetEqFactory> createNetEqFactory() {
+    return std::make_unique<CustomNetEqFactory>();
+}
+
 } // namespace
 
 class GroupInstanceCustomInternal : public sigslot::has_slots<>, public std::enable_shared_from_this<GroupInstanceCustomInternal> {
@@ -1374,6 +1392,7 @@ public:
     _videoCodecPreferences(std::move(descriptor.videoCodecPreferences)),
     _eventLog(std::make_unique<webrtc::RtcEventLogNull>()),
     _taskQueueFactory(webrtc::CreateDefaultTaskQueueFactory()),
+    _netEqFactory(createNetEqFactory()),
     _createAudioDeviceModule(descriptor.createAudioDeviceModule),
     _initialInputDeviceId(std::move(descriptor.initialInputDeviceId)),
     _initialOutputDeviceId(std::move(descriptor.initialOutputDeviceId)),
@@ -1543,6 +1562,7 @@ public:
 
         _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this]() {
             webrtc::Call::Config callConfig(_eventLog.get(), _threads->getNetworkThread());
+            callConfig.neteq_factory = _netEqFactory.get();
             callConfig.task_queue_factory = _taskQueueFactory.get();
             callConfig.trials = &_fieldTrials;
             callConfig.audio_state = _channelManager->media_engine()->voice().GetAudioState();
@@ -2136,7 +2156,7 @@ public:
                 break;
             }
         }
-        if (enableH264) {
+        if (enableH264 && _videoContentType != VideoContentType::Screencast) {
             defaultCodecPriorities.insert(defaultCodecPriorities.begin(), cricket::kH264CodecName);
         }
 
@@ -3311,6 +3331,7 @@ private:
 
     std::unique_ptr<webrtc::RtcEventLogNull> _eventLog;
     std::unique_ptr<webrtc::TaskQueueFactory> _taskQueueFactory;
+    std::unique_ptr<webrtc::NetEqFactory> _netEqFactory;
     std::unique_ptr<cricket::MediaEngineInterface> _mediaEngine;
     std::unique_ptr<webrtc::Call> _call;
     webrtc::FieldTrialBasedConfig _fieldTrials;
