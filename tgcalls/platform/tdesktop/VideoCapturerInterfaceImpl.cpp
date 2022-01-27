@@ -3,7 +3,7 @@
 #include "tgcalls/platform/tdesktop/VideoCapturerTrackSource.h"
 #include "tgcalls/platform/tdesktop/VideoCameraCapturer.h"
 
-#ifndef TGCALLS_UWP_DESKTOP_CAPTURE
+#ifndef TGCALLS_UWP_DESKTOP
 #include "tgcalls/desktop_capturer/DesktopCaptureSourceHelper.h"
 #endif // TGCALLS_DISABLE_DESKTOP_CAPTURE
 
@@ -33,7 +33,7 @@ VideoCapturerInterfaceImpl::VideoCapturerInterfaceImpl(
 : _source(source)
 , _sink(GetSink(source))
 , _stateUpdated(stateUpdated) {
-#ifdef TGCALLS_UWP_DESKTOP_CAPTURE
+#ifdef TGCALLS_UWP_DESKTOP
 	if (deviceId == "GraphicsCaptureItem")
 	{
 		auto uwpContext = std::static_pointer_cast<UwpContext>(platformContext);
@@ -57,7 +57,7 @@ VideoCapturerInterfaceImpl::VideoCapturerInterfaceImpl(
 		_desktopCapturer->start();
 		outResolution = { 1280, 960 };
 	} else if (!ShouldBeDesktopCapture(deviceId))
-#endif // TGCALLS_UWP_DESKTOP_CAPTURE
+#endif // TGCALLS_UWP_DESKTOP
 	{
 		_cameraCapturer = std::make_unique<VideoCameraCapturer>(_sink);
 		_cameraCapturer->setDeviceId(deviceId);
@@ -70,7 +70,7 @@ VideoCapturerInterfaceImpl::~VideoCapturerInterfaceImpl() {
 }
 
 void VideoCapturerInterfaceImpl::setState(VideoState state) {
-#ifdef TGCALLS_UWP_DESKTOP_CAPTURE
+#ifdef TGCALLS_UWP_DESKTOP
 	if (_screenCapturer) {
 		_screenCapturer->setState(state);
 	} else
@@ -82,7 +82,7 @@ void VideoCapturerInterfaceImpl::setState(VideoState state) {
 			_desktopCapturer->stop();
 		}
 	} else
-#endif // TGCALLS_UWP_DESKTOP_CAPTURE
+#endif // TGCALLS_UWP_DESKTOP
 	if (_cameraCapturer) {
 		_cameraCapturer->setState(state);
 	}
@@ -112,34 +112,34 @@ void VideoCapturerInterfaceImpl::setUncroppedOutput(
 }
 
 void VideoCapturerInterfaceImpl::setOnFatalError(std::function<void()> error) {
-#ifdef TGCALLS_UWP_DESKTOP_CAPTURE
+#ifdef TGCALLS_UWP_DESKTOP
 	if (_screenCapturer) {
 		_screenCapturer->setOnFatalError(std::move(error));
 	} else if (!_screenCapturer && !_cameraCapturer && error) {
 		error();
 	}
-#else // TGCALLS_UWP_DESKTOP_CAPTURE
+#else // TGCALLS_UWP_DESKTOP
 	if (_desktopCapturer) {
 		_desktopCapturer->setOnFatalError(std::move(error));
 	} else if (!_desktopCapturer && !_cameraCapturer && error) {
 		error();
 	}
-#endif // TGCALLS_UWP_DESKTOP_CAPTURE
+#endif // TGCALLS_UWP_DESKTOP
 	if (_cameraCapturer) {
 		_cameraCapturer->setOnFatalError(std::move(error));
 	}
 }
 
 void VideoCapturerInterfaceImpl::setOnPause(std::function<void(bool)> pause) {
-#ifdef TGCALLS_UWP_DESKTOP_CAPTURE
+#ifdef TGCALLS_UWP_DESKTOP
 	if (_screenCapturer) {
 		_screenCapturer->setOnPause(std::move(pause));
 	}
-#else // TGCALLS_UWP_DESKTOP_CAPTURE
+#else // TGCALLS_UWP_DESKTOP
 	if (_desktopCapturer) {
 		_desktopCapturer->setOnPause(std::move(pause));
 	}
-#endif // TGCALLS_UWP_DESKTOP_CAPTURE
+#endif // TGCALLS_UWP_DESKTOP
 }
 
 } // namespace tgcalls
