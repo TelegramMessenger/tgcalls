@@ -38,6 +38,23 @@ class CustomObjCVideoEncoderFactory : public VideoEncoderFactory {
  private:
   id<RTC_OBJC_TYPE(RTCVideoEncoderFactory)> encoder_factory_;
 };
+    
+    
+class SimulcastVideoEncoderFactory : public VideoEncoderFactory {
+public:
+    explicit SimulcastVideoEncoderFactory(std::unique_ptr<CustomObjCVideoEncoderFactory> softwareFactory, std::unique_ptr<CustomObjCVideoEncoderFactory> hardwareFactory);
+    ~SimulcastVideoEncoderFactory() override;
+    
+    std::vector<SdpVideoFormat> GetSupportedFormats() const override;
+    std::vector<SdpVideoFormat> GetImplementations() const override;
+    std::unique_ptr<VideoEncoder> CreateVideoEncoder(
+                                                     const SdpVideoFormat& format) override;
+    std::unique_ptr<EncoderSelectorInterface> GetEncoderSelector() const override;
+    
+private:
+    std::unique_ptr<CustomObjCVideoEncoderFactory> _softwareFactory;
+    std::unique_ptr<CustomObjCVideoEncoderFactory> _hardwareFactory;
+};
 
 }  // namespace webrtc
 

@@ -9,6 +9,8 @@
  *
  */
 
+#ifndef WEBRTC_DISABLE_H265
+
 #import "TGRTCVideoDecoderH265.h"
 
 #import <VideoToolbox/VideoToolbox.h>
@@ -354,3 +356,5 @@ static void tg_h265DecompressionOutputCallback(void* decoder,
 }
 
 @end
+
+#endif

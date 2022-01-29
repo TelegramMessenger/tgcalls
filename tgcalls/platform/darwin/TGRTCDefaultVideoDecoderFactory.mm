@@ -18,7 +18,7 @@
 #if defined(RTC_ENABLE_VP9)
 #import "api/video_codec/RTCVideoDecoderVP9.h"
 #endif
-#if !defined(DISABLE_H265)
+#if !defined(WEBRTC_DISABLE_H265)
 #import "RTCH265ProfileLevelId.h"
 #import "TGRTCVideoDecoderH265.h"
 #endif
@@ -53,7 +53,7 @@
     RTCVideoCodecInfo *vp9Info = [[RTCVideoCodecInfo alloc] initWithName:kRTCVideoCodecVp9Name];
 #endif
     
-#if !defined(DISABLE_H265)
+#if !defined(WEBRTC_DISABLE_H265)
     RTCVideoCodecInfo *h265Info = [[RTCVideoCodecInfo alloc] initWithName:kRTCVideoCodecH265Name];
 #endif
     
@@ -66,7 +66,7 @@
 #endif
     ]];
     
-#if !defined(DISABLE_H265)
+#if !defined(WEBRTC_DISABLE_H265)
 #ifdef WEBRTC_IOS
     if (@available(iOS 11.0, *)) {
         [result addObject:h265Info];
@@ -94,7 +94,7 @@
   }
 #endif
 
-#if !defined(DISABLE_H265)
+#if !defined(WEBRTC_DISABLE_H265)
 #ifdef WEBRTC_IOS
   if (@available(iOS 11.0, *)) {
     if ([info.name isEqualToString:kRTCVideoCodecH265Name]) {

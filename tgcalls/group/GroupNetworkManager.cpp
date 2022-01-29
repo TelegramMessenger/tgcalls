@@ -323,7 +323,7 @@ _audioActivityUpdated(audioActivityUpdated) {
 
     _networkMonitorFactory = PlatformInterface::SharedInstance()->createNetworkMonitorFactory();
 
-    _socketFactory.reset(new rtc::BasicPacketSocketFactory(_threads->getNetworkThread()));
+    _socketFactory.reset(new rtc::BasicPacketSocketFactory(_threads->getNetworkThread()->socketserver()));
     _networkManager = std::make_unique<rtc::BasicNetworkManager>(_networkMonitorFactory.get());
     _asyncResolverFactory = std::make_unique<webrtc::BasicAsyncResolverFactory>();
 

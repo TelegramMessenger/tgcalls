@@ -7,14 +7,26 @@
 #include "api/video_codecs/builtin_video_decoder_factory.h"
 #include "pc/video_track_source_proxy.h"
 
+#if TGCALLS_UWP_DESKTOP
+#include "modules/video_coding/codecs/h264/win/h264_mf_factory.h"
+#endif
+
 namespace tgcalls {
 
 std::unique_ptr<webrtc::VideoEncoderFactory> DesktopInterface::makeVideoEncoderFactory(bool preferHardwareEncoding) {
+#if TGCALLS_UWP_DESKTOP
+	return std::make_unique<webrtc::H264MFEncoderFactory>();
+#else
 	return webrtc::CreateBuiltinVideoEncoderFactory();
+#endif
 }
 
 std::unique_ptr<webrtc::VideoDecoderFactory> DesktopInterface::makeVideoDecoderFactory() {
+#if TGCALLS_UWP_DESKTOP
+	return std::make_unique<webrtc::H264MFDecoderFactory>();
+#else
 	return webrtc::CreateBuiltinVideoDecoderFactory();
+#endif
 }
 
 rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> DesktopInterface::makeVideoSource(rtc::Thread *signalingThread, rtc::Thread *workerThread) {

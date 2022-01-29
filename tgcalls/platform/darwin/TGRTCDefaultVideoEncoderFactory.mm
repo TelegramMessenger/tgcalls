@@ -18,14 +18,13 @@
 #if defined(RTC_ENABLE_VP9)
 #import "api/video_codec/RTCVideoEncoderVP9.h"
 #endif
-#if !defined(DISABLE_H265)
+#ifndef WEBRTC_DISABLE_H265
 #import "RTCH265ProfileLevelId.h"
 #import "TGRTCVideoEncoderH265.h"
 #endif
 
 #import "sdk/objc/api/video_codec/RTCWrappedNativeVideoEncoder.h"
-
-#include "modules/video_coding/codecs/h264/include/h264.h"
+#import "modules/video_coding/codecs/h264/include/h264.h"
 
 @interface TGRTCDefaultVideoEncoderFactory () {
     bool _preferHardwareH264;
@@ -70,7 +69,7 @@
   RTCVideoCodecInfo *vp9Info = [[RTCVideoCodecInfo alloc] initWithName:kRTCVideoCodecVp9Name];
 #endif
 
-#if !defined(DISABLE_H265)
+#if !defined(WEBRTC_DISABLE_H265)
   RTCVideoCodecInfo *h265Info = [[RTCVideoCodecInfo alloc] initWithName:kRTCVideoCodecH265Name];
 #endif
 
@@ -83,7 +82,7 @@
 #endif
   ]];
     
-#if !defined(DISABLE_H265)
+#if !defined(WEBRTC_DISABLE_H265)
 #ifdef WEBRTC_IOS
   if (@available(iOS 11.0, *)) {
     if ([[AVAssetExportSession allExportPresets] containsObject:AVAssetExportPresetHEVCHighestQuality]) {
@@ -123,7 +122,7 @@
   }
 #endif
 
-#if !defined(DISABLE_H265)
+#if !defined(WEBRTC_DISABLE_H265)
 #ifdef WEBRTC_IOS
   if (@available(iOS 11, *)) {
     if ([info.name isEqualToString:kRTCVideoCodecH265Name]) {
