@@ -221,7 +221,7 @@ std::vector<SdpVideoFormat> SimulcastVideoEncoderFactory::GetImplementations() c
 }
 
 std::unique_ptr<VideoEncoder> SimulcastVideoEncoderFactory::CreateVideoEncoder(const SdpVideoFormat& format) {
-    return std::make_unique<webrtc::CustomSimulcastEncoderAdapter>(_softwareFactory.get(), _hardwareFactory.get(), format);
+    return std::make_unique<webrtc::CustomSimulcastEncoderAdapter>(_hardwareFactory.get(), _hardwareFactory.get(), format);
 }
 
 std::unique_ptr<VideoEncoderFactory::EncoderSelectorInterface> SimulcastVideoEncoderFactory::GetEncoderSelector() const {
