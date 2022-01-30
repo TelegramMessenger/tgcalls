@@ -1367,6 +1367,30 @@ std::unique_ptr<webrtc::NetEqFactory> createNetEqFactory() {
     return std::make_unique<CustomNetEqFactory>();
 }
 
+class CustomEchoDetector : public webrtc::EchoDetector {
+public:
+    // (Re-)Initializes the submodule.
+    virtual void Initialize(int capture_sample_rate_hz,
+                            int num_capture_channels,
+                            int render_sample_rate_hz,
+                            int num_render_channels) override {
+    }
+    
+    // Analysis (not changing) of the render signal.
+    virtual void AnalyzeRenderAudio(rtc::ArrayView<const float> render_audio) override {
+    }
+    
+    // Analysis (not changing) of the capture signal.
+    virtual void AnalyzeCaptureAudio(
+                                     rtc::ArrayView<const float> capture_audio) override {
+    }
+    
+    // Collect current metrics from the echo detector.
+    virtual Metrics GetMetrics() const override {
+        return webrtc::EchoDetector::Metrics();
+    }
+};
+
 } // namespace
 
 class GroupInstanceCustomInternal : public sigslot::has_slots<>, public std::enable_shared_from_this<GroupInstanceCustomInternal> {
@@ -1532,6 +1556,8 @@ public:
             if (_audioLevelsUpdated && audioProcessor) {
                 webrtc::AudioProcessingBuilder builder;
                 builder.SetCapturePostProcessing(std::move(audioProcessor));
+                
+                builder.SetEchoDetector(rtc::make_ref_counted<CustomEchoDetector>());
 
                 mediaDeps.audio_processing = builder.Create();
             }
