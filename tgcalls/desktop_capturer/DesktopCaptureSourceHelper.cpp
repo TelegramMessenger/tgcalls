@@ -139,6 +139,7 @@ void SourceFrameCallbackImpl::OnCaptureResult(
 	    std::unique_ptr<webrtc::DesktopFrame> frame) {
 
     const auto failed = (result != webrtc::DesktopCapturer::Result::SUCCESS)
+        || !frame
         || frame->size().equals({ 1, 1 });
     if (failed) {
         if (result == webrtc::DesktopCapturer::Result::ERROR_PERMANENT) {
