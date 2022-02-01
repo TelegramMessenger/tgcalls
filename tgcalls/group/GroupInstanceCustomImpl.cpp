@@ -274,7 +274,7 @@ static std::vector<webrtc::SdpVideoFormat> filterSupportedVideoFormats(std::vect
                 return lhsLevelAssymetryAllowedPriority < rhsLevelAssymetryAllowedPriority;
             }
 
-            return true;
+            return false;
         });
 
         filteredFormats.push_back(h264Formats[0]);
