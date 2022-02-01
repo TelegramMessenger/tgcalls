@@ -728,6 +728,8 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
 
 - (void)setEncoderBitrateBps:(uint32_t)bitrateBps frameRate:(uint32_t)frameRate {
   if (_compressionSession) {
+    RTC_LOG(LS_ERROR) << "TGRTCVideoEncoderH264: setting bitrate to " << bitrateBps / 1024 << " kbit/s";
+      
     SetVTSessionProperty(_compressionSession, kVTCompressionPropertyKey_AverageBitRate, bitrateBps);
 
     // With zero |_maxAllowedFrameRate|, we fall back to automatic frame rate detection.
