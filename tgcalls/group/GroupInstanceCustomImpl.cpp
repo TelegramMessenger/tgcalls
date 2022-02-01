@@ -2987,6 +2987,14 @@ public:
     void setIsNoiseSuppressionEnabled(bool isNoiseSuppressionEnabled) {
         _noiseSuppressionConfiguration->isEnabled = isNoiseSuppressionEnabled;
     }
+    
+    void addOutgoingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+        _videoCaptureSink->addSink(sink);
+        
+        if (_videoCapture) {
+            _videoCapture->setOutput(_videoCaptureSink);
+        }
+    }
 
     void addIncomingVideoOutput(std::string const &endpointId, std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
         if (_sharedVideoInformation && endpointId == _sharedVideoInformation->endpointId) {
@@ -3533,6 +3541,12 @@ void GroupInstanceCustomImpl::setAudioInputDevice(std::string id) {
 void GroupInstanceCustomImpl::addExternalAudioSamples(std::vector<uint8_t> &&samples) {
     _internal->perform(RTC_FROM_HERE, [samples = std::move(samples)](GroupInstanceCustomInternal *internal) mutable {
         internal->addExternalAudioSamples(std::move(samples));
+    });
+}
+
+void GroupInstanceCustomImpl::addOutgoingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+    _internal->perform(RTC_FROM_HERE, [sink](GroupInstanceCustomInternal *internal) mutable {
+        internal->addOutgoingVideoOutput(sink);
     });
 }
 

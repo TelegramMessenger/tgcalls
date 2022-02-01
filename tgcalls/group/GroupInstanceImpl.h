@@ -192,6 +192,7 @@ public:
     virtual void setAudioInputDevice(std::string id) = 0;
     virtual void addExternalAudioSamples(std::vector<uint8_t> &&samples) = 0;
 
+    virtual void addOutgoingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) = 0;
     virtual void addIncomingVideoOutput(std::string const &endpointId, std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) = 0;
 
     virtual void setVolume(uint32_t ssrc, double volume) = 0;
