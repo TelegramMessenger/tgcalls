@@ -896,7 +896,7 @@ VideoEncoder::EncoderInfo CustomSimulcastEncoderAdapter::GetEncoderInfo() const 
           encoder_impl_info.has_trusted_rate_controller;
       encoder_info.is_hardware_accelerated =
           encoder_impl_info.is_hardware_accelerated;
-      encoder_info.has_internal_source = encoder_impl_info.has_internal_source;
+//      encoder_info.has_internal_source = encoder_impl_info.has_internal_source;
       encoder_info.is_qp_trusted = encoder_impl_info.is_qp_trusted;
     } else {
       encoder_info.implementation_name += ", ";
@@ -918,7 +918,7 @@ VideoEncoder::EncoderInfo CustomSimulcastEncoderAdapter::GetEncoderInfo() const 
           encoder_impl_info.is_hardware_accelerated;
 
       // Has internal source only if all encoders have it.
-      encoder_info.has_internal_source &= encoder_impl_info.has_internal_source;
+//      encoder_info.has_internal_source &= encoder_impl_info.has_internal_source;
 
       // Treat QP from frame/slice/tile header as average QP only if all
       // encoders report it as average QP.

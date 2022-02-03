@@ -77,7 +77,7 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
             [self custom_cropAndScaleARGBTo:outputPixelBuffer];
             break;
         }
-        default: { RTC_NOTREACHED() << "Unsupported pixel format."; }
+        default: { break; }
     }
 
     return YES;
