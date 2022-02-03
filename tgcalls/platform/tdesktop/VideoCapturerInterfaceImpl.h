@@ -3,10 +3,10 @@
 
 #include "VideoCapturerInterface.h"
 
-#ifdef TGCALLS_UWP_DESKTOP_CAPTURE
+#ifdef TGCALLS_UWP_DESKTOP
 #include "platform/uwp/UwpContext.h"
 #include "platform/uwp/UwpScreenCapturer.h"
-#endif // TGCALLS_UWP_DESKTOP_CAPTURE
+#endif // TGCALLS_UWP_DESKTOP
 
 #include "api/media_stream_interface.h"
 
@@ -38,11 +38,11 @@ public:
 private:
 	rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _source;
 	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _sink;
-#ifdef TGCALLS_UWP_DESKTOP_CAPTURE
+#ifdef TGCALLS_UWP_DESKTOP
 	std::unique_ptr<UwpScreenCapturer> _screenCapturer;
-#else // TGCALLS_UWP_DESKTOP_CAPTURE
+#else // TGCALLS_UWP_DESKTOP
 	std::unique_ptr<DesktopCaptureSourceHelper> _desktopCapturer;
-#endif // TGCALLS_UWP_DESKTOP_CAPTURE
+#endif // TGCALLS_UWP_DESKTOP
 	std::unique_ptr<VideoCameraCapturer> _cameraCapturer;
 	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _uncroppedSink;
 	std::function<void(VideoState)> _stateUpdated;
