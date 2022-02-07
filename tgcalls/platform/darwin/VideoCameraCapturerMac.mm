@@ -661,10 +661,10 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
     if (mediaSubType != _outputPixelFormat) {
         _outputPixelFormat = mediaSubType;
         _videoDataOutput.videoSettings =
-        @{ (NSString *)kCVPixelBufferPixelFormatTypeKey : @(mediaSubType), (NSString *)kCVPixelBufferWidthKey: @(dimensions.width), (NSString *)kCVPixelBufferHeightKey: @(dimensions.height) };
+        @{ (NSString *)kCVPixelBufferPixelFormatTypeKey : @(mediaSubType) };
     } else {
-        _videoDataOutput.videoSettings =
-        @{ (NSString *)kCVPixelBufferWidthKey: @(dimensions.width), (NSString *)kCVPixelBufferHeightKey: @(dimensions.height) };
+//        _videoDataOutput.videoSettings =
+//        @{ (NSString *)kCVPixelBufferWidthKey: @(dimensions.width), (NSString *)kCVPixelBufferHeightKey: @(dimensions.height) };
     }
     AVCaptureConnection *connection = [_videoDataOutput connectionWithMediaType:AVMediaTypeVideo];
 
