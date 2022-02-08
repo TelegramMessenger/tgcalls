@@ -9,6 +9,7 @@
 #include "modules/audio_device/include/audio_device.h"
 #include "rtc_base/ref_counted_object.h"
 #include <string>
+#include <map>
 
 namespace tgcalls {
 
@@ -314,6 +315,8 @@ public:
         return new rtc::RefCountedObject<DefaultWrappedAudioDeviceModule>(module);
     }
 
+public:
+    bool preferX264 = false;
 };
 
 std::unique_ptr<PlatformInterface> CreatePlatformInterface();
