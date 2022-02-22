@@ -394,10 +394,10 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
           self->_willBeRunning = false;
           return;
       }
-      [self reconfigureCaptureSessionInput];
       [self updateDeviceCaptureFormat:format fps:fps];
       [self updateVideoDataOutputPixelFormat:format];
       [self->_currentDevice unlockForConfiguration];
+      [self reconfigureCaptureSessionInput];
       if (completionHandler) {
           completionHandler(nil);
       }
@@ -656,18 +656,18 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
     if (![[RTCCVPixelBuffer supportedPixelFormats] containsObject:@(mediaSubType)]) {
         mediaSubType = _preferredOutputPixelFormat;
     }
+    CMVideoDimensions dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription);
 
     if (mediaSubType != _outputPixelFormat) {
         _outputPixelFormat = mediaSubType;
         _videoDataOutput.videoSettings =
-        @{ (NSString *)kCVPixelBufferPixelFormatTypeKey : @(mediaSubType) };
+        @{ (NSString *)kCVPixelBufferPixelFormatTypeKey : @(mediaSubType), (NSString *)kCVPixelBufferWidthKey: @(dimensions.width), (NSString *)kCVPixelBufferHeightKey: @(dimensions.height) };
+    } else {
+        _videoDataOutput.videoSettings =
+        @{ (NSString *)kCVPixelBufferWidthKey: @(dimensions.width), (NSString *)kCVPixelBufferHeightKey: @(dimensions.height) };
     }
     AVCaptureConnection *connection = [_videoDataOutput connectionWithMediaType:AVMediaTypeVideo];
 
-
-    if ([connection isVideoMirroringSupported]) {
-        [connection setVideoMirrored:YES];
-    }
 }
 
 #pragma mark - Private, called inside capture queue
