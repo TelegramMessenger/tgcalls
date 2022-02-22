@@ -14,66 +14,11 @@ extern "C" {
 #include <set>
 #include <map>
 
+#include "AVIOContextImpl.h"
+
 namespace tgcalls {
 
 namespace {
-
-class AVIOContextImpl {
-public:
-    AVIOContextImpl(std::vector<uint8_t> &&fileData) :
-    _fileData(std::move(fileData)) {
-        _buffer.resize(4 * 1024);
-        _context = avio_alloc_context(_buffer.data(), (int)_buffer.size(), 0, this, &AVIOContextImpl::read, NULL, &AVIOContextImpl::seek);
-    }
-
-    ~AVIOContextImpl() {
-        av_free(_context);
-    }
-
-    static int read(void *opaque, unsigned char *buffer, int bufferSize) {
-        AVIOContextImpl *instance = static_cast<AVIOContextImpl *>(opaque);
-
-        int bytesToRead = std::min(bufferSize, ((int)instance->_fileData.size()) - instance->_fileReadPosition);
-        if (bytesToRead < 0) {
-            bytesToRead = 0;
-        }
-
-        if (bytesToRead > 0) {
-            memcpy(buffer, instance->_fileData.data() + instance->_fileReadPosition, bytesToRead);
-            instance->_fileReadPosition += bytesToRead;
-
-            return bytesToRead;
-        } else {
-            return AVERROR_EOF;
-        }
-    }
-
-    static int64_t seek(void *opaque, int64_t offset, int whence) {
-        AVIOContextImpl *instance = static_cast<AVIOContextImpl *>(opaque);
-
-        if (whence == 0x10000) {
-            return (int64_t)instance->_fileData.size();
-        } else {
-            int64_t seekOffset = std::min(offset, (int64_t)instance->_fileData.size());
-            if (seekOffset < 0) {
-                seekOffset = 0;
-            }
-            instance->_fileReadPosition = (int)seekOffset;
-            return seekOffset;
-        }
-    }
-
-    AVIOContext *getContext() {
-        return _context;
-    }
-
-private:
-    std::vector<uint8_t> _fileData;
-    int _fileReadPosition = 0;
-
-    std::vector<uint8_t> _buffer;
-    AVIOContext *_context = nullptr;
-};
 
 class MediaDataPacket {
 public:
@@ -552,7 +497,7 @@ private:
 
 class VideoStreamingPartState {
 public:
-    VideoStreamingPartState(std::vector<uint8_t> &&data) {
+    VideoStreamingPartState(std::vector<uint8_t> &&data, VideoStreamingPart::ContentType contentType) {
         _videoStreamInfo = consumeVideoStreamInfo(data);
         if (!_videoStreamInfo) {
             return;
@@ -582,8 +527,24 @@ public:
                     break;
                 }
             }
-            auto part = std::make_unique<VideoStreamingPartInternal>(_videoStreamInfo->events[i].endpointId, rotation, std::move(dataSlice), _videoStreamInfo->container);
-            _parsedParts.push_back(std::move(part));
+            
+            switch (contentType) {
+                case VideoStreamingPart::ContentType::Audio: {
+                    auto part = std::make_unique<AudioStreamingPart>(std::move(dataSlice), _videoStreamInfo->container);
+                    _parsedAudioParts.push_back(std::move(part));
+                    
+                    break;
+                }
+                case VideoStreamingPart::ContentType::Video: {
+                    auto part = std::make_unique<VideoStreamingPartInternal>(_videoStreamInfo->events[i].endpointId, rotation, std::move(dataSlice), _videoStreamInfo->container);
+                    _parsedVideoParts.push_back(std::move(part));
+                    
+                    break;
+                }
+                default: {
+                    break;
+                }
+            }
         }
     }
 
@@ -593,13 +554,13 @@ public:
     absl::optional<VideoStreamingPartFrame> getFrameAtRelativeTimestamp(double timestamp) {
         while (true) {
             if (!_currentFrame) {
-                if (!_parsedParts.empty()) {
-                    auto result = _parsedParts[0]->getNextFrame();
+                if (!_parsedVideoParts.empty()) {
+                    auto result = _parsedVideoParts[0]->getNextFrame();
                     if (result) {
                         _currentFrame = result;
                         _relativeTimestamp += result->duration;
                     } else {
-                        _parsedParts.erase(_parsedParts.begin());
+                        _parsedVideoParts.erase(_parsedVideoParts.begin());
                         continue;
                     }
                 }
@@ -618,23 +579,49 @@ public:
     }
 
     absl::optional<std::string> getActiveEndpointId() const {
-        if (!_parsedParts.empty()) {
-            return _parsedParts[0]->endpointId();
+        if (!_parsedVideoParts.empty()) {
+            return _parsedVideoParts[0]->endpointId();
         } else {
             return absl::nullopt;
         }
     }
+    
+    int getAudioRemainingMilliseconds() {
+        while (!_parsedAudioParts.empty()) {
+            auto firstPartResult = _parsedAudioParts[0]->getRemainingMilliseconds();
+            if (firstPartResult <= 0) {
+                _parsedAudioParts.erase(_parsedAudioParts.begin());
+            } else {
+                return firstPartResult;
+            }
+        }
+        return 0;
+    }
+    
+    std::vector<AudioStreamingPart::StreamingPartChannel> getAudio10msPerChannel() {
+        while (!_parsedAudioParts.empty()) {
+            auto firstPartResult = _parsedAudioParts[0]->get10msPerChannel();
+            if (firstPartResult.empty()) {
+                _parsedAudioParts.erase(_parsedAudioParts.begin());
+            } else {
+                return firstPartResult;
+            }
+        }
+        return {};
+    }
 
 private:
     absl::optional<VideoStreamInfo> _videoStreamInfo;
-    std::vector<std::unique_ptr<VideoStreamingPartInternal>> _parsedParts;
+    std::vector<std::unique_ptr<VideoStreamingPartInternal>> _parsedVideoParts;
     absl::optional<VideoStreamingPartFrame> _currentFrame;
     double _relativeTimestamp = 0.0;
+    
+    std::vector<std::unique_ptr<AudioStreamingPart>> _parsedAudioParts;
 };
 
-VideoStreamingPart::VideoStreamingPart(std::vector<uint8_t> &&data) {
+VideoStreamingPart::VideoStreamingPart(std::vector<uint8_t> &&data, VideoStreamingPart::ContentType contentType) {
     if (!data.empty()) {
-        _state = new VideoStreamingPartState(std::move(data));
+        _state = new VideoStreamingPartState(std::move(data), contentType);
     }
 }
 
@@ -654,6 +641,17 @@ absl::optional<std::string> VideoStreamingPart::getActiveEndpointId() const {
     return _state
         ? _state->getActiveEndpointId()
         : absl::nullopt;
+}
+
+int VideoStreamingPart::getAudioRemainingMilliseconds() {
+    return _state
+        ? _state->getAudioRemainingMilliseconds()
+        : 0;
+}
+std::vector<AudioStreamingPart::StreamingPartChannel> VideoStreamingPart::getAudio10msPerChannel() {
+    return _state
+        ? _state->getAudio10msPerChannel()
+        : std::vector<AudioStreamingPart::StreamingPartChannel>();
 }
 
 }

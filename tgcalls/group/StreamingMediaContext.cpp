@@ -23,6 +23,9 @@ namespace {
 struct PendingAudioSegmentData {
 };
 
+struct PendingUnifiedSegmentData {
+};
+
 struct PendingVideoSegmentData {
     int32_t channelId = 0;
     VideoChannelDescription::Quality quality = VideoChannelDescription::Quality::Thumbnail;
@@ -42,7 +45,7 @@ struct PendingMediaSegmentPartResult {
 };
 
 struct PendingMediaSegmentPart {
-    absl::variant<PendingAudioSegmentData, PendingVideoSegmentData> typeData;
+    absl::variant<PendingAudioSegmentData, PendingVideoSegmentData, PendingUnifiedSegmentData> typeData;
 
     int64_t minRequestTimestamp = 0;
 
@@ -64,11 +67,20 @@ struct VideoSegment {
     std::shared_ptr<PendingMediaSegmentPart> pendingVideoQualityUpdatePart;
 };
 
+struct UnifiedSegment {
+    std::shared_ptr<VideoStreamingPart> videoPart;
+    double lastFramePts = -1.0;
+    int _displayedFrames = 0;
+    bool isPlaying = false;
+};
+
 struct MediaSegment {
     int64_t timestamp = 0;
     int64_t duration = 0;
     std::shared_ptr<AudioStreamingPart> audio;
+    std::shared_ptr<VideoStreamingPart> unifiedAudio;
     std::vector<std::shared_ptr<VideoSegment>> video;
+    std::vector<std::shared_ptr<UnifiedSegment>> unified;
 };
 
 class SampleRingBuffer {
@@ -226,6 +238,7 @@ class StreamingMediaContextPrivate : public std::enable_shared_from_this<Streami
 public:
     StreamingMediaContextPrivate(StreamingMediaContext::StreamingMediaContextArguments &&arguments) :
     _threads(arguments.threads),
+    _isUnifiedBroadcast(arguments.isUnifiedBroadcast),
     _requestCurrentTime(arguments.requestCurrentTime),
     _requestAudioBroadcastPart(arguments.requestAudioBroadcastPart),
     _requestVideoBroadcastPart(arguments.requestVideoBroadcastPart),
@@ -306,6 +319,28 @@ public:
                     }
                 }
             }
+            
+            for (auto &videoSegment : segment->unified) {
+                videoSegment->isPlaying = true;
+
+                auto frame = videoSegment->videoPart->getFrameAtRelativeTimestamp(relativeTimestamp);
+                if (frame) {
+                    if (videoSegment->lastFramePts != frame->pts) {
+                        videoSegment->lastFramePts = frame->pts;
+                        videoSegment->_displayedFrames += 1;
+
+                        auto sinkList = _videoSinks.find("unified");
+                        if (sinkList != _videoSinks.end()) {
+                            for (const auto &weakSink : sinkList->second) {
+                                auto sink = weakSink.lock();
+                                if (sink) {
+                                    sink->OnFrame(frame->frame);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             if (segment->audio) {
                 const auto available = [&] {
@@ -317,6 +352,49 @@ public:
                 };
                 while (available()) {
                     auto audioChannels = segment->audio->get10msPerChannel();
+                    if (audioChannels.empty()) {
+                        break;
+                    }
+
+                    std::vector<webrtc::AudioFrame *> audioFrames;
+
+                    for (const auto &audioChannel : audioChannels) {
+                        webrtc::AudioFrame *frame = new webrtc::AudioFrame();
+                        frame->UpdateFrame(0, audioChannel.pcmData.data(), audioChannel.pcmData.size(), 48000, webrtc::AudioFrame::SpeechType::kNormalSpeech, webrtc::AudioFrame::VADActivity::kVadActive);
+
+                        auto volumeIt = _volumeBySsrc.find(audioChannel.ssrc);
+                        if (volumeIt != _volumeBySsrc.end()) {
+                            double outputGain = volumeIt->second;
+                            if (outputGain < 0.99f || outputGain > 1.01f) {
+                                webrtc::AudioFrameOperations::ScaleWithSat(outputGain, frame);
+                            }
+                        }
+
+                        audioFrames.push_back(frame);
+                        processAudioLevel(audioChannel.ssrc, audioChannel.pcmData);
+                    }
+
+                    webrtc::AudioFrame frameOut;
+                    _audioFrameCombiner.Combine(audioFrames, 1, 48000, audioFrames.size(), &frameOut);
+
+                    for (webrtc::AudioFrame *frame : audioFrames) {
+                        delete frame;
+                    }
+
+                    _audioDataMutex.Lock();
+                    _audioRingBuffer.write(frameOut.data(), frameOut.samples_per_channel());
+                    _audioDataMutex.Unlock();
+                }
+            } else if (segment->unifiedAudio) {
+                const auto available = [&] {
+                    _audioDataMutex.Lock();
+                    const auto result = (_audioRingBuffer.availableForWriting() >= 480);
+                    _audioDataMutex.Unlock();
+
+                    return result;
+                };
+                while (available()) {
+                    auto audioChannels = segment->unifiedAudio->getAudio10msPerChannel();
                     if (audioChannels.empty()) {
                         break;
                     }
@@ -449,7 +527,7 @@ public:
     void requestSegmentsIfNeeded() {
         while (true) {
             if (_nextSegmentTimestamp == 0) {
-                if (!_pendingRequestTimeTask) {
+                if (!_pendingRequestTimeTask && _pendingRequestTimeDelayTaskId == 0) {
                     const auto weak = std::weak_ptr<StreamingMediaContextPrivate>(shared_from_this());
                     _pendingRequestTimeTask = _requestCurrentTime([weak, threads = _threads](int64_t timestamp) {
                         threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, timestamp]() {
@@ -459,9 +537,29 @@ public:
                             }
 
                             strong->_pendingRequestTimeTask.reset();
-
-                            strong->_nextSegmentTimestamp = (timestamp / strong->_segmentDuration * strong->_segmentDuration) - strong->_segmentBufferDuration;
-                            strong->requestSegmentsIfNeeded();
+                            
+                            if (timestamp <= 0) {
+                                int taskId = strong->_nextPendingRequestTimeDelayTaskId;
+                                strong->_pendingRequestTimeDelayTaskId = taskId;
+                                strong->_nextPendingRequestTimeDelayTaskId++;
+                                
+                                strong->_threads->getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak, taskId]() {
+                                    auto strong = weak.lock();
+                                    if (!strong) {
+                                        return;
+                                    }
+                                    if (strong->_pendingRequestTimeDelayTaskId != taskId) {
+                                        return;
+                                    }
+                                    
+                                    strong->_pendingRequestTimeDelayTaskId = 0;
+                                    
+                                    strong->requestSegmentsIfNeeded();
+                                }, 1000);
+                            } else {
+                                strong->_nextSegmentTimestamp = (timestamp / strong->_segmentDuration * strong->_segmentDuration) - strong->_segmentBufferDuration;
+                                strong->requestSegmentsIfNeeded();
+                            }
                         });
                     });
                 }
@@ -484,7 +582,11 @@ public:
             }
 
             auto audio = std::make_shared<PendingMediaSegmentPart>();
-            audio->typeData = PendingAudioSegmentData();
+            if (_isUnifiedBroadcast) {
+                audio->typeData = PendingUnifiedSegmentData();
+            } else {
+                audio->typeData = PendingAudioSegmentData();
+            }
             audio->minRequestTimestamp = 0;
             pendingSegment->parts.push_back(audio);
 
@@ -569,7 +671,7 @@ public:
 
                 auto result = strongSegment->pendingVideoQualityUpdatePart->result;
                 if (result) {
-                    strongSegment->part = std::make_shared<VideoStreamingPart>(std::move(result->data));
+                    strongSegment->part = std::make_shared<VideoStreamingPart>(std::move(result->data), VideoStreamingPart::ContentType::Video);
                 }
 
                 strongSegment->pendingVideoQualityUpdatePart.reset();
@@ -686,6 +788,8 @@ public:
                         part->task = _requestAudioBroadcastPart(segmentTimestamp, _segmentDuration, handleResult);
                     } else if (const auto videoData = absl::get_if<PendingVideoSegmentData>(typeData)) {
                         part->task = _requestVideoBroadcastPart(segmentTimestamp, _segmentDuration, videoData->channelId, videoData->quality, handleResult);
+                    } else if (const auto unifiedData = absl::get_if<PendingUnifiedSegmentData>(typeData)) {
+                        part->task = _requestVideoBroadcastPart(segmentTimestamp, _segmentDuration, 1, VideoChannelDescription::Quality::Full, handleResult);
                     }
                 }
             }
@@ -697,7 +801,7 @@ public:
                 for (auto &part : pendingSegment->parts) {
                     const auto typeData = &part->typeData;
                     if (const auto audioData = absl::get_if<PendingAudioSegmentData>(typeData)) {
-                        segment->audio = std::make_shared<AudioStreamingPart>(std::move(part->result->data));
+                        segment->audio = std::make_shared<AudioStreamingPart>(std::move(part->result->data), "ogg");
                         _currentEndpointMapping = segment->audio->getEndpointMapping();
                     } else if (const auto videoData = absl::get_if<PendingVideoSegmentData>(typeData)) {
                         auto videoSegment = std::make_shared<VideoSegment>();
@@ -705,8 +809,17 @@ public:
                         if (part->result->data.empty()) {
                             RTC_LOG(LS_INFO) << "Video part " << segment->timestamp << " is empty";
                         }
-                        videoSegment->part = std::make_shared<VideoStreamingPart>(std::move(part->result->data));
+                        videoSegment->part = std::make_shared<VideoStreamingPart>(std::move(part->result->data), VideoStreamingPart::ContentType::Video);
                         segment->video.push_back(videoSegment);
+                    } else if (const auto videoData = absl::get_if<PendingUnifiedSegmentData>(typeData)) {
+                        auto unifiedSegment = std::make_shared<UnifiedSegment>();
+                        if (part->result->data.empty()) {
+                            RTC_LOG(LS_INFO) << "Unified part " << segment->timestamp << " is empty";
+                        }
+                        std::vector<uint8_t> dataCopy = part->result->data;
+                        unifiedSegment->videoPart = std::make_shared<VideoStreamingPart>(std::move(part->result->data), VideoStreamingPart::ContentType::Video);
+                        segment->unified.push_back(unifiedSegment);
+                        segment->unifiedAudio = std::make_shared<VideoStreamingPart>(std::move(dataCopy), VideoStreamingPart::ContentType::Audio);
                     }
                 }
                 _availableSegments.push_back(segment);
@@ -778,6 +891,8 @@ public:
             part->task = _requestAudioBroadcastPart(segmentTimestamp, _segmentDuration, handleResult);
         } else if (const auto videoData = absl::get_if<PendingVideoSegmentData>(typeData)) {
             part->task = _requestVideoBroadcastPart(segmentTimestamp, _segmentDuration, videoData->channelId, videoData->quality, handleResult);
+        } else if (const auto unifiedData = absl::get_if<PendingUnifiedSegmentData>(typeData)) {
+            part->task = _requestVideoBroadcastPart(segmentTimestamp, _segmentDuration, 1, VideoChannelDescription::Quality::Full, handleResult);
         }
     }
 
@@ -786,15 +901,10 @@ public:
     }
 
     void setActiveVideoChannels(std::vector<StreamingMediaContext::VideoChannel> const &videoChannels) {
-        _activeVideoChannels = videoChannels;
-
-/*#if DEBUG
-        for (auto &updatedVideoChannel : _activeVideoChannels) {
-            if (updatedVideoChannel.quality == VideoChannelDescription::Quality::Medium) {
-                updatedVideoChannel.quality = VideoChannelDescription::Quality::Thumbnail;
-            }
+        if (_isUnifiedBroadcast) {
+            return;
         }
-#endif*/
+        _activeVideoChannels = videoChannels;
 
         for (const auto &updatedVideoChannel : _activeVideoChannels) {
             for (const auto &segment : _availableSegments) {
@@ -819,6 +929,7 @@ public:
 
 private:
     std::shared_ptr<Threads> _threads;
+    bool _isUnifiedBroadcast = false;
     std::function<std::shared_ptr<BroadcastPartTask>(std::function<void(int64_t)>)> _requestCurrentTime;
     std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, std::function<void(BroadcastPart &&)>)> _requestAudioBroadcastPart;
     std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, int32_t, VideoChannelDescription::Quality, std::function<void(BroadcastPart &&)>)> _requestVideoBroadcastPart;
@@ -833,6 +944,8 @@ private:
     std::vector<std::shared_ptr<MediaSegment>> _availableSegments;
 
     std::shared_ptr<BroadcastPartTask> _pendingRequestTimeTask;
+    int _pendingRequestTimeDelayTaskId = 0;
+    int _nextPendingRequestTimeDelayTaskId = 0;
 
     std::vector<std::shared_ptr<PendingMediaSegment>> _pendingSegments;
 
