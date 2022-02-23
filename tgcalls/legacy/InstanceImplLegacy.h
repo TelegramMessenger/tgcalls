@@ -1,8 +1,6 @@
 #ifndef TGCALLS_INSTANCE_IMPL_LEGACY_H
 #define TGCALLS_INSTANCE_IMPL_LEGACY_H
 
-#ifdef !WEBRTC_MAC
-
 #include "Instance.h"
 
 #include "VoIPController.h"
@@ -57,7 +55,5 @@ private:
 void SetLegacyGlobalServerConfig(const std::string &serverConfig);
 
 } // namespace tgcalls
-
-#endif //WEBRTC_MAC
 
 #endif
