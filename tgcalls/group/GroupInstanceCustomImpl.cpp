@@ -1549,7 +1549,7 @@ public:
             mediaDeps.audio_encoder_factory = webrtc::CreateAudioEncoderFactory<webrtc::AudioEncoderOpus, webrtc::AudioEncoderL16>();
             mediaDeps.audio_decoder_factory = webrtc::CreateAudioDecoderFactory<webrtc::AudioDecoderOpus, webrtc::AudioDecoderL16>();
 
-            mediaDeps.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory();
+            mediaDeps.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory(false, _videoContentType == VideoContentType::Screencast);
             mediaDeps.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactory();
 
     #if USE_RNNOISE
@@ -2182,7 +2182,7 @@ public:
                 break;
             }
         }
-        if (enableH264 && _videoContentType != VideoContentType::Screencast) {
+        if (enableH264) {
             defaultCodecPriorities.insert(defaultCodecPriorities.begin(), cricket::kH264CodecName);
         }
 
