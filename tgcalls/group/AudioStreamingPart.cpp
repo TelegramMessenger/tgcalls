@@ -29,9 +29,10 @@ class AudioStreamingPartState {
     };
 
 public:
-    AudioStreamingPartState(std::vector<uint8_t> &&data, std::string const &container) :
+    AudioStreamingPartState(std::vector<uint8_t> &&data, std::string const &container, bool isSingleChannel) :
+    _isSingleChannel(isSingleChannel),
     _parsedPart(std::move(data), container) {
-        if (_parsedPart.getChannelUpdates().size() == 0 && container != "mp4") {
+        if (_parsedPart.getChannelUpdates().size() == 0 && !isSingleChannel) {
             _didReadToEnd = true;
             return;
         }
@@ -71,25 +72,37 @@ public:
             _didReadToEnd = true;
             return {};
         }
-
+        
         std::vector<AudioStreamingPart::StreamingPartChannel> resultChannels;
-        for (const auto ssrc : _allSsrcs) {
-            AudioStreamingPart::StreamingPartChannel emptyPart;
-            emptyPart.ssrc = ssrc;
-            resultChannels.push_back(emptyPart);
-        }
+        
+        if (_isSingleChannel) {
+            AudioStreamingPart::StreamingPartChannel singlePart;
+            singlePart.ssrc = 1;
+            
+            for (int j = 0; j < readResult.numSamples; j++) {
+                singlePart.pcmData.push_back(_pcm10ms[j * readResult.numChannels]);
+            }
+            
+            resultChannels.push_back(std::move(singlePart));
+        } else {
+            for (const auto ssrc : _allSsrcs) {
+                AudioStreamingPart::StreamingPartChannel emptyPart;
+                emptyPart.ssrc = ssrc;
+                resultChannels.push_back(emptyPart);
+            }
 
-        for (auto &channel : resultChannels) {
-            auto mappedChannelIndex = getCurrentMappedChannelIndex(channel.ssrc);
+            for (auto &channel : resultChannels) {
+                auto mappedChannelIndex = getCurrentMappedChannelIndex(channel.ssrc);
 
-            if (mappedChannelIndex) {
-                int sourceChannelIndex = mappedChannelIndex.value();
-                for (int j = 0; j < readResult.numSamples; j++) {
-                    channel.pcmData.push_back(_pcm10ms[sourceChannelIndex + j * readResult.numChannels]);
-                }
-            } else {
-                for (int j = 0; j < readResult.numSamples; j++) {
-                    channel.pcmData.push_back(0);
+                if (mappedChannelIndex) {
+                    int sourceChannelIndex = mappedChannelIndex.value();
+                    for (int j = 0; j < readResult.numSamples; j++) {
+                        channel.pcmData.push_back(_pcm10ms[sourceChannelIndex + j * readResult.numChannels]);
+                    }
+                } else {
+                    for (int j = 0; j < readResult.numSamples; j++) {
+                        channel.pcmData.push_back(0);
+                    }
                 }
             }
         }
@@ -126,6 +139,7 @@ private:
     }
 
 private:
+    bool _isSingleChannel = false;
     AudioStreamingPartInternal _parsedPart;
     std::set<uint32_t> _allSsrcs;
 
@@ -137,9 +151,9 @@ private:
     bool _didReadToEnd = false;
 };
 
-AudioStreamingPart::AudioStreamingPart(std::vector<uint8_t> &&data, std::string const &container) {
+AudioStreamingPart::AudioStreamingPart(std::vector<uint8_t> &&data, std::string const &container, bool isSingleChannel) {
     if (!data.empty()) {
-        _state = new AudioStreamingPartState(std::move(data), container);
+        _state = new AudioStreamingPartState(std::move(data), container, isSingleChannel);
     }
 }
 

@@ -142,6 +142,8 @@ _avIoContext(std::move(fileData)) {
         }
         audioCodecParameters = inCodecpar;
         audioStream = inStream;
+        
+        _streamId = i;
 
         _durationInMilliseconds = (int)((inStream->duration + inStream->first_dts) * 1000 / 48000);
 
@@ -290,11 +292,15 @@ void AudioStreamingPartInternal::fillPcmBuffer() {
     }
 
     int ret = 0;
-    do {
+    while (true) {
       ret = av_read_frame(_inputFormatContext, &_packet);
       if (ret < 0) {
         _didReadToEnd = true;
         return;
+      }
+        
+      if (_packet.stream_index != _streamId) {
+        continue;
       }
 
       ret = avcodec_send_packet(_codecContext, &_packet);
@@ -310,7 +316,12 @@ void AudioStreamingPartInternal::fillPcmBuffer() {
       }
 
       ret = avcodec_receive_frame(_codecContext, _frame);
-    } while (ret == AVERROR(EAGAIN));
+      if (ret == AVERROR(EAGAIN)) {
+        continue;
+      }
+        
+      break;
+    }
 
     if (ret != 0) {
         _didReadToEnd = true;

@@ -801,7 +801,7 @@ public:
                 for (auto &part : pendingSegment->parts) {
                     const auto typeData = &part->typeData;
                     if (const auto audioData = absl::get_if<PendingAudioSegmentData>(typeData)) {
-                        segment->audio = std::make_shared<AudioStreamingPart>(std::move(part->result->data), "ogg");
+                        segment->audio = std::make_shared<AudioStreamingPart>(std::move(part->result->data), "ogg", false);
                         _currentEndpointMapping = segment->audio->getEndpointMapping();
                     } else if (const auto videoData = absl::get_if<PendingVideoSegmentData>(typeData)) {
                         auto videoSegment = std::make_shared<VideoSegment>();

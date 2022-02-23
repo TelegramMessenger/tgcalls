@@ -530,7 +530,7 @@ public:
             
             switch (contentType) {
                 case VideoStreamingPart::ContentType::Audio: {
-                    auto part = std::make_unique<AudioStreamingPart>(std::move(dataSlice), _videoStreamInfo->container);
+                    auto part = std::make_unique<AudioStreamingPart>(std::move(dataSlice), _videoStreamInfo->container, true);
                     _parsedAudioParts.push_back(std::move(part));
                     
                     break;

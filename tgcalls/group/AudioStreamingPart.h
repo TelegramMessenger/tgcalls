@@ -18,7 +18,7 @@ public:
         std::vector<int16_t> pcmData;
     };
     
-    explicit AudioStreamingPart(std::vector<uint8_t> &&data, std::string const &container);
+    explicit AudioStreamingPart(std::vector<uint8_t> &&data, std::string const &container, bool isSingleChannel);
     ~AudioStreamingPart();
     
     AudioStreamingPart(const AudioStreamingPart&) = delete;
