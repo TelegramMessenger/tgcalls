@@ -1363,10 +1363,13 @@ private:
     requestVideoBroadcastPart:(id<OngoingGroupCallBroadcastPartTask> _Nonnull (^ _Nonnull)(int64_t, int64_t, int32_t, OngoingGroupCallRequestedVideoQuality, void (^ _Nonnull)(OngoingGroupCallBroadcastPart * _Nullable)))requestVideoBroadcastPart
     outgoingAudioBitrateKbit:(int32_t)outgoingAudioBitrateKbit
     videoContentType:(OngoingGroupCallVideoContentType)videoContentType
-    enableNoiseSuppression:(bool)enableNoiseSuppression {
+    enableNoiseSuppression:(bool)enableNoiseSuppression
+    preferX264:(bool)preferX264 {
     self = [super init];
     if (self != nil) {
         _queue = queue;
+        
+        tgcalls::PlatformInterface::SharedInstance()->preferX264 = preferX264;
 
         _sinks = [[NSMutableDictionary alloc] init];
         
@@ -1577,7 +1580,7 @@ private:
     }
 }
 
-- (void)setConnectionMode:(OngoingCallConnectionMode)connectionMode keepBroadcastConnectedIfWasEnabled:(bool)keepBroadcastConnectedIfWasEnabled {
+- (void)setConnectionMode:(OngoingCallConnectionMode)connectionMode keepBroadcastConnectedIfWasEnabled:(bool)keepBroadcastConnectedIfWasEnabled isUnifiedBroadcast:(bool)isUnifiedBroadcast {
     if (_instance) {
         tgcalls::GroupConnectionMode mappedConnectionMode;
         switch (connectionMode) {
@@ -1598,7 +1601,7 @@ private:
                 break;
             }
         }
-        _instance->setConnectionMode(mappedConnectionMode, keepBroadcastConnectedIfWasEnabled);
+        _instance->setConnectionMode(mappedConnectionMode, keepBroadcastConnectedIfWasEnabled, isUnifiedBroadcast);
     }
 }
 
