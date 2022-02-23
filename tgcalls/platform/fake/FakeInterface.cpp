@@ -6,7 +6,7 @@
 
 namespace tgcalls {
 
-std::unique_ptr<webrtc::VideoEncoderFactory> FakeInterface::makeVideoEncoderFactory(bool preferHardwareEncoding) {
+std::unique_ptr<webrtc::VideoEncoderFactory> FakeInterface::makeVideoEncoderFactory(bool preferHardwareEncoding, bool isScreencast) {
   return webrtc::CreateBuiltinVideoEncoderFactory();
 }
 
