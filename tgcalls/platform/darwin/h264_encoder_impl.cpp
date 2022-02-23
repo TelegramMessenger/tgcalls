@@ -9,6 +9,8 @@
  *
  */
 
+#ifdef TGCALLS_ENABLE_X264
+
 #include "h264_encoder_impl.h"
 
 #include <limits>
@@ -343,3 +345,5 @@ bool H264EncoderX264Impl::IsInitialized() const {
 }
 
 }  // namespace webrtc
+
+#endif

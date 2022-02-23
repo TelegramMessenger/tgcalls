@@ -115,11 +115,15 @@
               videoCodec.SetParam(key.UTF8String, info.parameters[key].UTF8String);
           }
           
+#ifdef TGCALLS_ENABLE_X264
           if (_preferX264) {
               return [[RTC_OBJC_TYPE(RTCWrappedNativeVideoEncoder) alloc] initWithNativeEncoder:std::make_unique<webrtc::H264EncoderX264Impl>(videoCodec)];
           } else {
+#endif
               return [[RTC_OBJC_TYPE(RTCWrappedNativeVideoEncoder) alloc] initWithNativeEncoder:std::unique_ptr<webrtc::VideoEncoder>(webrtc::H264Encoder::Create(videoCodec))];
+#ifdef TGCALLS_ENABLE_X264
           }
+#endif
       }
   } else if ([info.name isEqualToString:kRTCVideoCodecVp8Name]) {
     return [RTCVideoEncoderVP8 vp8Encoder];
