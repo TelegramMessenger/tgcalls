@@ -13,7 +13,7 @@
 
 namespace tgcalls {
 
-std::unique_ptr<webrtc::VideoEncoderFactory> DesktopInterface::makeVideoEncoderFactory(bool preferHardwareEncoding) {
+std::unique_ptr<webrtc::VideoEncoderFactory> DesktopInterface::makeVideoEncoderFactory(bool preferHardwareEncoding, bool isScreencast) {
 #if TGCALLS_UWP_DESKTOP
 	return std::make_unique<webrtc::H264MFEncoderFactory>();
 #else

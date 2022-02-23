@@ -8,7 +8,7 @@ namespace tgcalls {
 
 class DesktopInterface : public PlatformInterface {
 public:
-	std::unique_ptr<webrtc::VideoEncoderFactory> makeVideoEncoderFactory(bool preferHardwareEncoding = false) override;
+	std::unique_ptr<webrtc::VideoEncoderFactory> makeVideoEncoderFactory(bool preferHardwareEncoding = false, bool isScreencast = false) override;
 	std::unique_ptr<webrtc::VideoDecoderFactory> makeVideoDecoderFactory() override;
 	bool supportsEncoding(const std::string &codecName) override;
 	rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> makeVideoSource(rtc::Thread *signalingThread, rtc::Thread *workerThread) override;
