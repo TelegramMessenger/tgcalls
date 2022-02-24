@@ -1,20 +1,14 @@
 #include "AudioStreamingPart.h"
 
+#include "AudioStreamingPartInternal.h"
+
 #include "rtc_base/logging.h"
 #include "rtc_base/third_party/base64/base64.h"
-
-extern "C" {
-#include <libavutil/timestamp.h>
-#include <libavformat/avformat.h>
-#include <libavcodec/avcodec.h>
-}
 
 #include <string>
 #include <bitset>
 #include <set>
 #include <map>
-
-#import "AudioStreamingPartInternal.h"
 
 namespace tgcalls {
 
@@ -72,17 +66,17 @@ public:
             _didReadToEnd = true;
             return {};
         }
-        
+
         std::vector<AudioStreamingPart::StreamingPartChannel> resultChannels;
-        
+
         if (_isSingleChannel) {
             AudioStreamingPart::StreamingPartChannel singlePart;
             singlePart.ssrc = 1;
-            
+
             for (int j = 0; j < readResult.numSamples; j++) {
                 singlePart.pcmData.push_back(_pcm10ms[j * readResult.numChannels]);
             }
-            
+
             resultChannels.push_back(std::move(singlePart));
         } else {
             for (const auto ssrc : _allSsrcs) {
