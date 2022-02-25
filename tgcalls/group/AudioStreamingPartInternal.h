@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include "AVIOContextImpl.h"
+#include "AudioStreamingPartPersistentDecoder.h"
 
 namespace tgcalls {
 
@@ -28,22 +29,22 @@ public:
     AudioStreamingPartInternal(std::vector<uint8_t> &&fileData, std::string const &container);
     ~AudioStreamingPartInternal();
 
-    ReadPcmResult readPcm(std::vector<int16_t> &outPcm);
+    ReadPcmResult readPcm(AudioStreamingPartPersistentDecoder &persistentDecoder, std::vector<int16_t> &outPcm);
     int getDurationInMilliseconds() const;
-    int getChannelCount() const;
+    //int getChannelCount() const;
     std::vector<ChannelUpdate> const &getChannelUpdates() const;
     std::map<std::string, int32_t> getEndpointMapping() const;
 
 private:
-    void fillPcmBuffer();
+    void fillPcmBuffer(AudioStreamingPartPersistentDecoder &persistentDecoder);
 
 private:
     AVIOContextImpl _avIoContext;
 
     AVFormatContext *_inputFormatContext = nullptr;
     AVPacket _packet;
-    AVCodecContext *_codecContext = nullptr;
     AVFrame *_frame = nullptr;
+    AVCodecParameters *_audioCodecParameters = nullptr;
 
     bool _didReadToEnd = false;
 

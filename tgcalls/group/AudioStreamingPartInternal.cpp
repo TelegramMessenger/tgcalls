@@ -131,8 +131,6 @@ _avIoContext(std::move(fileData)) {
         return;
     }
 
-    AVCodecParameters *audioCodecParameters = nullptr;
-    AVStream *audioStream = nullptr;
     for (int i = 0; i < _inputFormatContext->nb_streams; i++) {
         AVStream *inStream = _inputFormatContext->streams[i];
 
@@ -140,8 +138,9 @@ _avIoContext(std::move(fileData)) {
         if (inCodecpar->codec_type != AVMEDIA_TYPE_AUDIO) {
             continue;
         }
-        audioCodecParameters = inCodecpar;
-        audioStream = inStream;
+        
+        _audioCodecParameters = avcodec_parameters_alloc();
+        avcodec_parameters_copy(_audioCodecParameters, inCodecpar);
         
         _streamId = i;
 
@@ -189,58 +188,36 @@ _avIoContext(std::move(fileData)) {
 
         break;
     }
-
-    if (audioCodecParameters && audioStream) {
-        AVCodec *codec = avcodec_find_decoder(audioCodecParameters->codec_id);
-        if (codec) {
-            _codecContext = avcodec_alloc_context3(codec);
-            ret = avcodec_parameters_to_context(_codecContext, audioCodecParameters);
-            if (ret < 0) {
-                _didReadToEnd = true;
-
-                avcodec_free_context(&_codecContext);
-                _codecContext = nullptr;
-            } else {
-                _codecContext->pkt_timebase = audioStream->time_base;
-
-                _channelCount = _codecContext->channels;
-
-                ret = avcodec_open2(_codecContext, codec, nullptr);
-                if (ret < 0) {
-                    _didReadToEnd = true;
-
-                    avcodec_free_context(&_codecContext);
-                    _codecContext = nullptr;
-                }
-            }
-        }
-    }
 }
 
 AudioStreamingPartInternal::~AudioStreamingPartInternal() {
     if (_frame) {
         av_frame_unref(_frame);
     }
-    if (_codecContext) {
-        avcodec_close(_codecContext);
-        avcodec_free_context(&_codecContext);
-    }
     if (_inputFormatContext) {
         avformat_close_input(&_inputFormatContext);
     }
+    if (_audioCodecParameters) {
+        avcodec_parameters_free(&_audioCodecParameters);
+    }
 }
 
-AudioStreamingPartInternal::ReadPcmResult AudioStreamingPartInternal::readPcm(std::vector<int16_t> &outPcm) {
+AudioStreamingPartInternal::ReadPcmResult AudioStreamingPartInternal::readPcm(AudioStreamingPartPersistentDecoder &persistentDecoder, std::vector<int16_t> &outPcm) {
     int outPcmSampleOffset = 0;
     ReadPcmResult result;
+    
+    if (_pcmBufferSampleOffset >= _pcmBufferSampleSize) {
+        fillPcmBuffer(persistentDecoder);
+    }
 
+    if (outPcm.size() != 480 * _channelCount) {
+        outPcm.resize(480 * _channelCount);
+    }
     int readSamples = (int)outPcm.size() / _channelCount;
-
-    result.numChannels = _channelCount;
 
     while (outPcmSampleOffset < readSamples) {
         if (_pcmBufferSampleOffset >= _pcmBufferSampleSize) {
-            fillPcmBuffer();
+            fillPcmBuffer(persistentDecoder);
 
             if (_pcmBufferSampleOffset >= _pcmBufferSampleSize) {
                 break;
@@ -255,6 +232,8 @@ AudioStreamingPartInternal::ReadPcmResult AudioStreamingPartInternal::readPcm(st
             result.numSamples += readFromPcmBufferSamples;
         }
     }
+    
+    result.numChannels = _channelCount;
 
     return result;
 }
@@ -263,9 +242,9 @@ int AudioStreamingPartInternal::getDurationInMilliseconds() const {
     return _durationInMilliseconds;
 }
 
-int AudioStreamingPartInternal::getChannelCount() const {
+/*int AudioStreamingPartInternal::getChannelCount() const {
     return _channelCount;
-}
+}*/
 
 std::vector<AudioStreamingPartInternal::ChannelUpdate> const &AudioStreamingPartInternal::getChannelUpdates() const {
     return _channelUpdates;
@@ -275,7 +254,7 @@ std::map<std::string, int32_t> AudioStreamingPartInternal::getEndpointMapping() 
     return _endpointMapping;
 }
     
-void AudioStreamingPartInternal::fillPcmBuffer() {
+void AudioStreamingPartInternal::fillPcmBuffer(AudioStreamingPartPersistentDecoder &persistentDecoder) {
     _pcmBufferSampleSize = 0;
     _pcmBufferSampleOffset = 0;
 
@@ -283,10 +262,6 @@ void AudioStreamingPartInternal::fillPcmBuffer() {
         return;
     }
     if (!_inputFormatContext) {
-        _didReadToEnd = true;
-        return;
-    }
-    if (!_codecContext) {
         _didReadToEnd = true;
         return;
     }
@@ -302,20 +277,9 @@ void AudioStreamingPartInternal::fillPcmBuffer() {
       if (_packet.stream_index != _streamId) {
         continue;
       }
+        
+      ret = persistentDecoder.decode(_audioCodecParameters, _inputFormatContext->streams[_streamId]->time_base, _packet, _frame);
 
-      ret = avcodec_send_packet(_codecContext, &_packet);
-      if (ret < 0) {
-        _didReadToEnd = true;
-        return;
-      }
-
-      int bytesPerSample = av_get_bytes_per_sample(_codecContext->sample_fmt);
-      if (bytesPerSample != 2 && bytesPerSample != 4) {
-        _didReadToEnd = true;
-        return;
-      }
-
-      ret = avcodec_receive_frame(_codecContext, _frame);
       if (ret == AVERROR(EAGAIN)) {
         continue;
       }
@@ -327,6 +291,16 @@ void AudioStreamingPartInternal::fillPcmBuffer() {
         _didReadToEnd = true;
         return;
     }
+    
+    if (_channelCount == 0) {
+        _channelCount = _frame->channels;
+    }
+    
+    if (_channelCount == 0) {
+        _didReadToEnd = true;
+        return;
+    }
+    
     if (_frame->channels != _channelCount || _frame->channels > 8) {
         _didReadToEnd = true;
         return;
@@ -336,7 +310,7 @@ void AudioStreamingPartInternal::fillPcmBuffer() {
         _pcmBuffer.resize(_frame->nb_samples * _frame->channels);
     }
 
-    switch (_codecContext->sample_fmt) {
+    switch (_frame->format) {
     case AV_SAMPLE_FMT_S16: {
         memcpy(_pcmBuffer.data(), _frame->data[0], _frame->nb_samples * 2 * _frame->channels);
     } break;

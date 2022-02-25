@@ -54,7 +54,7 @@ public:
     absl::optional<std::string> getActiveEndpointId() const;
     
     int getAudioRemainingMilliseconds();
-    std::vector<AudioStreamingPart::StreamingPartChannel> getAudio10msPerChannel();
+    std::vector<AudioStreamingPart::StreamingPartChannel> getAudio10msPerChannel(AudioStreamingPartPersistentDecoder &persistentDecoder);
     
 private:
     VideoStreamingPartState *_state = nullptr;

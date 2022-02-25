@@ -351,7 +351,7 @@ public:
                     return result;
                 };
                 while (available()) {
-                    auto audioChannels = segment->audio->get10msPerChannel();
+                    auto audioChannels = segment->audio->get10msPerChannel(_persistentAudioDecoder);
                     if (audioChannels.empty()) {
                         break;
                     }
@@ -394,34 +394,24 @@ public:
                     return result;
                 };
                 while (available()) {
-                    auto audioChannels = segment->unifiedAudio->getAudio10msPerChannel();
-                    if (audioChannels.empty()) {
+                    auto audioChannels = segment->unifiedAudio->getAudio10msPerChannel(_persistentAudioDecoder);
+                    if (audioChannels.size() != 1) {
                         break;
                     }
-
-                    std::vector<webrtc::AudioFrame *> audioFrames;
-
-                    for (const auto &audioChannel : audioChannels) {
-                        webrtc::AudioFrame *frame = new webrtc::AudioFrame();
-                        frame->UpdateFrame(0, audioChannel.pcmData.data(), audioChannel.pcmData.size(), 48000, webrtc::AudioFrame::SpeechType::kNormalSpeech, webrtc::AudioFrame::VADActivity::kVadActive);
-
-                        auto volumeIt = _volumeBySsrc.find(audioChannel.ssrc);
-                        if (volumeIt != _volumeBySsrc.end()) {
-                            double outputGain = volumeIt->second;
-                            if (outputGain < 0.99f || outputGain > 1.01f) {
-                                webrtc::AudioFrameOperations::ScaleWithSat(outputGain, frame);
-                            }
-                        }
-
-                        audioFrames.push_back(frame);
-                        processAudioLevel(audioChannel.ssrc, audioChannel.pcmData);
+                    
+                    if (audioChannels[0].numSamples < 480) {
+                        RTC_LOG(LS_INFO) << "render: got less than 10ms of audio data (" << audioChannels[0].numSamples << " samples)";
                     }
 
                     webrtc::AudioFrame frameOut;
-                    _audioFrameCombiner.Combine(audioFrames, 1, 48000, audioFrames.size(), &frameOut);
+                    frameOut.UpdateFrame(0, audioChannels[0].pcmData.data(), audioChannels[0].pcmData.size(), 48000, webrtc::AudioFrame::SpeechType::kNormalSpeech, webrtc::AudioFrame::VADActivity::kVadActive);
 
-                    for (webrtc::AudioFrame *frame : audioFrames) {
-                        delete frame;
+                    auto volumeIt = _volumeBySsrc.find(1);
+                    if (volumeIt != _volumeBySsrc.end()) {
+                        double outputGain = volumeIt->second;
+                        if (outputGain < 0.99f || outputGain > 1.01f) {
+                            webrtc::AudioFrameOperations::ScaleWithSat(outputGain, &frameOut);
+                        }
                     }
 
                     _audioDataMutex.Lock();
@@ -750,7 +740,7 @@ public:
                                     break;
                                 }
                                 case BroadcastPart::Status::NotReady: {
-                                    if (segmentTimestamp == 0) {
+                                    if (segmentTimestamp == 0 && !strong->_isUnifiedBroadcast) {
                                         int64_t responseTimestampMilliseconds = (int64_t)(part.responseTimestamp * 1000.0);
                                         int64_t responseTimestampBoundary = (responseTimestampMilliseconds / strong->_segmentDuration) * strong->_segmentDuration;
 
@@ -765,10 +755,15 @@ public:
                                     break;
                                 }
                                 case BroadcastPart::Status::ResyncNeeded: {
-                                    int64_t responseTimestampMilliseconds = (int64_t)(part.responseTimestamp * 1000.0);
-                                    int64_t responseTimestampBoundary = (responseTimestampMilliseconds / strong->_segmentDuration) * strong->_segmentDuration;
+                                    if (strong->_isUnifiedBroadcast) {
+                                        strong->_nextSegmentTimestamp = 0;
+                                    } else {
+                                        int64_t responseTimestampMilliseconds = (int64_t)(part.responseTimestamp * 1000.0);
+                                        int64_t responseTimestampBoundary = (responseTimestampMilliseconds / strong->_segmentDuration) * strong->_segmentDuration;
 
-                                    strong->_nextSegmentTimestamp = responseTimestampBoundary;
+                                        strong->_nextSegmentTimestamp = responseTimestampBoundary;
+                                    }
+                                    
                                     strong->discardAllPendingSegments();
                                     strong->requestSegmentsIfNeeded();
                                     strong->checkPendingSegments();
@@ -942,6 +937,7 @@ private:
 
     absl::optional<int> _waitForBufferredMillisecondsBeforeRendering;
     std::vector<std::shared_ptr<MediaSegment>> _availableSegments;
+    AudioStreamingPartPersistentDecoder _persistentAudioDecoder;
 
     std::shared_ptr<BroadcastPartTask> _pendingRequestTimeTask;
     int _pendingRequestTimeDelayTaskId = 0;

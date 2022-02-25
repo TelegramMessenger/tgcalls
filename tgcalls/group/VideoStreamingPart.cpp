@@ -598,9 +598,9 @@ public:
         return 0;
     }
     
-    std::vector<AudioStreamingPart::StreamingPartChannel> getAudio10msPerChannel() {
+    std::vector<AudioStreamingPart::StreamingPartChannel> getAudio10msPerChannel(AudioStreamingPartPersistentDecoder &persistentDecoder) {
         while (!_parsedAudioParts.empty()) {
-            auto firstPartResult = _parsedAudioParts[0]->get10msPerChannel();
+            auto firstPartResult = _parsedAudioParts[0]->get10msPerChannel(persistentDecoder);
             if (firstPartResult.empty()) {
                 _parsedAudioParts.erase(_parsedAudioParts.begin());
             } else {
@@ -648,9 +648,9 @@ int VideoStreamingPart::getAudioRemainingMilliseconds() {
         ? _state->getAudioRemainingMilliseconds()
         : 0;
 }
-std::vector<AudioStreamingPart::StreamingPartChannel> VideoStreamingPart::getAudio10msPerChannel() {
+std::vector<AudioStreamingPart::StreamingPartChannel> VideoStreamingPart::getAudio10msPerChannel(AudioStreamingPartPersistentDecoder &persistentDecoder) {
     return _state
-        ? _state->getAudio10msPerChannel()
+        ? _state->getAudio10msPerChannel(persistentDecoder)
         : std::vector<AudioStreamingPart::StreamingPartChannel>();
 }
 

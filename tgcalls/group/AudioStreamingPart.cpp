@@ -38,7 +38,6 @@ public:
         }
 
         _remainingMilliseconds = _parsedPart.getDurationInMilliseconds();
-        _pcm10ms.resize(480 * _parsedPart.getChannelCount());
 
         for (const auto &it : _parsedPart.getChannelUpdates()) {
             _allSsrcs.insert(it.ssrc);
@@ -56,7 +55,7 @@ public:
         return _remainingMilliseconds;
     }
 
-    std::vector<AudioStreamingPart::StreamingPartChannel> get10msPerChannel() {
+    std::vector<AudioStreamingPart::StreamingPartChannel> get10msPerChannel(AudioStreamingPartPersistentDecoder &persistentDecoder) {
         if (_didReadToEnd) {
             return {};
         }
@@ -67,7 +66,7 @@ public:
             }
         }
 
-        auto readResult = _parsedPart.readPcm(_pcm10ms);
+        auto readResult = _parsedPart.readPcm(persistentDecoder, _pcm10ms);
         if (readResult.numSamples <= 0) {
             _didReadToEnd = true;
             return {};
@@ -82,6 +81,8 @@ public:
             for (int j = 0; j < readResult.numSamples; j++) {
                 singlePart.pcmData.push_back(_pcm10ms[j * readResult.numChannels]);
             }
+            
+            singlePart.numSamples += readResult.numSamples;
             
             resultChannels.push_back(std::move(singlePart));
         } else {
@@ -99,10 +100,12 @@ public:
                     for (int j = 0; j < readResult.numSamples; j++) {
                         channel.pcmData.push_back(_pcm10ms[sourceChannelIndex + j * readResult.numChannels]);
                     }
+                    channel.numSamples += readResult.numSamples;
                 } else {
                     for (int j = 0; j < readResult.numSamples; j++) {
                         channel.pcmData.push_back(0);
                     }
+                    channel.numSamples += readResult.numSamples;
                 }
             }
         }
@@ -171,9 +174,9 @@ int AudioStreamingPart::getRemainingMilliseconds() const {
     return _state ? _state->getRemainingMilliseconds() : 0;
 }
 
-std::vector<AudioStreamingPart::StreamingPartChannel> AudioStreamingPart::get10msPerChannel() {
+std::vector<AudioStreamingPart::StreamingPartChannel> AudioStreamingPart::get10msPerChannel(AudioStreamingPartPersistentDecoder &persistentDecoder) {
     return _state
-        ? _state->get10msPerChannel()
+        ? _state->get10msPerChannel(persistentDecoder)
         : std::vector<AudioStreamingPart::StreamingPartChannel>();
 }
 
