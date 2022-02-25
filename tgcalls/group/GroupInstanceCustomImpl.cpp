@@ -51,6 +51,7 @@
 #include "AudioDeviceHelper.h"
 #include "FakeAudioDeviceModule.h"
 #include "StreamingMediaContext.h"
+#include "platform/darwin/iOS/tgcalls_audio_device_module_ios.h"
 
 #include <mutex>
 #include <random>
@@ -1411,6 +1412,7 @@ public:
     _useDummyChannel(descriptor.useDummyChannel),
     _outgoingAudioBitrateKbit(descriptor.outgoingAudioBitrateKbit),
     _disableOutgoingAudioProcessing(descriptor.disableOutgoingAudioProcessing),
+    _disableAudioInput(descriptor.disableAudioInput),
     _minOutgoingVideoBitrateKbit(descriptor.minOutgoingVideoBitrateKbit),
     _videoContentType(descriptor.videoContentType),
     _videoCodecPreferences(std::move(descriptor.videoCodecPreferences)),
@@ -3307,10 +3309,15 @@ public:
 private:
     rtc::scoped_refptr<WrappedAudioDeviceModule> createAudioDeviceModule() {
         auto audioDeviceDataObserverShared = _audioDeviceDataObserverShared;
+        auto disableRecording = _disableAudioInput;
         const auto create = [&](webrtc::AudioDeviceModule::AudioLayer layer) {
+#ifdef WEBRTC_IOS
+            return rtc::make_ref_counted<webrtc::tgcalls_ios_adm::AudioDeviceModuleIOS>(false, disableRecording);
+#else
             return webrtc::AudioDeviceModule::Create(
                 layer,
                 _taskQueueFactory.get());
+#endif
         };
         const auto check = [&](const rtc::scoped_refptr<webrtc::AudioDeviceModule> &result) -> rtc::scoped_refptr<WrappedAudioDeviceModule> {
             if (!result) {
@@ -3357,6 +3364,7 @@ private:
     bool _useDummyChannel{true};
     int _outgoingAudioBitrateKbit{32};
     bool _disableOutgoingAudioProcessing{false};
+    bool _disableAudioInput{false};
     int _minOutgoingVideoBitrateKbit{100};
     VideoContentType _videoContentType{VideoContentType::None};
     std::vector<VideoCodecName> _videoCodecPreferences;

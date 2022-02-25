@@ -158,6 +158,7 @@ struct GroupInstanceDescriptor {
     std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, int32_t, VideoChannelDescription::Quality, std::function<void(BroadcastPart &&)>)> requestVideoBroadcastPart;
     int outgoingAudioBitrateKbit{32};
     bool disableOutgoingAudioProcessing{false};
+    bool disableAudioInput{false};
     VideoContentType videoContentType{VideoContentType::None};
     bool initialEnableNoiseSuppression{false};
     std::vector<VideoCodecName> videoCodecPreferences;
