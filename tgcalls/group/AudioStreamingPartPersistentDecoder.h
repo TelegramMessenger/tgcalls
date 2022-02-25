@@ -7,6 +7,9 @@
 #include <map>
 #include <stdint.h>
 
+// Fix build on Windows - this should appear before FFmpeg timestamp include.
+#define _USE_MATH_DEFINES
+#include <math.h>
 
 extern "C" {
 #include <libavutil/timestamp.h>
@@ -22,9 +25,9 @@ class WrappedCodecParameters {
 public:
     WrappedCodecParameters(AVCodecParameters const *codecParameters);
     ~WrappedCodecParameters();
-    
+
     bool isEqual(AVCodecParameters const *other);
-    
+
 private:
     AVCodecParameters *_value = nullptr;
 };
@@ -33,12 +36,12 @@ class AudioStreamingPartPersistentDecoder {
 public:
     AudioStreamingPartPersistentDecoder();
     ~AudioStreamingPartPersistentDecoder();
-    
+
     int decode(AVCodecParameters const *codecParameters, AVRational timeBase, AVPacket &packet, AVFrame *frame);
-    
+
 private:
     void maybeReset(AVCodecParameters const *codecParameters, AVRational timeBase);
-    
+
 private:
     AudioStreamingPartPersistentDecoderState *_state = nullptr;
 };
