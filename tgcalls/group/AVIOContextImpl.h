@@ -8,6 +8,10 @@
 #include "api/video/video_frame.h"
 #include "absl/types/optional.h"
 
+// Fix build on Windows - this should appear before FFmpeg teimstamp include.
+#define _USE_MATH_DEFINES
+#include <math.h>
+
 extern "C" {
 #include <libavutil/timestamp.h>
 #include <libavformat/avformat.h>

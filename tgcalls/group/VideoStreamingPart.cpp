@@ -4,17 +4,11 @@
 #include "rtc_base/third_party/base64/base64.h"
 #include "api/video/i420_buffer.h"
 
-extern "C" {
-#include <libavutil/timestamp.h>
-#include <libavformat/avformat.h>
-#include <libavcodec/avcodec.h>
-}
+#include "AVIOContextImpl.h"
 
 #include <string>
 #include <set>
 #include <map>
-
-#include "AVIOContextImpl.h"
 
 namespace tgcalls {
 
@@ -527,18 +521,18 @@ public:
                     break;
                 }
             }
-            
+
             switch (contentType) {
                 case VideoStreamingPart::ContentType::Audio: {
                     auto part = std::make_unique<AudioStreamingPart>(std::move(dataSlice), _videoStreamInfo->container, true);
                     _parsedAudioParts.push_back(std::move(part));
-                    
+
                     break;
                 }
                 case VideoStreamingPart::ContentType::Video: {
                     auto part = std::make_unique<VideoStreamingPartInternal>(_videoStreamInfo->events[i].endpointId, rotation, std::move(dataSlice), _videoStreamInfo->container);
                     _parsedVideoParts.push_back(std::move(part));
-                    
+
                     break;
                 }
                 default: {
@@ -585,7 +579,7 @@ public:
             return absl::nullopt;
         }
     }
-    
+
     int getAudioRemainingMilliseconds() {
         while (!_parsedAudioParts.empty()) {
             auto firstPartResult = _parsedAudioParts[0]->getRemainingMilliseconds();
@@ -615,7 +609,7 @@ private:
     std::vector<std::unique_ptr<VideoStreamingPartInternal>> _parsedVideoParts;
     absl::optional<VideoStreamingPartFrame> _currentFrame;
     double _relativeTimestamp = 0.0;
-    
+
     std::vector<std::unique_ptr<AudioStreamingPart>> _parsedAudioParts;
 };
 

@@ -319,7 +319,7 @@ public:
                     }
                 }
             }
-            
+
             for (auto &videoSegment : segment->unified) {
                 videoSegment->isPlaying = true;
 
@@ -527,12 +527,12 @@ public:
                             }
 
                             strong->_pendingRequestTimeTask.reset();
-                            
+
                             if (timestamp <= 0) {
                                 int taskId = strong->_nextPendingRequestTimeDelayTaskId;
                                 strong->_pendingRequestTimeDelayTaskId = taskId;
                                 strong->_nextPendingRequestTimeDelayTaskId++;
-                                
+
                                 strong->_threads->getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak, taskId]() {
                                     auto strong = weak.lock();
                                     if (!strong) {
@@ -541,9 +541,9 @@ public:
                                     if (strong->_pendingRequestTimeDelayTaskId != taskId) {
                                         return;
                                     }
-                                    
+
                                     strong->_pendingRequestTimeDelayTaskId = 0;
-                                    
+
                                     strong->requestSegmentsIfNeeded();
                                 }, 1000);
                             } else {

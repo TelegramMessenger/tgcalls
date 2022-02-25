@@ -18,7 +18,7 @@ public:
         int numSamples = 0;
         int numChannels = 0;
     };
-    
+
     struct ChannelUpdate {
         int frameIndex = 0;
         int id = 0;
