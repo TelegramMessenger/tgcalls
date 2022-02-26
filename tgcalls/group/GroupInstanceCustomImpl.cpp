@@ -1277,7 +1277,6 @@ public:
     }
 
     void mixAudio(int16_t *audio_samples, const size_t num_samples, const size_t num_channels, const uint32_t samples_per_sec) {
-
         _mutex.Lock();
         const auto context = _streamingContext;
         _mutex.Unlock();
@@ -1293,11 +1292,16 @@ public:
             if (_resamplerFrequency != samples_per_sec || _resamplerNumChannels != num_channels) {
                 _resamplerFrequency = samples_per_sec;
                 _resamplerNumChannels = num_channels;
-                _resampler = std::make_unique<webrtc::Resampler>(48000, samples_per_sec, num_channels);
+                _resampler = std::make_unique<webrtc::Resampler>();
+                if (_resampler->Reset(48000, samples_per_sec, num_channels) == -1) {
+                    _resampler = nullptr;
+                }
             }
 
-            size_t outLen = 0;
-            _resampler->Push(_samplesToResample.data(), _samplesToResample.size(), (int16_t *)audio_samples, num_samples * num_channels, outLen);
+            if (_resampler) {
+                size_t outLen = 0;
+                _resampler->Push(_samplesToResample.data(), _samplesToResample.size(), (int16_t *)audio_samples, num_samples * num_channels, outLen);
+            }
         }
     }
 

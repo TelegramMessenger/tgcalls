@@ -22,6 +22,7 @@
 #include "api/call/audio_sink.h"
 #include "modules/audio_processing/audio_buffer.h"
 #include "modules/audio_device/include/audio_device_factory.h"
+#include "platform/darwin/iOS/tgcalls_audio_device_module_ios.h"
 
 namespace tgcalls {
 namespace {
@@ -402,9 +403,13 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
 
 rtc::scoped_refptr<webrtc::AudioDeviceModule> MediaManager::createAudioDeviceModule() {
 	const auto create = [&](webrtc::AudioDeviceModule::AudioLayer layer) {
+#ifdef WEBRTC_IOS
+        return rtc::make_ref_counted<webrtc::tgcalls_ios_adm::AudioDeviceModuleIOS>(false, false);
+#else
 		return webrtc::AudioDeviceModule::Create(
 			layer,
             _taskQueueFactory.get());
+#endif
 	};
 	const auto check = [&](const rtc::scoped_refptr<webrtc::AudioDeviceModule> &result) {
         return (result && result->Init() == 0) ? result : nullptr;

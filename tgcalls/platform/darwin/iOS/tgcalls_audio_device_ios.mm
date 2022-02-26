@@ -28,10 +28,10 @@
 #include "system_wrappers/include/metrics.h"
 
 #import "base/RTCLogging.h"
-#import "components/audio/RTCAudioSession+Private.h"
-#import "components/audio/RTCAudioSession.h"
-#import "components/audio/RTCAudioSessionConfiguration.h"
-#import "components/audio/RTCNativeAudioSessionDelegateAdapter.h"
+#import "RTCAudioSession+Private.h"
+#import "RTCAudioSession.h"
+#import "RTCAudioSessionConfiguration.h"
+#import "RTCNativeAudioSessionDelegateAdapter.h"
 
 namespace webrtc {
 namespace tgcalls_ios_adm {
@@ -841,9 +841,6 @@ void AudioDeviceIOS::UpdateAudioUnit(bool can_play_or_record) {
 }
 
 bool AudioDeviceIOS::ConfigureAudioSession() {
-  if (disable_recording_) {
-    return true;
-  }
   RTC_DCHECK_RUN_ON(&thread_checker_);
   RTCLog(@"Configuring audio session.");
   if (has_configured_session_) {
@@ -852,7 +849,7 @@ bool AudioDeviceIOS::ConfigureAudioSession() {
   }
   RTC_OBJC_TYPE(RTCAudioSession)* session = [RTC_OBJC_TYPE(RTCAudioSession) sharedInstance];
   [session lockForConfiguration];
-  bool success = [session configureWebRTCSession:nil];
+  bool success = [session configureWebRTCSession:nil disableRecording:disable_recording_];
   [session unlockForConfiguration];
   if (success) {
     has_configured_session_ = true;
@@ -864,9 +861,6 @@ bool AudioDeviceIOS::ConfigureAudioSession() {
 }
 
 bool AudioDeviceIOS::ConfigureAudioSessionLocked() {
-  if (disable_recording_) {
-    return true;
-  }
   RTC_DCHECK_RUN_ON(&thread_checker_);
   RTCLog(@"Configuring audio session.");
   if (has_configured_session_) {
@@ -874,7 +868,7 @@ bool AudioDeviceIOS::ConfigureAudioSessionLocked() {
     return false;
   }
   RTC_OBJC_TYPE(RTCAudioSession)* session = [RTC_OBJC_TYPE(RTCAudioSession) sharedInstance];
-  bool success = [session configureWebRTCSession:nil];
+  bool success = [session configureWebRTCSession:nil disableRecording:disable_recording_];
   if (success) {
     has_configured_session_ = true;
     RTCLog(@"Configured audio session.");
@@ -885,9 +879,6 @@ bool AudioDeviceIOS::ConfigureAudioSessionLocked() {
 }
 
 void AudioDeviceIOS::UnconfigureAudioSession() {
-  if (disable_recording_) {
-    return;
-  }
   RTC_DCHECK_RUN_ON(&thread_checker_);
   RTCLog(@"Unconfiguring audio session.");
   if (!has_configured_session_) {
@@ -897,7 +888,9 @@ void AudioDeviceIOS::UnconfigureAudioSession() {
   RTC_OBJC_TYPE(RTCAudioSession)* session = [RTC_OBJC_TYPE(RTCAudioSession) sharedInstance];
   [session lockForConfiguration];
   [session unconfigureWebRTCSession:nil];
-  [session endWebRTCSession:nil];
+  if (!disable_recording_) {
+    [session endWebRTCSession:nil];
+  }
   [session unlockForConfiguration];
   has_configured_session_ = false;
   RTCLog(@"Unconfigured audio session.");

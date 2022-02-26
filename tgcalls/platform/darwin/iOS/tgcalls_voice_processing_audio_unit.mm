@@ -15,7 +15,7 @@
 #include "system_wrappers/include/metrics.h"
 
 #import "base/RTCLogging.h"
-#import "sdk/objc/components/audio/RTCAudioSessionConfiguration.h"
+#import "platform/darwin/iOS/RTCAudioSessionConfiguration.h"
 
 #if !defined(NDEBUG)
 static void LogStreamDescription(AudioStreamBasicDescription description) {

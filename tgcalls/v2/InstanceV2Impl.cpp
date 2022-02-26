@@ -43,6 +43,7 @@
 #include "CodecSelectHelper.h"
 #include "AudioDeviceHelper.h"
 #include "SignalingEncryption.h"
+#include "platform/darwin/iOS/tgcalls_audio_device_module_ios.h"
 
 #include <random>
 #include <sstream>
@@ -2013,9 +2014,13 @@ public:
 private:
     rtc::scoped_refptr<webrtc::AudioDeviceModule> createAudioDeviceModule() {
         const auto create = [&](webrtc::AudioDeviceModule::AudioLayer layer) {
+#ifdef WEBRTC_IOS
+            return rtc::make_ref_counted<webrtc::tgcalls_ios_adm::AudioDeviceModuleIOS>(false, false);
+#else
             return webrtc::AudioDeviceModule::Create(
                 layer,
                 _taskQueueFactory.get());
+#endif
         };
         const auto check = [&](const rtc::scoped_refptr<webrtc::AudioDeviceModule> &result) {
             return (result && result->Init() == 0) ? result : nullptr;

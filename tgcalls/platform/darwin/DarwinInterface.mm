@@ -18,8 +18,8 @@
 #include "objc_video_decoder_factory.h"
 
 #ifdef WEBRTC_IOS
-#include "sdk/objc/components/audio/RTCAudioSession.h"
-#include "sdk/objc/components/audio/RTCAudioSessionConfiguration.h"
+#include "platform/darwin/iOS/RTCAudioSession.h"
+#include "platform/darwin/iOS/RTCAudioSessionConfiguration.h"
 #import <UIKit/UIKit.h>
 #endif // WEBRTC_IOS
 
