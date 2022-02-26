@@ -516,7 +516,7 @@ public:
 
     void requestSegmentsIfNeeded() {
         while (true) {
-            if (_nextSegmentTimestamp == 0) {
+            if (_nextSegmentTimestamp == -1) {
                 if (!_pendingRequestTimeTask && _pendingRequestTimeDelayTaskId == 0) {
                     const auto weak = std::weak_ptr<StreamingMediaContextPrivate>(shared_from_this());
                     _pendingRequestTimeTask = _requestCurrentTime([weak, threads = _threads](int64_t timestamp) {
@@ -547,7 +547,7 @@ public:
                                     strong->requestSegmentsIfNeeded();
                                 }, 1000);
                             } else {
-                                strong->_nextSegmentTimestamp = (timestamp / strong->_segmentDuration * strong->_segmentDuration) - strong->_segmentBufferDuration;
+                                strong->_nextSegmentTimestamp = std::max((int64_t)((timestamp / strong->_segmentDuration * strong->_segmentDuration) - strong->_segmentBufferDuration), (int64_t)0);
                                 strong->requestSegmentsIfNeeded();
                             }
                         });
@@ -567,7 +567,7 @@ public:
             auto pendingSegment = std::make_shared<PendingMediaSegment>();
             pendingSegment->timestamp = _nextSegmentTimestamp;
 
-            if (_nextSegmentTimestamp != 0) {
+            if (_nextSegmentTimestamp != -1) {
                 _nextSegmentTimestamp += _segmentDuration;
             }
 
@@ -596,7 +596,7 @@ public:
 
             _pendingSegments.push_back(pendingSegment);
 
-            if (_nextSegmentTimestamp == 0) {
+            if (_nextSegmentTimestamp == -1) {
                 break;
             }
         }
@@ -733,7 +733,7 @@ public:
                             switch (part.status) {
                                 case BroadcastPart::Status::Success: {
                                     pendingPart->result = std::make_shared<PendingMediaSegmentPartResult>(std::move(part.data));
-                                    if (strong->_nextSegmentTimestamp == 0) {
+                                    if (strong->_nextSegmentTimestamp == -1) {
                                         strong->_nextSegmentTimestamp = part.timestampMilliseconds + strong->_segmentDuration;
                                     }
                                     strong->checkPendingSegments();
@@ -756,7 +756,7 @@ public:
                                 }
                                 case BroadcastPart::Status::ResyncNeeded: {
                                     if (strong->_isUnifiedBroadcast) {
-                                        strong->_nextSegmentTimestamp = 0;
+                                        strong->_nextSegmentTimestamp = -1;
                                     } else {
                                         int64_t responseTimestampMilliseconds = (int64_t)(part.responseTimestamp * 1000.0);
                                         int64_t responseTimestampBoundary = (responseTimestampMilliseconds / strong->_segmentDuration) * strong->_segmentDuration;
@@ -933,7 +933,7 @@ private:
     const int _segmentDuration = 1000;
     const int _segmentBufferDuration = 2000;
 
-    int64_t _nextSegmentTimestamp = 0;
+    int64_t _nextSegmentTimestamp = -1;
 
     absl::optional<int> _waitForBufferredMillisecondsBeforeRendering;
     std::vector<std::shared_ptr<MediaSegment>> _availableSegments;
