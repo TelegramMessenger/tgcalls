@@ -498,7 +498,22 @@ public:
         }
 
         for (size_t i = 0; i < _videoStreamInfo->events.size(); i++) {
-            std::vector<uint8_t> dataSlice(data.begin() + _videoStreamInfo->events[i].offset, i == (_videoStreamInfo->events.size() - 1) ? data.end() : (data.begin() + _videoStreamInfo->events[i + 1].offset));
+            if (_videoStreamInfo->events[i].offset < 0) {
+                continue;
+            }
+            size_t endOffset = 0;
+            if (i == _videoStreamInfo->events.size() - 1) {
+                endOffset = data.size();
+            } else {
+                endOffset = _videoStreamInfo->events[i + 1].offset;
+            }
+            if (endOffset <= _videoStreamInfo->events[i].offset) {
+                continue;
+            }
+            if (endOffset > data.size()) {
+                continue;
+            }
+            std::vector<uint8_t> dataSlice(data.begin() + _videoStreamInfo->events[i].offset, data.begin() + endOffset);
             webrtc::VideoRotation rotation = webrtc::VideoRotation::kVideoRotation_0;
             switch (_videoStreamInfo->events[i].rotation) {
                 case 0: {
