@@ -22,8 +22,9 @@
 #include "api/call/audio_sink.h"
 #include "modules/audio_processing/audio_buffer.h"
 #include "modules/audio_device/include/audio_device_factory.h"
+#ifdef WEBRTC_IOS
 #include "platform/darwin/iOS/tgcalls_audio_device_module_ios.h"
-
+#endif
 namespace tgcalls {
 namespace {
 

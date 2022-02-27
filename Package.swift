@@ -24,6 +24,7 @@ let package = Package(
                       "tgcalls/platform/tdesktop",
                       "tgcalls/platform/uwp",
                       "tgcalls/platform/fake",
+                      "tgcalls/platform/darwin/iOS",
                       "tgcalls/platform/darwin/VideoCaptureView.mm",
                       "tgcalls/platform/darwin/VideoCaptureView.h",
                       "tgcalls/platform/darwin/GLVideoView.mm",
