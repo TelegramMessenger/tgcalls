@@ -51,8 +51,9 @@
 #include "AudioDeviceHelper.h"
 #include "FakeAudioDeviceModule.h"
 #include "StreamingMediaContext.h"
+#ifdef WEBRTC_IOS
 #include "platform/darwin/iOS/tgcalls_audio_device_module_ios.h"
-
+#endif
 #include <mutex>
 #include <random>
 #include <sstream>
