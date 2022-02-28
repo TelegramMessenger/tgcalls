@@ -49,7 +49,7 @@ private:
     bool _didReadToEnd = false;
 
     int _durationInMilliseconds = 0;
-    int _streamId = 0;
+    int _streamId = -1;
     int _channelCount = 0;
 
     std::vector<ChannelUpdate> _channelUpdates;

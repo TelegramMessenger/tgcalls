@@ -188,6 +188,10 @@ _avIoContext(std::move(fileData)) {
 
         break;
     }
+    
+    if (_streamId == -1) {
+        _didReadToEnd = true;
+    }
 }
 
 AudioStreamingPartInternal::~AudioStreamingPartInternal() {
