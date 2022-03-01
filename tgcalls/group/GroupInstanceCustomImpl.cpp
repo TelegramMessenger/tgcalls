@@ -3314,6 +3314,9 @@ public:
 private:
     rtc::scoped_refptr<WrappedAudioDeviceModule> createAudioDeviceModule() {
         auto audioDeviceDataObserverShared = _audioDeviceDataObserverShared;
+#ifdef WEBRTC_IOS
+        bool disableRecording = _disableAudioInput;
+#endif
         const auto create = [&](webrtc::AudioDeviceModule::AudioLayer layer) {
 #ifdef WEBRTC_IOS
             return rtc::make_ref_counted<webrtc::tgcalls_ios_adm::AudioDeviceModuleIOS>(false, disableRecording);
