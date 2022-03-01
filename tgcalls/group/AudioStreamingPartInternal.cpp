@@ -241,10 +241,16 @@ AudioStreamingPartInternal::ReadPcmResult AudioStreamingPartInternal::readPcm(Au
             _pcmBufferSampleOffset += readFromPcmBufferSamples;
             outPcmSampleOffset += readFromPcmBufferSamples;
             result.numSamples += readFromPcmBufferSamples;
+            _readSampleCount += readFromPcmBufferSamples;
         }
     }
     
     result.numChannels = _channelCount;
+    
+    // Uncomment for debugging incomplete frames
+    /*if (result.numSamples != 480 && result.numSamples != 0) {
+        RTC_LOG(LS_INFO) << "result.numSamples = " << result.numSamples << ", _readSampleCount = " << _readSampleCount << ", duration = " << _inputFormatContext->streams[_streamId]->duration;
+    }*/
 
     return result;
 }
@@ -252,10 +258,6 @@ AudioStreamingPartInternal::ReadPcmResult AudioStreamingPartInternal::readPcm(Au
 int AudioStreamingPartInternal::getDurationInMilliseconds() const {
     return _durationInMilliseconds;
 }
-
-/*int AudioStreamingPartInternal::getChannelCount() const {
-    return _channelCount;
-}*/
 
 std::vector<AudioStreamingPartInternal::ChannelUpdate> const &AudioStreamingPartInternal::getChannelUpdates() const {
     return _channelUpdates;

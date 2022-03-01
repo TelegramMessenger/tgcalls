@@ -251,8 +251,12 @@ absl::optional<VideoStreamInfo> consumeVideoStreamInfo(std::vector<uint8_t> &dat
     }
 
     if (const auto eventCount = readInt32(data, offset)) {
-        if (const auto event = readVideoStreamEvent(data, offset)) {
-            info.events.push_back(event.value());
+        if (eventCount > 0) {
+            if (const auto event = readVideoStreamEvent(data, offset)) {
+                info.events.push_back(event.value());
+            } else {
+                return absl::nullopt;
+            }
         } else {
             return absl::nullopt;
         }

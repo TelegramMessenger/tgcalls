@@ -78,6 +78,7 @@ struct MediaSegment {
     int64_t timestamp = 0;
     int64_t duration = 0;
     std::shared_ptr<AudioStreamingPart> audio;
+    AudioStreamingPartPersistentDecoder audioDecoder;
     std::shared_ptr<VideoStreamingPart> unifiedAudio;
     std::vector<std::shared_ptr<VideoSegment>> video;
     std::vector<std::shared_ptr<UnifiedSegment>> unified;
@@ -351,7 +352,7 @@ public:
                     return result;
                 };
                 while (available()) {
-                    auto audioChannels = segment->audio->get10msPerChannel(_persistentAudioDecoder);
+                    auto audioChannels = segment->audio->get10msPerChannel(segment->audioDecoder);
                     if (audioChannels.empty()) {
                         break;
                     }

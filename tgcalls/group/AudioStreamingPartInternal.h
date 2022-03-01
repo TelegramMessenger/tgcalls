@@ -31,7 +31,6 @@ public:
 
     ReadPcmResult readPcm(AudioStreamingPartPersistentDecoder &persistentDecoder, std::vector<int16_t> &outPcm);
     int getDurationInMilliseconds() const;
-    //int getChannelCount() const;
     std::vector<ChannelUpdate> const &getChannelUpdates() const;
     std::map<std::string, int32_t> getEndpointMapping() const;
 
@@ -58,6 +57,7 @@ private:
     std::vector<int16_t> _pcmBuffer;
     int _pcmBufferSampleOffset = 0;
     int _pcmBufferSampleSize = 0;
+    int _readSampleCount = 0;
 };
 
 }
