@@ -207,6 +207,10 @@ AudioStreamingPartInternal::~AudioStreamingPartInternal() {
 }
 
 AudioStreamingPartInternal::ReadPcmResult AudioStreamingPartInternal::readPcm(AudioStreamingPartPersistentDecoder &persistentDecoder, std::vector<int16_t> &outPcm) {
+    if (_didReadToEnd) {
+        return AudioStreamingPartInternal::ReadPcmResult();
+    }
+    
     int outPcmSampleOffset = 0;
     ReadPcmResult result;
     
@@ -217,7 +221,10 @@ AudioStreamingPartInternal::ReadPcmResult AudioStreamingPartInternal::readPcm(Au
     if (outPcm.size() != 480 * _channelCount) {
         outPcm.resize(480 * _channelCount);
     }
-    int readSamples = (int)outPcm.size() / _channelCount;
+    int readSamples = 0;
+    if (_channelCount != 0) {
+        readSamples = (int)outPcm.size() / _channelCount;
+    }
 
     while (outPcmSampleOffset < readSamples) {
         if (_pcmBufferSampleOffset >= _pcmBufferSampleSize) {
