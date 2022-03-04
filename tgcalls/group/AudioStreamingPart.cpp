@@ -69,16 +69,20 @@ public:
         std::vector<AudioStreamingPart::StreamingPartChannel> resultChannels;
 
         if (_isSingleChannel) {
-            AudioStreamingPart::StreamingPartChannel singlePart;
-            singlePart.ssrc = 1;
-
-            for (int j = 0; j < readResult.numSamples; j++) {
-                singlePart.pcmData.push_back(_pcm10ms[j * readResult.numChannels]);
+            for (int i = 0; i < readResult.numChannels; i++) {
+                AudioStreamingPart::StreamingPartChannel emptyPart;
+                emptyPart.ssrc = i + 1;
+                resultChannels.push_back(emptyPart);
             }
-            
-            singlePart.numSamples += readResult.numSamples;
-            
-            resultChannels.push_back(std::move(singlePart));
+
+            for (int i = 0; i < readResult.numChannels; i++) {
+                auto channel = resultChannels.begin() + i;
+                int sourceChannelIndex = i;
+                for (int j = 0; j < readResult.numSamples; j++) {
+                    channel->pcmData.push_back(_pcm10ms[sourceChannelIndex + j * readResult.numChannels]);
+                }
+                channel->numSamples += readResult.numSamples;
+            }
         } else {
             for (const auto ssrc : _allSsrcs) {
                 AudioStreamingPart::StreamingPartChannel emptyPart;

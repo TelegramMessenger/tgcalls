@@ -346,7 +346,7 @@ public:
             if (segment->audio) {
                 const auto available = [&] {
                     _audioDataMutex.Lock();
-                    const auto result = (_audioRingBuffer.availableForWriting() >= 480);
+                    const auto result = (_audioRingBuffer.availableForWriting() >= 480 * _audioRingBufferNumChannels);
                     _audioDataMutex.Unlock();
 
                     return result;
@@ -383,7 +383,19 @@ public:
                     }
 
                     _audioDataMutex.Lock();
-                    _audioRingBuffer.write(frameOut.data(), frameOut.samples_per_channel());
+                    if (frameOut.num_channels() == _audioRingBufferNumChannels) {
+                        _audioRingBuffer.write(frameOut.data(), frameOut.samples_per_channel() * frameOut.num_channels());
+                    } else {
+                        if (_stereoShuffleBuffer.size() < frameOut.samples_per_channel() * _audioRingBufferNumChannels) {
+                            _stereoShuffleBuffer.resize(frameOut.samples_per_channel() * _audioRingBufferNumChannels);
+                        }
+                        for (int i = 0; i < frameOut.samples_per_channel(); i++) {
+                            for (int j = 0; j < _audioRingBufferNumChannels; j++) {
+                                _stereoShuffleBuffer[i * _audioRingBufferNumChannels + j] = frameOut.data()[i];
+                            }
+                        }
+                        _audioRingBuffer.write(_stereoShuffleBuffer.data(), frameOut.samples_per_channel() * _audioRingBufferNumChannels);
+                    }
                     _audioDataMutex.Unlock();
                 }
             } else if (segment->unifiedAudio) {
@@ -396,16 +408,42 @@ public:
                 };
                 while (available()) {
                     auto audioChannels = segment->unifiedAudio->getAudio10msPerChannel(_persistentAudioDecoder);
-                    if (audioChannels.size() != 1) {
+                    if (audioChannels.empty()) {
                         break;
                     }
                     
                     if (audioChannels[0].numSamples < 480) {
                         RTC_LOG(LS_INFO) << "render: got less than 10ms of audio data (" << audioChannels[0].numSamples << " samples)";
                     }
+                    
+                    int numChannels = std::min(2, (int)audioChannels.size());
 
                     webrtc::AudioFrame frameOut;
-                    frameOut.UpdateFrame(0, audioChannels[0].pcmData.data(), audioChannels[0].pcmData.size(), 48000, webrtc::AudioFrame::SpeechType::kNormalSpeech, webrtc::AudioFrame::VADActivity::kVadActive);
+                    
+                    if (numChannels == 1) {
+                        frameOut.UpdateFrame(0, audioChannels[0].pcmData.data(), audioChannels[0].pcmData.size(), 48000, webrtc::AudioFrame::SpeechType::kNormalSpeech, webrtc::AudioFrame::VADActivity::kVadActive, numChannels);
+                    } else {
+                        bool skipFrame = false;
+                        int numSamples = (int)audioChannels[0].pcmData.size();
+                        for (int i = 1; i < numChannels; i++) {
+                            if (audioChannels[i].pcmData.size() != numSamples) {
+                                skipFrame = true;
+                                break;
+                            }
+                        }
+                        if (skipFrame) {
+                            break;
+                        }
+                        if (_stereoShuffleBuffer.size() < numChannels * numSamples) {
+                            _stereoShuffleBuffer.resize(numChannels * numSamples);
+                        }
+                        for (int i = 0; i < numSamples; i++) {
+                            for (int j = 0; j < numChannels; j++) {
+                                _stereoShuffleBuffer[i * numChannels + j] = audioChannels[0].pcmData[i];
+                            }
+                        }
+                        frameOut.UpdateFrame(0, _stereoShuffleBuffer.data(), numSamples, 48000, webrtc::AudioFrame::SpeechType::kNormalSpeech, webrtc::AudioFrame::VADActivity::kVadActive, numChannels);
+                    }
 
                     auto volumeIt = _volumeBySsrc.find(1);
                     if (volumeIt != _volumeBySsrc.end()) {
@@ -416,7 +454,19 @@ public:
                     }
 
                     _audioDataMutex.Lock();
-                    _audioRingBuffer.write(frameOut.data(), frameOut.samples_per_channel());
+                    if (frameOut.num_channels() == _audioRingBufferNumChannels) {
+                        _audioRingBuffer.write(frameOut.data(), frameOut.samples_per_channel() * frameOut.num_channels());
+                    } else {
+                        if (_stereoShuffleBuffer.size() < frameOut.samples_per_channel() * _audioRingBufferNumChannels) {
+                            _stereoShuffleBuffer.resize(frameOut.samples_per_channel() * _audioRingBufferNumChannels);
+                        }
+                        for (int i = 0; i < frameOut.samples_per_channel(); i++) {
+                            for (int j = 0; j < _audioRingBufferNumChannels; j++) {
+                                _stereoShuffleBuffer[i * _audioRingBufferNumChannels + j] = frameOut.data()[i];
+                            }
+                        }
+                        _audioRingBuffer.write(_stereoShuffleBuffer.data(), frameOut.samples_per_channel() * _audioRingBufferNumChannels);
+                    }
                     _audioDataMutex.Unlock();
                 }
             }
@@ -465,31 +515,31 @@ public:
         _updateAudioLevel(ssrc, vadResult.first, vadResult.second);
     }
 
-    void getAudio(int16_t *audio_samples, const size_t num_samples, const size_t num_channels, const uint32_t samples_per_sec) {
+    void getAudio(int16_t *audio_samples, size_t num_samples, size_t num_channels, uint32_t samples_per_sec) {
         int16_t *buffer = nullptr;
 
-        if (num_channels == 1) {
+        if (num_channels == _audioRingBufferNumChannels) {
             buffer = audio_samples;
         } else {
-            if (_tempAudioBuffer.size() < num_samples) {
-                _tempAudioBuffer.resize(num_samples);
+            if (_tempAudioBuffer.size() < num_samples * _audioRingBufferNumChannels) {
+                _tempAudioBuffer.resize(num_samples * _audioRingBufferNumChannels);
             }
             buffer = _tempAudioBuffer.data();
         }
 
         _audioDataMutex.Lock();
-        size_t readSamples = _audioRingBuffer.read(buffer, num_samples);
+        size_t readSamples = _audioRingBuffer.read(buffer, num_samples * _audioRingBufferNumChannels);
         _audioDataMutex.Unlock();
 
-        if (num_channels != 1) {
-            for (size_t sampleIndex = 0; sampleIndex < readSamples; sampleIndex++) {
+        if (num_channels != _audioRingBufferNumChannels) {
+            for (size_t sampleIndex = 0; sampleIndex < readSamples / _audioRingBufferNumChannels; sampleIndex++) {
                 for (size_t channelIndex = 0; channelIndex < num_channels; channelIndex++) {
-                    audio_samples[sampleIndex * num_channels + channelIndex] = _tempAudioBuffer[sampleIndex];
+                    audio_samples[sampleIndex * num_channels + channelIndex] = _tempAudioBuffer[sampleIndex * _audioRingBufferNumChannels + 0];
                 }
             }
         }
-        if (readSamples < num_samples) {
-            memset(audio_samples + readSamples * num_channels, 0, (num_samples - readSamples) * num_channels * sizeof(int16_t));
+        if (readSamples < num_samples * num_channels) {
+            memset(audio_samples + readSamples, 0, (num_samples * num_channels - readSamples) * sizeof(int16_t));
         }
     }
 
@@ -948,10 +998,12 @@ private:
 
     int64_t _playbackReferenceTimestamp = 0;
 
-    const size_t _audioDataRingBufferMaxSize = 4800;
+    const int _audioRingBufferNumChannels = 2;
+    const size_t _audioDataRingBufferMaxSize = 4800 * 2;
     webrtc::Mutex _audioDataMutex;
     SampleRingBuffer _audioRingBuffer;
     std::vector<int16_t> _tempAudioBuffer;
+    std::vector<int16_t> _stereoShuffleBuffer;
     webrtc::FrameCombiner _audioFrameCombiner;
     std::map<uint32_t, std::unique_ptr<SparseVad>> _audioVadMap;
 

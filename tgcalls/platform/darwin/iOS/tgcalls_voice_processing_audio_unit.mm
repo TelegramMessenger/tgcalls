@@ -463,14 +463,14 @@ AudioStreamBasicDescription VoiceProcessingAudioUnit::GetFormat(
   // - linear PCM => noncompressed audio data format with one frame per packet
   // - no need to specify interleaving since only mono is supported
   AudioStreamBasicDescription format;
-  RTC_DCHECK_EQ(1, kRTCAudioSessionPreferredNumberOfChannels);
+  //RTC_DCHECK_EQ(1, kRTCAudioSessionPreferredNumberOfChannels);
   format.mSampleRate = sample_rate;
   format.mFormatID = kAudioFormatLinearPCM;
   format.mFormatFlags =
-      kLinearPCMFormatFlagIsSignedInteger | kLinearPCMFormatFlagIsPacked;
-  format.mBytesPerPacket = kBytesPerSample;
+      kLinearPCMFormatFlagIsSignedInteger | kLinearPCMFormatFlagIsPacked | kAudioFormatFlagsNativeEndian;
+  format.mBytesPerPacket = kBytesPerSample * kRTCAudioSessionPreferredNumberOfChannels;
   format.mFramesPerPacket = 1;  // uncompressed.
-  format.mBytesPerFrame = kBytesPerSample;
+  format.mBytesPerFrame = kBytesPerSample * kRTCAudioSessionPreferredNumberOfChannels;
   format.mChannelsPerFrame = kRTCAudioSessionPreferredNumberOfChannels;
   format.mBitsPerChannel = 8 * kBytesPerSample;
   return format;

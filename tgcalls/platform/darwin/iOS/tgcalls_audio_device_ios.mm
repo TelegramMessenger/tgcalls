@@ -431,7 +431,7 @@ OSStatus AudioDeviceIOS::OnGetPlayoutData(AudioUnitRenderActionFlags* flags,
   // Verify 16-bit, noninterleaved mono PCM signal format.
   RTC_DCHECK_EQ(1, io_data->mNumberBuffers);
   AudioBuffer* audio_buffer = &io_data->mBuffers[0];
-  RTC_DCHECK_EQ(1, audio_buffer->mNumberChannels);
+  //RTC_DCHECK_EQ(1, audio_buffer->mNumberChannels);
 
   // Produce silence and give audio unit a hint about it if playout is not
   // activated.
@@ -476,7 +476,7 @@ OSStatus AudioDeviceIOS::OnGetPlayoutData(AudioUnitRenderActionFlags* flags,
   // the native I/O audio unit) and copy the result to the audio buffer in the
   // `io_data` destination.
   fine_audio_buffer_->GetPlayoutData(
-      rtc::ArrayView<int16_t>(static_cast<int16_t*>(audio_buffer->mData), num_frames),
+      rtc::ArrayView<int16_t>(static_cast<int16_t*>(audio_buffer->mData), num_frames * audio_buffer->mNumberChannels),
       kFixedPlayoutDelayEstimate);
   return noErr;
 }
@@ -681,7 +681,7 @@ void AudioDeviceIOS::UpdateAudioDeviceBuffer() {
   RTC_DCHECK(audio_device_buffer_) << "AttachAudioBuffer must be called first";
   RTC_DCHECK_GT(playout_parameters_.sample_rate(), 0);
   RTC_DCHECK_GT(record_parameters_.sample_rate(), 0);
-  RTC_DCHECK_EQ(playout_parameters_.channels(), 1);
+  //RTC_DCHECK_EQ(playout_parameters_.channels(), 1);
   RTC_DCHECK_EQ(record_parameters_.channels(), 1);
   // Inform the audio device buffer (ADB) about the new audio format.
   audio_device_buffer_->SetPlayoutSampleRate(playout_parameters_.sample_rate());
@@ -730,7 +730,7 @@ void AudioDeviceIOS::SetupAudioBuffersForActiveAudioSession() {
   RTC_DCHECK(record_parameters_.is_complete());
   RTC_LOG(LS_INFO) << " frames per I/O buffer: " << playout_parameters_.frames_per_buffer();
   RTC_LOG(LS_INFO) << " bytes per I/O buffer: " << playout_parameters_.GetBytesPerBuffer();
-  RTC_DCHECK_EQ(playout_parameters_.GetBytesPerBuffer(), record_parameters_.GetBytesPerBuffer());
+  //RTC_DCHECK_EQ(playout_parameters_.GetBytesPerBuffer(), record_parameters_.GetBytesPerBuffer());
 
   // Update the ADB parameters since the sample rate might have changed.
   UpdateAudioDeviceBuffer();
