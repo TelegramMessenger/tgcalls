@@ -20,7 +20,20 @@ RTC_OBJC_EXPORT
 API_AVAILABLE(ios(11.0))
 @interface RTCVideoEncoderH265 : NSObject <RTCVideoEncoder>
 
-- (instancetype)initWithCodecInfo:(RTCVideoCodecInfo *)codecInfo;
+- (instancetype _Nonnull)initWithCodecInfo:(RTCVideoCodecInfo *)codecInfo;
+
+- (nullable RTC_OBJC_TYPE(RTCVideoEncoderQpThresholds) *)scalingSettings;
+
+/** Resolutions should be aligned to this value. */
+@property(nonatomic, readonly) NSInteger resolutionAlignment;
+
+/** If enabled, resolution alignment is applied to all simulcast layers simultaneously so that when
+    scaled, all resolutions comply with 'resolutionAlignment'. */
+@property(nonatomic, readonly) BOOL applyAlignmentToAllSimulcastLayers;
+
+/** If YES, the reciever is expected to resample/scale the source texture to the expected output
+    size. */
+@property(nonatomic, readonly) BOOL supportsNativeHandle;
 
 @end
 

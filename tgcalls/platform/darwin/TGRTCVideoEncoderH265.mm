@@ -609,4 +609,16 @@ void compressionOutputCallback(void* encoder,
                        high:kHighh265QpThreshold];
 }
 
+- (NSInteger)resolutionAlignment {
+  return 1;
+}
+
+- (BOOL)applyAlignmentToAllSimulcastLayers {
+  return NO;
+}
+
+- (BOOL)supportsNativeHandle {
+  return YES;
+}
+
 @end
