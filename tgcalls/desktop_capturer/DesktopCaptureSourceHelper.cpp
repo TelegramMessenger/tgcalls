@@ -24,7 +24,7 @@
 #include "modules/desktop_capture/desktop_capturer.h"
 #include "system_wrappers/include/clock.h"
 #include "api/video/i420_buffer.h"
-#include "third_party/libyuv/include/libyuv.h"
+#include "libyuv.h"
 
 #ifdef WEBRTC_MAC
 #import <QuartzCore/QuartzCore.h>
