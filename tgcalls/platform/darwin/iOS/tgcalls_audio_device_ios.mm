@@ -437,7 +437,7 @@ OSStatus AudioDeviceIOS::OnGetPlayoutData(AudioUnitRenderActionFlags* flags,
   // activated.
   if (!rtc::AtomicOps::AcquireLoad(&playing_)) {
     const size_t size_in_bytes = audio_buffer->mDataByteSize;
-    RTC_CHECK_EQ(size_in_bytes / VoiceProcessingAudioUnit::kBytesPerSample, num_frames);
+    RTC_CHECK_EQ((size_in_bytes / audio_buffer->mNumberChannels) / VoiceProcessingAudioUnit::kBytesPerSample, num_frames);
     *flags |= kAudioUnitRenderAction_OutputIsSilence;
     memset(static_cast<int8_t*>(audio_buffer->mData), 0, size_in_bytes);
     return noErr;

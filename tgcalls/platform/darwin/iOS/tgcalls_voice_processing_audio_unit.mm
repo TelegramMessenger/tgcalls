@@ -210,17 +210,18 @@ bool VoiceProcessingAudioUnit::Initialize(Float64 sample_rate) {
   RTCLog(@"Initializing audio unit with sample rate: %f", sample_rate);
 
   OSStatus result = noErr;
-  AudioStreamBasicDescription format = GetFormat(sample_rate);
-  UInt32 size = sizeof(format);
+  AudioStreamBasicDescription outputFormat = GetFormat(sample_rate, false);
+  AudioStreamBasicDescription inputFormat = GetFormat(sample_rate, true);
+  UInt32 size = sizeof(outputFormat);
 #if !defined(NDEBUG)
-  LogStreamDescription(format);
+  LogStreamDescription(outputFormat);
 #endif
 
     if (!disable_recording_) {
         // Set the format on the output scope of the input element/bus.
         result =
         AudioUnitSetProperty(vpio_unit_, kAudioUnitProperty_StreamFormat,
-                             kAudioUnitScope_Output, kInputBus, &format, size);
+                             kAudioUnitScope_Output, kInputBus, &inputFormat, size);
         if (result != noErr) {
             RTCLogError(@"Failed to set format on output scope of input bus. "
                         "Error=%ld.",
@@ -232,7 +233,7 @@ bool VoiceProcessingAudioUnit::Initialize(Float64 sample_rate) {
   // Set the format on the input scope of the output element/bus.
   result =
       AudioUnitSetProperty(vpio_unit_, kAudioUnitProperty_StreamFormat,
-                           kAudioUnitScope_Input, kOutputBus, &format, size);
+                           kAudioUnitScope_Input, kOutputBus, &outputFormat, size);
   if (result != noErr) {
     RTCLogError(@"Failed to set format on input scope of output bus. "
                  "Error=%ld.",
@@ -456,22 +457,23 @@ OSStatus VoiceProcessingAudioUnit::NotifyDeliverRecordedData(
 }
 
 AudioStreamBasicDescription VoiceProcessingAudioUnit::GetFormat(
-    Float64 sample_rate) const {
+    Float64 sample_rate, bool isInput) const {
+  int numChannels = isInput ? 1 : kRTCAudioSessionPreferredNumberOfChannels;
+        
   // Set the application formats for input and output:
   // - use same format in both directions
   // - avoid resampling in the I/O unit by using the hardware sample rate
   // - linear PCM => noncompressed audio data format with one frame per packet
   // - no need to specify interleaving since only mono is supported
   AudioStreamBasicDescription format;
-  //RTC_DCHECK_EQ(1, kRTCAudioSessionPreferredNumberOfChannels);
   format.mSampleRate = sample_rate;
   format.mFormatID = kAudioFormatLinearPCM;
   format.mFormatFlags =
       kLinearPCMFormatFlagIsSignedInteger | kLinearPCMFormatFlagIsPacked | kAudioFormatFlagsNativeEndian;
-  format.mBytesPerPacket = kBytesPerSample * kRTCAudioSessionPreferredNumberOfChannels;
+  format.mBytesPerPacket = kBytesPerSample * numChannels;
   format.mFramesPerPacket = 1;  // uncompressed.
-  format.mBytesPerFrame = kBytesPerSample * kRTCAudioSessionPreferredNumberOfChannels;
-  format.mChannelsPerFrame = kRTCAudioSessionPreferredNumberOfChannels;
+  format.mBytesPerFrame = kBytesPerSample * numChannels;
+  format.mChannelsPerFrame = numChannels;
   format.mBitsPerChannel = 8 * kBytesPerSample;
   return format;
 }
