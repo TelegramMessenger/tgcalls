@@ -373,7 +373,7 @@ struct DesktopCaptureSourceHelper::Renderer {
 };
 
 DesktopCaptureSource DesktopCaptureSourceForKey(
-	    const std::string &uniqueKey) {
+	    const std::string &deviceIdKey) {
     if (!ShouldBeDesktopCapture(uniqueKey)) {
 		return DesktopCaptureSource::Invalid();
     }
@@ -397,7 +397,7 @@ DesktopCaptureSource DesktopCaptureSourceForKey(
     return DesktopCaptureSource::Invalid();
 }
 
-bool ShouldBeDesktopCapture(const std::string &uniqueKey) {
+bool ShouldBeDesktopCapture(const std::string &deviceIdKey) {
     return (uniqueKey.find("desktop_capturer_") == 0);
 }
 
