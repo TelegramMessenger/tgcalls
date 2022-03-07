@@ -442,13 +442,15 @@ public:
                                 _frameIndex++;
                                 return convertedFrame;
                             }
-                        } else if (status == -35) {
+                        } else if (status == AVERROR(EAGAIN)) {
                             // more data needed
                         } else {
+                            RTC_LOG(LS_ERROR) << "avcodec_receive_frame failed with result: " << status;
                             _didReadToEnd = true;
                             break;
                         }
                     } else {
+                        RTC_LOG(LS_ERROR) << "avcodec_send_packet failed with result: " << status;
                         _didReadToEnd = true;
                         return {};
                     }
@@ -465,9 +467,14 @@ public:
                                     _finalFrames.push_back(convertedFrame.value());
                                 }
                             } else {
+                                if (status != AVERROR_EOF) {
+                                    RTC_LOG(LS_ERROR) << "avcodec_receive_frame (drain) failed with result: " << status;
+                                }
                                 break;
                             }
                         }
+                    } else {
+                        RTC_LOG(LS_ERROR) << "avcodec_send_packet (drain) failed with result: " << status;
                     }
                 }
             }
@@ -610,7 +617,7 @@ public:
         }
         return 0;
     }
-    
+
     std::vector<AudioStreamingPart::StreamingPartChannel> getAudio10msPerChannel(AudioStreamingPartPersistentDecoder &persistentDecoder) {
         while (!_parsedAudioParts.empty()) {
             auto firstPartResult = _parsedAudioParts[0]->get10msPerChannel(persistentDecoder);
