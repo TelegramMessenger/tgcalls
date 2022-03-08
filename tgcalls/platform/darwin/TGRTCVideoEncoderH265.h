@@ -20,7 +20,7 @@ RTC_OBJC_EXPORT
 API_AVAILABLE(ios(11.0))
 @interface RTCVideoEncoderH265 : NSObject <RTCVideoEncoder>
 
-- (instancetype _Nonnull)initWithCodecInfo:(RTCVideoCodecInfo *)codecInfo;
+- (instancetype _Nonnull)initWithCodecInfo:(RTCVideoCodecInfo * _Nonnull)codecInfo;
 
 - (nullable RTC_OBJC_TYPE(RTCVideoEncoderQpThresholds) *)scalingSettings;
 
