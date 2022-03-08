@@ -605,6 +605,10 @@ public:
             return absl::nullopt;
         }
     }
+    
+    bool hasRemainingFrames() const {
+        return !_parsedVideoParts.empty();
+    }
 
     int getAudioRemainingMilliseconds() {
         while (!_parsedAudioParts.empty()) {
@@ -661,6 +665,12 @@ absl::optional<std::string> VideoStreamingPart::getActiveEndpointId() const {
     return _state
         ? _state->getActiveEndpointId()
         : absl::nullopt;
+}
+
+bool VideoStreamingPart::hasRemainingFrames() const {
+    return _state
+        ? _state->hasRemainingFrames()
+        : false;
 }
 
 int VideoStreamingPart::getAudioRemainingMilliseconds() {

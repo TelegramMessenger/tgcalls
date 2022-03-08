@@ -482,6 +482,9 @@ public:
                         RTC_LOG(LS_INFO) << "render: discarding video frames at the end of a segment (displayed " << segment->video[0]->_displayedFrames << " frames)";
                     }
                 }
+                if (!segment->unified.empty() && segment->unified[0]->videoPart->hasRemainingFrames()) {
+                    RTC_LOG(LS_INFO) << "render: discarding video frames at the end of a segment (displayed " << segment->unified[0]->_displayedFrames << " frames)";
+                }
 
                 _availableSegments.erase(_availableSegments.begin());
             }
