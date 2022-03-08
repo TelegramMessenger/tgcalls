@@ -578,8 +578,13 @@ public:
                             }
 
                             strong->_pendingRequestTimeTask.reset();
+                            
+                            int64_t adjustedTimestamp = 0;
+                            if (timestamp > 0) {
+                                adjustedTimestamp = (int64_t)((timestamp / strong->_segmentDuration * strong->_segmentDuration) - strong->_segmentBufferDuration);
+                            }
 
-                            if (timestamp <= 0) {
+                            if (adjustedTimestamp <= 0) {
                                 int taskId = strong->_nextPendingRequestTimeDelayTaskId;
                                 strong->_pendingRequestTimeDelayTaskId = taskId;
                                 strong->_nextPendingRequestTimeDelayTaskId++;
@@ -598,7 +603,7 @@ public:
                                     strong->requestSegmentsIfNeeded();
                                 }, 1000);
                             } else {
-                                strong->_nextSegmentTimestamp = std::max((int64_t)((timestamp / strong->_segmentDuration * strong->_segmentDuration) - strong->_segmentBufferDuration), (int64_t)0);
+                                strong->_nextSegmentTimestamp = adjustedTimestamp;
                                 strong->requestSegmentsIfNeeded();
                             }
                         });
