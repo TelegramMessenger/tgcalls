@@ -47,6 +47,12 @@ struct PayloadType {
 };
 
 struct MediaContent {
+    enum class Type {
+        Audio,
+        Video
+    };
+    
+    Type type = Type::Audio;
     uint32_t ssrc = 0;
     std::vector<SsrcGroup> ssrcGroups;
     std::vector<PayloadType> payloadTypes;
@@ -57,9 +63,12 @@ struct InitialSetupMessage {
     std::string ufrag;
     std::string pwd;
     std::vector<DtlsFingerprint> fingerprints;
-    absl::optional<MediaContent> audio;
-    absl::optional<MediaContent> video;
-    absl::optional<MediaContent> screencast;
+};
+
+struct OfferAnswerMessage {
+    int exchangeId = 0;
+    std::vector<MediaContent> outgoingContents;
+    std::vector<MediaContent> incomingContents;
 };
 
 struct CandidatesMessage {
@@ -91,6 +100,7 @@ struct MediaStateMessage {
 struct Message {
     absl::variant<
         InitialSetupMessage,
+        OfferAnswerMessage,
         CandidatesMessage,
         MediaStateMessage> data;
 
