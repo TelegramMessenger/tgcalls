@@ -276,6 +276,9 @@ public:
 
         int ret = 0;
 
+#if LIBAVFORMAT_VERSION_MAJOR >= 59
+        const
+#endif
         AVInputFormat *inputFormat = av_find_input_format(container.c_str());
         if (!inputFormat) {
             _didReadToEnd = true;
@@ -319,7 +322,7 @@ public:
         }
 
         if (videoCodecParameters && videoStream) {
-            AVCodec *codec = avcodec_find_decoder(videoCodecParameters->codec_id);
+            const AVCodec *codec = avcodec_find_decoder(videoCodecParameters->codec_id);
             if (codec) {
                 _codecContext = avcodec_alloc_context3(codec);
                 ret = avcodec_parameters_to_context(_codecContext, videoCodecParameters);
