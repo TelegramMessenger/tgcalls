@@ -14,16 +14,6 @@
 #import "helpers/RTCDispatcher.h"
 #import "helpers/UIDevice+RTCDevice.h"
 
-// Try to use mono to save resources. Also avoids channel format conversion
-// in the I/O audio unit. Initial tests have shown that it is possible to use
-// mono natively for built-in microphones and for BT headsets but not for
-// wired headsets. Wired headsets only support stereo as native channel format
-// but it is a low cost operation to do a format conversion to mono in the
-// audio unit. Hence, we will not hit a RTC_CHECK in
-// VerifyAudioParametersForActiveAudioSession() for a mismatch between the
-// preferred number of channels and the actual number of channels.
-const int kRTCAudioSessionPreferredNumberOfChannels = 1;
-
 // Preferred hardware sample rate (unit is in Hertz). The client sample rate
 // will be set to this value as well to avoid resampling the the audio unit's
 // format converter. Note that, some devices, e.g. BT headsets, only supports
@@ -95,7 +85,7 @@ static RTC_OBJC_TYPE(RTCAudioSessionConfiguration) *gWebRTCConfiguration = nil;
     // e.g. wired headset on iPhone 6.
     // TODO(henrika): add support for stereo if needed.
     _inputNumberOfChannels = 1;
-    _outputNumberOfChannels = kRTCAudioSessionPreferredNumberOfChannels;
+    _outputNumberOfChannels = 1;
   }
   return self;
 }

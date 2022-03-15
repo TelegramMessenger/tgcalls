@@ -99,9 +99,10 @@ static void LogDeviceInfo() {
 }
 #endif  // !defined(NDEBUG)
 
-AudioDeviceIOS::AudioDeviceIOS(bool bypass_voice_processing, bool disable_recording)
+AudioDeviceIOS::AudioDeviceIOS(bool bypass_voice_processing, bool disable_recording, int numChannels)
     : bypass_voice_processing_(bypass_voice_processing),
       disable_recording_(disable_recording),
+      numChannels_(numChannels),
       audio_device_buffer_(nullptr),
       audio_unit_(nullptr),
       recording_(0),
@@ -745,7 +746,7 @@ void AudioDeviceIOS::SetupAudioBuffersForActiveAudioSession() {
 bool AudioDeviceIOS::CreateAudioUnit() {
   RTC_DCHECK(!audio_unit_);
 
-  audio_unit_.reset(new VoiceProcessingAudioUnit(bypass_voice_processing_, disable_recording_, this));
+  audio_unit_.reset(new VoiceProcessingAudioUnit(bypass_voice_processing_, disable_recording_, numChannels_, this));
   if (!audio_unit_->Init()) {
     audio_unit_.reset();
     return false;

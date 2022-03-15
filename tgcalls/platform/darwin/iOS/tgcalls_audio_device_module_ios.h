@@ -30,7 +30,7 @@ class AudioDeviceModuleIOS : public AudioDeviceModule {
  public:
   int32_t AttachAudioBuffer();
 
-  explicit AudioDeviceModuleIOS(bool bypass_voice_processing, bool disable_recording);
+  explicit AudioDeviceModuleIOS(bool bypass_voice_processing, bool disable_recording, int numChannels);
   ~AudioDeviceModuleIOS() override;
 
   // Retrieve the currently utilized audio layer
@@ -133,6 +133,7 @@ class AudioDeviceModuleIOS : public AudioDeviceModule {
  private:
   const bool bypass_voice_processing_;
   const bool disable_recording_;
+  const int numChannels_;
   bool initialized_ = false;
   const std::unique_ptr<TaskQueueFactory> task_queue_factory_;
   std::unique_ptr<AudioDeviceIOS> audio_device_;

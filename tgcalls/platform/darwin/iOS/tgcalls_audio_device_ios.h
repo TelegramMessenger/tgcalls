@@ -48,7 +48,7 @@ class AudioDeviceIOS : public AudioDeviceGeneric,
                        public VoiceProcessingAudioUnitObserver,
                        public rtc::MessageHandler {
  public:
-  explicit AudioDeviceIOS(bool bypass_voice_processing, bool disable_recording);
+  explicit AudioDeviceIOS(bool bypass_voice_processing, bool disable_recording, int numChannels);
   ~AudioDeviceIOS() override;
 
   void AttachAudioBuffer(AudioDeviceBuffer* audioBuffer) override;
@@ -213,6 +213,7 @@ class AudioDeviceIOS : public AudioDeviceGeneric,
   const bool bypass_voice_processing_;
                            
   const bool disable_recording_;
+  const int numChannels_;
 
   // Ensures that methods are called from the same thread as this object is
   // created on.

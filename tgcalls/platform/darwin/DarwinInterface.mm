@@ -59,10 +59,11 @@ std::unique_ptr<rtc::NetworkMonitorFactory> DarwinInterface::createNetworkMonito
     return webrtc::CreateNetworkMonitorFactory();
 }
 
-void DarwinInterface::configurePlatformAudio() {
+void DarwinInterface::configurePlatformAudio(int numChanels) {
 #ifdef WEBRTC_IOS
     RTCAudioSessionConfiguration *sharedConfiguration = [RTCAudioSessionConfiguration webRTCConfiguration];
     sharedConfiguration.categoryOptions |= AVAudioSessionCategoryOptionMixWithOthers;
+    sharedConfiguration.outputNumberOfChannels = numChanels;
     [RTCAudioSessionConfiguration setWebRTCConfiguration:sharedConfiguration];
 
     [RTCAudioSession sharedInstance].useManualAudio = true;
