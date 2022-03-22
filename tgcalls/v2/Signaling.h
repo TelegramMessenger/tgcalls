@@ -65,10 +65,9 @@ struct InitialSetupMessage {
     std::vector<DtlsFingerprint> fingerprints;
 };
 
-struct OfferAnswerMessage {
-    int exchangeId = 0;
-    std::vector<MediaContent> outgoingContents;
-    std::vector<MediaContent> incomingContents;
+struct NegotiateChannelsMessage {
+    uint32_t exchangeId = 0;
+    std::vector<MediaContent> contents;
 };
 
 struct CandidatesMessage {
@@ -100,7 +99,7 @@ struct MediaStateMessage {
 struct Message {
     absl::variant<
         InitialSetupMessage,
-        OfferAnswerMessage,
+        NegotiateChannelsMessage,
         CandidatesMessage,
         MediaStateMessage> data;
 

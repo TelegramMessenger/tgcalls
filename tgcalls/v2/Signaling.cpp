@@ -398,67 +398,50 @@ absl::optional<InitialSetupMessage> InitialSetupMessage_parse(json11::Json::obje
     return message;
 }
 
-std::vector<uint8_t> OfferAnswerMessage_serialize(const OfferAnswerMessage * const message) {
+std::vector<uint8_t> NegotiateChannelsMessage_serialize(const NegotiateChannelsMessage * const message) {
     json11::Json::object object;
     
-    object.insert(std::make_pair("@type", json11::Json("OfferAnswer")));
+    object.insert(std::make_pair("@type", json11::Json("NegotiateChannels")));
     
-    object.insert(std::make_pair("exchangeId", json11::Json(message->exchangeId)));
+    object.insert(std::make_pair("exchangeId", json11::Json(uint32ToString(message->exchangeId))));
     
-    json11::Json::array outgoingContents;
-    for (const auto &content : message->outgoingContents) {
-        outgoingContents.push_back(json11::Json(MediaContent_serialize(content)));
+    json11::Json::array contents;
+    for (const auto &content : message->contents) {
+        contents.push_back(json11::Json(MediaContent_serialize(content)));
     }
-    object.insert(std::make_pair("outgoingContents", std::move(outgoingContents)));
-
-    json11::Json::array incomingContents;
-    for (const auto &content : message->incomingContents) {
-        incomingContents.push_back(json11::Json(MediaContent_serialize(content)));
-    }
-    object.insert(std::make_pair("incomingContents", std::move(incomingContents)));
+    object.insert(std::make_pair("contents", std::move(contents)));
 
     auto json = json11::Json(std::move(object));
     std::string result = json.dump();
     return std::vector<uint8_t>(result.begin(), result.end());
 }
 
-absl::optional<OfferAnswerMessage> OfferAnswerMessage_parse(json11::Json::object const &object) {
+absl::optional<NegotiateChannelsMessage> NegotiateChannelsMessage_parse(json11::Json::object const &object) {
+    NegotiateChannelsMessage message;
+    
     const auto exchangeId = object.find("exchangeId");
-    if (exchangeId == object.end() || !exchangeId->second.is_number()) {
+    
+    if (exchangeId == object.end()) {
+        return absl::nullopt;
+    } else if (exchangeId->second.is_string()) {
+        message.exchangeId = stringToUInt32(exchangeId->second.string_value());
+    } else if (exchangeId->second.is_number()) {
+        message.exchangeId = (uint32_t)exchangeId->second.number_value();
+    } else {
         return absl::nullopt;
     }
 
-    OfferAnswerMessage message;
-    message.exchangeId = exchangeId->second.int_value();
-
-    const auto outgoingContents = object.find("outgoingContents");
-    if (outgoingContents != object.end()) {
-        if (!outgoingContents->second.is_array()) {
+    const auto contents = object.find("contents");
+    if (contents != object.end()) {
+        if (!contents->second.is_array()) {
             return absl::nullopt;
         }
-        for (const auto &content : outgoingContents->second.array_items()) {
+        for (const auto &content : contents->second.array_items()) {
             if (!content.is_object()) {
                 return absl::nullopt;
             }
             if (auto parsedContent = MediaContent_parse(content.object_items())) {
-                message.outgoingContents.push_back(std::move(parsedContent.value()));
-            } else {
-                return absl::nullopt;
-            }
-        }
-    }
-
-    const auto incomingContents = object.find("incomingContents");
-    if (incomingContents != object.end()) {
-        if (!incomingContents->second.is_array()) {
-            return absl::nullopt;
-        }
-        for (const auto &content : incomingContents->second.array_items()) {
-            if (!content.is_object()) {
-                return absl::nullopt;
-            }
-            if (auto parsedContent = MediaContent_parse(content.object_items())) {
-                message.incomingContents.push_back(std::move(parsedContent.value()));
+                message.contents.push_back(std::move(parsedContent.value()));
             } else {
                 return absl::nullopt;
             }
@@ -703,8 +686,8 @@ std::vector<uint8_t> Message::serialize() const {
         return CandidatesMessage_serialize(candidates);
     } else if (const auto mediaState = absl::get_if<MediaStateMessage>(&data)) {
         return MediaStateMessage_serialize(mediaState);
-    } else if (const auto mediaState = absl::get_if<OfferAnswerMessage>(&data)) {
-        return OfferAnswerMessage_serialize(mediaState);
+    } else if (const auto negotiateChannels = absl::get_if<NegotiateChannelsMessage>(&data)) {
+        return NegotiateChannelsMessage_serialize(negotiateChannels);
     } else {
         return {};
     }
@@ -732,8 +715,8 @@ absl::optional<Message> Message::parse(const std::vector<uint8_t> &data) {
         Message message;
         message.data = std::move(parsed.value());
         return message;
-    } else if (type->second.string_value() == "OfferAnswer") {
-        auto parsed = OfferAnswerMessage_parse(json.object_items());
+    } else if (type->second.string_value() == "NegotiateChannels") {
+        auto parsed = NegotiateChannelsMessage_parse(json.object_items());
         if (!parsed) {
             return absl::nullopt;
         }

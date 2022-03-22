@@ -184,11 +184,14 @@ public:
             audioOptions.echo_cancellation = true;
             audioOptions.noise_suppression = true;
         }
+        
+        std::ostringstream contentId;
+        contentId << _ssrc;
 
         std::vector<std::string> streamIds;
-        streamIds.push_back("1");
+        streamIds.push_back(contentId.str());
 
-        _outgoingAudioChannel = _channelManager->CreateVoiceChannel(call, cricket::MediaConfig(), rtpTransport, threads->getMediaThread(), "audio0", false, NativeNetworkingImpl::getDefaulCryptoOptions(), uniqueRandomIdGenerator, audioOptions);
+        _outgoingAudioChannel = _channelManager->CreateVoiceChannel(call, cricket::MediaConfig(), rtpTransport, threads->getMediaThread(), contentId.str(), false, NativeNetworkingImpl::getDefaulCryptoOptions(), uniqueRandomIdGenerator, audioOptions);
 
         std::vector<cricket::AudioCodec> codecs;
         for (const auto &payloadType : mediaContent.payloadTypes) {
@@ -262,6 +265,10 @@ public:
             });
         }
     }
+    
+    uint32_t ssrc() const {
+        return _ssrc;
+    }
 
 private:
     void OnSentPacket_w(const rtc::SentPacket& sent_packet) {
@@ -296,10 +303,13 @@ public:
         cricket::AudioOptions audioOptions;
         audioOptions.audio_jitter_buffer_fast_accelerate = true;
         audioOptions.audio_jitter_buffer_min_delay_ms = 50;
+        
+        std::ostringstream contentId;
+        contentId << _ssrc;
 
-        std::string streamId = std::string("stream1");
+        std::string streamId = contentId.str();
 
-        _audioChannel = _channelManager->CreateVoiceChannel(call, cricket::MediaConfig(), rtpTransport, threads->getMediaThread(), "0", false, NativeNetworkingImpl::getDefaulCryptoOptions(), randomIdGenerator, audioOptions);
+        _audioChannel = _channelManager->CreateVoiceChannel(call, cricket::MediaConfig(), rtpTransport, threads->getMediaThread(), contentId.str(), false, NativeNetworkingImpl::getDefaulCryptoOptions(), randomIdGenerator, audioOptions);
 
         std::vector<cricket::AudioCodec> codecs;
         for (const auto &payloadType : mediaContent.payloadTypes) {
@@ -368,6 +378,10 @@ public:
     int64_t getActivity() {
         return _activityTimestamp;
     }
+    
+    uint32_t ssrc() const {
+        return _ssrc;
+    }
 
 private:
     void OnSentPacket_w(const rtc::SentPacket& sent_packet) {
@@ -387,101 +401,6 @@ private:
 
 class OutgoingVideoChannel : public sigslot::has_slots<>, public std::enable_shared_from_this<OutgoingVideoChannel> {
 public:
-    /*static absl::optional<signaling::MediaContent> createOutgoingContentDescription(std::vector<webrtc::SdpVideoFormat> const &availableVideoFormats, bool isScreencast) {
-        signaling::MediaContent mediaContent;
-
-        auto generator = std::mt19937(std::random_device()());
-        auto distribution = std::uniform_int_distribution<uint32_t>();
-        do {
-            mediaContent.ssrc = distribution(generator) & 0x7fffffffU;
-        } while (!mediaContent.ssrc);
-
-        mediaContent.rtpExtensions.emplace_back(webrtc::RtpExtension::kAbsSendTimeUri, 2);
-        mediaContent.rtpExtensions.emplace_back(webrtc::RtpExtension::kTransportSequenceNumberUri, 3);
-        mediaContent.rtpExtensions.emplace_back(webrtc::RtpExtension::kVideoRotationUri, 13);
-
-        signaling::SsrcGroup fidGroup;
-        fidGroup.semantics = "FID";
-        fidGroup.ssrcs.push_back(mediaContent.ssrc);
-        fidGroup.ssrcs.push_back(mediaContent.ssrc + 1);
-        mediaContent.ssrcGroups.push_back(std::move(fidGroup));
-
-        auto unsortedVideoFormats = generateAvailableVideoFormats(availableVideoFormats);
-
-        std::vector<std::string> formatPreferences;
-        if (isScreencast) {
-            formatPreferences.push_back(cricket::kVp8CodecName);
-        } else {
-#ifndef WEBRTC_DISABLE_H265
-            formatPreferences.push_back(cricket::kH265CodecName);
-#endif
-            formatPreferences.push_back(cricket::kH264CodecName);
-        }
-
-        std::vector<OutgoingVideoFormat> videoFormats;
-        for (const auto &name : formatPreferences) {
-            for (size_t i = 0; i < unsortedVideoFormats.size(); i++) {
-                if (absl::EqualsIgnoreCase(name, unsortedVideoFormats[i].videoCodec.name)) {
-                    videoFormats.push_back(unsortedVideoFormats[i]);
-                    unsortedVideoFormats.erase(unsortedVideoFormats.begin() + i);
-                    break;
-                }
-            }
-        }
-        for (const auto &format : unsortedVideoFormats) {
-            videoFormats.push_back(format);
-        }
-
-        for (const auto &format : videoFormats) {
-            signaling::PayloadType videoPayload;
-            videoPayload.id = format.videoCodec.id;
-            videoPayload.name = format.videoCodec.name;
-            videoPayload.clockrate = format.videoCodec.clockrate;
-            videoPayload.channels = 0;
-
-            std::vector<signaling::FeedbackType> videoFeedbackTypes;
-
-            signaling::FeedbackType fbGoogRemb;
-            fbGoogRemb.type = "goog-remb";
-            videoFeedbackTypes.push_back(fbGoogRemb);
-
-            signaling::FeedbackType fbTransportCc;
-            fbTransportCc.type = "transport-cc";
-            videoFeedbackTypes.push_back(fbTransportCc);
-
-            signaling::FeedbackType fbCcmFir;
-            fbCcmFir.type = "ccm";
-            fbCcmFir.subtype = "fir";
-            videoFeedbackTypes.push_back(fbCcmFir);
-
-            signaling::FeedbackType fbNack;
-            fbNack.type = "nack";
-            videoFeedbackTypes.push_back(fbNack);
-
-            signaling::FeedbackType fbNackPli;
-            fbNackPli.type = "nack";
-            fbNackPli.subtype = "pli";
-            videoFeedbackTypes.push_back(fbNackPli);
-
-            videoPayload.feedbackTypes = videoFeedbackTypes;
-            videoPayload.parameters = {};
-
-            mediaContent.payloadTypes.push_back(std::move(videoPayload));
-
-            if (format.rtxCodec) {
-                signaling::PayloadType rtxPayload;
-                rtxPayload.id = format.rtxCodec->id;
-                rtxPayload.name = format.rtxCodec->name;
-                rtxPayload.clockrate = format.rtxCodec->clockrate;
-                rtxPayload.parameters.push_back(std::make_pair("apt", intToString(videoPayload.id)));
-                mediaContent.payloadTypes.push_back(std::move(rtxPayload));
-            }
-        }
-
-        return mediaContent;
-    }*/
-
-public:
     OutgoingVideoChannel(
         std::shared_ptr<Threads> threads,
         cricket::ChannelManager *channelManager,
@@ -500,7 +419,11 @@ public:
     _rotationUpdated(rotationUpdated) {
         cricket::VideoOptions videoOptions;
         videoOptions.is_screencast = isScreencast;
-        _outgoingVideoChannel = _channelManager->CreateVideoChannel(call, cricket::MediaConfig(), rtpTransport, threads->getMediaThread(), "out" + intToString(mediaContent.ssrc), false, NativeNetworkingImpl::getDefaulCryptoOptions(), randomIdGenerator, videoOptions, videoBitrateAllocatorFactory);
+        
+        std::ostringstream contentId;
+        contentId << mediaContent.ssrc;
+        
+        _outgoingVideoChannel = _channelManager->CreateVideoChannel(call, cricket::MediaConfig(), rtpTransport, threads->getMediaThread(), contentId.str(), false, NativeNetworkingImpl::getDefaulCryptoOptions(), randomIdGenerator, videoOptions, videoBitrateAllocatorFactory);
 
         std::vector<cricket::VideoCodec> codecs;
         for (const auto &payloadType : mediaContent.payloadTypes) {
@@ -654,6 +577,10 @@ public:
             });
         }
     }
+    
+    uint32_t ssrc() const {
+        return _mainSsrc;
+    }
 
 public:
     std::shared_ptr<VideoCaptureInterface> videoCapture() {
@@ -737,15 +664,17 @@ public:
         webrtc::RtpTransport *rtpTransport,
         rtc::UniqueRandomIdGenerator *randomIdGenerator,
         signaling::MediaContent const &mediaContent,
-        std::string const &streamId,
         std::shared_ptr<Threads> threads) :
     _channelManager(channelManager),
     _call(call) {
         _videoSink.reset(new VideoSinkImpl());
 
         _videoBitrateAllocatorFactory = webrtc::CreateBuiltinVideoBitrateAllocatorFactory();
+        
+        std::ostringstream contentId;
+        contentId << mediaContent.ssrc;
 
-        _videoChannel = _channelManager->CreateVideoChannel(call, cricket::MediaConfig(), rtpTransport, threads->getMediaThread(), streamId, false, NativeNetworkingImpl::getDefaulCryptoOptions(), randomIdGenerator, cricket::VideoOptions(), _videoBitrateAllocatorFactory.get());
+        _videoChannel = _channelManager->CreateVideoChannel(call, cricket::MediaConfig(), rtpTransport, threads->getMediaThread(), contentId.str(), false, NativeNetworkingImpl::getDefaulCryptoOptions(), randomIdGenerator, cricket::VideoOptions(), _videoBitrateAllocatorFactory.get());
 
         std::vector<cricket::VideoCodec> codecs;
         for (const auto &payloadType : mediaContent.payloadTypes) {
@@ -787,7 +716,7 @@ public:
         videoRecvStreamParams.ssrcs = allSsrcs;
 
         videoRecvStreamParams.cname = "cname";
-        videoRecvStreamParams.set_stream_ids({ streamId });
+        videoRecvStreamParams.set_stream_ids({ contentId.str() });
 
         auto incomingVideoDescription = std::make_unique<cricket::VideoContentDescription>();
         for (const auto &rtpExtension : mediaContent.rtpExtensions) {
@@ -821,6 +750,10 @@ public:
     void addSink(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> impl) {
         _videoSink->addSink(impl);
     }
+    
+    uint32_t ssrc() const {
+        return _mainVideoSsrc;
+    }
 
 private:
     void OnSentPacket_w(const rtc::SentPacket& sent_packet) {
@@ -845,6 +778,7 @@ public:
     InstanceV2ImplInternal(Descriptor &&descriptor, std::shared_ptr<Threads> threads) :
     _threads(threads),
     _rtcServers(descriptor.rtcServers),
+    _enableP2P(descriptor.config.enableP2P),
     _encryptionKey(std::move(descriptor.encryptionKey)),
     _stateUpdated(descriptor.stateUpdated),
     _signalBarsUpdated(descriptor.signalBarsUpdated),
@@ -887,12 +821,12 @@ public:
     void start() {
         const auto weak = std::weak_ptr<InstanceV2ImplInternal>(shared_from_this());
 
-        _networking.reset(new ThreadLocalObject<NativeNetworkingImpl>(_threads->getNetworkThread(), [weak, threads = _threads, isOutgoing = _encryptionKey.isOutgoing, rtcServers = _rtcServers]() {
+        _networking.reset(new ThreadLocalObject<NativeNetworkingImpl>(_threads->getNetworkThread(), [weak, threads = _threads, isOutgoing = _encryptionKey.isOutgoing, rtcServers = _rtcServers, enableP2P = _enableP2P]() {
             return new NativeNetworkingImpl(NativeNetworkingImpl::Configuration{
                 .isOutgoing = isOutgoing,
                 .enableStunMarking = false,
                 .enableTCP = false,
-                .enableP2P = true,
+                .enableP2P = enableP2P,
                 .rtcServers = rtcServers,
                 .stateUpdated = [threads, weak](const NativeNetworkingImpl::State &state) {
                     threads->getMediaThread()->PostTask(RTC_FROM_HERE, [=] {
@@ -993,8 +927,8 @@ public:
         
         _contentCoordinationContext = std::make_unique<ContentCoordinationContext>(_encryptionKey.isOutgoing, _channelManager.get(), _uniqueRandomIdGenerator.get());
         
-        _contentCoordinationContext->addOutgoingChannel(ContentCoordinationContext::MediaType::Audio);
-        _contentCoordinationContext->addOutgoingChannel(ContentCoordinationContext::MediaType::Video);
+        _contentCoordinationContext->addOutgoingChannel(signaling::MediaContent::Type::Audio);
+        _contentCoordinationContext->addOutgoingChannel(signaling::MediaContent::Type::Video);
 
         _threads->getNetworkThread()->Invoke<void>(RTC_FROM_HERE, [this]() {
             _rtpTransport = _networking->getSyncAssumingSameThread()->getRtpTransport();
@@ -1041,10 +975,17 @@ public:
 
     void createNegotiatedChannels() {
         const auto coordinatedState = _contentCoordinationContext->coordinatedState();
-        if (coordinatedState) {
-            for (const auto &content : coordinatedState->outgoingContents) {
-                switch (content.type) {
-                    case signaling::MediaContent::Type::Audio: {
+        if (!coordinatedState) {
+            return;
+        }
+        for (const auto &content : coordinatedState->outgoingContents) {
+            switch (content.type) {
+                case signaling::MediaContent::Type::Audio: {
+                    if (_outgoingAudioChannel && _outgoingAudioChannel->ssrc() != content.ssrc) {
+                        _outgoingAudioChannel.reset();
+                    }
+                    
+                    if (!_outgoingAudioChannel) {
                         _outgoingAudioChannel.reset(new OutgoingAudioChannel(
                             _call.get(),
                             _channelManager.get(),
@@ -1054,10 +995,16 @@ public:
                             content,
                             _threads
                         ));
-                        
-                        break;
                     }
-                    case signaling::MediaContent::Type::Video: {
+                    
+                    break;
+                }
+                case signaling::MediaContent::Type::Video: {
+                    if (_outgoingVideoChannel && _outgoingVideoChannel->ssrc() != content.ssrc) {
+                        _outgoingVideoChannel.reset();
+                    }
+                    
+                    if (!_outgoingVideoChannel) {
                         const auto weak = std::weak_ptr<InstanceV2ImplInternal>(shared_from_this());
 
                         _outgoingVideoChannel.reset(new OutgoingVideoChannel(
@@ -1083,19 +1030,25 @@ public:
                         if (_videoCapture) {
                             _outgoingVideoChannel->setVideoCapture(_videoCapture);
                         }
-                        
-                        break;
                     }
-                    default: {
-                        RTC_FATAL() << "Unknown media type";
-                        break;
-                    }
+                    
+                    break;
+                }
+                default: {
+                    RTC_FATAL() << "Unknown media type";
+                    break;
                 }
             }
-            
-            for (const auto &content : coordinatedState->incomingContents) {
-                switch (content.type) {
-                    case signaling::MediaContent::Type::Audio: {
+        }
+        
+        for (const auto &content : coordinatedState->incomingContents) {
+            switch (content.type) {
+                case signaling::MediaContent::Type::Audio: {
+                    if (_incomingAudioChannel && _incomingAudioChannel->ssrc() != content.ssrc) {
+                        _incomingAudioChannel.reset();
+                    }
+                    
+                    if (!_incomingAudioChannel) {
                         _incomingAudioChannel.reset(new IncomingV2AudioChannel(
                             _channelManager.get(),
                             _call.get(),
@@ -1104,27 +1057,32 @@ public:
                             content,
                             _threads
                         ));
-                        
-                        break;
                     }
-                    case signaling::MediaContent::Type::Video: {
+                    
+                    break;
+                }
+                case signaling::MediaContent::Type::Video: {
+                    if (_incomingVideoChannel && _incomingVideoChannel->ssrc() != content.ssrc) {
+                        _incomingVideoChannel.reset();
+                    }
+                    
+                    if (!_incomingVideoChannel) {
                         _incomingVideoChannel.reset(new IncomingV2VideoChannel(
                             _channelManager.get(),
                             _call.get(),
                             _rtpTransport,
                             _uniqueRandomIdGenerator.get(),
                             content,
-                            "1",
                             _threads
                         ));
                         _incomingVideoChannel->addSink(_currentSink);
-                        
-                        break;
                     }
-                    default: {
-                        RTC_FATAL() << "Unknown media type";
-                        break;
-                    }
+                    
+                    break;
+                }
+                default: {
+                    RTC_FATAL() << "Unknown media type";
+                    break;
                 }
             }
         }
@@ -1218,12 +1176,11 @@ public:
     
     void sendOffer() {
         if (const auto offer = _contentCoordinationContext->getOffer()) {
-            signaling::OfferAnswerMessage data;
+            signaling::NegotiateChannelsMessage data;
 
             data.exchangeId = offer->exchangeId;
             
-            data.outgoingContents = offer->outgoingContents;
-            data.incomingContents = offer->incomingContents;
+            data.contents = offer->contents;
 
             signaling::Message message;
             message.data = std::move(data);
@@ -1454,70 +1411,25 @@ public:
 
             _handshakeCompleted = true;
             commitPendingIceCandidates();
-        } else if (const auto offerAnwer = absl::get_if<signaling::OfferAnswerMessage>(messageData)) {
-            if (offerAnwer->exchangeId == 0) {
-                if (_encryptionKey.isOutgoing) {
-                    auto answer = std::make_unique<ContentCoordinationContext::Answer>();
-                    answer->exchangeId = offerAnwer->exchangeId;
-                    answer->outgoingContents = offerAnwer->outgoingContents;
-                    answer->incomingContents = offerAnwer->incomingContents;
-                    _contentCoordinationContext->setAnswer(std::move(answer));
-                } else {
-                    auto offer = std::make_unique<ContentCoordinationContext::Offer>();
-                    
-                    offer->exchangeId = offerAnwer->exchangeId;
-                    offer->outgoingContents = offerAnwer->outgoingContents;
-                    offer->incomingContents = offerAnwer->incomingContents;
-                    
-                    auto answer = _contentCoordinationContext->getAnwer(std::move(offer));
-                    
-                    signaling::OfferAnswerMessage data;
+        } else if (const auto offerAnwer = absl::get_if<signaling::NegotiateChannelsMessage>(messageData)) {
+            auto negotiationContents = std::make_unique<ContentCoordinationContext::NegotiationContents>();
+            negotiationContents->exchangeId = offerAnwer->exchangeId;
+            negotiationContents->contents = offerAnwer->contents;
+            //answer->incomingContents = offerAnwer->incomingContents;
+            if (const auto response = _contentCoordinationContext->setRemoteNegotiationContent(std::move(negotiationContents))) {
+                signaling::NegotiateChannelsMessage data;
 
-                    data.exchangeId = answer->exchangeId;
-                    
-                    data.outgoingContents = answer->outgoingContents;
-                    data.incomingContents = answer->incomingContents;
+                data.exchangeId = response->exchangeId;
+                data.contents = response->contents;
 
-                    signaling::Message message;
-                    message.data = std::move(data);
-                    sendSignalingMessage(message);
-                    
-                    sendOffer();
-                }
-            } else if (offerAnwer->exchangeId == 1) {
-                if (!_encryptionKey.isOutgoing) {
-                    auto answer = std::make_unique<ContentCoordinationContext::Answer>();
-                    answer->exchangeId = offerAnwer->exchangeId;
-                    answer->outgoingContents = offerAnwer->outgoingContents;
-                    answer->incomingContents = offerAnwer->incomingContents;
-                    _contentCoordinationContext->setAnswer(std::move(answer));
-                    
-                    createNegotiatedChannels();
-                } else {
-                    auto offer = std::make_unique<ContentCoordinationContext::Offer>();
-                    
-                    offer->exchangeId = offerAnwer->exchangeId;
-                    offer->outgoingContents = offerAnwer->outgoingContents;
-                    offer->incomingContents = offerAnwer->incomingContents;
-                    
-                    auto answer = _contentCoordinationContext->getAnwer(std::move(offer));
-                    
-                    signaling::OfferAnswerMessage data;
-
-                    data.exchangeId = answer->exchangeId;
-                    
-                    data.outgoingContents = answer->outgoingContents;
-                    data.incomingContents = answer->incomingContents;
-
-                    signaling::Message message;
-                    message.data = std::move(data);
-                    sendSignalingMessage(message);
-                    
-                    createNegotiatedChannels();
-                }
-            } else {
-                RTC_LOG(LS_ERROR) << "Unknown exchangeId: " << offerAnwer->exchangeId;
+                signaling::Message message;
+                message.data = std::move(data);
+                sendSignalingMessage(message);
             }
+            
+            sendOffer();
+            
+            createNegotiatedChannels();
         } else if (const auto candidatesList = absl::get_if<signaling::CandidatesMessage>(messageData)) {
             for (const auto &candidate : candidatesList->iceCandidates) {
                 webrtc::JsepIceCandidate parseCandidate{ std::string(), 0 };
@@ -1840,6 +1752,7 @@ private:
 private:
     std::shared_ptr<Threads> _threads;
     std::vector<RtcServer> _rtcServers;
+    bool _enableP2P = false;
     EncryptionKey _encryptionKey;
     std::function<void(State)> _stateUpdated;
     std::function<void(int)> _signalBarsUpdated;
