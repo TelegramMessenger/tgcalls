@@ -448,23 +448,25 @@ std::unique_ptr<ContentCoordinationContext::NegotiationContents> ContentCoordina
     answerOptions.bundle_enabled = true;
     
     for (const auto &id : _channelIdOrder) {
-        /*for (const auto &channel : _outgoingChannels) {
-            if (channel.description.mid == id) {
-                answerOptions.media_description_options.push_back(channel.description);
+        for (const auto &channel : _outgoingChannels) {
+            if (channel.id == id) {
+                auto mappedContent = convertSingalingContentToContentInfo(channel.id, channel.content, webrtc::RtpTransceiverDirection::kRecvOnly);
                 
-                cricket::MediaDescriptionOptions contentDescription(channel.description.type, channel.description.mid, webrtc::RtpTransceiverDirection::kSendOnly, false);
-                contentDescription.header_extensions = channel.description.header_extensions;
+                cricket::MediaDescriptionOptions contentDescription(mappedContent.media_description()->type(), mappedContent.name, webrtc::RtpTransceiverDirection::kSendOnly, false);
+                for (const auto &extension : mappedContent.media_description()->rtp_header_extensions()) {
+                    contentDescription.header_extensions.emplace_back(extension.uri, extension.id);
+                }
+                answerOptions.media_description_options.push_back(contentDescription);
                 
+                cricket::TransportDescription transportDescription;
+                cricket::TransportInfo transportInfo(channel.id, transportDescription);
+                mappedOffer->AddTransportInfo(transportInfo);
                 
                 mappedOffer->AddContent(std::move(mappedContent));
                 
-                cricket::TransportDescription transportDescription;
-                cricket::TransportInfo transportInfo(contentId, transportDescription);
-                mappedOffer->AddTransportInfo(transportInfo);
-                
                 break;
             }
-        }*/
+        }
         
         for (const auto &content : offer->contents) {
             if (contentIdBySsrc(content.ssrc) == id) {
