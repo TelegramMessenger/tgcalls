@@ -1,4 +1,4 @@
-#include "v2/ContentCoordination.h"
+#include "v2/ContentNegotiation.h"
 
 #include "rtc_base/rtc_certificate_generator.h"
 
@@ -103,6 +103,9 @@ cricket::ContentInfo convertSingalingContentToContentInfo(std::string const &con
                 for (const auto &parameter : payloadType.parameters) {
                     mappedCodec.params.insert(parameter);
                 }
+                for (const auto &feedbackParam : payloadType.feedbackTypes) {
+                    mappedCodec.AddFeedbackParam(cricket::FeedbackParam(feedbackParam.type, feedbackParam.subtype));
+                }
                 audioDescription->AddCodec(mappedCodec);
             }
             
@@ -118,6 +121,9 @@ cricket::ContentInfo convertSingalingContentToContentInfo(std::string const &con
                 for (const auto &parameter : payloadType.parameters) {
                     mappedCodec.params.insert(parameter);
                 }
+                for (const auto &feedbackParam : payloadType.feedbackTypes) {
+                    mappedCodec.AddFeedbackParam(cricket::FeedbackParam(feedbackParam.type, feedbackParam.subtype));
+                }
                 videoDescription->AddCodec(mappedCodec);
             }
             
@@ -132,6 +138,7 @@ cricket::ContentInfo convertSingalingContentToContentInfo(std::string const &con
     }
     
     cricket::StreamParams streamParams;
+    streamParams.id = contentId;
     streamParams.set_stream_ids({ contentId });
     streamParams.add_ssrc(content.ssrc);
     for (const auto &ssrcGroup : content.ssrcGroups) {
@@ -160,6 +167,24 @@ cricket::ContentInfo convertSingalingContentToContentInfo(std::string const &con
     return mappedContentInfo;
 }
 
+cricket::ContentInfo createInactiveContentInfo(std::string const &contentId) {
+    std::unique_ptr<cricket::MediaContentDescription> contentDescription;
+    
+    auto audioDescription = std::make_unique<cricket::AudioContentDescription>();
+    contentDescription = std::move(audioDescription);
+    
+    contentDescription->set_direction(webrtc::RtpTransceiverDirection::kInactive);
+    contentDescription->set_rtcp_mux(true);
+    
+    cricket::ContentInfo mappedContentInfo(cricket::MediaProtocolType::kRtp);
+    mappedContentInfo.name = contentId;
+    mappedContentInfo.rejected = false;
+    mappedContentInfo.bundle_only = false;
+    mappedContentInfo.set_media_description(std::move(contentDescription));
+    
+    return mappedContentInfo;
+}
+
 std::string contentIdBySsrc(uint32_t ssrc) {
     std::ostringstream contentIdString;
     
@@ -170,7 +195,7 @@ std::string contentIdBySsrc(uint32_t ssrc) {
 
 }
 
-ContentCoordinationContext::ContentCoordinationContext(bool isOutgoing, cricket::ChannelManager *channelManager, rtc::UniqueRandomIdGenerator *uniqueRandomIdGenerator) :
+ContentNegotiationContext::ContentNegotiationContext(bool isOutgoing, rtc::UniqueRandomIdGenerator *uniqueRandomIdGenerator) :
 _isOutgoing(isOutgoing),
 _uniqueRandomIdGenerator(uniqueRandomIdGenerator) {
     _transportDescriptionFactory = std::make_unique<cricket::TransportDescriptionFactory>();
@@ -182,6 +207,14 @@ _uniqueRandomIdGenerator(uniqueRandomIdGenerator) {
     
     _sessionDescriptionFactory = std::make_unique<cricket::MediaSessionDescriptionFactory>(_transportDescriptionFactory.get(), uniqueRandomIdGenerator);
     
+    _needNegotiation = true;
+}
+
+ContentNegotiationContext::~ContentNegotiationContext() {
+    
+}
+
+void ContentNegotiationContext::copyCodecsFromChannelManager(cricket::ChannelManager *channelManager, bool randomize) {
     cricket::AudioCodecs audioSendCodecs;
     cricket::AudioCodecs audioRecvCodecs;
     cricket::VideoCodecs videoSendCodecs;
@@ -200,22 +233,43 @@ _uniqueRandomIdGenerator(uniqueRandomIdGenerator) {
         }
     }
     
+    if (randomize) {
+        for (auto &codec : audioSendCodecs) {
+            codec.id += 3;
+        }
+        for (auto &codec : videoSendCodecs) {
+            codec.id += 3;
+        }
+        for (auto &codec : audioRecvCodecs) {
+            codec.id += 3;
+        }
+        for (auto &codec : videoRecvCodecs) {
+            codec.id += 3;
+        }
+    }
+    
     _sessionDescriptionFactory->set_audio_codecs(audioSendCodecs, audioRecvCodecs);
     _sessionDescriptionFactory->set_video_codecs(videoSendCodecs, videoRecvCodecs);
     
-    _rtpAudioExtensions.emplace_back(webrtc::RtpExtension::kAbsSendTimeUri, 2);
-    _rtpAudioExtensions.emplace_back(webrtc::RtpExtension::kTransportSequenceNumberUri, 3);
+    int absSendTimeUriId = 2;
+    int transportSequenceNumberUriId = 3;
+    int videoRotationUri = 13;
     
-    _rtpVideoExtensions.emplace_back(webrtc::RtpExtension::kAbsSendTimeUri, 2);
-    _rtpVideoExtensions.emplace_back(webrtc::RtpExtension::kTransportSequenceNumberUri, 3);
-    _rtpVideoExtensions.emplace_back(webrtc::RtpExtension::kVideoRotationUri, 13);
+    if (randomize) {
+        absSendTimeUriId = 3;
+        transportSequenceNumberUriId = 2;
+        videoRotationUri = 4;
+    }
+    
+    _rtpAudioExtensions.emplace_back(webrtc::RtpExtension::kAbsSendTimeUri, absSendTimeUriId);
+    _rtpAudioExtensions.emplace_back(webrtc::RtpExtension::kTransportSequenceNumberUri, transportSequenceNumberUriId);
+    
+    _rtpVideoExtensions.emplace_back(webrtc::RtpExtension::kAbsSendTimeUri, absSendTimeUriId);
+    _rtpVideoExtensions.emplace_back(webrtc::RtpExtension::kTransportSequenceNumberUri, transportSequenceNumberUriId);
+    _rtpVideoExtensions.emplace_back(webrtc::RtpExtension::kVideoRotationUri, videoRotationUri);
 }
 
-ContentCoordinationContext::~ContentCoordinationContext() {
-    
-}
-
-void ContentCoordinationContext::addOutgoingChannel(signaling::MediaContent::Type mediaType) {
+std::string ContentNegotiationContext::addOutgoingChannel(signaling::MediaContent::Type mediaType) {
     std::string channelId = takeNextOutgoingChannelId();
     
     cricket::MediaType mappedMediaType;
@@ -257,29 +311,23 @@ void ContentCoordinationContext::addOutgoingChannel(signaling::MediaContent::Typ
     
     _outgoingChannelDescriptions.emplace_back(std::move(offerDescription));
     _needNegotiation = true;
+    
+    return channelId;
 }
 
-/*void ContentCoordinationContext::removeOutgoingChannel(std::string const &channelId) {
+void ContentNegotiationContext::removeOutgoingChannel(std::string const &id) {
     for (size_t i = 0; i < _outgoingChannels.size(); i++) {
-        if (_outgoingChannels[i].mid == channelId) {
-            _outgoingChannels.erase(_outgoingChannels.begin() + i);
+        if (_outgoingChannelDescriptions[i].description.mid == id) {
+            _outgoingChannelDescriptions.erase(_outgoingChannelDescriptions.begin() + i);
+            
+            _needNegotiation = true;
+            
             break;
         }
     }
-}*/
-
-static cricket::MediaDescriptionOptions getOutgoingContentDescription(std::string const &name, signaling::MediaContent const &content) {
-    auto mappedContent = convertSingalingContentToContentInfo(name, content, webrtc::RtpTransceiverDirection::kRecvOnly);
-    
-    cricket::MediaDescriptionOptions contentDescription(mappedContent.media_description()->type(), mappedContent.name, webrtc::RtpTransceiverDirection::kSendOnly, false);
-    for (const auto &extension : mappedContent.media_description()->rtp_header_extensions()) {
-        contentDescription.header_extensions.emplace_back(extension.uri, extension.id);
-    }
-    
-    return contentDescription;
 }
 
-std::unique_ptr<cricket::SessionDescription> ContentCoordinationContext::currentSessionDescriptionFromCoordinatedState() {
+std::unique_ptr<cricket::SessionDescription> ContentNegotiationContext::currentSessionDescriptionFromCoordinatedState() {
     if (_channelIdOrder.empty()) {
         return nullptr;
     }
@@ -287,8 +335,12 @@ std::unique_ptr<cricket::SessionDescription> ContentCoordinationContext::current
     auto sessionDescription = std::make_unique<cricket::SessionDescription>();
     
     for (const auto &id : _channelIdOrder) {
+        bool found = false;
+        
         for (const auto &channel : _incomingChannels) {
             if (contentIdBySsrc(channel.ssrc) == id) {
+                found = true;
+                
                 auto mappedContent = convertSingalingContentToContentInfo(contentIdBySsrc(channel.ssrc), channel, webrtc::RtpTransceiverDirection::kRecvOnly);
                 
                 cricket::TransportDescription transportDescription;
@@ -303,16 +355,28 @@ std::unique_ptr<cricket::SessionDescription> ContentCoordinationContext::current
         
         for (const auto &channel : _outgoingChannels) {
             if (channel.id == id) {
+                found = true;
+                
                 auto mappedContent = convertSingalingContentToContentInfo(channel.id, channel.content, webrtc::RtpTransceiverDirection::kSendOnly);
                 
                 cricket::TransportDescription transportDescription;
-                cricket::TransportInfo transportInfo(channel.id, transportDescription);
+                cricket::TransportInfo transportInfo(mappedContent.name, transportDescription);
                 sessionDescription->AddTransportInfo(transportInfo);
                 
                 sessionDescription->AddContent(std::move(mappedContent));
                 
                 break;
             }
+        }
+        
+        if (!found) {
+            auto mappedContent = createInactiveContentInfo("_" + id);
+            
+            cricket::TransportDescription transportDescription;
+            cricket::TransportInfo transportInfo(mappedContent.name, transportDescription);
+            sessionDescription->AddTransportInfo(transportInfo);
+            
+            sessionDescription->AddContent(std::move(mappedContent));
         }
     }
     
@@ -330,21 +394,29 @@ static cricket::MediaDescriptionOptions getIncomingContentDescription(signaling:
     return contentDescription;
 }
 
-std::unique_ptr<ContentCoordinationContext::NegotiationContents> ContentCoordinationContext::getOffer() {
+std::unique_ptr<ContentNegotiationContext::NegotiationContents> ContentNegotiationContext::getPendingOffer() {
     if (!_needNegotiation) {
+        return nullptr;
+    }
+    if (_pendingOutgoingOffer) {
         return nullptr;
     }
     
     _pendingOutgoingOffer = std::make_unique<PendingOutgoingOffer>();
     _pendingOutgoingOffer->exchangeId = _uniqueRandomIdGenerator->GenerateId();
     
+    auto currentSessionDescription = currentSessionDescriptionFromCoordinatedState();
+    
     cricket::MediaSessionOptions offerOptions;
     offerOptions.offer_extmap_allow_mixed = true;
     offerOptions.bundle_enabled = true;
     
     for (const auto &id : _channelIdOrder) {
+        bool found = false;
+        
         for (const auto &channel : _outgoingChannelDescriptions) {
             if (channel.description.mid == id) {
+                found = true;
                 offerOptions.media_description_options.push_back(channel.description);
                 
                 break;
@@ -353,10 +425,16 @@ std::unique_ptr<ContentCoordinationContext::NegotiationContents> ContentCoordina
         
         for (const auto &content : _incomingChannels) {
             if (contentIdBySsrc(content.ssrc) == id) {
+                found = true;
                 offerOptions.media_description_options.push_back(getIncomingContentDescription(content));
                 
                 break;
             }
+        }
+        
+        if (!found) {
+            cricket::MediaDescriptionOptions contentDescription(cricket::MediaType::MEDIA_TYPE_AUDIO, "_" + id, webrtc::RtpTransceiverDirection::kInactive, false);
+            offerOptions.media_description_options.push_back(contentDescription);
         }
     }
     
@@ -376,31 +454,14 @@ std::unique_ptr<ContentCoordinationContext::NegotiationContents> ContentCoordina
         }
     }
     
-    auto currentSessionDescription = currentSessionDescriptionFromCoordinatedState();
-    
     std::unique_ptr<cricket::SessionDescription> offer = _sessionDescriptionFactory->CreateOffer(offerOptions, currentSessionDescription.get());
     
-    auto mappedOffer = std::make_unique<ContentCoordinationContext::NegotiationContents>();
+    auto mappedOffer = std::make_unique<ContentNegotiationContext::NegotiationContents>();
     
     mappedOffer->exchangeId = _pendingOutgoingOffer->exchangeId;
     
     for (const auto &content : offer->contents()) {
         auto mappedContent = convertContentInfoToSingalingContent(content);
-        
-        /*if (_coordinatedState) {
-            int nextRemoteContentId = 0;
-            for (const auto &findContent : _coordinatedState->incomingContents) {
-                std::ostringstream contentIdString;
-                contentIdString << (_isOutgoing ? "1" : "0") << nextRemoteContentId;
-                nextRemoteContentId++;
-                std::string contentId = contentIdString.str();
-                if (contentId == content.name) {
-                    mappedContent.ssrc = findContent.ssrc;
-                    mappedContent.ssrcGroups = findContent.ssrcGroups;
-                    break;
-                }
-            }
-        }*/
         
         if (content.media_description()->direction() == webrtc::RtpTransceiverDirection::kSendOnly) {
             mappedOffer->contents.push_back(std::move(mappedContent));
@@ -417,7 +478,7 @@ std::unique_ptr<ContentCoordinationContext::NegotiationContents> ContentCoordina
     return mappedOffer;
 }
 
-std::unique_ptr<ContentCoordinationContext::NegotiationContents> ContentCoordinationContext::setRemoteNegotiationContent(std::unique_ptr<NegotiationContents> &&remoteNegotiationContent) {
+std::unique_ptr<ContentNegotiationContext::NegotiationContents> ContentNegotiationContext::setRemoteNegotiationContent(std::unique_ptr<NegotiationContents> &&remoteNegotiationContent) {
     if (!remoteNegotiationContent) {
         return nullptr;
     }
@@ -427,8 +488,8 @@ std::unique_ptr<ContentCoordinationContext::NegotiationContents> ContentCoordina
             setAnswer(std::move(remoteNegotiationContent));
             return nullptr;
         } else {
-            // race condition detected — highest exchangeId wins
-            if (_pendingOutgoingOffer->exchangeId < remoteNegotiationContent->exchangeId) {
+            // race condition detected — call initiator wins
+            if (!_isOutgoing) {
                 _pendingOutgoingOffer.reset();
                 return getAnswer(std::move(remoteNegotiationContent));
             } else {
@@ -440,7 +501,9 @@ std::unique_ptr<ContentCoordinationContext::NegotiationContents> ContentCoordina
     }
 }
 
-std::unique_ptr<ContentCoordinationContext::NegotiationContents> ContentCoordinationContext::getAnswer(std::unique_ptr<ContentCoordinationContext::NegotiationContents> &&offer) {
+std::unique_ptr<ContentNegotiationContext::NegotiationContents> ContentNegotiationContext::getAnswer(std::unique_ptr<ContentNegotiationContext::NegotiationContents> &&offer) {
+    auto currentSessionDescription = currentSessionDescriptionFromCoordinatedState();
+    
     auto mappedOffer = std::make_unique<cricket::SessionDescription>();
     
     cricket::MediaSessionOptions answerOptions;
@@ -448,8 +511,12 @@ std::unique_ptr<ContentCoordinationContext::NegotiationContents> ContentCoordina
     answerOptions.bundle_enabled = true;
     
     for (const auto &id : _channelIdOrder) {
+        bool found = false;
+        
         for (const auto &channel : _outgoingChannels) {
             if (channel.id == id) {
+                found = true;
+                
                 auto mappedContent = convertSingalingContentToContentInfo(channel.id, channel.content, webrtc::RtpTransceiverDirection::kRecvOnly);
                 
                 cricket::MediaDescriptionOptions contentDescription(mappedContent.media_description()->type(), mappedContent.name, webrtc::RtpTransceiverDirection::kSendOnly, false);
@@ -470,7 +537,7 @@ std::unique_ptr<ContentCoordinationContext::NegotiationContents> ContentCoordina
         
         for (const auto &content : offer->contents) {
             if (contentIdBySsrc(content.ssrc) == id) {
-                answerOptions.media_description_options.push_back(getIncomingContentDescription(content));
+                found = true;
                 
                 auto mappedContent = convertSingalingContentToContentInfo(contentIdBySsrc(content.ssrc), content, webrtc::RtpTransceiverDirection::kSendOnly);
                 
@@ -488,6 +555,19 @@ std::unique_ptr<ContentCoordinationContext::NegotiationContents> ContentCoordina
                 
                 break;
             }
+        }
+        
+        if (!found) {
+            auto mappedContent = createInactiveContentInfo("_" + id);
+            
+            cricket::MediaDescriptionOptions contentDescription(cricket::MediaType::MEDIA_TYPE_AUDIO, "_" + id, webrtc::RtpTransceiverDirection::kInactive, false);
+            answerOptions.media_description_options.push_back(contentDescription);
+            
+            cricket::TransportDescription transportDescription;
+            cricket::TransportInfo transportInfo(mappedContent.mid(), transportDescription);
+            mappedOffer->AddTransportInfo(transportInfo);
+            
+            mappedOffer->AddContent(std::move(mappedContent));
         }
     }
     
@@ -507,78 +587,6 @@ std::unique_ptr<ContentCoordinationContext::NegotiationContents> ContentCoordina
         }
     }
     
-    /*int nextRemoteContentId = 0;
-    for (const auto &content : offer->outgoingContents) {
-        std::ostringstream contentIdString;
-        contentIdString << (_isOutgoing ? "1" : "0") << nextRemoteContentId;
-        nextRemoteContentId++;
-        std::string contentId = contentIdString.str();
-        
-        auto mappedContent = convertSingalingContentToContentInfo(contentId, content, webrtc::RtpTransceiverDirection::kSendOnly);
-        
-        cricket::MediaDescriptionOptions contentDescription(mappedContent.media_description()->type(), mappedContent.name, webrtc::RtpTransceiverDirection::kRecvOnly, false);
-        for (const auto &extension : mappedContent.media_description()->rtp_header_extensions()) {
-            contentDescription.header_extensions.emplace_back(extension.uri, extension.id);
-        }
-        answerOptions.media_description_options.push_back(contentDescription);
-        
-        mappedOffer->AddContent(std::move(mappedContent));
-        
-        cricket::TransportDescription transportDescription;
-        cricket::TransportInfo transportInfo(contentId, transportDescription);
-        mappedOffer->AddTransportInfo(transportInfo);
-    }
-    
-    while (mappedOffer->contents().size() < 4) {
-        std::ostringstream contentIdString;
-        contentIdString << mappedOffer->contents().size();
-        
-        std::unique_ptr<cricket::MediaContentDescription> contentDescription;
-        
-        auto audioDescription = std::make_unique<cricket::AudioContentDescription>();
-        
-        contentDescription = std::move(audioDescription);
-        
-        contentDescription->set_direction(webrtc::RtpTransceiverDirection::kRecvOnly);
-        contentDescription->set_rtcp_mux(true);
-        
-        cricket::ContentInfo mappedContentInfo(cricket::MediaProtocolType::kRtp);
-        mappedContentInfo.name = contentIdString.str();
-        mappedContentInfo.rejected = false;
-        mappedContentInfo.bundle_only = false;
-        mappedContentInfo.set_media_description(std::move(contentDescription));
-        
-        mappedOffer->AddContent(std::move(mappedContentInfo));
-    }
-    
-    int nextLocalContentId = 0;
-    for (const auto &content : offer->incomingContents) {
-        std::ostringstream contentIdString;
-        contentIdString << (!_isOutgoing ? "1" : "0") << nextLocalContentId;
-        nextLocalContentId++;
-        std::string contentId = contentIdString.str();
-        
-        auto mappedContent = convertSingalingContentToContentInfo(contentId, content, webrtc::RtpTransceiverDirection::kRecvOnly);
-        
-        cricket::MediaDescriptionOptions contentDescription(mappedContent.media_description()->type(), mappedContent.name, webrtc::RtpTransceiverDirection::kSendOnly, false);
-        for (const auto &extension : mappedContent.media_description()->rtp_header_extensions()) {
-            contentDescription.header_extensions.emplace_back(extension.uri, extension.id);
-        }
-        answerOptions.media_description_options.push_back(contentDescription);
-        
-        mappedOffer->AddContent(std::move(mappedContent));
-        
-        cricket::TransportDescription transportDescription;
-        cricket::TransportInfo transportInfo(contentId, transportDescription);
-        mappedOffer->AddTransportInfo(transportInfo);
-    }
-    
-    for (const auto &channel : _outgoingChannels) {
-        answerOptions.media_description_options.push_back(channel);
-    }*/
-    
-    auto currentSessionDescription = currentSessionDescriptionFromCoordinatedState();
-    
     std::unique_ptr<cricket::SessionDescription> answer = _sessionDescriptionFactory->CreateAnswer(mappedOffer.get(), answerOptions, currentSessionDescription.get());
     
     auto mappedAnswer = std::make_unique<NegotiationContents>();
@@ -589,40 +597,8 @@ std::unique_ptr<ContentCoordinationContext::NegotiationContents> ContentCoordina
     
     for (const auto &content : answer->contents()) {
         auto mappedContent = convertContentInfoToSingalingContent(content);
-        /*if (content.media_description()->direction() == webrtc::RtpTransceiverDirection::kSendOnly) {
-            if (_coordinatedState) {
-                int nextRemoteContentId = 0;
-                for (const auto &findContent : _coordinatedState->outgoingContents) {
-                    std::ostringstream contentIdString;
-                    contentIdString << (_isOutgoing ? "0" : "1") << nextRemoteContentId;
-                    nextRemoteContentId++;
-                    std::string contentId = contentIdString.str();
-                    if (contentId == content.name) {
-                        mappedContent.ssrc = findContent.ssrc;
-                        mappedContent.ssrcGroups = findContent.ssrcGroups;
-                        break;
-                    }
-                }
-            }
-            
-            resultingState->outgoingContents.push_back(mappedContent);
-            mappedAnswer->outgoingContents.push_back(std::move(mappedContent));
-        } else */
         
         if (content.media_description()->direction() == webrtc::RtpTransceiverDirection::kRecvOnly) {
-            /*int nextRemoteContentId = 0;
-            for (const auto &findContent : offer->outgoingContents) {
-                std::ostringstream contentIdString;
-                contentIdString << (_isOutgoing ? "1" : "0") << nextRemoteContentId;
-                nextRemoteContentId++;
-                std::string contentId = contentIdString.str();
-                if (contentId == content.name) {
-                    mappedContent.ssrc = findContent.ssrc;
-                    mappedContent.ssrcGroups = findContent.ssrcGroups;
-                    break;
-                }
-            }*/
-            
             for (const auto &offerContent : offer->contents) {
                 if (contentIdBySsrc(offerContent.ssrc) == content.mid()) {
                     mappedContent.ssrc = offerContent.ssrc;
@@ -642,7 +618,7 @@ std::unique_ptr<ContentCoordinationContext::NegotiationContents> ContentCoordina
     return mappedAnswer;
 }
 
-void ContentCoordinationContext::setAnswer(std::unique_ptr<ContentCoordinationContext::NegotiationContents> &&answer) {
+void ContentNegotiationContext::setAnswer(std::unique_ptr<ContentNegotiationContext::NegotiationContents> &&answer) {
     if (!_pendingOutgoingOffer) {
         return;
     }
@@ -666,23 +642,55 @@ void ContentCoordinationContext::setAnswer(std::unique_ptr<ContentCoordinationCo
     }
 }
 
-std::string ContentCoordinationContext::takeNextOutgoingChannelId() {
+std::string ContentNegotiationContext::takeNextOutgoingChannelId() {
     std::ostringstream result;
-    result << (_isOutgoing ? "0" : "1") << _nextOutgoingChannelId;
+    result << "m" << _nextOutgoingChannelId;
     _nextOutgoingChannelId++;
     
     return result.str();
 }
 
-std::unique_ptr<ContentCoordinationContext::CoordinatedState> ContentCoordinationContext::coordinatedState() const {
-    auto result = std::make_unique<ContentCoordinationContext::CoordinatedState>();
+std::unique_ptr<ContentNegotiationContext::CoordinatedState> ContentNegotiationContext::coordinatedState() const {
+    auto result = std::make_unique<ContentNegotiationContext::CoordinatedState>();
     
     result->incomingContents = _incomingChannels;
     for (const auto &channel : _outgoingChannels) {
-        result->outgoingContents.push_back(channel.content);
+        bool found = false;
+        
+        for (const auto &channelDescription : _outgoingChannelDescriptions) {
+            if (channelDescription.description.mid == channel.id) {
+                found = true;
+                break;
+            }
+        }
+        
+        if (found) {
+            result->outgoingContents.push_back(channel.content);
+        }
     }
     
     return result;
+}
+
+absl::optional<uint32_t> ContentNegotiationContext::outgoingChannelSsrc(std::string const &id) const {
+    for (const auto &channel : _outgoingChannels) {
+        bool found = false;
+        
+        for (const auto &channelDescription : _outgoingChannelDescriptions) {
+            if (channelDescription.description.mid == channel.id) {
+                found = true;
+                break;
+            }
+        }
+        
+        if (found && channel.id == id) {
+            if (channel.content.ssrc != 0) {
+                return channel.content.ssrc;
+            }
+        }
+    }
+    
+    return absl::nullopt;
 }
 
 } // namespace tgcalls

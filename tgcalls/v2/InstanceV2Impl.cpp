@@ -5,7 +5,7 @@
 #include "VideoCapturerInterface.h"
 #include "v2/NativeNetworkingImpl.h"
 #include "v2/Signaling.h"
-#include "v2/ContentCoordination.h"
+#include "v2/ContentNegotiation.h"
 
 #include "CodecSelectHelper.h"
 #include "platform/PlatformInterface.h"
@@ -55,101 +55,10 @@
 namespace tgcalls {
 namespace {
 
-static std::string intToString(int value) {
-    std::ostringstream stringStream;
-    stringStream << value;
-    return stringStream.str();
-}
-
 static VideoCaptureInterfaceObject *GetVideoCaptureAssumingSameThread(VideoCaptureInterface *videoCapture) {
     return videoCapture
         ? static_cast<VideoCaptureInterfaceImpl*>(videoCapture)->object()->getSyncAssumingSameThread()
         : nullptr;
-}
-
-struct OutgoingVideoFormat {
-    cricket::VideoCodec videoCodec;
-    absl::optional<cricket::VideoCodec> rtxCodec;
-};
-
-static void addDefaultFeedbackParams(cricket::VideoCodec *codec) {
-    // Don't add any feedback params for RED and ULPFEC.
-    if (codec->name == cricket::kRedCodecName || codec->name == cricket::kUlpfecCodecName) {
-        return;
-    }
-    codec->AddFeedbackParam(cricket::FeedbackParam(cricket::kRtcpFbParamRemb, cricket::kParamValueEmpty));
-    codec->AddFeedbackParam(cricket::FeedbackParam(cricket::kRtcpFbParamTransportCc, cricket::kParamValueEmpty));
-    // Don't add any more feedback params for FLEXFEC.
-    if (codec->name == cricket::kFlexfecCodecName) {
-        return;
-    }
-    codec->AddFeedbackParam(cricket::FeedbackParam(cricket::kRtcpFbParamCcm, cricket::kRtcpFbCcmParamFir));
-    codec->AddFeedbackParam(cricket::FeedbackParam(cricket::kRtcpFbParamNack, cricket::kParamValueEmpty));
-    codec->AddFeedbackParam(cricket::FeedbackParam(cricket::kRtcpFbParamNack, cricket::kRtcpFbNackParamPli));
-}
-
-static std::vector<OutgoingVideoFormat> generateAvailableVideoFormats(std::vector<webrtc::SdpVideoFormat> const &formats) {
-    if (formats.empty()) {
-        return {};
-    }
-
-    constexpr int kFirstDynamicPayloadType = 100;
-    constexpr int kLastDynamicPayloadType = 127;
-
-    int payload_type = kFirstDynamicPayloadType;
-
-    std::vector<OutgoingVideoFormat> result;
-
-    //bool codecSelected = false;
-
-    for (const auto &format : formats) {
-        /*if (codecSelected) {
-            break;
-        }*/
-
-        bool alreadyAdded = false;
-        for (const auto &it : result) {
-            if (it.videoCodec.name == format.name) {
-                alreadyAdded = true;
-                break;
-            }
-        }
-        if (alreadyAdded) {
-            continue;
-        }
-
-        OutgoingVideoFormat resultFormat;
-
-        cricket::VideoCodec codec(format);
-        codec.id = payload_type;
-        addDefaultFeedbackParams(&codec);
-
-        resultFormat.videoCodec = codec;
-        //codecSelected = true;
-
-        // Increment payload type.
-        ++payload_type;
-        if (payload_type > kLastDynamicPayloadType) {
-            RTC_LOG(LS_ERROR) << "Out of dynamic payload types, skipping the rest.";
-            break;
-        }
-
-        // Add associated RTX codec for non-FEC codecs.
-        if (!absl::EqualsIgnoreCase(codec.name, cricket::kUlpfecCodecName) &&
-            !absl::EqualsIgnoreCase(codec.name, cricket::kFlexfecCodecName)) {
-            resultFormat.rtxCodec = cricket::VideoCodec::CreateRtxCodec(payload_type, codec.id);
-
-            // Increment payload type.
-            ++payload_type;
-            if (payload_type > kLastDynamicPayloadType) {
-                RTC_LOG(LS_ERROR) << "Out of dynamic payload types, skipping the rest.";
-                break;
-            }
-        }
-
-        result.push_back(std::move(resultFormat));
-    }
-    return result;
 }
 
 class OutgoingAudioChannel : public sigslot::has_slots<> {
@@ -198,16 +107,8 @@ public:
             if (payloadType.name == "opus") {
                 cricket::AudioCodec codec(payloadType.id, payloadType.name, payloadType.clockrate, 0, payloadType.channels);
 
-                const uint8_t opusMinBitrateKbps = 16;
-                const uint8_t opusMaxBitrateKbps = 32;
-                const uint8_t opusStartBitrateKbps = 32;
-                const uint8_t opusPTimeMs = 60;
-
-                codec.SetParam(cricket::kCodecParamMinBitrate, opusMinBitrateKbps);
-                codec.SetParam(cricket::kCodecParamStartBitrate, opusStartBitrateKbps);
-                codec.SetParam(cricket::kCodecParamMaxBitrate, opusMaxBitrateKbps);
                 codec.SetParam(cricket::kCodecParamUseInbandFec, 1);
-                codec.SetParam(cricket::kCodecParamPTime, opusPTimeMs);
+                codec.SetParam(cricket::kCodecParamPTime, 60);
                 
                 for (const auto &feedbackType : payloadType.feedbackTypes) {
                     codec.AddFeedbackParam(cricket::FeedbackParam(feedbackType.type, feedbackType.subtype));
@@ -268,6 +169,23 @@ public:
     
     uint32_t ssrc() const {
         return _ssrc;
+    }
+    
+    void setMaxBitrate(int bitrate) {
+        _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [&]() {
+            webrtc::RtpParameters initialParameters = _outgoingAudioChannel->media_channel()->GetRtpSendParameters(_ssrc);
+            webrtc::RtpParameters updatedParameters = initialParameters;
+            
+            if (updatedParameters.encodings.empty()) {
+                updatedParameters.encodings.push_back(webrtc::RtpEncodingParameters());
+            }
+            
+            updatedParameters.encodings[0].max_bitrate_bps = bitrate;
+            
+            if (initialParameters != updatedParameters) {
+                _outgoingAudioChannel->media_channel()->SetRtpSendParameters(_ssrc, updatedParameters);
+            }
+        });
     }
 
 private:
@@ -425,7 +343,7 @@ public:
         
         _outgoingVideoChannel = _channelManager->CreateVideoChannel(call, cricket::MediaConfig(), rtpTransport, threads->getMediaThread(), contentId.str(), false, NativeNetworkingImpl::getDefaulCryptoOptions(), randomIdGenerator, videoOptions, videoBitrateAllocatorFactory);
 
-        std::vector<cricket::VideoCodec> codecs;
+        std::vector<cricket::VideoCodec> unsortedCodecs;
         for (const auto &payloadType : mediaContent.payloadTypes) {
             cricket::VideoCodec codec(payloadType.id, payloadType.name);
             for (const auto &parameter : payloadType.parameters) {
@@ -434,7 +352,26 @@ public:
             for (const auto &feedbackType : payloadType.feedbackTypes) {
                 codec.AddFeedbackParam(cricket::FeedbackParam(feedbackType.type, feedbackType.subtype));
             }
-            codecs.push_back(std::move(codec));
+            unsortedCodecs.push_back(std::move(codec));
+        }
+        
+        std::vector<std::string> codecPreferences = {
+            cricket::kH265CodecName,
+            cricket::kH264CodecName
+        };
+        
+        std::vector<cricket::VideoCodec> codecs;
+        for (const auto &name : codecPreferences) {
+            for (const auto &codec : unsortedCodecs) {
+                if (codec.name == name) {
+                    codecs.push_back(codec);
+                }
+            }
+        }
+        for (const auto &codec : unsortedCodecs) {
+            if (std::find(codecs.begin(), codecs.end(), codec) == codecs.end()) {
+                codecs.push_back(codec);
+            }
         }
 
         auto outgoingVideoDescription = std::make_unique<cricket::VideoContentDescription>();
@@ -481,6 +418,10 @@ public:
             _outgoingVideoChannel->SetRemoteContent(incomingVideoDescription.get(), webrtc::SdpType::kAnswer, nullptr);
 
             webrtc::RtpParameters rtpParameters = _outgoingVideoChannel->media_channel()->GetRtpSendParameters(mediaContent.ssrc);
+            
+            if (isScreencast) {
+                rtpParameters.degradation_preference = webrtc::DegradationPreference::MAINTAIN_RESOLUTION;
+            }
 
             _outgoingVideoChannel->media_channel()->SetRtpSendParameters(mediaContent.ssrc, rtpParameters);
         });
@@ -580,6 +521,23 @@ public:
     
     uint32_t ssrc() const {
         return _mainSsrc;
+    }
+    
+    void setMaxBitrate(int bitrate) {
+        _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [&]() {
+            webrtc::RtpParameters initialParameters = _outgoingVideoChannel->media_channel()->GetRtpSendParameters(_mainSsrc);
+            webrtc::RtpParameters updatedParameters = initialParameters;
+            
+            if (updatedParameters.encodings.empty()) {
+                updatedParameters.encodings.push_back(webrtc::RtpEncodingParameters());
+            }
+            
+            updatedParameters.encodings[0].max_bitrate_bps = bitrate;
+            
+            if (initialParameters != updatedParameters) {
+                _outgoingVideoChannel->media_channel()->SetRtpSendParameters(_mainSsrc, updatedParameters);
+            }
+        });
     }
 
 public:
@@ -812,7 +770,7 @@ public:
             _audioDeviceModule = nullptr;
         });
         
-        _contentCoordinationContext.reset();
+        _contentNegotiationContext.reset();
         
         _threads->getNetworkThread()->Invoke<void>(RTC_FROM_HERE, []() {
         });
@@ -925,10 +883,11 @@ public:
 
         _uniqueRandomIdGenerator.reset(new rtc::UniqueRandomIdGenerator());
         
-        _contentCoordinationContext = std::make_unique<ContentCoordinationContext>(_encryptionKey.isOutgoing, _channelManager.get(), _uniqueRandomIdGenerator.get());
+        _contentNegotiationContext = std::make_unique<ContentNegotiationContext>(_encryptionKey.isOutgoing, _uniqueRandomIdGenerator.get());
+        _contentNegotiationContext->copyCodecsFromChannelManager(_channelManager.get(), false);
         
-        _contentCoordinationContext->addOutgoingChannel(signaling::MediaContent::Type::Audio);
-        _contentCoordinationContext->addOutgoingChannel(signaling::MediaContent::Type::Video);
+        _outgoingAudioChannelId = _contentNegotiationContext->addOutgoingChannel(signaling::MediaContent::Type::Audio);
+        //_contentNegotiationContext->addOutgoingChannel(signaling::MediaContent::Type::Video);
 
         _threads->getNetworkThread()->Invoke<void>(RTC_FROM_HERE, [this]() {
             _rtpTransport = _networking->getSyncAssumingSameThread()->getRtpTransport();
@@ -974,17 +933,27 @@ public:
     }
 
     void createNegotiatedChannels() {
-        const auto coordinatedState = _contentCoordinationContext->coordinatedState();
+        const auto coordinatedState = _contentNegotiationContext->coordinatedState();
         if (!coordinatedState) {
             return;
         }
-        for (const auto &content : coordinatedState->outgoingContents) {
-            switch (content.type) {
-                case signaling::MediaContent::Type::Audio: {
-                    if (_outgoingAudioChannel && _outgoingAudioChannel->ssrc() != content.ssrc) {
-                        _outgoingAudioChannel.reset();
+        
+        if (_outgoingAudioChannelId) {
+            const auto audioSsrc = _contentNegotiationContext->outgoingChannelSsrc(_outgoingAudioChannelId.value());
+            if (audioSsrc) {
+                if (_outgoingAudioChannel && _outgoingAudioChannel->ssrc() != audioSsrc.value()) {
+                    _outgoingAudioChannel.reset();
+                }
+                
+                absl::optional<signaling::MediaContent> outgoingAudioContent;
+                for (const auto &content : coordinatedState->outgoingContents) {
+                    if (content.type == signaling::MediaContent::Type::Audio && content.ssrc == audioSsrc.value()) {
+                        outgoingAudioContent = content;
+                        break;
                     }
-                    
+                }
+                
+                if (outgoingAudioContent) {
                     if (!_outgoingAudioChannel) {
                         _outgoingAudioChannel.reset(new OutgoingAudioChannel(
                             _call.get(),
@@ -992,18 +961,30 @@ public:
                             _uniqueRandomIdGenerator.get(),
                             &_audioSource,
                             _rtpTransport,
-                            content,
+                            outgoingAudioContent.value(),
                             _threads
                         ));
                     }
-                    
-                    break;
                 }
-                case signaling::MediaContent::Type::Video: {
-                    if (_outgoingVideoChannel && _outgoingVideoChannel->ssrc() != content.ssrc) {
-                        _outgoingVideoChannel.reset();
+            }
+        }
+        
+        if (_outgoingVideoChannelId) {
+            const auto videoSsrc = _contentNegotiationContext->outgoingChannelSsrc(_outgoingVideoChannelId.value());
+            if (videoSsrc) {
+                if (_outgoingVideoChannel && _outgoingVideoChannel->ssrc() != videoSsrc.value()) {
+                    _outgoingVideoChannel.reset();
+                }
+                
+                absl::optional<signaling::MediaContent> outgoingVideoContent;
+                for (const auto &content : coordinatedState->outgoingContents) {
+                    if (content.type == signaling::MediaContent::Type::Video && content.ssrc == videoSsrc.value()) {
+                        outgoingVideoContent = content;
+                        break;
                     }
-                    
+                }
+                
+                if (outgoingVideoContent) {
                     if (!_outgoingVideoChannel) {
                         const auto weak = std::weak_ptr<InstanceV2ImplInternal>(shared_from_this());
 
@@ -1023,7 +1004,7 @@ public:
                                     strong->sendMediaState();
                                 });
                             },
-                            content,
+                            outgoingVideoContent.value(),
                             false
                         ));
 
@@ -1031,12 +1012,53 @@ public:
                             _outgoingVideoChannel->setVideoCapture(_videoCapture);
                         }
                     }
-                    
-                    break;
                 }
-                default: {
-                    RTC_FATAL() << "Unknown media type";
-                    break;
+            }
+        }
+        
+        if (_outgoingScreencastChannelId) {
+            const auto screencastSsrc = _contentNegotiationContext->outgoingChannelSsrc(_outgoingScreencastChannelId.value());
+            if (screencastSsrc) {
+                if (_outgoingScreencastChannel && _outgoingScreencastChannel->ssrc() != screencastSsrc.value()) {
+                    _outgoingScreencastChannel.reset();
+                }
+                
+                absl::optional<signaling::MediaContent> outgoingScreencastContent;
+                for (const auto &content : coordinatedState->outgoingContents) {
+                    if (content.type == signaling::MediaContent::Type::Video && content.ssrc == screencastSsrc.value()) {
+                        outgoingScreencastContent = content;
+                        break;
+                    }
+                }
+                
+                if (outgoingScreencastContent) {
+                    if (!_outgoingScreencastChannel) {
+                        const auto weak = std::weak_ptr<InstanceV2ImplInternal>(shared_from_this());
+
+                        _outgoingScreencastChannel.reset(new OutgoingVideoChannel(
+                            _threads,
+                            _channelManager.get(),
+                            _call.get(),
+                            _rtpTransport,
+                            _uniqueRandomIdGenerator.get(),
+                            _videoBitrateAllocatorFactory.get(),
+                            [threads = _threads, weak]() {
+                                threads->getMediaThread()->PostTask(RTC_FROM_HERE, [=] {
+                                    const auto strong = weak.lock();
+                                    if (!strong) {
+                                        return;
+                                    }
+                                    strong->sendMediaState();
+                                });
+                            },
+                            outgoingScreencastContent.value(),
+                            true
+                        ));
+
+                        if (_screencastCapture) {
+                            _outgoingScreencastChannel->setVideoCapture(_screencastCapture);
+                        }
+                    }
                 }
             }
         }
@@ -1130,6 +1152,7 @@ public:
         }*/
 
         adjustBitratePreferences(true);
+        sendMediaState();
     }
 
     void sendInitialSetup() {
@@ -1174,8 +1197,8 @@ public:
         });
     }
     
-    void sendOffer() {
-        if (const auto offer = _contentCoordinationContext->getOffer()) {
+    void sendOfferIfNeeded() {
+        if (const auto offer = _contentNegotiationContext->getPendingOffer()) {
             signaling::NegotiateChannelsMessage data;
 
             data.exchangeId = offer->exchangeId;
@@ -1231,180 +1254,8 @@ public:
                 networking->setRemoteParams(remoteIceParameters, fingerprint.get(), sslSetup);
             });
 
-            /*if (const auto audio = initialSetup->audio) {
-                if (_encryptionKey.isOutgoing) {
-                    if (_outgoingAudioContent) {
-                        _negotiatedOutgoingAudioContent = negotiateMediaContent<cricket::AudioCodec>(_outgoingAudioContent.value(), _outgoingAudioContent.value(), audio.value(), false);
-                        const auto incomingAudioContent = negotiateMediaContent<cricket::AudioCodec>(audio.value(), _outgoingAudioContent.value(), audio.value(), false);
-
-                        signaling::MediaContent outgoingAudioContent;
-
-                        outgoingAudioContent.ssrc = _outgoingAudioContent->ssrc;
-                        outgoingAudioContent.ssrcGroups = _outgoingAudioContent->ssrcGroups;
-                        outgoingAudioContent.rtpExtensions = _negotiatedOutgoingAudioContent->rtpExtensions;
-                        outgoingAudioContent.payloadTypes = getPayloadTypesFromAudioCodecs(_negotiatedOutgoingAudioContent->codecs);
-
-                        _outgoingAudioContent = std::move(outgoingAudioContent);
-
-                        _incomingAudioChannel.reset(new IncomingV2AudioChannel(
-                            _channelManager.get(),
-                            _call.get(),
-                            _rtpTransport,
-                            _uniqueRandomIdGenerator.get(),
-                            incomingAudioContent,
-                            _threads
-                        ));
-                    }
-                } else {
-                    const auto generatedOutgoingContent = OutgoingAudioChannel::createOutgoingContentDescription();
-
-                    if (generatedOutgoingContent) {
-                        _negotiatedOutgoingAudioContent = negotiateMediaContent<cricket::AudioCodec>(generatedOutgoingContent.value(), generatedOutgoingContent.value(), audio.value(), true);
-                        const auto incomingAudioContent = negotiateMediaContent<cricket::AudioCodec>(audio.value(), generatedOutgoingContent.value(), audio.value(), true);
-
-                        if (_negotiatedOutgoingAudioContent) {
-                            signaling::MediaContent outgoingAudioContent;
-
-                            outgoingAudioContent.ssrc = generatedOutgoingContent->ssrc;
-                            outgoingAudioContent.ssrcGroups = generatedOutgoingContent->ssrcGroups;
-                            outgoingAudioContent.rtpExtensions = _negotiatedOutgoingAudioContent->rtpExtensions;
-                            outgoingAudioContent.payloadTypes = getPayloadTypesFromAudioCodecs(_negotiatedOutgoingAudioContent->codecs);
-
-                            _outgoingAudioContent = std::move(outgoingAudioContent);
-
-                            _incomingAudioChannel.reset(new IncomingV2AudioChannel(
-                                _channelManager.get(),
-                                _call.get(),
-                                _rtpTransport,
-                                _uniqueRandomIdGenerator.get(),
-                                incomingAudioContent,
-                                _threads
-                            ));
-                        }
-                    }
-                }
-            }
-
-            if (const auto video = initialSetup->video) {
-                if (_encryptionKey.isOutgoing) {
-                    if (_outgoingVideoContent) {
-                        _negotiatedOutgoingVideoContent = negotiateMediaContent<cricket::VideoCodec>(_outgoingVideoContent.value(), _outgoingVideoContent.value(), video.value(), false);
-                        const auto incomingVideoContent = negotiateMediaContent<cricket::VideoCodec>(video.value(), _outgoingVideoContent.value(), video.value(), false);
-
-                        signaling::MediaContent outgoingVideoContent;
-
-                        outgoingVideoContent.ssrc = _outgoingVideoContent->ssrc;
-                        outgoingVideoContent.ssrcGroups = _outgoingVideoContent->ssrcGroups;
-                        outgoingVideoContent.rtpExtensions = _negotiatedOutgoingVideoContent->rtpExtensions;
-                        outgoingVideoContent.payloadTypes = getPayloadTypesFromVideoCodecs(_negotiatedOutgoingVideoContent->codecs);
-
-                        _outgoingVideoContent = std::move(outgoingVideoContent);
-
-                        _incomingVideoChannel.reset(new IncomingV2VideoChannel(
-                            _channelManager.get(),
-                            _call.get(),
-                            _rtpTransport,
-                            _uniqueRandomIdGenerator.get(),
-                            incomingVideoContent,
-                            "1",
-                            _threads
-                        ));
-                        _incomingVideoChannel->addSink(_currentSink);
-                    }
-                } else {
-                    const auto generatedOutgoingContent = OutgoingVideoChannel::createOutgoingContentDescription(_availableVideoFormats, false);
-
-                    if (generatedOutgoingContent) {
-                        _negotiatedOutgoingVideoContent = negotiateMediaContent<cricket::VideoCodec>(generatedOutgoingContent.value(), generatedOutgoingContent.value(), video.value(), true);
-                        const auto incomingVideoContent = negotiateMediaContent<cricket::VideoCodec>(video.value(), generatedOutgoingContent.value(), video.value(), true);
-
-                        if (_negotiatedOutgoingVideoContent) {
-                            signaling::MediaContent outgoingVideoContent;
-
-                            outgoingVideoContent.ssrc = generatedOutgoingContent->ssrc;
-                            outgoingVideoContent.ssrcGroups = generatedOutgoingContent->ssrcGroups;
-                            outgoingVideoContent.rtpExtensions = _negotiatedOutgoingVideoContent->rtpExtensions;
-                            outgoingVideoContent.payloadTypes = getPayloadTypesFromVideoCodecs(_negotiatedOutgoingVideoContent->codecs);
-
-                            _outgoingVideoContent = std::move(outgoingVideoContent);
-
-                            _incomingVideoChannel.reset(new IncomingV2VideoChannel(
-                                _channelManager.get(),
-                                _call.get(),
-                                _rtpTransport,
-                                _uniqueRandomIdGenerator.get(),
-                                incomingVideoContent,
-                                "1",
-                                _threads
-                            ));
-                            _incomingVideoChannel->addSink(_currentSink);
-                        }
-                    }
-                }
-            }
-
-            if (const auto screencast = initialSetup->screencast) {
-                if (_encryptionKey.isOutgoing) {
-                    if (_outgoingScreencastContent) {
-                        _negotiatedOutgoingScreencastContent = negotiateMediaContent<cricket::VideoCodec>(_outgoingScreencastContent.value(), _outgoingScreencastContent.value(), screencast.value(), false);
-                        const auto incomingScreencastContent = negotiateMediaContent<cricket::VideoCodec>(screencast.value(), _outgoingScreencastContent.value(), screencast.value(), false);
-
-                        signaling::MediaContent outgoingScreencastContent;
-
-                        outgoingScreencastContent.ssrc = _outgoingScreencastContent->ssrc;
-                        outgoingScreencastContent.ssrcGroups = _outgoingScreencastContent->ssrcGroups;
-                        outgoingScreencastContent.rtpExtensions = _negotiatedOutgoingScreencastContent->rtpExtensions;
-                        outgoingScreencastContent.payloadTypes = getPayloadTypesFromVideoCodecs(_negotiatedOutgoingScreencastContent->codecs);
-
-                        _outgoingScreencastContent = std::move(outgoingScreencastContent);
-
-                        _incomingScreencastChannel.reset(new IncomingV2VideoChannel(
-                            _channelManager.get(),
-                            _call.get(),
-                            _rtpTransport,
-                            _uniqueRandomIdGenerator.get(),
-                            incomingScreencastContent,
-                            "2",
-                            _threads
-                        ));
-                        _incomingScreencastChannel->addSink(_currentSink);
-                    }
-                } else {
-                    const auto generatedOutgoingContent = OutgoingVideoChannel::createOutgoingContentDescription(_availableVideoFormats, true);
-
-                    if (generatedOutgoingContent) {
-                        _negotiatedOutgoingScreencastContent = negotiateMediaContent<cricket::VideoCodec>(generatedOutgoingContent.value(), generatedOutgoingContent.value(), screencast.value(), true);
-                        const auto incomingScreencastContent = negotiateMediaContent<cricket::VideoCodec>(screencast.value(), generatedOutgoingContent.value(), screencast.value(), true);
-
-                        if (_negotiatedOutgoingScreencastContent) {
-                            signaling::MediaContent outgoingScreencastContent;
-
-                            outgoingScreencastContent.ssrc = generatedOutgoingContent->ssrc;
-                            outgoingScreencastContent.ssrcGroups = generatedOutgoingContent->ssrcGroups;
-                            outgoingScreencastContent.rtpExtensions = _negotiatedOutgoingScreencastContent->rtpExtensions;
-                            outgoingScreencastContent.payloadTypes = getPayloadTypesFromVideoCodecs(_negotiatedOutgoingScreencastContent->codecs);
-
-                            _outgoingScreencastContent = std::move(outgoingScreencastContent);
-
-                            _incomingScreencastChannel.reset(new IncomingV2VideoChannel(
-                                _channelManager.get(),
-                                _call.get(),
-                                _rtpTransport,
-                                _uniqueRandomIdGenerator.get(),
-                                incomingScreencastContent,
-                                "2",
-                                _threads
-                            ));
-                            _incomingScreencastChannel->addSink(_currentSink);
-                        }
-                    }
-                }
-            }*/
-
-            createNegotiatedChannels();
-
             if (_encryptionKey.isOutgoing) {
-                sendOffer();
+                sendOfferIfNeeded();
             } else {
                 sendInitialSetup();
             }
@@ -1412,11 +1263,11 @@ public:
             _handshakeCompleted = true;
             commitPendingIceCandidates();
         } else if (const auto offerAnwer = absl::get_if<signaling::NegotiateChannelsMessage>(messageData)) {
-            auto negotiationContents = std::make_unique<ContentCoordinationContext::NegotiationContents>();
+            auto negotiationContents = std::make_unique<ContentNegotiationContext::NegotiationContents>();
             negotiationContents->exchangeId = offerAnwer->exchangeId;
             negotiationContents->contents = offerAnwer->contents;
-            //answer->incomingContents = offerAnwer->incomingContents;
-            if (const auto response = _contentCoordinationContext->setRemoteNegotiationContent(std::move(negotiationContents))) {
+            
+            if (const auto response = _contentNegotiationContext->setRemoteNegotiationContent(std::move(negotiationContents))) {
                 signaling::NegotiateChannelsMessage data;
 
                 data.exchangeId = response->exchangeId;
@@ -1427,7 +1278,7 @@ public:
                 sendSignalingMessage(message);
             }
             
-            sendOffer();
+            sendOfferIfNeeded();
             
             createNegotiatedChannels();
         } else if (const auto candidatesList = absl::get_if<signaling::CandidatesMessage>(messageData)) {
@@ -1621,13 +1472,17 @@ public:
                 if (_outgoingVideoChannel) {
                     _outgoingVideoChannel->setVideoCapture(nullptr);
                 }
+                if (_outgoingVideoChannelId) {
+                    _contentNegotiationContext->removeOutgoingChannel(_outgoingVideoChannelId.value());
+                    _outgoingVideoChannelId.reset();
+                }
 
                 if (_outgoingScreencastChannel) {
                     _outgoingScreencastChannel->setVideoCapture(videoCapture);
                 }
-
-                sendMediaState();
-                adjustBitratePreferences(true);
+                if (!_outgoingScreencastChannelId) {
+                    _outgoingScreencastChannelId = _contentNegotiationContext->addOutgoingChannel(signaling::MediaContent::Type::Video);
+                }
             } else {
                 _videoCapture = videoCapture;
                 _screencastCapture = nullptr;
@@ -1635,13 +1490,17 @@ public:
                 if (_outgoingVideoChannel) {
                     _outgoingVideoChannel->setVideoCapture(videoCapture);
                 }
+                if (!_outgoingVideoChannelId) {
+                    _outgoingVideoChannelId = _contentNegotiationContext->addOutgoingChannel(signaling::MediaContent::Type::Video);
+                }
 
                 if (_outgoingScreencastChannel) {
                     _outgoingScreencastChannel->setVideoCapture(nullptr);
                 }
-
-                sendMediaState();
-                adjustBitratePreferences(true);
+                if (_outgoingScreencastChannelId) {
+                    _contentNegotiationContext->removeOutgoingChannel(_outgoingScreencastChannelId.value());
+                    _outgoingScreencastChannelId.reset();
+                }
             }
         } else {
             _videoCapture = nullptr;
@@ -1654,10 +1513,22 @@ public:
             if (_outgoingScreencastChannel) {
                 _outgoingScreencastChannel->setVideoCapture(nullptr);
             }
-
-            sendMediaState();
-            adjustBitratePreferences(true);
+            
+            if (_outgoingVideoChannelId) {
+                _contentNegotiationContext->removeOutgoingChannel(_outgoingVideoChannelId.value());
+                _outgoingVideoChannelId.reset();
+            }
+            
+            if (_outgoingScreencastChannelId) {
+                _contentNegotiationContext->removeOutgoingChannel(_outgoingScreencastChannelId.value());
+                _outgoingScreencastChannelId.reset();
+            }
         }
+
+        sendOfferIfNeeded();
+        sendMediaState();
+        adjustBitratePreferences(true);
+        createNegotiatedChannels();
     }
 
     void setRequestedVideoAspect(float aspect) {
@@ -1709,22 +1580,12 @@ public:
     }
 
     void adjustBitratePreferences(bool resetStartBitrate) {
-        webrtc::BitrateConstraints preferences;
-        if (_videoCapture || _screencastCapture) {
-            preferences.min_bitrate_bps = 64000;
-            if (resetStartBitrate) {
-                preferences.start_bitrate_bps = (100 + 800 + 32 + 100) * 1000;
-            }
-            preferences.max_bitrate_bps = (100 + 200 + 800 + 32 + 100) * 1000;
-        } else {
-            preferences.min_bitrate_bps = 32000;
-            if (resetStartBitrate) {
-                preferences.start_bitrate_bps = 32000;
-            }
-            preferences.max_bitrate_bps = 32000;
+        if (_outgoingAudioChannel) {
+            _outgoingAudioChannel->setMaxBitrate(32 * 1024);
         }
-
-        _call->GetTransportControllerSend()->SetSdpBitrateParameters(preferences);
+        if (_outgoingVideoChannel) {
+            _outgoingVideoChannel->setMaxBitrate(1000 * 1024);
+        }
     }
 
 private:
@@ -1782,16 +1643,19 @@ private:
     std::unique_ptr<cricket::ChannelManager> _channelManager;
     std::unique_ptr<webrtc::VideoBitrateAllocatorFactory> _videoBitrateAllocatorFactory;
     
-    std::unique_ptr<ContentCoordinationContext> _contentCoordinationContext;
+    std::unique_ptr<ContentNegotiationContext> _contentNegotiationContext;
 
     std::shared_ptr<ThreadLocalObject<NativeNetworkingImpl>> _networking;
 
+    absl::optional<std::string> _outgoingAudioChannelId;
     std::unique_ptr<OutgoingAudioChannel> _outgoingAudioChannel;
     bool _isMicrophoneMuted = false;
 
     std::vector<webrtc::SdpVideoFormat> _availableVideoFormats;
 
+    absl::optional<std::string> _outgoingVideoChannelId;
     std::shared_ptr<OutgoingVideoChannel> _outgoingVideoChannel;
+    absl::optional<std::string> _outgoingScreencastChannelId;
     std::shared_ptr<OutgoingVideoChannel> _outgoingScreencastChannel;
 
     bool _isBatteryLow = false;

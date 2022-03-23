@@ -1,5 +1,5 @@
-#ifndef TGCALLS_CONTENT_COORDINATION_H
-#define TGCALLS_CONTENT_COORDINATION_H
+#ifndef TGCALLS_CONTENT_NEGOTIATION_H
+#define TGCALLS_CONTENT_NEGOTIATION_H
 
 #include <memory>
 
@@ -12,7 +12,7 @@
 
 namespace tgcalls {
 
-class ContentCoordinationContext {
+class ContentNegotiationContext {
 public:
     struct NegotiationContents {
         uint32_t exchangeId = 0;
@@ -49,15 +49,19 @@ public:
     };
     
 public:
-    ContentCoordinationContext(bool isOutgoing, cricket::ChannelManager *channelManager, rtc::UniqueRandomIdGenerator *uniqueRandomIdGenerator);
-    ~ContentCoordinationContext();
+    ContentNegotiationContext(bool isOutgoing, rtc::UniqueRandomIdGenerator *uniqueRandomIdGenerator);
+    ~ContentNegotiationContext();
     
-    void addOutgoingChannel(signaling::MediaContent::Type mediaType);
+    void copyCodecsFromChannelManager(cricket::ChannelManager *channelManager, bool randomize);
     
-    std::unique_ptr<NegotiationContents> getOffer();
+    std::string addOutgoingChannel(signaling::MediaContent::Type mediaType);
+    void removeOutgoingChannel(std::string const &id);
+    
+    std::unique_ptr<NegotiationContents> getPendingOffer();
     std::unique_ptr<NegotiationContents> setRemoteNegotiationContent(std::unique_ptr<NegotiationContents> &&remoteNegotiationContent);
     
     std::unique_ptr<CoordinatedState> coordinatedState() const;
+    absl::optional<uint32_t> outgoingChannelSsrc(std::string const &id) const;
     
 private:
     std::string takeNextOutgoingChannelId();
