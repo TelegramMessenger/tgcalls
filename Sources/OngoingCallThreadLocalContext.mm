@@ -1,5 +1,6 @@
 #import <TgVoipWebrtc/OngoingCallThreadLocalContext.h>
 
+#import "MediaUtils.h"
 
 #import "Instance.h"
 #import "InstanceImpl.h"
@@ -802,6 +803,7 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
     if (includeReference) {
         [list addObject:@"4.0.0"];
     }
+    [list addObject:@"4.0.1"];
     return list;
 }
 
