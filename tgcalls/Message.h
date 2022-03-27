@@ -20,7 +20,6 @@ struct PeerIceParameters {
     std::string pwd;
     
     PeerIceParameters() = default;
-    PeerIceParameters(const PeerIceParameters &other) = default;
 
     PeerIceParameters(std::string ufrag_, std::string pwd_) :
     ufrag(ufrag_),
