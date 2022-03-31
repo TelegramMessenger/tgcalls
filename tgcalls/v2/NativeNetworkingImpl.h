@@ -36,10 +36,10 @@ class DtlsTransport;
 } // namespace cricket
 
 namespace webrtc {
-class BasicAsyncResolverFactory;
 class TurnCustomizer;
 class DtlsSrtpTransport;
 class RtpTransport;
+class AsyncDnsResolverFactoryInterface;
 } // namespace webrtc
 
 namespace tgcalls {
@@ -61,6 +61,7 @@ public:
         bool enableTCP = false;
         bool enableP2P = false;
         std::vector<RtcServer> rtcServers;
+        absl::optional<Proxy> proxy;
         std::function<void(const NativeNetworkingImpl::State &)> stateUpdated;
         std::function<void(const cricket::Candidate &)> candidateGathered;
         std::function<void(rtc::CopyOnWriteBuffer const &, bool)> transportMessageReceived;
@@ -111,6 +112,7 @@ private:
     bool _enableTCP = false;
     bool _enableP2P = false;
     std::vector<RtcServer> _rtcServers;
+    absl::optional<Proxy> _proxy;
 
     std::function<void(const NativeNetworkingImpl::State &)> _stateUpdated;
     std::function<void(const cricket::Candidate &)> _candidateGathered;
@@ -123,7 +125,7 @@ private:
     std::unique_ptr<rtc::BasicNetworkManager> _networkManager;
     std::unique_ptr<webrtc::TurnCustomizer> _turnCustomizer;
     std::unique_ptr<cricket::BasicPortAllocator> _portAllocator;
-    std::unique_ptr<webrtc::BasicAsyncResolverFactory> _asyncResolverFactory;
+    std::unique_ptr<webrtc::AsyncDnsResolverFactoryInterface> _asyncResolverFactory;
     std::unique_ptr<cricket::P2PTransportChannel> _transportChannel;
     std::unique_ptr<cricket::DtlsTransport> _dtlsTransport;
     std::unique_ptr<webrtc::DtlsSrtpTransport> _dtlsSrtpTransport;
