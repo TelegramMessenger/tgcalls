@@ -356,7 +356,9 @@ public:
         }
         
         std::vector<std::string> codecPreferences = {
+#ifndef WEBRTC_DISABLE_H265
             cricket::kH265CodecName,
+#endif
             cricket::kH264CodecName
         };
         
