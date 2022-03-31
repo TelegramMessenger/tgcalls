@@ -39,11 +39,11 @@ let package = Package(
                       "tgcalls/platform/darwin/CustomExternalCapturer.mm",
                       "tgcalls/platform/darwin/CustomExternalCapturer.h",
                      ],
-            publicHeadersPath: "PublicHeaders",
+            publicHeadersPath: "macos/PublicHeaders",
             cxxSettings: [
                 .headerSearchPath("."),
                 .headerSearchPath("tgcalls"),
-                .headerSearchPath("PublicHeaders"),
+                .headerSearchPath("macos/PublicHeaders"),
                 .unsafeFlags(["-I../../core-xprojects/webrtc/build/src",
                               "-I../../core-xprojects/webrtc/build/src/third_party/abseil-cpp",
                               "-I../../core-xprojects/webrtc/build/src/sdk/objc",
