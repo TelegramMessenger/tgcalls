@@ -50,9 +50,31 @@ class Threads;
 
 class NativeNetworkingImpl : public sigslot::has_slots<>, public std::enable_shared_from_this<NativeNetworkingImpl> {
 public:
+    struct RouteDescription {
+        explicit RouteDescription(std::string const &localDescription_, std::string const &remoteDescription_) :
+        localDescription(localDescription_),
+        remoteDescription(remoteDescription_) {
+        }
+        
+        std::string localDescription;
+        std::string remoteDescription;
+        
+        bool operator==(RouteDescription const &rhs) const {
+            if (localDescription != rhs.localDescription) {
+                return false;
+            }
+            if (remoteDescription != rhs.remoteDescription) {
+                return false;
+            }
+            
+            return true;
+        }
+    };
+    
     struct State {
         bool isReadyToSendData = false;
         bool isFailed = false;
+        absl::optional<RouteDescription> route;
     };
     
     struct Configuration {
@@ -98,6 +120,7 @@ private:
     void transportStateChanged(cricket::IceTransportInternal *transport);
     void transportReadyToSend(cricket::IceTransportInternal *transport);
     void transportPacketReceived(rtc::PacketTransportInternal *transport, const char *bytes, size_t size, const int64_t &timestamp, int unused);
+    void transportRouteChanged(absl::optional<rtc::NetworkRoute> route);
     void DtlsReadyToSend(bool DtlsReadyToSend);
     void UpdateAggregateStates_n();
     void RtpPacketReceived_n(rtc::CopyOnWriteBuffer *packet, int64_t packet_time_us, bool isUnresolved);
@@ -105,6 +128,8 @@ private:
 
     void sctpReadyToSendData();
     void sctpDataReceived(const cricket::ReceiveDataParams& params, const rtc::CopyOnWriteBuffer& buffer);
+    
+    void notifyStateUpdated();
 
     std::shared_ptr<Threads> _threads;
     bool _isOutgoing = false;
@@ -138,6 +163,7 @@ private:
 
     bool _isConnected = false;
     int64_t _lastNetworkActivityMs = 0;
+    absl::optional<RouteDescription> _currentRouteDescription;
 };
 
 } // namespace tgcalls

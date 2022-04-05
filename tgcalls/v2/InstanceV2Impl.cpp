@@ -52,6 +52,8 @@
 #include <random>
 #include <sstream>
 
+#include "third-party/json11.hpp"
+
 namespace tgcalls {
 namespace {
 
@@ -731,6 +733,37 @@ private:
     webrtc::Call *_call = nullptr;
 };
 
+template<typename T>
+struct StateLogRecord {
+    int64_t timestamp = 0;
+    T record;
+    
+    explicit StateLogRecord(int32_t timestamp_, T &&record_) :
+    timestamp(timestamp_),
+    record(std::move(record_)) {
+    }
+};
+
+struct NetworkStateLogRecord {
+    bool isConnected = false;
+    absl::optional<NativeNetworkingImpl::RouteDescription> route;
+    
+    bool operator==(NetworkStateLogRecord const &rhs) const {
+        if (isConnected != rhs.isConnected) {
+            return false;
+        }
+        if (!(route == rhs.route)) {
+            return false;
+        }
+        
+        return true;
+    }
+};
+
+struct NetworkBitrateLogRecord {
+    int32_t bitrate = 0;
+};
+
 } // namespace
 
 class InstanceV2ImplInternal : public std::enable_shared_from_this<InstanceV2ImplInternal> {
@@ -749,6 +782,7 @@ public:
     _remotePrefferedAspectRatioUpdated(descriptor.remotePrefferedAspectRatioUpdated),
     _signalingDataEmitted(descriptor.signalingDataEmitted),
     _createAudioDeviceModule(descriptor.createAudioDeviceModule),
+    _statsLogPath(descriptor.config.statsLogPath),
     _eventLog(std::make_unique<webrtc::RtcEventLogNull>()),
     _taskQueueFactory(webrtc::CreateDefaultTaskQueueFactory()),
     _videoCapture(descriptor.videoCapture) {
@@ -780,6 +814,8 @@ public:
     }
 
     void start() {
+        _startTimestamp = rtc::TimeMillis();
+        
         const auto weak = std::weak_ptr<InstanceV2ImplInternal>(shared_from_this());
         
         absl::optional<Proxy> proxy;
@@ -915,6 +951,75 @@ public:
         beginSignaling();
 
         adjustBitratePreferences(true);
+        
+        beginQualityTimer(0);
+        beginLogTimer(0);
+    }
+    
+    void beginQualityTimer(int delayMs) {
+        const auto weak = std::weak_ptr<InstanceV2ImplInternal>(shared_from_this());
+        _threads->getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
+            auto strong = weak.lock();
+            if (!strong) {
+                return;
+            }
+
+            
+            
+            strong->beginQualityTimer(500);
+        }, delayMs);
+    }
+    
+    void beginLogTimer(int delayMs) {
+        const auto weak = std::weak_ptr<InstanceV2ImplInternal>(shared_from_this());
+        _threads->getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
+            auto strong = weak.lock();
+            if (!strong) {
+                return;
+            }
+
+            strong->writeStateLogRecords();
+
+            strong->beginLogTimer(1000);
+        }, delayMs);
+    }
+    
+    void writeStateLogRecords() {
+        const auto weak = std::weak_ptr<InstanceV2ImplInternal>(shared_from_this());
+        _threads->getWorkerThread()->PostTask(RTC_FROM_HERE, [weak]() {
+            auto strong = weak.lock();
+            if (!strong) {
+                return;
+            }
+            
+            auto stats = strong->_call->GetStats();
+            float sendBitrateKbps = ((float)stats.send_bandwidth_bps / 1000.0f);
+            
+            strong->_threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, sendBitrateKbps]() {
+                auto strong = weak.lock();
+                if (!strong) {
+                    return;
+                }
+                
+                float bitrateNorm = 16.0f;
+                if (strong->_outgoingVideoChannel) {
+                    bitrateNorm = 600.0f;
+                }
+                
+                float signalBarsNorm = 4.0f;
+                float adjustedQuality = sendBitrateKbps / bitrateNorm;
+                adjustedQuality = fmaxf(0.0f, adjustedQuality);
+                adjustedQuality = fminf(1.0f, adjustedQuality);
+                if (strong->_signalBarsUpdated) {
+                    strong->_signalBarsUpdated((int)(adjustedQuality * signalBarsNorm));
+                }
+                
+                NetworkBitrateLogRecord networkBitrateLogRecord;
+                networkBitrateLogRecord.bitrate = (int32_t)sendBitrateKbps;
+                
+                strong->_networkBitrateLogRecords.emplace_back(rtc::TimeMillis(), std::move(networkBitrateLogRecord));
+            });
+        });
     }
 
     void sendSignalingMessage(signaling::Message const &message) {
@@ -1384,6 +1489,17 @@ public:
         } else {
             mappedState = State::Reconnecting;
         }
+        
+        NetworkStateLogRecord record;
+        record.isConnected = state.isReadyToSendData;
+        record.route = state.route;
+        
+        if (!_currentNetworkStateLogRecord || !(_currentNetworkStateLogRecord.value() == record)) {
+            _currentNetworkStateLogRecord = record;
+            _networkStateLogRecords.emplace_back(rtc::TimeMillis(), std::move(record));
+        }
+        
+        _networkState = state;
         _stateUpdated(mappedState);
     }
 
@@ -1588,7 +1704,55 @@ public:
     }
 
     void stop(std::function<void(FinalState)> completion) {
-        completion({});
+        FinalState finalState;
+        
+        json11::Json::object statsLog;
+        
+        json11::Json::array jsonNetworkStateLogRecords;
+        int64_t baseTimestamp = 0;
+        for (const auto &record : _networkStateLogRecords) {
+            json11::Json::object jsonRecord;
+            
+            std::ostringstream timestampString;
+            
+            if (baseTimestamp == 0) {
+                baseTimestamp = record.timestamp;
+            }
+            timestampString << (record.timestamp - baseTimestamp);
+            
+            jsonRecord.insert(std::make_pair("t", json11::Json(timestampString.str())));
+            jsonRecord.insert(std::make_pair("c", json11::Json(record.record.isConnected ? 1 : 0)));
+            if (record.record.route) {
+                jsonRecord.insert(std::make_pair("local", json11::Json(record.record.route->localDescription)));
+                jsonRecord.insert(std::make_pair("remote", json11::Json(record.record.route->remoteDescription)));
+            }
+            
+            jsonNetworkStateLogRecords.push_back(std::move(jsonRecord));
+        }
+        statsLog.insert(std::make_pair("network", std::move(jsonNetworkStateLogRecords)));
+        
+        json11::Json::array jsonNetworkBitrateLogRecords;
+        for (const auto &record : _networkBitrateLogRecords) {
+            json11::Json::object jsonRecord;
+            
+            jsonRecord.insert(std::make_pair("b", json11::Json(record.record.bitrate)));
+            
+            jsonNetworkBitrateLogRecords.push_back(std::move(jsonRecord));
+        }
+        statsLog.insert(std::make_pair("bitrate", std::move(jsonNetworkBitrateLogRecords)));
+        
+        auto jsonStatsLog = json11::Json(std::move(statsLog));
+        
+        if (!_statsLogPath.data.empty()) {
+            std::ofstream file;
+            file.open(_statsLogPath.data);
+            
+            file << jsonStatsLog.dump();
+            
+            file.close();
+        }
+        
+        completion(finalState);
     }
 
     void adjustBitratePreferences(bool resetStartBitrate) {
@@ -1636,8 +1800,17 @@ private:
     std::function<void(float)> _remotePrefferedAspectRatioUpdated;
     std::function<void(const std::vector<uint8_t> &)> _signalingDataEmitted;
     std::function<rtc::scoped_refptr<webrtc::AudioDeviceModule>(webrtc::TaskQueueFactory*)> _createAudioDeviceModule;
+    FilePath _statsLogPath;
 
     std::unique_ptr<SignalingEncryption> _signalingEncryption;
+    
+    int64_t _startTimestamp = 0;
+    
+    absl::optional<NetworkStateLogRecord> _currentNetworkStateLogRecord;
+    std::vector<StateLogRecord<NetworkStateLogRecord>> _networkStateLogRecords;
+    std::vector<StateLogRecord<NetworkBitrateLogRecord>> _networkBitrateLogRecords;
+    
+    absl::optional<NativeNetworkingImpl::State> _networkState;
 
     bool _handshakeCompleted = false;
     std::vector<cricket::Candidate> _pendingIceCandidates;

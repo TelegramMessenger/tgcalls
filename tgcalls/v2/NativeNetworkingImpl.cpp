@@ -321,6 +321,7 @@ void NativeNetworkingImpl::resetDtlsSrtpTransport() {
     _transportChannel->SignalCandidateGathered.connect(this, &NativeNetworkingImpl::candidateGathered);
     _transportChannel->SignalIceTransportStateChanged.connect(this, &NativeNetworkingImpl::transportStateChanged);
     _transportChannel->SignalReadPacket.connect(this, &NativeNetworkingImpl::transportPacketReceived);
+    _transportChannel->SignalNetworkRouteChanged.connect(this, &NativeNetworkingImpl::transportRouteChanged);
 
     webrtc::CryptoOptions cryptoOptions = NativeNetworkingImpl::getDefaulCryptoOptions();
     _dtlsTransport.reset(new cricket::DtlsTransport(_transportChannel.get(), cryptoOptions, nullptr));
@@ -374,6 +375,7 @@ void NativeNetworkingImpl::stop() {
     _transportChannel->SignalCandidateGathered.disconnect(this);
     _transportChannel->SignalIceTransportStateChanged.disconnect(this);
     _transportChannel->SignalReadPacket.disconnect(this);
+    _transportChannel->SignalNetworkRouteChanged.disconnect(this);
     
     _dtlsTransport->SignalWritableState.disconnect(this);
     _dtlsTransport->SignalReceivingState.disconnect(this);
@@ -516,6 +518,33 @@ void NativeNetworkingImpl::transportPacketReceived(rtc::PacketTransportInternal 
     _lastNetworkActivityMs = rtc::TimeMillis();
 }
 
+void NativeNetworkingImpl::transportRouteChanged(absl::optional<rtc::NetworkRoute> route) {
+    assert(_threads->getNetworkThread()->IsCurrent());
+    
+    if (route.has_value()) {
+        RTC_LOG(LS_INFO) << "NativeNetworkingImpl route changed: " << route->DebugString();
+        
+        bool localIsWifi = route->local.adapter_type() == rtc::AdapterType::ADAPTER_TYPE_WIFI;
+        bool remoteIsWifi = route->remote.adapter_type() == rtc::AdapterType::ADAPTER_TYPE_WIFI;
+        
+        RTC_LOG(LS_INFO) << "NativeNetworkingImpl is wifi: local=" << localIsWifi << ", remote=" << remoteIsWifi;
+        
+        CallStatsConnectionEndpointType endpointType;
+        if (route->local.uses_turn()) {
+            endpointType = CallStatsConnectionEndpointType::ConnectionEndpointTURN;
+        } else {
+            endpointType = CallStatsConnectionEndpointType::ConnectionEndpointP2P;
+        }
+        
+        RouteDescription routeDescription(route->local.uses_turn() ? "turn" : "p2p", route->remote.uses_turn() ? "turn" : "p2p");
+        
+        if (!_currentRouteDescription || !(routeDescription == _currentRouteDescription.value())) {
+            _currentRouteDescription = std::move(routeDescription);
+            notifyStateUpdated();
+        }
+    }
+}
+
 void NativeNetworkingImpl::RtpPacketReceived_n(rtc::CopyOnWriteBuffer *packet, int64_t packet_time_us, bool isUnresolved) {
     if (_transportMessageReceived) {
         _transportMessageReceived(*packet, isUnresolved);
@@ -549,14 +578,19 @@ void NativeNetworkingImpl::UpdateAggregateStates_n() {
     if (_isConnected != isConnected) {
         _isConnected = isConnected;
 
-        NativeNetworkingImpl::State emitState;
-        emitState.isReadyToSendData = isConnected;
-        _stateUpdated(emitState);
+        notifyStateUpdated();
 
         if (_dataChannelInterface) {
             _dataChannelInterface->updateIsConnected(isConnected);
         }
     }
+}
+
+void NativeNetworkingImpl::notifyStateUpdated() {
+    NativeNetworkingImpl::State emitState;
+    emitState.isReadyToSendData = _isConnected;
+    emitState.route = _currentRouteDescription;
+    _stateUpdated(emitState);
 }
 
 void NativeNetworkingImpl::sctpReadyToSendData() {
