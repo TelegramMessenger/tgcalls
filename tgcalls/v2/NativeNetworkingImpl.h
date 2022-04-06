@@ -10,9 +10,9 @@
 #include "rtc_base/third_party/sigslot/sigslot.h"
 #include "api/candidate.h"
 #include "media/base/media_channel.h"
-//#include "media/sctp/sctp_transport.h"
 #include "rtc_base/ssl_fingerprint.h"
 #include "pc/sctp_data_channel.h"
+#include "p2p/base/port.h"
 
 #include <functional>
 #include <memory>
@@ -69,12 +69,61 @@ public:
             
             return true;
         }
+        
+        bool operator!=(const RouteDescription& rhs) const {
+            return !(*this == rhs);
+        }
+    };
+    
+    struct ConnectionDescription {
+        struct CandidateDescription {
+            std::string protocol;
+            std::string type;
+            std::string address;
+            
+            bool operator==(CandidateDescription const &rhs) const {
+                if (protocol != rhs.protocol) {
+                    return false;
+                }
+                if (type != rhs.type) {
+                    return false;
+                }
+                if (address != rhs.address) {
+                    return false;
+                }
+                
+                return true;
+            }
+            
+            bool operator!=(const CandidateDescription& rhs) const {
+                return !(*this == rhs);
+            }
+        };
+        
+        CandidateDescription local;
+        CandidateDescription remote;
+        
+        bool operator==(ConnectionDescription const &rhs) const {
+            if (local != rhs.local) {
+                return false;
+            }
+            if (remote != rhs.remote) {
+                return false;
+            }
+            
+            return true;
+        }
+        
+        bool operator!=(const ConnectionDescription& rhs) const {
+            return !(*this == rhs);
+        }
     };
     
     struct State {
         bool isReadyToSendData = false;
         bool isFailed = false;
         absl::optional<RouteDescription> route;
+        absl::optional<ConnectionDescription> connection;
     };
     
     struct Configuration {
@@ -121,6 +170,7 @@ private:
     void transportReadyToSend(cricket::IceTransportInternal *transport);
     void transportPacketReceived(rtc::PacketTransportInternal *transport, const char *bytes, size_t size, const int64_t &timestamp, int unused);
     void transportRouteChanged(absl::optional<rtc::NetworkRoute> route);
+    void candidatePairChanged(cricket::CandidatePairChangeEvent const &event);
     void DtlsReadyToSend(bool DtlsReadyToSend);
     void UpdateAggregateStates_n();
     void RtpPacketReceived_n(rtc::CopyOnWriteBuffer *packet, int64_t packet_time_us, bool isUnresolved);
@@ -146,6 +196,7 @@ private:
     std::function<void(bool)> _dataChannelStateUpdated;
     std::function<void(std::string const &)> _dataChannelMessageReceived;
 
+    std::unique_ptr<rtc::NetworkMonitorFactory> _networkMonitorFactory;
     std::unique_ptr<rtc::BasicPacketSocketFactory> _socketFactory;
     std::unique_ptr<rtc::BasicNetworkManager> _networkManager;
     std::unique_ptr<webrtc::TurnCustomizer> _turnCustomizer;
@@ -162,8 +213,10 @@ private:
     absl::optional<PeerIceParameters> _remoteIceParameters;
 
     bool _isConnected = false;
+    bool _isFailed = false;
     int64_t _lastNetworkActivityMs = 0;
     absl::optional<RouteDescription> _currentRouteDescription;
+    absl::optional<ConnectionDescription> _currentConnectionDescription;
 };
 
 } // namespace tgcalls

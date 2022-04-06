@@ -19,10 +19,21 @@
 #include "TurnCustomizerImpl.h"
 #include "SctpDataChannelProviderInterfaceImpl.h"
 #include "StaticThreads.h"
+#include "platform/PlatformInterface.h"
 
 namespace tgcalls {
 
 namespace {
+
+NativeNetworkingImpl::ConnectionDescription::CandidateDescription connectionDescriptionFromCandidate(cricket::Candidate const &candidate) {
+    NativeNetworkingImpl::ConnectionDescription::CandidateDescription result;
+    
+    result.type = candidate.type();
+    result.protocol = candidate.protocol();
+    result.address = candidate.address().ToString();
+    
+    return result;
+}
 
 class CryptStringImpl : public rtc::CryptStringImpl {
 public:
@@ -208,8 +219,9 @@ _dataChannelMessageReceived(configuration.dataChannelMessageReceived) {
     
     _localCertificate = rtc::RTCCertificateGenerator::GenerateCertificate(rtc::KeyParams(rtc::KT_ECDSA), absl::nullopt);
     
+    _networkMonitorFactory = PlatformInterface::SharedInstance()->createNetworkMonitorFactory();
     _socketFactory.reset(new rtc::BasicPacketSocketFactory(_threads->getNetworkThread()->socketserver()));
-    _networkManager = std::make_unique<rtc::BasicNetworkManager>();
+    _networkManager = std::make_unique<rtc::BasicNetworkManager>(_networkMonitorFactory.get(), nullptr);
     
     _asyncResolverFactory = std::make_unique<webrtc::WrappingAsyncDnsResolverFactory>(std::make_unique<webrtc::BasicAsyncResolverFactory>());
     
@@ -236,6 +248,7 @@ NativeNetworkingImpl::~NativeNetworkingImpl() {
     _portAllocator.reset();
     _networkManager.reset();
     _socketFactory.reset();
+    _networkMonitorFactory.reset();
 }
 
 void NativeNetworkingImpl::resetDtlsSrtpTransport() {
@@ -320,6 +333,7 @@ void NativeNetworkingImpl::resetDtlsSrtpTransport() {
 
     _transportChannel->SignalCandidateGathered.connect(this, &NativeNetworkingImpl::candidateGathered);
     _transportChannel->SignalIceTransportStateChanged.connect(this, &NativeNetworkingImpl::transportStateChanged);
+    _transportChannel->SignalCandidatePairChanged.connect(this, &NativeNetworkingImpl::candidatePairChanged);
     _transportChannel->SignalReadPacket.connect(this, &NativeNetworkingImpl::transportPacketReceived);
     _transportChannel->SignalNetworkRouteChanged.connect(this, &NativeNetworkingImpl::transportRouteChanged);
 
@@ -369,6 +383,9 @@ void NativeNetworkingImpl::start() {
         },
         _threads
     ));
+    
+    _lastNetworkActivityMs = rtc::TimeMillis();
+    checkConnectionTimeout();
 }
 
 void NativeNetworkingImpl::stop() {
@@ -458,10 +475,8 @@ void NativeNetworkingImpl::checkConnectionTimeout() {
         const int64_t maxTimeout = 20000;
 
         if (strong->_lastNetworkActivityMs + maxTimeout < currentTimestamp) {
-            NativeNetworkingImpl::State emitState;
-            emitState.isReadyToSendData = false;
-            emitState.isFailed = true;
-            strong->_stateUpdated(emitState);
+            strong->_isFailed = true;
+            strong->notifyStateUpdated();
         }
 
         strong->checkConnectionTimeout();
@@ -516,12 +531,17 @@ void NativeNetworkingImpl::transportPacketReceived(rtc::PacketTransportInternal 
     assert(_threads->getNetworkThread()->IsCurrent());
 
     _lastNetworkActivityMs = rtc::TimeMillis();
+    _isFailed = false;
 }
 
 void NativeNetworkingImpl::transportRouteChanged(absl::optional<rtc::NetworkRoute> route) {
     assert(_threads->getNetworkThread()->IsCurrent());
     
     if (route.has_value()) {
+        /*cricket::IceTransportStats iceTransportStats;
+        if (_transportChannel->GetStats(&iceTransportStats)) {
+        }*/
+        
         RTC_LOG(LS_INFO) << "NativeNetworkingImpl route changed: " << route->DebugString();
         
         bool localIsWifi = route->local.adapter_type() == rtc::AdapterType::ADAPTER_TYPE_WIFI;
@@ -529,19 +549,27 @@ void NativeNetworkingImpl::transportRouteChanged(absl::optional<rtc::NetworkRout
         
         RTC_LOG(LS_INFO) << "NativeNetworkingImpl is wifi: local=" << localIsWifi << ", remote=" << remoteIsWifi;
         
-        CallStatsConnectionEndpointType endpointType;
-        if (route->local.uses_turn()) {
-            endpointType = CallStatsConnectionEndpointType::ConnectionEndpointTURN;
-        } else {
-            endpointType = CallStatsConnectionEndpointType::ConnectionEndpointP2P;
-        }
+        std::string localDescription = route->local.uses_turn() ? "turn" : "p2p";
+        std::string remoteDescription = route->remote.uses_turn() ? "turn" : "p2p";
         
-        RouteDescription routeDescription(route->local.uses_turn() ? "turn" : "p2p", route->remote.uses_turn() ? "turn" : "p2p");
+        RouteDescription routeDescription(localDescription, remoteDescription);
         
-        if (!_currentRouteDescription || !(routeDescription == _currentRouteDescription.value())) {
+        if (!_currentRouteDescription || routeDescription != _currentRouteDescription.value()) {
             _currentRouteDescription = std::move(routeDescription);
             notifyStateUpdated();
         }
+    }
+}
+
+void NativeNetworkingImpl::candidatePairChanged(cricket::CandidatePairChangeEvent const &event) {
+    ConnectionDescription connectionDescription;
+    
+    connectionDescription.local = connectionDescriptionFromCandidate(event.selected_candidate_pair.local);
+    connectionDescription.remote = connectionDescriptionFromCandidate(event.selected_candidate_pair.remote);
+    
+    if (!_currentConnectionDescription || _currentConnectionDescription.value() != connectionDescription) {
+        _currentConnectionDescription = std::move(connectionDescription);
+        notifyStateUpdated();
     }
 }
 
@@ -590,6 +618,8 @@ void NativeNetworkingImpl::notifyStateUpdated() {
     NativeNetworkingImpl::State emitState;
     emitState.isReadyToSendData = _isConnected;
     emitState.route = _currentRouteDescription;
+    emitState.connection = _currentConnectionDescription;
+    emitState.isFailed = _isFailed;
     _stateUpdated(emitState);
 }
 

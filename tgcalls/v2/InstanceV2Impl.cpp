@@ -746,13 +746,21 @@ struct StateLogRecord {
 
 struct NetworkStateLogRecord {
     bool isConnected = false;
+    bool isFailed = false;
     absl::optional<NativeNetworkingImpl::RouteDescription> route;
+    absl::optional<NativeNetworkingImpl::ConnectionDescription> connection;
     
     bool operator==(NetworkStateLogRecord const &rhs) const {
         if (isConnected != rhs.isConnected) {
             return false;
         }
-        if (!(route == rhs.route)) {
+        if (isFailed != rhs.isFailed) {
+            return false;
+        }
+        if (route != rhs.route) {
+            return false;
+        }
+        if (connection != rhs.connection) {
             return false;
         }
         
@@ -1484,7 +1492,9 @@ public:
 
     void onNetworkStateUpdated(NativeNetworkingImpl::State const &state) {
         State mappedState;
-        if (state.isReadyToSendData) {
+        if (state.isFailed) {
+            mappedState = State::Failed;
+        } else if (state.isReadyToSendData) {
             mappedState = State::Established;
         } else {
             mappedState = State::Reconnecting;
@@ -1493,6 +1503,8 @@ public:
         NetworkStateLogRecord record;
         record.isConnected = state.isReadyToSendData;
         record.route = state.route;
+        record.connection = state.connection;
+        record.isFailed = state.isFailed;
         
         if (!_currentNetworkStateLogRecord || !(_currentNetworkStateLogRecord.value() == record)) {
             _currentNetworkStateLogRecord = record;
@@ -1708,6 +1720,13 @@ public:
         
         json11::Json::object statsLog;
         
+        for (int i = (int)_networkStateLogRecords.size() - 1; i >= 1; i--) {
+            // coalesce events within 5ms
+            if (_networkStateLogRecords[i].timestamp - _networkStateLogRecords[i - 1].timestamp < 5) {
+                _networkStateLogRecords.erase(_networkStateLogRecords.begin() + i - 1);
+            }
+        }
+        
         json11::Json::array jsonNetworkStateLogRecords;
         int64_t baseTimestamp = 0;
         for (const auto &record : _networkStateLogRecords) {
@@ -1725,6 +1744,27 @@ public:
             if (record.record.route) {
                 jsonRecord.insert(std::make_pair("local", json11::Json(record.record.route->localDescription)));
                 jsonRecord.insert(std::make_pair("remote", json11::Json(record.record.route->remoteDescription)));
+            }
+            if (record.record.connection) {
+                json11::Json::object jsonConnection;
+                
+                auto serializeCandidate = [](NativeNetworkingImpl::ConnectionDescription::CandidateDescription const &candidate) -> json11::Json::object {
+                    json11::Json::object jsonCandidate;
+                    
+                    jsonCandidate.insert(std::make_pair("type", json11::Json(candidate.type)));
+                    jsonCandidate.insert(std::make_pair("protocol", json11::Json(candidate.protocol)));
+                    jsonCandidate.insert(std::make_pair("address", json11::Json(candidate.address)));
+                    
+                    return jsonCandidate;
+                };
+                
+                jsonConnection.insert(std::make_pair("local", serializeCandidate(record.record.connection->local)));
+                jsonConnection.insert(std::make_pair("remote", serializeCandidate(record.record.connection->remote)));
+                
+                jsonRecord.insert(std::make_pair("network", std::move(jsonConnection)));
+            }
+            if (record.record.isFailed) {
+                jsonRecord.insert(std::make_pair("failed", json11::Json(1)));
             }
             
             jsonNetworkStateLogRecords.push_back(std::move(jsonRecord));
