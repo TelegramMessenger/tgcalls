@@ -56,11 +56,13 @@
 namespace tgcalls {
 namespace {
 
+/*
 static VideoCaptureInterfaceObject *GetVideoCaptureAssumingSameThread(VideoCaptureInterface *videoCapture) {
     return videoCapture
         ? static_cast<VideoCaptureInterfaceImpl*>(videoCapture)->object()->getSyncAssumingSameThread()
         : nullptr;
 }
+*/
 
 class VideoSinkImpl : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
 public:
@@ -132,17 +134,17 @@ public:
     }
 
     ~InstanceV2ReferenceImplInternal() {
-        
+
         _currentSink.reset();
     }
 
     void start() {
         const auto weak = std::weak_ptr<InstanceV2ReferenceImplInternal>(shared_from_this());
-        
+
         PlatformInterface::SharedInstance()->configurePlatformAudio();
-        
+
         RTC_DCHECK(_threads->getMediaThread()->IsCurrent());
-        
+
         //_threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [&]() {
             cricket::MediaEngineDependencies mediaDeps;
             mediaDeps.task_queue_factory = _taskQueueFactory.get();
@@ -158,19 +160,19 @@ public:
 
             std::unique_ptr<cricket::MediaEngineInterface> mediaEngine = cricket::CreateMediaEngine(std::move(mediaDeps));
         //});
-        
+
         webrtc::PeerConnectionFactoryDependencies peerConnectionFactoryDependencies;
         peerConnectionFactoryDependencies.signaling_thread = _threads->getMediaThread();
         peerConnectionFactoryDependencies.worker_thread = _threads->getWorkerThread();
         peerConnectionFactoryDependencies.task_queue_factory = std::move(_taskQueueFactory);
         peerConnectionFactoryDependencies.media_engine = std::move(mediaEngine);
-        
+
         auto peerConnectionFactory = webrtc::PeerConnectionFactory::Create(std::move(peerConnectionFactoryDependencies));
-        
+
         webrtc::PeerConnectionDependencies peerConnectionDependencies(nullptr);
-        
+
         webrtc::PeerConnectionInterface::RTCConfiguration peerConnectionConfiguration;
-        
+
         auto peerConnectionOrError = peerConnectionFactory->CreatePeerConnectionOrError(peerConnectionConfiguration, std::move(peerConnectionDependencies));
         if (peerConnectionOrError.ok()) {
             _peerConnection = peerConnectionOrError.value();
@@ -212,14 +214,14 @@ public:
         if (!coordinatedState) {
             return;
         }
-        
+
         if (_outgoingAudioChannelId) {
             const auto audioSsrc = _contentNegotiationContext->outgoingChannelSsrc(_outgoingAudioChannelId.value());
             if (audioSsrc) {
                 if (_outgoingAudioChannel && _outgoingAudioChannel->ssrc() != audioSsrc.value()) {
                     _outgoingAudioChannel.reset();
                 }
-                
+
                 absl::optional<signaling::MediaContent> outgoingAudioContent;
                 for (const auto &content : coordinatedState->outgoingContents) {
                     if (content.type == signaling::MediaContent::Type::Audio && content.ssrc == audioSsrc.value()) {
@@ -227,7 +229,7 @@ public:
                         break;
                     }
                 }
-                
+
                 if (outgoingAudioContent) {
                     if (!_outgoingAudioChannel) {
                         _outgoingAudioChannel.reset(new OutgoingAudioChannel(
@@ -243,14 +245,14 @@ public:
                 }
             }
         }
-        
+
         if (_outgoingVideoChannelId) {
             const auto videoSsrc = _contentNegotiationContext->outgoingChannelSsrc(_outgoingVideoChannelId.value());
             if (videoSsrc) {
                 if (_outgoingVideoChannel && _outgoingVideoChannel->ssrc() != videoSsrc.value()) {
                     _outgoingVideoChannel.reset();
                 }
-                
+
                 absl::optional<signaling::MediaContent> outgoingVideoContent;
                 for (const auto &content : coordinatedState->outgoingContents) {
                     if (content.type == signaling::MediaContent::Type::Video && content.ssrc == videoSsrc.value()) {
@@ -258,7 +260,7 @@ public:
                         break;
                     }
                 }
-                
+
                 if (outgoingVideoContent) {
                     if (!_outgoingVideoChannel) {
                         const auto weak = std::weak_ptr<InstanceV2ReferenceImplInternal>(shared_from_this());
@@ -290,14 +292,14 @@ public:
                 }
             }
         }
-        
+
         if (_outgoingScreencastChannelId) {
             const auto screencastSsrc = _contentNegotiationContext->outgoingChannelSsrc(_outgoingScreencastChannelId.value());
             if (screencastSsrc) {
                 if (_outgoingScreencastChannel && _outgoingScreencastChannel->ssrc() != screencastSsrc.value()) {
                     _outgoingScreencastChannel.reset();
                 }
-                
+
                 absl::optional<signaling::MediaContent> outgoingScreencastContent;
                 for (const auto &content : coordinatedState->outgoingContents) {
                     if (content.type == signaling::MediaContent::Type::Video && content.ssrc == screencastSsrc.value()) {
@@ -305,7 +307,7 @@ public:
                         break;
                     }
                 }
-                
+
                 if (outgoingScreencastContent) {
                     if (!_outgoingScreencastChannel) {
                         const auto weak = std::weak_ptr<InstanceV2ReferenceImplInternal>(shared_from_this());
@@ -337,14 +339,14 @@ public:
                 }
             }
         }
-        
+
         for (const auto &content : coordinatedState->incomingContents) {
             switch (content.type) {
                 case signaling::MediaContent::Type::Audio: {
                     if (_incomingAudioChannel && _incomingAudioChannel->ssrc() != content.ssrc) {
                         _incomingAudioChannel.reset();
                     }
-                    
+
                     if (!_incomingAudioChannel) {
                         _incomingAudioChannel.reset(new IncomingV2AudioChannel(
                             _channelManager.get(),
@@ -355,14 +357,14 @@ public:
                             _threads
                         ));
                     }
-                    
+
                     break;
                 }
                 case signaling::MediaContent::Type::Video: {
                     if (_incomingVideoChannel && _incomingVideoChannel->ssrc() != content.ssrc) {
                         _incomingVideoChannel.reset();
                     }
-                    
+
                     if (!_incomingVideoChannel) {
                         _incomingVideoChannel.reset(new IncomingV2VideoChannel(
                             _channelManager.get(),
@@ -374,7 +376,7 @@ public:
                         ));
                         _incomingVideoChannel->addSink(_currentSink);
                     }
-                    
+
                     break;
                 }
                 default: {
@@ -429,13 +431,13 @@ public:
             });
         });*/
     }
-    
+
     void sendOfferIfNeeded() {
         /*if (const auto offer = _contentNegotiationContext->getPendingOffer()) {
             signaling::NegotiateChannelsMessage data;
 
             data.exchangeId = offer->exchangeId;
-            
+
             data.contents = offer->contents;
 
             signaling::Message message;
@@ -499,7 +501,7 @@ public:
             auto negotiationContents = std::make_unique<ContentNegotiationContext::NegotiationContents>();
             negotiationContents->exchangeId = offerAnwer->exchangeId;
             negotiationContents->contents = offerAnwer->contents;
-            
+
             if (const auto response = _contentNegotiationContext->setRemoteNegotiationContent(std::move(negotiationContents))) {
                 signaling::NegotiateChannelsMessage data;
 
@@ -510,9 +512,9 @@ public:
                 message.data = std::move(data);
                 sendSignalingMessage(message);
             }
-            
+
             sendOfferIfNeeded();
-            
+
             createNegotiatedChannels();
         } else if (const auto candidatesList = absl::get_if<signaling::CandidatesMessage>(messageData)) {
             for (const auto &candidate : candidatesList->iceCandidates) {
@@ -746,12 +748,12 @@ public:
             if (_outgoingScreencastChannel) {
                 _outgoingScreencastChannel->setVideoCapture(nullptr);
             }
-            
+
             if (_outgoingVideoChannelId) {
                 _contentNegotiationContext->removeOutgoingChannel(_outgoingVideoChannelId.value());
                 _outgoingVideoChannelId.reset();
             }
-            
+
             if (_outgoingScreencastChannelId) {
                 _contentNegotiationContext->removeOutgoingChannel(_outgoingScreencastChannelId.value());
                 _outgoingScreencastChannelId.reset();
@@ -865,9 +867,9 @@ private:
     std::unique_ptr<webrtc::TaskQueueFactory> _taskQueueFactory;
     rtc::scoped_refptr<webrtc::PeerConnectionInterface> _peerConnection;
     webrtc::FieldTrialBasedConfig _fieldTrials;
-    
+
     webrtc::LocalAudioSinkAdapter _audioSource;
-    
+
     rtc::scoped_refptr<webrtc::AudioDeviceModule> _audioDeviceModule;
 
     bool _isBatteryLow = false;
