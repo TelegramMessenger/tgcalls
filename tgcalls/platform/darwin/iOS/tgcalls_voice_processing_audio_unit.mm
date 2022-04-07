@@ -72,10 +72,11 @@ static OSStatus GetAGCState(AudioUnit audio_unit, UInt32* enabled) {
   return result;
 }
 
-VoiceProcessingAudioUnit::VoiceProcessingAudioUnit(bool bypass_voice_processing, bool disable_recording,
+VoiceProcessingAudioUnit::VoiceProcessingAudioUnit(bool bypass_voice_processing, bool disable_recording, int numChannels,
                                                    VoiceProcessingAudioUnitObserver* observer)
     : bypass_voice_processing_(bypass_voice_processing),
       disable_recording_(disable_recording),
+      numChannels_(numChannels),
       observer_(observer),
       vpio_unit_(nullptr),
       state_(kInitRequired) {
@@ -210,8 +211,8 @@ bool VoiceProcessingAudioUnit::Initialize(Float64 sample_rate) {
   RTCLog(@"Initializing audio unit with sample rate: %f", sample_rate);
 
   OSStatus result = noErr;
-  AudioStreamBasicDescription outputFormat = GetFormat(sample_rate, false);
-  AudioStreamBasicDescription inputFormat = GetFormat(sample_rate, true);
+  AudioStreamBasicDescription outputFormat = GetFormat(sample_rate, numChannels_);
+  AudioStreamBasicDescription inputFormat = GetFormat(sample_rate, 1);
   UInt32 size = sizeof(outputFormat);
 #if !defined(NDEBUG)
   LogStreamDescription(outputFormat);
@@ -457,9 +458,7 @@ OSStatus VoiceProcessingAudioUnit::NotifyDeliverRecordedData(
 }
 
 AudioStreamBasicDescription VoiceProcessingAudioUnit::GetFormat(
-    Float64 sample_rate, bool isInput) const {
-  int numChannels = isInput ? 1 : kRTCAudioSessionPreferredNumberOfChannels;
-        
+    Float64 sample_rate, int numChannels) const {
   // Set the application formats for input and output:
   // - use same format in both directions
   // - avoid resampling in the I/O unit by using the hardware sample rate

@@ -46,7 +46,7 @@ class VoiceProcessingAudioUnitObserver {
 // VoIP applications.
 class VoiceProcessingAudioUnit {
  public:
-  VoiceProcessingAudioUnit(bool bypass_voice_processing, bool disable_recording,
+  VoiceProcessingAudioUnit(bool bypass_voice_processing, bool disable_recording, int numChannels,
                            VoiceProcessingAudioUnitObserver* observer);
   ~VoiceProcessingAudioUnit();
 
@@ -125,13 +125,14 @@ class VoiceProcessingAudioUnit {
 
   // Returns the predetermined format with a specific sample rate. See
   // implementation file for details on format.
-  AudioStreamBasicDescription GetFormat(Float64 sample_rate, bool isInput) const;
+  AudioStreamBasicDescription GetFormat(Float64 sample_rate, int numChannels) const;
 
   // Deletes the underlying audio unit.
   void DisposeAudioUnit();
 
   const bool bypass_voice_processing_;
   const bool disable_recording_;
+  const int numChannels_;
   VoiceProcessingAudioUnitObserver* observer_;
   AudioUnit vpio_unit_;
   VoiceProcessingAudioUnit::State state_;
