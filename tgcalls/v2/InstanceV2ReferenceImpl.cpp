@@ -556,6 +556,36 @@ public:
         peerConnectionConfiguration.continual_gathering_policy = webrtc::PeerConnectionInterface::ContinualGatheringPolicy::GATHER_CONTINUALLY;
         peerConnectionConfiguration.audio_jitter_buffer_fast_accelerate = true;
         
+        for (auto &server : _rtcServers) {
+            rtc::SocketAddress address(server.host, server.port);
+            if (!address.IsComplete()) {
+                RTC_LOG(LS_ERROR) << "Invalid ICE server host: " << server.host;
+                continue;
+            }
+            
+            if (server.isTurn) {
+                webrtc::PeerConnectionInterface::IceServer mappedServer;
+                
+                std::ostringstream uri;
+                uri << "turn:" << address.HostAsURIString() << ":" << server.port;
+                
+                mappedServer.urls.push_back(uri.str());
+                mappedServer.username = server.login;
+                mappedServer.password = server.password;
+                
+                peerConnectionConfiguration.servers.push_back(mappedServer);
+            } else {
+                webrtc::PeerConnectionInterface::IceServer mappedServer;
+                
+                std::ostringstream uri;
+                uri << "stun:" << address.HostAsURIString() << ":" << server.port;
+                
+                mappedServer.urls.push_back(uri.str());
+                
+                peerConnectionConfiguration.servers.push_back(mappedServer);
+            }
+        }
+        
         auto peerConnectionOrError = _peerConnectionFactory->CreatePeerConnectionOrError(peerConnectionConfiguration, std::move(peerConnectionDependencies));
         if (peerConnectionOrError.ok()) {
             _peerConnection = peerConnectionOrError.value();
