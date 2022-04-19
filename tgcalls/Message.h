@@ -21,7 +21,6 @@ struct PeerIceParameters {
     bool supportsRenomination = false;
     
     PeerIceParameters() = default;
-    PeerIceParameters(const PeerIceParameters &other) = default;
 
     PeerIceParameters(std::string ufrag_, std::string pwd_, bool supportsRenomination_) :
     ufrag(ufrag_),
