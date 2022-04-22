@@ -42,6 +42,7 @@ struct Proxy {
 };
 
 struct RtcServer {
+    uint8_t id = 0;
 	std::string host;
 	uint16_t port = 0;
 	std::string login;

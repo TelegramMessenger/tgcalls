@@ -185,7 +185,8 @@ private:
 
 class ReflectorRelayPortFactory : public cricket::RelayPortFactoryInterface {
 public:
-    ReflectorRelayPortFactory() {
+    ReflectorRelayPortFactory(std::vector<RtcServer> servers) :
+    _servers(servers) {
     }
     
     ~ReflectorRelayPortFactory() override {
@@ -195,22 +196,35 @@ public:
     // using a already existing shared socket.
     virtual std::unique_ptr<cricket::Port> Create(const cricket::CreateRelayPortArgs& args, rtc::AsyncPacketSocket* udp_socket) override {
         if (args.config->credentials.username == "reflector") {
+            uint8_t id = 0;
+            for (const auto &server : _servers) {
+                rtc::SocketAddress serverAddress(server.host, server.port);
+                if (args.server_address->address == serverAddress) {
+                    id = server.id;
+                    break;
+                }
+            }
+            
+            if (id == 0) {
+                return nullptr;
+            }
+            
             auto port = ReflectorPort::CreateUnique(
                 args.network_thread, args.socket_factory, args.network, udp_socket,
-                args.username, args.password, *args.server_address,
-                args.config->credentials, args.config->priority, args.turn_customizer);
-            if (!port)
-              return nullptr;
-            port->SetTlsCertPolicy(args.config->tls_cert_policy);
-            port->SetTurnLoggingId(args.config->turn_logging_id);
+                args.username, args.password, *args.server_address, id,
+                args.config->credentials, args.config->priority);
+            if (!port) {
+                return nullptr;
+            }
             return std::move(port);
         } else {
             auto port = cricket::TurnPort::CreateUnique(
                 args.network_thread, args.socket_factory, args.network, udp_socket,
                 args.username, args.password, *args.server_address,
                 args.config->credentials, args.config->priority, args.turn_customizer);
-            if (!port)
-              return nullptr;
+            if (!port) {
+                return nullptr;
+            }
             port->SetTlsCertPolicy(args.config->tls_cert_policy);
             port->SetTurnLoggingId(args.config->turn_logging_id);
             return std::move(port);
@@ -220,16 +234,26 @@ public:
     // This variant is used for the other cases.
     virtual std::unique_ptr<cricket::Port> Create(const cricket::CreateRelayPortArgs& args, int min_port, int max_port) override {
         if (args.config->credentials.username == "reflector") {
+            uint8_t id = 0;
+            for (const auto &server : _servers) {
+                rtc::SocketAddress serverAddress(server.host, server.port);
+                if (args.server_address->address == serverAddress) {
+                    id = server.id;
+                    break;
+                }
+            }
+            
+            if (id == 0) {
+                return nullptr;
+            }
+            
             auto port = ReflectorPort::CreateUnique(
                 args.network_thread, args.socket_factory, args.network, min_port,
-                max_port, args.username, args.password, *args.server_address,
-                args.config->credentials, args.config->priority,
-                args.config->tls_alpn_protocols, args.config->tls_elliptic_curves,
-                args.turn_customizer, args.config->tls_cert_verifier);
-            if (!port)
-              return nullptr;
-            port->SetTlsCertPolicy(args.config->tls_cert_policy);
-            port->SetTurnLoggingId(args.config->turn_logging_id);
+                max_port, args.username, args.password, *args.server_address, id,
+                args.config->credentials, args.config->priority);
+            if (!port) {
+                return nullptr;
+            }
             return std::move(port);
         } else {
             auto port = cricket::TurnPort::CreateUnique(
@@ -238,13 +262,17 @@ public:
                 args.config->credentials, args.config->priority,
                 args.config->tls_alpn_protocols, args.config->tls_elliptic_curves,
                 args.turn_customizer, args.config->tls_cert_verifier);
-            if (!port)
-              return nullptr;
+            if (!port) {
+                return nullptr;
+            }
             port->SetTlsCertPolicy(args.config->tls_cert_policy);
             port->SetTurnLoggingId(args.config->turn_logging_id);
             return std::move(port);
         }
     }
+    
+private:
+    std::vector<RtcServer> _servers;
 };
 
 }
@@ -323,7 +351,7 @@ void NativeNetworkingImpl::resetDtlsSrtpTransport() {
         _turnCustomizer.reset(new TurnCustomizerImpl());
     }
     
-    _relayPortFactory.reset(new ReflectorRelayPortFactory());
+    _relayPortFactory.reset(new ReflectorRelayPortFactory(_rtcServers));
 
     _portAllocator.reset(new cricket::BasicPortAllocator(_networkManager.get(), _socketFactory.get(), _turnCustomizer.get(), _relayPortFactory.get()));
 

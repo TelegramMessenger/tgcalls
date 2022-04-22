@@ -4,6 +4,8 @@
 #include <memory>
 #include <utility>
 #include <vector>
+#include <random>
+#include <sstream>
 
 #include "absl/algorithm/container.h"
 #include "absl/strings/match.h"
@@ -20,6 +22,7 @@
 #include "rtc_base/strings/string_builder.h"
 #include "rtc_base/task_utils/to_queued_task.h"
 #include "system_wrappers/include/field_trial.h"
+#include "rtc_base/byte_order.h"
 
 namespace tgcalls {
 
@@ -38,10 +41,6 @@ rtc::CopyOnWriteBuffer parseHex(std::string const &string) {
 }
 
 }
-
-// Retry at most twice (i.e. three different ALLOCATE requests) on
-// STUN_ERROR_ALLOCATION_MISMATCH error per rfc5766.
-static const size_t MAX_ALLOCATE_MISMATCH_RETRIES = 2;
 
 static int GetRelayPreference(cricket::ProtocolType proto) {
     switch (proto) {
@@ -62,40 +61,40 @@ ReflectorPort::ReflectorPort(rtc::Thread* thread,
                              const std::string& username,
                              const std::string& password,
                              const cricket::ProtocolAddress& server_address,
+                             uint8_t serverId,
                              const cricket::RelayCredentials& credentials,
-                             int server_priority,
-                             webrtc::TurnCustomizer* customizer)
+                             int server_priority)
 : Port(thread, cricket::RELAY_PORT_TYPE, factory, network, username, password),
 server_address_(server_address),
-tls_cert_verifier_(nullptr),
 credentials_(credentials),
 socket_(socket),
 error_(0),
 stun_dscp_value_(rtc::DSCP_NO_CHANGE),
-request_manager_(thread),
 state_(STATE_CONNECTING),
-server_priority_(server_priority),
-allocate_mismatch_retries_(0),
-turn_customizer_(customizer) {
-    peer_tag_ = parseHex(credentials.password);
+server_priority_(server_priority) {
+    serverId_ = serverId;
     
-    request_manager_.SignalSendPacket.connect(this, &ReflectorPort::OnSendStunPacket);
+    auto rawPeerTag = parseHex(credentials.password);
+    auto generator = std::mt19937(std::random_device()());
+    auto distribution = std::uniform_int_distribution<uint32_t>();
+    do {
+        randomTag_ = distribution(generator);
+    } while (!randomTag_);
+    peer_tag_.AppendData(rawPeerTag.data(), rawPeerTag.size() - 4);
+    peer_tag_.AppendData((uint8_t *)&randomTag_, 4);
 }
 
 ReflectorPort::ReflectorPort(rtc::Thread* thread,
-                             rtc::PacketSocketFactory* factory,
-                             rtc::Network* network,
-                             uint16_t min_port,
-                             uint16_t max_port,
-                             const std::string& username,
-                             const std::string& password,
-                             const cricket::ProtocolAddress& server_address,
-                             const cricket::RelayCredentials& credentials,
-                             int server_priority,
-                             const std::vector<std::string>& tls_alpn_protocols,
-                             const std::vector<std::string>& tls_elliptic_curves,
-                             webrtc::TurnCustomizer* customizer,
-                             rtc::SSLCertificateVerifier* tls_cert_verifier)
+                              rtc::PacketSocketFactory* factory,
+                              rtc::Network* network,
+                              uint16_t min_port,
+                              uint16_t max_port,
+                              const std::string& username,
+                              const std::string& password,
+                              const cricket::ProtocolAddress& server_address,
+                              uint8_t serverId,
+                              const cricket::RelayCredentials& credentials,
+                              int server_priority)
 : Port(thread,
        cricket::RELAY_PORT_TYPE,
        factory,
@@ -105,21 +104,22 @@ ReflectorPort::ReflectorPort(rtc::Thread* thread,
        username,
        password),
 server_address_(server_address),
-tls_alpn_protocols_(tls_alpn_protocols),
-tls_elliptic_curves_(tls_elliptic_curves),
-tls_cert_verifier_(tls_cert_verifier),
 credentials_(credentials),
 socket_(NULL),
 error_(0),
 stun_dscp_value_(rtc::DSCP_NO_CHANGE),
-request_manager_(thread),
 state_(STATE_CONNECTING),
-server_priority_(server_priority),
-allocate_mismatch_retries_(0),
-turn_customizer_(customizer) {
-    peer_tag_ = parseHex(credentials.password);
+server_priority_(server_priority) {
+    serverId_ = serverId;
     
-    request_manager_.SignalSendPacket.connect(this, &ReflectorPort::OnSendStunPacket);
+    auto rawPeerTag = parseHex(credentials.password);
+    auto generator = std::mt19937(std::random_device()());
+    auto distribution = std::uniform_int_distribution<uint32_t>();
+    do {
+        randomTag_ = distribution(generator);
+    } while (!randomTag_);
+    peer_tag_.AppendData(rawPeerTag.data(), rawPeerTag.size() - 4);
+    peer_tag_.AppendData((uint8_t *)&randomTag_, 4);
 }
 
 ReflectorPort::~ReflectorPort() {
@@ -144,32 +144,19 @@ cricket::ProtocolType ReflectorPort::GetProtocol() const {
     return server_address_.proto;
 }
 
-cricket::TlsCertPolicy ReflectorPort::GetTlsCertPolicy() const {
-    return tls_cert_policy_;
-}
-
-void ReflectorPort::SetTlsCertPolicy(cricket::TlsCertPolicy tls_cert_policy) {
-    tls_cert_policy_ = tls_cert_policy;
-}
-
-void ReflectorPort::SetTurnLoggingId(const std::string& turn_logging_id) {
-    turn_logging_id_ = turn_logging_id;
-}
-
-std::vector<std::string> ReflectorPort::GetTlsAlpnProtocols() const {
-    return tls_alpn_protocols_;
-}
-
-std::vector<std::string> ReflectorPort::GetTlsEllipticCurves() const {
-    return tls_elliptic_curves_;
-}
-
 void ReflectorPort::PrepareAddress() {
     if (peer_tag_.size() != 16) {
         RTC_LOG(LS_ERROR) << "Allocation can't be started without setting the"
         " peer tag.";
         OnAllocateError(cricket::STUN_ERROR_UNAUTHORIZED,
                         "Missing REFLECTOR server credentials.");
+        return;
+    }
+    if (serverId_ == 0) {
+        RTC_LOG(LS_ERROR) << "Allocation can't be started without setting the"
+        " server id.";
+        OnAllocateError(cricket::STUN_ERROR_UNAUTHORIZED,
+                        "Missing REFLECTOR server id.");
         return;
     }
     
@@ -219,43 +206,46 @@ void ReflectorPort::PrepareAddress() {
 }
 
 void ReflectorPort::SendReflectorHello() {
-    if (state_ == STATE_READY) {
+    if (!(state_ == STATE_CONNECTED || state_ == STATE_READY)) {
         return;
-    }
-    
-    if (state_ != STATE_READY) {
-        state_ = STATE_READY;
-        
-        // For relayed candidate, Base is the candidate itself.
-        AddAddress(server_address_.address,          // Candidate address.
-                   server_address_.address,          // Base address.
-                   rtc::SocketAddress(),  // Related address.
-                   cricket::UDP_PROTOCOL_NAME,
-                   ProtoToString(server_address_.proto),  // The first hop protocol.
-                   "",  // TCP canddiate type, empty for turn candidates.
-                   cricket::RELAY_PORT_TYPE, GetRelayPreference(server_address_.proto),
-                   server_priority_, ReconstructedServerUrl(false /* use_hostname */),
-                   true);
     }
     
     RTC_LOG(LS_WARNING)
     << ToString()
-    << ": REFLECTOR sending hello to " << server_address_.address.ToString();
+    << ": REFLECTOR sending ping to " << server_address_.address.ToString();
     
     rtc::ByteBufferWriter bufferWriter;
     bufferWriter.WriteBytes((const char *)peer_tag_.data(), peer_tag_.size());
+    for (int i = 0; i < 12; i++) {
+        bufferWriter.WriteUInt8(0xffu);
+    }
+    bufferWriter.WriteUInt8(0xfeu);
+    for (int i = 0; i < 3; i++) {
+        bufferWriter.WriteUInt8(0xffu);
+    }
+    bufferWriter.WriteUInt64(123);
+    
+    while (bufferWriter.Length() % 4 != 0) {
+        bufferWriter.WriteUInt8(0);
+    }
     
     rtc::PacketOptions options;
     Send(bufferWriter.Data(), bufferWriter.Length(), options);
     
-    /*if (!is_running_ping_task_) {
+    if (!is_running_ping_task_) {
         is_running_ping_task_ = true;
+        
+        int timeoutMs = 10000;
+        // Send pings faster until response arrives
+        if (state_ == STATE_CONNECTED) {
+            timeoutMs = 500;
+        }
         
         thread()->PostDelayedTask(ToQueuedTask(task_safety_.flag(), [this] {
             is_running_ping_task_ = false;
             SendReflectorHello();
-        }), 1000);
-    }*/
+        }), timeoutMs);
+    }
 }
 
 bool ReflectorPort::CreateReflectorClientSocket() {
@@ -264,26 +254,12 @@ bool ReflectorPort::CreateReflectorClientSocket() {
     if (server_address_.proto == cricket::PROTO_UDP && !SharedSocket()) {
         socket_ = socket_factory()->CreateUdpSocket(
                                                     rtc::SocketAddress(Network()->GetBestIP(), 0), min_port(), max_port());
-    } else if (server_address_.proto == cricket::PROTO_TCP ||
-               server_address_.proto == cricket::PROTO_TLS) {
+    } else if (server_address_.proto == cricket::PROTO_TCP) {
         RTC_DCHECK(!SharedSocket());
         int opts = rtc::PacketSocketFactory::OPT_STUN;
         
-        // Apply server address TLS and insecure bits to options.
-        if (server_address_.proto == cricket::PROTO_TLS) {
-            if (tls_cert_policy_ ==
-                cricket::TlsCertPolicy::TLS_CERT_POLICY_INSECURE_NO_CHECK) {
-                opts |= rtc::PacketSocketFactory::OPT_TLS_INSECURE;
-            } else {
-                opts |= rtc::PacketSocketFactory::OPT_TLS;
-            }
-        }
-        
         rtc::PacketSocketTcpOptions tcp_options;
         tcp_options.opts = opts;
-        tcp_options.tls_alpn_protocols = tls_alpn_protocols_;
-        tcp_options.tls_elliptic_curves = tls_elliptic_curves_;
-        tcp_options.tls_cert_verifier = tls_cert_verifier_;
         socket_ = socket_factory()->CreateClientTcpSocket(
                                                           rtc::SocketAddress(Network()->GetBestIP(), 0), server_address_.address,
                                                           proxy(), user_agent(), tcp_options);
@@ -392,39 +368,13 @@ void ReflectorPort::OnSocketClose(rtc::AsyncPacketSocket* socket, int error) {
     Close();
 }
 
-void ReflectorPort::OnAllocateMismatch() {
-    if (allocate_mismatch_retries_ >= MAX_ALLOCATE_MISMATCH_RETRIES) {
-        RTC_LOG(LS_WARNING) << ToString() << ": Giving up on the port after "
-        << allocate_mismatch_retries_
-        << " retries for STUN_ERROR_ALLOCATION_MISMATCH";
-        OnAllocateError(cricket::STUN_ERROR_ALLOCATION_MISMATCH,
-                        "Maximum retries reached for allocation mismatch.");
-        return;
-    }
-    
-    RTC_LOG(LS_INFO) << ToString()
-    << ": Allocating a new socket after "
-    "STUN_ERROR_ALLOCATION_MISMATCH, retry: "
-    << allocate_mismatch_retries_ + 1;
-    if (SharedSocket()) {
-        ResetSharedSocket();
-    } else {
-        delete socket_;
-    }
-    socket_ = NULL;
-    
-    ResetNonce();
-    PrepareAddress();
-    ++allocate_mismatch_retries_;
-}
-
 cricket::Connection* ReflectorPort::CreateConnection(const cricket::Candidate& remote_candidate,
                                                      CandidateOrigin origin) {
     // REFLECTOR-UDP can only connect to UDP candidates.
     if (!SupportsProtocol(remote_candidate.protocol())) {
         return nullptr;
     }
-    if (remote_candidate.address() != server_address_.address) {
+    if (remote_candidate.address().port() != serverId_) {
         return nullptr;
     }
     
@@ -436,36 +386,6 @@ cricket::Connection* ReflectorPort::CreateConnection(const cricket::Candidate& r
     AddOrReplaceConnection(conn);
     
     return conn;
-    
-    // If the remote endpoint signaled us an mDNS candidate, we do not form a pair
-    // with the relay candidate to avoid IP leakage in the CreatePermission
-    // request.
-    /*if (absl::EndsWith(remote_candidate.address().hostname(), cricket::LOCAL_TLD)) {
-        return nullptr;
-    }
-    
-    // A REFLECTOR port will have two candiates, STUN and TURN. STUN may not
-    // present in all cases. If present stun candidate will be added first
-    // and TURN candidate later.
-    for (size_t index = 0; index < Candidates().size(); ++index) {
-        const cricket::Candidate& local_candidate = Candidates()[index];
-        if (local_candidate.type() == cricket::RELAY_PORT_TYPE &&
-            local_candidate.address().family() ==
-            remote_candidate.address().family()) {
-            // Create an entry, if needed, so we can get our permissions set up
-            // correctly.
-            if (CreateOrRefreshEntry(remote_candidate.address(), next_channel_number_,
-                                     remote_candidate.username())) {
-                // An entry was created.
-                next_channel_number_++;
-            }
-            cricket::ProxyConnection* conn =
-            new cricket::ProxyConnection(this, index, remote_candidate);
-            AddOrReplaceConnection(conn);
-            return conn;
-        }
-    }
-    return nullptr;*/
 }
 
 bool ReflectorPort::FailAndPruneConnection(const rtc::SocketAddress& address) {
@@ -513,38 +433,31 @@ int ReflectorPort::SendTo(const void* data,
                           const rtc::SocketAddress& addr,
                           const rtc::PacketOptions& options,
                           bool payload) {
+    rtc::CopyOnWriteBuffer targetPeerTag;
+    uint32_t ipAddress = addr.ip();
+    targetPeerTag.AppendData(peer_tag_.data(), peer_tag_.size() - 4);
+    targetPeerTag.AppendData((uint8_t *)&ipAddress, 4);
+    
     rtc::ByteBufferWriter bufferWriter;
-    bufferWriter.WriteBytes((const char *)peer_tag_.data(), peer_tag_.size());
+    bufferWriter.WriteBytes((const char *)targetPeerTag.data(), targetPeerTag.size());
+    
+    bufferWriter.WriteBytes((const char *)&randomTag_, 4);
+    
+    bufferWriter.WriteUInt32((uint32_t)size);
     bufferWriter.WriteBytes((const char *)data, size);
     
-    Send(bufferWriter.Data(), bufferWriter.Length(), options);
-    
-    return static_cast<int>(size);
-    
-    /*// Try to find an entry for this specific address; we should have one.
-    TurnEntry* entry = FindEntry(addr);
-    if (!entry) {
-        RTC_LOG(LS_ERROR) << "Did not find the TurnEntry for address "
-        << addr.ToSensitiveString();
-        return 0;
+    while (bufferWriter.Length() % 4 != 0) {
+        bufferWriter.WriteUInt8(0);
     }
     
-    if (!ready()) {
-        error_ = ENOTCONN;
-        return SOCKET_ERROR;
-    }
-    
-    // Send the actual contents to the server using the usual mechanism.
     rtc::PacketOptions modified_options(options);
     CopyPortInformationToPacketInfo(&modified_options.info_signaled_after_sent);
-    int sent = entry->Send(data, size, payload, modified_options);
-    if (sent <= 0) {
-        return SOCKET_ERROR;
-    }
     
-    // The caller of the function is expecting the number of user data bytes,
-    // rather than the size of the packet.
-    return static_cast<int>(size);*/
+    modified_options.info_signaled_after_sent.turn_overhead_bytes = bufferWriter.Length() - size;
+    
+    Send(bufferWriter.Data(), bufferWriter.Length(), modified_options);
+    
+    return static_cast<int>(size);
 }
 
 bool ReflectorPort::CanHandleIncomingPacketsFrom(
@@ -592,7 +505,7 @@ bool ReflectorPort::HandleIncomingPacket(rtc::AsyncPacketSocket* socket,
     uint8_t receivedPeerTag[16];
     memcpy(receivedPeerTag, data, 16);
     
-    if (memcmp(receivedPeerTag, peer_tag_.data(), 16) != 0) {
+    if (memcmp(receivedPeerTag, peer_tag_.data(), 16 - 4) != 0) {
         RTC_LOG(LS_WARNING)
         << ToString()
         << ": Received REFLECTOR message with incorrect peer_tag";
@@ -602,8 +515,10 @@ bool ReflectorPort::HandleIncomingPacket(rtc::AsyncPacketSocket* socket,
     if (state_ != STATE_READY) {
         state_ = STATE_READY;
         
+        rtc::SocketAddress candidateAddress(randomTag_, serverId_);
+        
         // For relayed candidate, Base is the candidate itself.
-        AddAddress(server_address_.address,          // Candidate address.
+        AddAddress(candidateAddress,          // Candidate address.
                    server_address_.address,          // Base address.
                    rtc::SocketAddress(),  // Related address.
                    cricket::UDP_PROTOCOL_NAME,
@@ -614,8 +529,37 @@ bool ReflectorPort::HandleIncomingPacket(rtc::AsyncPacketSocket* socket,
                    true);
     }
     
-    if (size > 16) {
-        DispatchPacket(data + 16, size - 16, remote_addr, cricket::ProtocolType::PROTO_UDP, packet_time_us);
+    if (size > 16 + 4 + 4) {
+        bool isSpecialPacket = false;
+        if (size >= 16 + 12) {
+            uint8_t specialTag[12];
+            memcpy(specialTag, data + 16, 12);
+            
+            uint8_t expectedSpecialTag[12];
+            memset(expectedSpecialTag, 0xff, 12);
+            
+            if (memcmp(specialTag, expectedSpecialTag, 12) == 0) {
+                isSpecialPacket = true;
+            }
+        }
+        
+        if (!isSpecialPacket) {
+            uint32_t senderTag = 0;
+            memcpy(&senderTag, data + 16, 4);
+            
+            uint32_t dataSize = 0;
+            memcpy(&dataSize, data + 16 + 4, 4);
+            dataSize = be32toh(dataSize);
+            if (dataSize > size - 16 - 4 - 4) {
+                RTC_LOG(LS_WARNING)
+                << ToString()
+                << ": Received data packet with invalid size tag";
+            } else {
+                rtc::SocketAddress candidateAddress(senderTag, serverId_);
+                
+                DispatchPacket(data + 16 + 4 + 4, dataSize, candidateAddress, cricket::ProtocolType::PROTO_UDP, packet_time_us);
+            }
+        }
     }
     
     return true;
@@ -643,43 +587,6 @@ void ReflectorPort::OnReadyToSend(rtc::AsyncPacketSocket* socket) {
 bool ReflectorPort::SupportsProtocol(const std::string& protocol) const {
     // Turn port only connects to UDP candidates.
     return protocol == cricket::UDP_PROTOCOL_NAME;
-}
-
-// Update current server address port with the alternate server address port.
-bool ReflectorPort::SetAlternateServer(const rtc::SocketAddress& address) {
-    // Check if we have seen this address before and reject if we did.
-    AttemptedServerSet::iterator iter = attempted_server_addresses_.find(address);
-    if (iter != attempted_server_addresses_.end()) {
-        RTC_LOG(LS_WARNING) << ToString() << ": Redirection to ["
-        << address.ToSensitiveString()
-        << "] ignored, allocation failed.";
-        return false;
-    }
-    
-    // If protocol family of server address doesn't match with local, return.
-    if (!IsCompatibleAddress(address)) {
-        RTC_LOG(LS_WARNING) << "Server IP address family does not match with "
-        "local host address family type";
-        return false;
-    }
-    
-    // Block redirects to a loopback address.
-    // See: https://bugs.chromium.org/p/chromium/issues/detail?id=649118
-    if (address.IsLoopbackIP()) {
-        RTC_LOG(LS_WARNING) << ToString()
-        << ": Blocking attempted redirect to loopback address.";
-        return false;
-    }
-    
-    RTC_LOG(LS_INFO) << ToString() << ": Redirecting from REFLECTOR server ["
-    << server_address_.address.ToSensitiveString()
-    << "] to TURN server [" << address.ToSensitiveString()
-    << "]";
-    server_address_ = cricket::ProtocolAddress(address, server_address_.proto);
-    
-    // Insert the current address to prevent redirection pingpong.
-    attempted_server_addresses_.insert(server_address_.address);
-    return true;
 }
 
 void ReflectorPort::ResolveTurnAddress(const rtc::SocketAddress& address) {
@@ -740,59 +647,22 @@ void ReflectorPort::OnSendStunPacket(const void* data,
     }
 }
 
-void ReflectorPort::OnAllocateSuccess(const rtc::SocketAddress& address,
-                                      const rtc::SocketAddress& stun_address) {
-    state_ = STATE_READY;
-    
-    rtc::SocketAddress related_address = stun_address;
-    
-    // For relayed candidate, Base is the candidate itself.
-    AddAddress(address,          // Candidate address.
-               address,          // Base address.
-               related_address,  // Related address.
-               cricket::UDP_PROTOCOL_NAME,
-               ProtoToString(server_address_.proto),  // The first hop protocol.
-               "",  // TCP canddiate type, empty for turn candidates.
-               cricket::RELAY_PORT_TYPE, GetRelayPreference(server_address_.proto),
-               server_priority_, ReconstructedServerUrl(false /* use_hostname */),
-               true);
-}
-
 void ReflectorPort::OnAllocateError(int error_code, const std::string& reason) {
     // We will send SignalPortError asynchronously as this can be sent during
     // port initialization. This way it will not be blocking other port
     // creation.
-    /*thread()->Post(RTC_FROM_HERE, this, MSG_ALLOCATE_ERROR);
+    thread()->Post(RTC_FROM_HERE, this, MSG_ALLOCATE_ERROR);
     std::string address = GetLocalAddress().HostAsSensitiveURIString();
     int port = GetLocalAddress().port();
     if (server_address_.proto == cricket::PROTO_TCP &&
         server_address_.address.IsPrivateIP()) {
         address.clear();
         port = 0;
-    }*/
-    //SignalCandidateError(this, cricket::IceCandidateErrorEvent(address, port, ReconstructedServerUrl(true /* use_hostname */), error_code, reason));
-}
-
-void ReflectorPort::OnRefreshError() {
-    // Need to clear the requests asynchronously because otherwise, the refresh
-    // request may be deleted twice: once at the end of the message processing
-    // and the other in HandleRefreshError().
-    //thread()->Post(RTC_FROM_HERE, this, MSG_REFRESH_ERROR);
-}
-
-void ReflectorPort::HandleRefreshError() {
-    request_manager_.Clear();
-    state_ = STATE_RECEIVEONLY;
-    // Fail and prune all connections; stop sending data.
-    for (auto kv : connections()) {
-        kv.second->FailAndPrune();
     }
+    SignalCandidateError(this, cricket::IceCandidateErrorEvent(address, port, ReconstructedServerUrl(true /* use_hostname */), error_code, reason));
 }
 
 void ReflectorPort::Release() {
-    // Remove any pending refresh requests.
-    request_manager_.Clear();
-    
     state_ = STATE_RECEIVEONLY;
 }
 
@@ -800,7 +670,6 @@ void ReflectorPort::Close() {
     if (!ready()) {
         OnAllocateError(cricket::SERVER_NOT_REACHABLE_ERROR, "");
     }
-    request_manager_.Clear();
     // Stop the port from creating new connections.
     state_ = STATE_DISCONNECTED;
     // Delete all existing connections; stop sending data.
@@ -818,22 +687,14 @@ rtc::DiffServCodePoint ReflectorPort::StunDscpValue() const {
 // static
 bool ReflectorPort::AllowedReflectorPort(int port) {
     return true;
-    
-    /*// Port 53, 80 and 443 are used for existing deployments.
-    // Ports above 1024 are assumed to be OK to use.
-    if (port == 53 || port == 80 || port == 443 || port >= 1024) {
-        return true;
-    }
-    // Allow any port if relevant field trial is set. This allows disabling the
-    // check.
-    if (webrtc::field_trial::IsEnabled("WebRTC-Turn-AllowSystemPorts")) {
-        return true;
-    }
-    return false;*/
 }
 
 void ReflectorPort::OnMessage(rtc::Message* message) {
     switch (message->message_id) {
+        case MSG_ALLOCATE_ERROR: {
+            SignalPortError(this);
+            break;
+        }
         default:
             Port::OnMessage(message);
     }
@@ -844,32 +705,11 @@ void ReflectorPort::DispatchPacket(const char* data,
                                    const rtc::SocketAddress& remote_addr,
                                    cricket::ProtocolType proto,
                                    int64_t packet_time_us) {
-    if (!remote_addr.EqualIPs(server_address_.address)) {
-        return;
-    }
-    
-    if (cricket::Connection* conn = GetConnection(server_address_.address)) {
+    if (cricket::Connection* conn = GetConnection(remote_addr)) {
         conn->OnReadPacket(data, size, packet_time_us);
     } else {
-        Port::OnReadPacket(data, size, server_address_.address, proto);
+        Port::OnReadPacket(data, size, remote_addr, proto);
     }
-}
-
-void ReflectorPort::SendRequest(cricket::StunRequest* req, int delay) {
-    request_manager_.SendDelayed(req, delay);
-}
-
-void ReflectorPort::AddRequestAuthInfo(cricket::StunMessage* msg) {
-    // If we've gotten the necessary data from the server, add it to our request.
-    RTC_DCHECK(!hash_.empty());
-    msg->AddAttribute(std::make_unique<cricket::StunByteStringAttribute>(
-                                                                         cricket::STUN_ATTR_USERNAME, credentials_.username));
-    msg->AddAttribute(
-                      std::make_unique<cricket::StunByteStringAttribute>(cricket::STUN_ATTR_REALM, realm_));
-    msg->AddAttribute(
-                      std::make_unique<cricket::StunByteStringAttribute>(cricket::STUN_ATTR_NONCE, nonce_));
-    const bool success = msg->AddMessageIntegrity(hash());
-    RTC_DCHECK(success);
 }
 
 int ReflectorPort::Send(const void* data,
@@ -878,49 +718,7 @@ int ReflectorPort::Send(const void* data,
     return socket_->SendTo(data, len, server_address_.address, options);
 }
 
-void ReflectorPort::UpdateHash() {
-    const bool success = cricket::ComputeStunCredentialHash(credentials_.username, realm_,
-                                                   credentials_.password, &hash_);
-    RTC_DCHECK(success);
-}
-
-bool ReflectorPort::UpdateNonce(cricket::StunMessage* response) {
-    // When stale nonce error received, we should update
-    // hash and store realm and nonce.
-    // Check the mandatory attributes.
-    const cricket::StunByteStringAttribute* realm_attr =
-    response->GetByteString(cricket::STUN_ATTR_REALM);
-    if (!realm_attr) {
-        RTC_LOG(LS_ERROR) << "Missing STUN_ATTR_REALM attribute in "
-        "stale nonce error response.";
-        return false;
-    }
-    set_realm(realm_attr->GetString());
-    
-    const cricket::StunByteStringAttribute* nonce_attr =
-    response->GetByteString(cricket::STUN_ATTR_NONCE);
-    if (!nonce_attr) {
-        RTC_LOG(LS_ERROR) << "Missing STUN_ATTR_NONCE attribute in "
-        "stale nonce error response.";
-        return false;
-    }
-    set_nonce(nonce_attr->GetString());
-    return true;
-}
-
-void ReflectorPort::ResetNonce() {
-    hash_.clear();
-    nonce_.clear();
-    realm_.clear();
-}
-
 void ReflectorPort::HandleConnectionDestroyed(cricket::Connection* conn) {
-    /*// Schedule an event to destroy TurnEntry for the connection, which is
-    // already destroyed.
-    const rtc::SocketAddress& remote_address = conn->remote_candidate().address();
-    TurnEntry* entry = FindEntry(remote_address);
-    RTC_DCHECK(entry != NULL);
-    ScheduleEntryDestruction(entry);*/
 }
 
 std::string ReflectorPort::ReconstructedServerUrl(bool use_hostname) {
@@ -951,24 +749,6 @@ std::string ReflectorPort::ReconstructedServerUrl(bool use_hostname) {
         : server_address_.address.ipaddr().ToString())
     << ":" << server_address_.address.port() << "?transport=" << transport;
     return url.Release();
-}
-
-void ReflectorPort::TurnCustomizerMaybeModifyOutgoingStunMessage(
-                                                                 cricket::StunMessage* message) {
-    if (turn_customizer_ == nullptr) {
-        return;
-    }
-    
-    turn_customizer_->MaybeModifyOutgoingStunMessage(this, message);
-}
-
-bool ReflectorPort::TurnCustomizerAllowChannelData(const void* data,
-                                                   size_t size,
-                                                   bool payload) {
-    return true;
-}
-
-void ReflectorPort::MaybeAddTurnLoggingId(cricket::StunMessage* msg) {
 }
 
 }  // namespace cricket
