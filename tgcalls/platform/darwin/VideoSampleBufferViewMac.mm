@@ -222,7 +222,7 @@ bool CopyVideoFrameToNV12PixelBuffer(id<RTC_OBJC_TYPE(RTCI420Buffer)> frameBuffe
 
     CVReturn cvRet = CVPixelBufferLockBaseAddress(pixelBuffer, 0);
     if (cvRet != kCVReturnSuccess) {
-        return nil;
+        return false;
     }
     uint8_t *dstY = reinterpret_cast<uint8_t *>(CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0));
     size_t dstStrideY = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0);
@@ -243,7 +243,7 @@ bool CopyVideoFrameToNV12PixelBuffer(id<RTC_OBJC_TYPE(RTCI420Buffer)> frameBuffe
                                  frameBuffer.height);
     CVPixelBufferUnlockBaseAddress(pixelBuffer, 0);
     if (ret) {
-        return nil;
+        return false;
     }
     return true;
 }
