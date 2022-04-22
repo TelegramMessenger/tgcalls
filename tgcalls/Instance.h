@@ -214,6 +214,7 @@ template <typename Implementation>
 bool Register();
 
 struct Descriptor {
+    std::string version;
 	Config config;
 	PersistentState persistentState;
 	std::vector<Endpoint> endpoints;
