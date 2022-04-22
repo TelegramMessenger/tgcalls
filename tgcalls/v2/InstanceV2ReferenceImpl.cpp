@@ -50,6 +50,7 @@
 #include "CodecSelectHelper.h"
 #include "AudioDeviceHelper.h"
 #include "SignalingEncryption.h"
+#include "ReflectorRelayPortFactory.h"
 #ifdef WEBRTC_IOS
 #include "platform/darwin/iOS/tgcalls_audio_device_module_ios.h"
 #endif
@@ -370,6 +371,8 @@ public:
         _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [&]() {
             _audioDeviceModule = createAudioDeviceModule();
         });
+        
+        _relayPortFactory.reset(new ReflectorRelayPortFactory(_rtcServers));
 
         webrtc::PeerConnectionFactoryDependencies peerConnectionFactoryDependencies;
         peerConnectionFactoryDependencies.signaling_thread = _threads->getMediaThread();
@@ -388,7 +391,6 @@ public:
         
         std::unique_ptr<cricket::MediaEngineInterface> mediaEngine = cricket::CreateMediaEngine(std::move(mediaDeps));
         peerConnectionFactoryDependencies.media_engine = std::move(mediaEngine);
-        
         
         peerConnectionFactoryDependencies.call_factory = webrtc::CreateCallFactory();
         peerConnectionFactoryDependencies.event_log_factory = std::make_unique<webrtc::RtcEventLogFactory>(peerConnectionFactoryDependencies.task_queue_factory.get());
@@ -1440,6 +1442,7 @@ private:
 
     std::unique_ptr<webrtc::RtcEventLogNull> _eventLog;
     std::unique_ptr<webrtc::TaskQueueFactory> _taskQueueFactory;
+    std::unique_ptr<cricket::RelayPortFactoryInterface> _relayPortFactory;
     rtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> _peerConnectionFactory;
     std::unique_ptr<PeerConnectionDelegateAdapter> _peerConnectionObserver;
     rtc::scoped_refptr<webrtc::PeerConnectionInterface> _peerConnection;

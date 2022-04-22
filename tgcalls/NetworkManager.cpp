@@ -3,6 +3,7 @@
 #include "Message.h"
 
 #include "p2p/base/basic_packet_socket_factory.h"
+#include "v2/ReflectorRelayPortFactory.h"
 #include "p2p/client/basic_port_allocator.h"
 #include "p2p/base/p2p_transport_channel.h"
 #include "p2p/base/basic_async_resolver_factory.h"
@@ -116,7 +117,9 @@ void NetworkManager::start() {
         _turnCustomizer.reset(new TurnCustomizerImpl());
     }
     
-    _portAllocator.reset(new cricket::BasicPortAllocator(_networkManager.get(), _socketFactory.get(), _turnCustomizer.get(), nullptr));
+    _relayPortFactory.reset(new ReflectorRelayPortFactory(_rtcServers));
+    
+    _portAllocator.reset(new cricket::BasicPortAllocator(_networkManager.get(), _socketFactory.get(), _turnCustomizer.get(), _relayPortFactory.get()));
 
     uint32_t flags = _portAllocator->flags();
     
