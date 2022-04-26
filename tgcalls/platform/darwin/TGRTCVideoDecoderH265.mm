@@ -145,7 +145,7 @@ static void tg_h265DecompressionOutputCallback(void* decoder,
 
 - (void)handleApplicationDidBecomeActive:(NSNotification *)notification {
     __weak TGRTCVideoDecoderH265 *weakSelf = self;
-    tgcalls::StaticThreads::getMediaThread()->PostTask(RTC_FROM_HERE, [weakSelf]() {
+    tgcalls::StaticThreads::getMediaThread()->PostTask([weakSelf]() {
         __strong TGRTCVideoDecoderH265 *strongSelf = weakSelf;
         if (strongSelf == nil) {
             return;

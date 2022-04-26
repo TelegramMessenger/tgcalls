@@ -195,10 +195,10 @@ std::string contentIdBySsrc(uint32_t ssrc) {
 
 }
 
-ContentNegotiationContext::ContentNegotiationContext(bool isOutgoing, rtc::UniqueRandomIdGenerator *uniqueRandomIdGenerator) :
+ContentNegotiationContext::ContentNegotiationContext(const webrtc::WebRtcKeyValueConfig& fieldTrials, bool isOutgoing, rtc::UniqueRandomIdGenerator *uniqueRandomIdGenerator) :
 _isOutgoing(isOutgoing),
 _uniqueRandomIdGenerator(uniqueRandomIdGenerator) {
-    _transportDescriptionFactory = std::make_unique<cricket::TransportDescriptionFactory>();
+    _transportDescriptionFactory = std::make_unique<cricket::TransportDescriptionFactory>(fieldTrials);
     
     // tempCertificate is only used to fill in the local SDP
     auto tempCertificate = rtc::RTCCertificateGenerator::GenerateCertificate(rtc::KeyParams(rtc::KT_ECDSA), absl::nullopt);

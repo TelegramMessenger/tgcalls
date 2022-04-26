@@ -157,6 +157,10 @@ void NetworkManager::start() {
     std::vector<cricket::RelayServerConfig> turnServers;
 
     for (auto &server : _rtcServers) {
+        if (server.isTcp) {
+            continue;
+        }
+        
         if (server.isTurn) {
             turnServers.push_back(cricket::RelayServerConfig(
                 rtc::SocketAddress(server.host, server.port),
@@ -278,7 +282,7 @@ void NetworkManager::logCurrentNetworkState() {
 
 void NetworkManager::checkConnectionTimeout() {
     const auto weak = std::weak_ptr<NetworkManager>(shared_from_this());
-    _thread->PostDelayedTask(RTC_FROM_HERE, [weak]() {
+    _thread->PostDelayedTask([weak]() {
         auto strong = weak.lock();
         if (!strong) {
             return;

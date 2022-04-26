@@ -19,6 +19,8 @@
 #include "TurnCustomizerImpl.h"
 #include "SctpDataChannelProviderInterfaceImpl.h"
 #include "StaticThreads.h"
+#include "call/rtp_packet_sink_interface.h"
+#include "modules/rtp_rtcp/source/rtp_packet_received.h"
 
 namespace tgcalls {
 
@@ -276,23 +278,69 @@ static void maybeReadRtpVoiceActivity(rtc::CopyOnWriteBuffer *packet, bool &didR
     }
 }
 
+class UnknownRtpPacketHandler : public webrtc::RtpPacketSinkInterface {
+public:
+    UnknownRtpPacketHandler(std::function<void(uint32_t, int)> &&unknownSsrcPacketReceived) :
+    _unknownSsrcPacketReceived(std::move(unknownSsrcPacketReceived)) {
+    }
+    
+    virtual ~UnknownRtpPacketHandler() = default;
+    
+    void OnRtpPacket(webrtc::RtpPacketReceived const &packet) override {
+        uint32_t ssrc = packet.Ssrc();
+        int payloadType = packet.PayloadType();
+        
+        _unknownSsrcPacketReceived(ssrc, payloadType);
+    }
+    
+private:
+    std::function<void(uint32_t, int)> _unknownSsrcPacketReceived;
+};
+
 class WrappedDtlsSrtpTransport : public webrtc::DtlsSrtpTransport {
 public:
     bool _voiceActivity = false;
 
 public:
-    WrappedDtlsSrtpTransport(bool rtcp_mux_enabled) :
-    webrtc::DtlsSrtpTransport(rtcp_mux_enabled) {
-
+    WrappedDtlsSrtpTransport(bool rtcp_mux_enabled, const webrtc::WebRtcKeyValueConfig& fieldTrials, std::function<void(uint32_t, int)> &&unknownSsrcPacketReceived) :
+    webrtc::DtlsSrtpTransport(rtcp_mux_enabled, fieldTrials),
+    _unknownRtpPacketHandler(std::move(unknownSsrcPacketReceived)) {
+        webrtc::RtpDemuxerCriteria criteria;
+        criteria.payload_types().insert(111); //TODO: hardcoded opus payload type
+        webrtc::DtlsSrtpTransport::RegisterRtpDemuxerSink(criteria, &_unknownRtpPacketHandler);
     }
-
+    
     virtual ~WrappedDtlsSrtpTransport() {
+        webrtc::DtlsSrtpTransport::UnregisterRtpDemuxerSink(&_unknownRtpPacketHandler);
     }
-
+    
     bool SendRtpPacket(rtc::CopyOnWriteBuffer *packet, const rtc::PacketOptions& options, int flags) override {
         maybeUpdateRtpVoiceActivity(packet, _voiceActivity);
         return webrtc::DtlsSrtpTransport::SendRtpPacket(packet, options, flags);
     }
+    
+    bool RegisterRtpDemuxerSink(const webrtc::RtpDemuxerCriteria& criteria, webrtc::RtpPacketSinkInterface* sink) override {
+        if (!criteria.payload_types().empty()) {
+            _payloadTypeDemuxers.push_back(sink);
+            return true;
+        }
+        return webrtc::DtlsSrtpTransport::RegisterRtpDemuxerSink(criteria, sink);
+    }
+    
+    bool UnregisterRtpDemuxerSink(webrtc::RtpPacketSinkInterface* sink) override {
+        for (auto it = _payloadTypeDemuxers.begin(); it != _payloadTypeDemuxers.end(); it++) {
+            if (*it == sink) {
+                _payloadTypeDemuxers.erase(it);
+                break;
+            }
+        }
+        
+        return webrtc::DtlsSrtpTransport::UnregisterRtpDemuxerSink(sink);
+    }
+    
+private:
+    UnknownRtpPacketHandler _unknownRtpPacketHandler;
+    std::vector<webrtc::RtpPacketSinkInterface *> _payloadTypeDemuxers;
 };
 
 webrtc::CryptoOptions GroupNetworkManager::getDefaulCryptoOptions() {
@@ -303,15 +351,15 @@ webrtc::CryptoOptions GroupNetworkManager::getDefaulCryptoOptions() {
 }
 
 GroupNetworkManager::GroupNetworkManager(
+    const webrtc::WebRtcKeyValueConfig& fieldTrials,
     std::function<void(const State &)> stateUpdated,
-    std::function<void(rtc::CopyOnWriteBuffer const &, bool)> transportMessageReceived,
+    std::function<void(uint32_t, int)> unknownSsrcPacketReceived,
     std::function<void(bool)> dataChannelStateUpdated,
     std::function<void(std::string const &)> dataChannelMessageReceived,
     std::function<void(uint32_t, uint8_t, bool)> audioActivityUpdated,
     std::shared_ptr<Threads> threads) :
 _threads(std::move(threads)),
 _stateUpdated(std::move(stateUpdated)),
-_transportMessageReceived(std::move(transportMessageReceived)),
 _dataChannelStateUpdated(dataChannelStateUpdated),
 _dataChannelMessageReceived(dataChannelMessageReceived),
 _audioActivityUpdated(audioActivityUpdated) {
@@ -327,11 +375,11 @@ _audioActivityUpdated(audioActivityUpdated) {
     _networkManager = std::make_unique<rtc::BasicNetworkManager>(_networkMonitorFactory.get());
     _asyncResolverFactory = std::make_unique<webrtc::BasicAsyncResolverFactory>();
 
-    _dtlsSrtpTransport = std::make_unique<WrappedDtlsSrtpTransport>(true);
+    _dtlsSrtpTransport = std::make_unique<WrappedDtlsSrtpTransport>(true, fieldTrials, std::move(unknownSsrcPacketReceived));
     _dtlsSrtpTransport->SetDtlsTransports(nullptr, nullptr);
     _dtlsSrtpTransport->SetActiveResetSrtpParams(false);
     _dtlsSrtpTransport->SignalReadyToSend.connect(this, &GroupNetworkManager::DtlsReadyToSend);
-    _dtlsSrtpTransport->SignalRtpPacketReceived.connect(this, &GroupNetworkManager::RtpPacketReceived_n);
+    //_dtlsSrtpTransport->SignalRtpPacketReceived.connect(this, &GroupNetworkManager::RtpPacketReceived_n);
 
     resetDtlsSrtpTransport();
 }
@@ -341,9 +389,9 @@ GroupNetworkManager::~GroupNetworkManager() {
 
     RTC_LOG(LS_INFO) << "GroupNetworkManager::~GroupNetworkManager()";
 
+    _dataChannelInterface.reset();
     _dtlsSrtpTransport.reset();
     _dtlsTransport.reset();
-    _dataChannelInterface.reset();
     _transportChannel.reset();
     _asyncResolverFactory.reset();
     _portAllocator.reset();
@@ -508,7 +556,7 @@ webrtc::RtpTransport *GroupNetworkManager::getRtpTransport() {
 
 void GroupNetworkManager::checkConnectionTimeout() {
     const auto weak = std::weak_ptr<GroupNetworkManager>(shared_from_this());
-    _threads->getNetworkThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
+    _threads->getNetworkThread()->PostDelayedTask([weak]() {
         auto strong = weak.lock();
         if (!strong) {
             return;
@@ -552,7 +600,7 @@ void GroupNetworkManager::DtlsReadyToSend(bool isReadyToSend) {
 
     if (isReadyToSend) {
         const auto weak = std::weak_ptr<GroupNetworkManager>(shared_from_this());
-        _threads->getNetworkThread()->PostTask(RTC_FROM_HERE, [weak]() {
+        _threads->getNetworkThread()->PostTask([weak]() {
             const auto strong = weak.lock();
             if (!strong) {
                 return;
@@ -588,9 +636,12 @@ void GroupNetworkManager::RtpPacketReceived_n(rtc::CopyOnWriteBuffer *packet, in
         }
     }
 
-    if (_transportMessageReceived) {
-        _transportMessageReceived(*packet, isUnresolved);
-    }
+    /*if (isUnresolved && _unknownSsrcPacketReceived) {
+        uint32_t ssrc = webrtc::ParseRtpSsrc(*packet);
+        int payloadType = webrtc::ParseRtpPayloadType(*packet);
+        
+        _unknownSsrcPacketReceived(ssrc, payloadType);
+    }*/
 }
 
 void GroupNetworkManager::UpdateAggregateStates_n() {

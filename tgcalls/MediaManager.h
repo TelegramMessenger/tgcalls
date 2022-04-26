@@ -151,7 +151,6 @@ private:
 
 	std::unique_ptr<cricket::MediaEngineInterface> _mediaEngine;
 	std::unique_ptr<webrtc::Call> _call;
-	webrtc::FieldTrialBasedConfig _fieldTrials;
 	webrtc::LocalAudioSinkAdapter _audioSource;
 	rtc::scoped_refptr<webrtc::AudioDeviceModule> _audioDeviceModule;
 	std::unique_ptr<cricket::VoiceMediaChannel> _audioChannel;

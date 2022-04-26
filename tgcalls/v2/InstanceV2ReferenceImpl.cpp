@@ -339,6 +339,9 @@ public:
     _eventLog(std::make_unique<webrtc::RtcEventLogNull>()),
     _taskQueueFactory(webrtc::CreateDefaultTaskQueueFactory()),
     _videoCapture(descriptor.videoCapture) {
+        webrtc::field_trial::InitFieldTrialsFromString(
+            "WebRTC-DataChannel-Dcsctp/Enabled/"
+        );
     }
 
     ~InstanceV2ReferenceImplInternal() {
@@ -401,7 +404,7 @@ public:
         
         PeerConnectionDelegateAdapter::Parameters delegateParameters;
         delegateParameters.onRenegotiationNeeded = [weak, threads = _threads]() {
-            threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak]() {
+            threads->getMediaThread()->PostTask([weak]() {
                 const auto strong = weak.lock();
                 if (!strong) {
                     return;
@@ -559,6 +562,10 @@ public:
         peerConnectionConfiguration.audio_jitter_buffer_fast_accelerate = true;
         
         for (auto &server : _rtcServers) {
+            if (server.isTcp) {
+                continue;
+            }
+            
             rtc::SocketAddress address(server.host, server.port);
             if (!address.IsComplete()) {
                 RTC_LOG(LS_ERROR) << "Invalid ICE server host: " << server.host;
@@ -636,7 +643,7 @@ public:
             _encryptionKey,
             [weak, threads = _threads](int delayMs, int cause) {
                 if (delayMs == 0) {
-                    threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, cause]() {
+                    threads->getMediaThread()->PostTask([weak, cause]() {
                         const auto strong = weak.lock();
                         if (!strong) {
                             return;
@@ -645,7 +652,7 @@ public:
                         strong->sendPendingSignalingServiceData(cause);
                     });
                 } else {
-                    threads->getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak, cause]() {
+                    threads->getMediaThread()->PostDelayedTask([weak, cause]() {
                         const auto strong = weak.lock();
                         if (!strong) {
                             return;
@@ -693,7 +700,7 @@ public:
     
     void beginLogTimer(int delayMs) {
         const auto weak = std::weak_ptr<InstanceV2ReferenceImplInternal>(shared_from_this());
-        _threads->getMediaThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
+        _threads->getMediaThread()->PostDelayedTask([weak]() {
             auto strong = weak.lock();
             if (!strong) {
                 return;
@@ -712,7 +719,7 @@ public:
             return;
         }
         
-        _threads->getWorkerThread()->PostTask(RTC_FROM_HERE, [weak, call]() {
+        _threads->getWorkerThread()->PostTask([weak, call]() {
             auto strong = weak.lock();
             if (!strong) {
                 return;
@@ -721,7 +728,7 @@ public:
             auto stats = call->GetStats();
             float sendBitrateKbps = ((float)stats.send_bandwidth_bps / 1024.0f);
             
-            strong->_threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, sendBitrateKbps]() {
+            strong->_threads->getMediaThread()->PostTask([weak, sendBitrateKbps]() {
                 auto strong = weak.lock();
                 if (!strong) {
                     return;
@@ -754,7 +761,7 @@ public:
         _isMakingOffer = true;
         
         rtc::scoped_refptr<webrtc::SetLocalDescriptionObserverInterface> observer(new rtc::RefCountedObject<SetSessionDescriptionObserver>([threads = _threads, weak](webrtc::RTCError error) {
-            threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak]() {
+            threads->getMediaThread()->PostTask([weak]() {
                 const auto strong = weak.lock();
                 if (!strong) {
                     return;
@@ -963,7 +970,7 @@ public:
         std::unique_ptr<webrtc::SessionDescriptionInterface> remoteDescription(webrtc::CreateSessionDescription(type, sdp, &sdpParseError));
         const auto weak = std::weak_ptr<InstanceV2ReferenceImplInternal>(shared_from_this());
         rtc::scoped_refptr<webrtc::SetRemoteDescriptionObserverInterface> observer(new rtc::RefCountedObject<SetSessionDescriptionObserver>([threads = _threads, weak, type](webrtc::RTCError error) {
-            threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak, type]() {
+            threads->getMediaThread()->PostTask([weak, type]() {
                 const auto strong = weak.lock();
                 if (!strong) {
                     return;
@@ -1026,7 +1033,7 @@ public:
         
         DataChannelObserverImpl::Parameters dataChannelObserverParams;
         dataChannelObserverParams.onStateChange = [threads = _threads, weak]() {
-            threads->getMediaThread()->PostTask(RTC_FROM_HERE, [weak]() {
+            threads->getMediaThread()->PostTask([weak]() {
                 const auto strong = weak.lock();
                 if (!strong) {
                     return;
@@ -1146,7 +1153,7 @@ public:
         _isPerformingConfiguration = true;
         
         if (_outgoingVideoTransceiver) {
-            _peerConnection->RemoveTrackNew(_outgoingVideoTransceiver->sender());
+            _peerConnection->RemoveTrackOrError(_outgoingVideoTransceiver->sender());
         }
         if (_outgoingVideoTrack) {
             _outgoingVideoTrack = nullptr;
@@ -1446,7 +1453,6 @@ private:
     rtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> _peerConnectionFactory;
     std::unique_ptr<PeerConnectionDelegateAdapter> _peerConnectionObserver;
     rtc::scoped_refptr<webrtc::PeerConnectionInterface> _peerConnection;
-    webrtc::FieldTrialBasedConfig _fieldTrials;
     
     webrtc::LocalAudioSinkAdapter _audioSource;
     

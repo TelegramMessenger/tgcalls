@@ -56,8 +56,9 @@ public:
     static webrtc::CryptoOptions getDefaulCryptoOptions();
 
     GroupNetworkManager(
+        const webrtc::WebRtcKeyValueConfig& fieldTrials,
         std::function<void(const State &)> stateUpdated,
-        std::function<void(rtc::CopyOnWriteBuffer const &, bool)> transportMessageReceived,
+        std::function<void(uint32_t, int)> unknownSsrcPacketReceived,
         std::function<void(bool)> dataChannelStateUpdated,
         std::function<void(std::string const &)> dataChannelMessageReceived,
         std::function<void(uint32_t, uint8_t, bool)> audioActivityUpdated,
@@ -98,7 +99,6 @@ private:
 
     std::shared_ptr<Threads> _threads;
     std::function<void(const GroupNetworkManager::State &)> _stateUpdated;
-    std::function<void(rtc::CopyOnWriteBuffer const &, bool)> _transportMessageReceived;
     std::function<void(bool)> _dataChannelStateUpdated;
     std::function<void(std::string const &)> _dataChannelMessageReceived;
     std::function<void(uint32_t, uint8_t, bool)> _audioActivityUpdated;

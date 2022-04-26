@@ -24,6 +24,7 @@
 #include "p2p/base/turn_port.h"
 
 #include "ReflectorPort.h"
+#include "FieldTrialsConfig.h"
 
 namespace tgcalls {
 
@@ -229,11 +230,11 @@ _dataChannelMessageReceived(configuration.dataChannelMessageReceived) {
     
     _asyncResolverFactory = std::make_unique<webrtc::WrappingAsyncDnsResolverFactory>(std::make_unique<webrtc::BasicAsyncResolverFactory>());
     
-    _dtlsSrtpTransport = std::make_unique<webrtc::DtlsSrtpTransport>(true);
+    _dtlsSrtpTransport = std::make_unique<webrtc::DtlsSrtpTransport>(true, fieldTrialsBasedConfig);
     _dtlsSrtpTransport->SetDtlsTransports(nullptr, nullptr);
     _dtlsSrtpTransport->SetActiveResetSrtpParams(false);
     _dtlsSrtpTransport->SignalReadyToSend.connect(this, &NativeNetworkingImpl::DtlsReadyToSend);
-    _dtlsSrtpTransport->SignalRtpPacketReceived.connect(this, &NativeNetworkingImpl::RtpPacketReceived_n);
+    //_dtlsSrtpTransport->SignalRtpPacketReceived.connect(this, &NativeNetworkingImpl::RtpPacketReceived_n);
     _dtlsSrtpTransport->SignalRtcpPacketReceived.connect(this, &NativeNetworkingImpl::OnRtcpPacketReceived_n);
     
     resetDtlsSrtpTransport();
@@ -303,6 +304,10 @@ void NativeNetworkingImpl::resetDtlsSrtpTransport() {
     std::vector<cricket::RelayServerConfig> turnServers;
 
     for (auto &server : _rtcServers) {
+        if (server.isTcp) {
+            continue;
+        }
+        
         if (server.isTurn) {
             turnServers.push_back(cricket::RelayServerConfig(
                 rtc::SocketAddress(server.host, server.port),
@@ -412,8 +417,6 @@ void NativeNetworkingImpl::stop() {
     _localIceParameters = PeerIceParameters(rtc::CreateRandomString(cricket::ICE_UFRAG_LENGTH), rtc::CreateRandomString(cricket::ICE_PWD_LENGTH), true);
     
     _localCertificate = rtc::RTCCertificateGenerator::GenerateCertificate(rtc::KeyParams(rtc::KT_ECDSA), absl::nullopt);
-    
-    resetDtlsSrtpTransport();
 }
 
 PeerIceParameters NativeNetworkingImpl::getLocalIceParameters() {
@@ -470,7 +473,7 @@ webrtc::RtpTransport *NativeNetworkingImpl::getRtpTransport() {
 
 void NativeNetworkingImpl::checkConnectionTimeout() {
     const auto weak = std::weak_ptr<NativeNetworkingImpl>(shared_from_this());
-    _threads->getNetworkThread()->PostDelayedTask(RTC_FROM_HERE, [weak]() {
+    _threads->getNetworkThread()->PostDelayedTask([weak]() {
         auto strong = weak.lock();
         if (!strong) {
             return;
@@ -516,7 +519,7 @@ void NativeNetworkingImpl::DtlsReadyToSend(bool isReadyToSend) {
 
     if (isReadyToSend) {
         const auto weak = std::weak_ptr<NativeNetworkingImpl>(shared_from_this());
-        _threads->getNetworkThread()->PostTask(RTC_FROM_HERE, [weak]() {
+        _threads->getNetworkThread()->PostTask([weak]() {
             const auto strong = weak.lock();
             if (!strong) {
                 return;

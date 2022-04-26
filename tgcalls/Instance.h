@@ -48,6 +48,7 @@ struct RtcServer {
 	std::string login;
 	std::string password;
 	bool isTurn = false;
+    bool isTcp = false;
 };
 
 enum class EndpointType {

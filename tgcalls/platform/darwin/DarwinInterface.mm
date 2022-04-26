@@ -135,9 +135,9 @@ std::unique_ptr<VideoCapturerInterface> DarwinInterface::makeVideoCapturer(rtc::
 
 rtc::scoped_refptr<WrappedAudioDeviceModule> DarwinInterface::wrapAudioDeviceModule(rtc::scoped_refptr<webrtc::AudioDeviceModule> module) {
 #ifdef WEBRTC_MAC
-    return new rtc::RefCountedObject<AudioDeviceModuleMacos>(module);
+    return rtc::make_ref_counted<AudioDeviceModuleMacos>(module);
 #else
-    return new rtc::RefCountedObject<AudioDeviceModuleIOS>(module);
+    return rtc::make_ref_counted<AudioDeviceModuleIOS>(module);
 #endif
 }
 

@@ -13,6 +13,7 @@
 #include "rtc_base/ssl_fingerprint.h"
 #include "pc/sctp_data_channel.h"
 #include "p2p/base/port.h"
+#include "api/transport/field_trial_based_config.h"
 
 #include <functional>
 #include <memory>
