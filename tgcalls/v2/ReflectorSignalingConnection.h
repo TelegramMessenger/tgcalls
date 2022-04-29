@@ -42,6 +42,7 @@ private:
     void restartSocket();
     void cleanupSocket();
     void reconnect();
+    void sendConnectionHeader();
     void sendDataToSocket(const std::vector<uint8_t> &data);
     bool consumeIncomingData(rtc::ByteBufferReader &reader);
     void processIncomingPacket(rtc::CopyOnWriteBuffer const &header, rtc::CopyOnWriteBuffer const &data);

@@ -90,6 +90,7 @@ void ReflectorSignalingConnection::onSocketConnect(rtc::Socket *socket) {
     
     _isConnected = true;
     
+    sendConnectionHeader();
     sendDataToSocket({});
     
     for (const auto &packet : _pendingDataToSend) {
@@ -231,16 +232,32 @@ void ReflectorSignalingConnection::send(const std::vector<uint8_t> &data) {
     }
 }
 
+void ReflectorSignalingConnection::sendConnectionHeader() {
+    if (!_socket || !_isConnected) {
+        return;
+    }
+    
+    rtc::ByteBufferWriter writer;
+    writer.WriteUInt32(0xeeeeeeee);
+    
+    _socket->Send(writer.Data(), writer.Length());
+}
+
 void ReflectorSignalingConnection::sendDataToSocket(const std::vector<uint8_t> &data) {
     if (!_socket || !_isConnected) {
         return;
     }
     
     rtc::ByteBufferWriter writer;
-    writer.WriteUInt32((uint32_t)data.size() + 16);
+    uint32_t dataSize = (uint32_t)data.size() + 16;
+    dataSize = (dataSize + 3) & ~(4 - 1);
+    writer.WriteBytes((const char *)&dataSize, 4);
     writer.WriteBytes((const char *)_peerTag.data(), _peerTag.size());
     if (!data.empty()) {
         writer.WriteBytes((const char *)data.data(), data.size());
+    }
+    for (uint32_t i = 16 + (uint32_t)data.size(); i < dataSize; i++) {
+        writer.WriteUInt8(0);
     }
     
     int totalSentBytes = 0;

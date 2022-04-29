@@ -937,6 +937,7 @@ public:
             std::string streamId = std::string("stream") + ssrc.name();
 
             _audioChannel = _channelManager->CreateVoiceChannel(_call, cricket::MediaConfig(), std::string("audio") + uint32ToString(ssrc.networkSsrc), false, GroupNetworkManager::getDefaulCryptoOptions(), audioOptions);
+            
             _threads->getNetworkThread()->Invoke<void>(RTC_FROM_HERE, [&]() {
                 _audioChannel->SetRtpTransport(rtpTransport);
             });
@@ -977,9 +978,9 @@ public:
             incomingAudioDescription->AddStream(streamParams);
 
             std::string errorDesc;
+            _audioChannel->SetPayloadTypeDemuxingEnabled(false);
             _audioChannel->SetLocalContent(outgoingAudioDescription.get(), webrtc::SdpType::kOffer, errorDesc);
             _audioChannel->SetRemoteContent(incomingAudioDescription.get(), webrtc::SdpType::kAnswer, errorDesc);
-            _audioChannel->SetPayloadTypeDemuxingEnabled(false);
 
             outgoingAudioDescription.reset();
             incomingAudioDescription.reset();
@@ -1122,6 +1123,7 @@ public:
             incomingVideoDescription->AddStream(videoRecvStreamParams);
 
             _videoChannel = _channelManager->CreateVideoChannel(_call, cricket::MediaConfig(), std::string("video") + uint32ToString(mid), false, GroupNetworkManager::getDefaulCryptoOptions(), cricket::VideoOptions(), _videoBitrateAllocatorFactory.get());
+            
             _threads->getNetworkThread()->Invoke<void>(RTC_FROM_HERE, [&]() {
                 _videoChannel->SetRtpTransport(rtpTransport);
             });
@@ -1564,51 +1566,46 @@ public:
     #endif
         }
 
-        _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this
-    #if USE_RNNOISE
-			, audioProcessor = std::move(audioProcessor)
-    #endif
-          ]() mutable {
+        _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this]() mutable {
             _audioDeviceModule = createAudioDeviceModule();
             if (!_audioDeviceModule) {
                 return;
             }
         });
         
-            cricket::MediaEngineDependencies mediaDeps;
-            mediaDeps.task_queue_factory = _taskQueueFactory.get();
-            mediaDeps.audio_encoder_factory = webrtc::CreateAudioEncoderFactory<webrtc::AudioEncoderOpus, webrtc::AudioEncoderL16>();
-            mediaDeps.audio_decoder_factory = webrtc::CreateAudioDecoderFactory<webrtc::AudioDecoderOpus, webrtc::AudioDecoderL16>();
+        cricket::MediaEngineDependencies mediaDeps;
+        mediaDeps.task_queue_factory = _taskQueueFactory.get();
+        mediaDeps.audio_encoder_factory = webrtc::CreateAudioEncoderFactory<webrtc::AudioEncoderOpus, webrtc::AudioEncoderL16>();
+        mediaDeps.audio_decoder_factory = webrtc::CreateAudioDecoderFactory<webrtc::AudioDecoderOpus, webrtc::AudioDecoderL16>();
 
-            mediaDeps.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory(false, _videoContentType == VideoContentType::Screencast);
-            mediaDeps.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactory();
+        mediaDeps.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory(false, _videoContentType == VideoContentType::Screencast);
+        mediaDeps.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactory();
 
-    #if USE_RNNOISE
-            if (_audioLevelsUpdated && audioProcessor) {
-                webrtc::AudioProcessingBuilder builder;
-                builder.SetCapturePostProcessing(std::move(audioProcessor));
-                
-                builder.SetEchoDetector(rtc::make_ref_counted<CustomEchoDetector>());
+#if USE_RNNOISE
+        if (_audioLevelsUpdated && audioProcessor) {
+            webrtc::AudioProcessingBuilder builder;
+            builder.SetCapturePostProcessing(std::move(audioProcessor));
+            
+            builder.SetEchoDetector(rtc::make_ref_counted<CustomEchoDetector>());
 
-                mediaDeps.audio_processing = builder.Create();
-            }
-    #endif
+            mediaDeps.audio_processing = builder.Create();
+        }
+#endif
 
-            _audioDeviceDataObserverShared = std::make_shared<AudioDeviceDataObserverShared>();
+        _audioDeviceDataObserverShared = std::make_shared<AudioDeviceDataObserverShared>();
 
-            mediaDeps.adm = _audioDeviceModule;
+        mediaDeps.adm = _audioDeviceModule;
 
-            _availableVideoFormats = filterSupportedVideoFormats(mediaDeps.video_encoder_factory->GetSupportedFormats());
+        _availableVideoFormats = filterSupportedVideoFormats(mediaDeps.video_encoder_factory->GetSupportedFormats());
 
-            std::unique_ptr<cricket::MediaEngineInterface> mediaEngine = cricket::CreateMediaEngine(std::move(mediaDeps));
+        std::unique_ptr<cricket::MediaEngineInterface> mediaEngine = cricket::CreateMediaEngine(std::move(mediaDeps));
 
-            _channelManager = cricket::ChannelManager::Create(
-                std::move(mediaEngine),
-                true,
-                _threads->getWorkerThread(),
-                _threads->getNetworkThread()
-            );
-        //});
+        _channelManager = cricket::ChannelManager::Create(
+            std::move(mediaEngine),
+            true,
+            _threads->getWorkerThread(),
+            _threads->getNetworkThread()
+        );
 
         setAudioInputDevice(_initialInputDeviceId);
         setAudioOutputDevice(_initialOutputDeviceId);
