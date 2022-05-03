@@ -58,14 +58,15 @@
 
 #include "SignalingConnection.h"
 #include "ExternalSignalingConnection.h"
-#include "ReflectorSignalingConnection.h"
+#include "SignalingSctpConnection.h"
 
 namespace tgcalls {
 namespace {
 
 enum class SignalingProtocolVersion {
     V1,
-    V2
+    V2,
+    V3
 };
 
 SignalingProtocolVersion signalingProtocolVersion(std::string const &version) {
@@ -73,6 +74,8 @@ SignalingProtocolVersion signalingProtocolVersion(std::string const &version) {
         return SignalingProtocolVersion::V1;
     } else if (version == "4.0.2") {
         return SignalingProtocolVersion::V2;
+    } else if (version == "4.0.3") {
+        return SignalingProtocolVersion::V3;
     } else {
         RTC_LOG(LS_ERROR) << "signalingProtocolVersion: unknown version " << version;
         
@@ -884,27 +887,23 @@ public:
         
         const auto weak = std::weak_ptr<InstanceV2ImplInternal>(shared_from_this());
         
-        for (const auto &server : _rtcServers) {
-            if (server.isTcp && server.login == "reflector") {
-                _signalingConnection = std::make_unique<ReflectorSignalingConnection>(
-                    _threads,
-                    [threads = _threads, weak](const std::vector<uint8_t> &data) {
-                        threads->getMediaThread()->PostTask([weak, data] {
-                            const auto strong = weak.lock();
-                            if (!strong) {
-                                return;
-                            }
+        if (_signalingProtocolVersion == SignalingProtocolVersion::V3) {
+            _signalingConnection = std::make_unique<SignalingSctpConnection>(
+                _threads,
+                [threads = _threads, weak](const std::vector<uint8_t> &data) {
+                    threads->getMediaThread()->PostTask([weak, data] {
+                        const auto strong = weak.lock();
+                        if (!strong) {
+                            return;
+                        }
 
-                            strong->onSignalingData(data);
-                        });
-                    },
-                    server.host,
-                    server.port,
-                    server.password
-                );
-                
-                break;
-            }
+                        strong->onSignalingData(data);
+                    });
+                },
+                [signalingDataEmitted = _signalingDataEmitted](const std::vector<uint8_t> &data) {
+                    signalingDataEmitted(data);
+                }
+            );
         }
         if (!_signalingConnection) {
             _signalingConnection = std::make_unique<ExternalSignalingConnection>(
@@ -1139,7 +1138,8 @@ public:
 
         if (_signalingConnection && _signalingEncryptedConnection) {
             switch (_signalingProtocolVersion) {
-                case SignalingProtocolVersion::V1: {
+                case SignalingProtocolVersion::V1:
+                case SignalingProtocolVersion::V3: {
                     if (const auto message = _signalingEncryptedConnection->encryptRawPacket(rtc::CopyOnWriteBuffer(data.data(), data.size()))) {
                         _signalingConnection->send(std::vector<uint8_t>(message.value().data(), message.value().data() + message.value().size()));
                     } else {
@@ -1504,7 +1504,8 @@ public:
     void onSignalingData(const std::vector<uint8_t> &data) {
         if (_signalingEncryptedConnection) {
             switch (_signalingProtocolVersion) {
-                case SignalingProtocolVersion::V1: {
+                case SignalingProtocolVersion::V1:
+                case SignalingProtocolVersion::V3: {
                     if (const auto message = _signalingEncryptedConnection->decryptRawPacket(rtc::CopyOnWriteBuffer(data.data(), data.size()))) {
                         processSignalingMessage(message.value());
                     } else {
@@ -2182,6 +2183,7 @@ std::vector<std::string> InstanceV2Impl::GetVersions() {
     std::vector<std::string> result;
     result.push_back("4.0.1");
     result.push_back("4.0.2");
+    result.push_back("4.0.3");
     return result;
 }
 

@@ -1565,6 +1565,8 @@ public:
             }, _noiseSuppressionConfiguration, nullptr, nullptr);
     #endif
         }
+        
+        _audioDeviceDataObserverShared = std::make_shared<AudioDeviceDataObserverShared>();
 
         _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this]() mutable {
             _audioDeviceModule = createAudioDeviceModule();
@@ -1591,8 +1593,6 @@ public:
             mediaDeps.audio_processing = builder.Create();
         }
 #endif
-
-        _audioDeviceDataObserverShared = std::make_shared<AudioDeviceDataObserverShared>();
 
         mediaDeps.adm = _audioDeviceModule;
 
