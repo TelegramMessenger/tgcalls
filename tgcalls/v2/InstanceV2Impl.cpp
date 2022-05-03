@@ -59,6 +59,7 @@
 #include "SignalingConnection.h"
 #include "ExternalSignalingConnection.h"
 #include "SignalingSctpConnection.h"
+#include "utils/gzip.h"
 
 namespace tgcalls {
 namespace {
@@ -80,6 +81,19 @@ SignalingProtocolVersion signalingProtocolVersion(std::string const &version) {
         RTC_LOG(LS_ERROR) << "signalingProtocolVersion: unknown version " << version;
         
         return SignalingProtocolVersion::V2;
+    }
+}
+
+bool signalingProtocolSupportsCompression(SignalingProtocolVersion version) {
+    switch (version) {
+        case SignalingProtocolVersion::V1:
+        case SignalingProtocolVersion::V2:
+            return false;
+        case SignalingProtocolVersion::V3:
+            return true;
+        default:
+            RTC_DCHECK_NOTREACHED();
+            break;
     }
 }
 
@@ -1140,7 +1154,18 @@ public:
             switch (_signalingProtocolVersion) {
                 case SignalingProtocolVersion::V1:
                 case SignalingProtocolVersion::V3: {
-                    if (const auto message = _signalingEncryptedConnection->encryptRawPacket(rtc::CopyOnWriteBuffer(data.data(), data.size()))) {
+                    std::vector<uint8_t> packetData;
+                    if (signalingProtocolSupportsCompression(_signalingProtocolVersion)) {
+                        if (const auto compressedData = gzipData(data)) {
+                            packetData = std::move(compressedData.value());
+                        } else {
+                            RTC_LOG(LS_ERROR) << "Could not gzip signaling message";
+                        }
+                    } else {
+                        packetData = data;
+                    }
+                    
+                    if (const auto message = _signalingEncryptedConnection->encryptRawPacket(rtc::CopyOnWriteBuffer(packetData.data(), packetData.size()))) {
                         _signalingConnection->send(std::vector<uint8_t>(message.value().data(), message.value().data() + message.value().size()));
                     } else {
                         RTC_LOG(LS_ERROR) << "Could not encrypt signaling message";
@@ -1538,7 +1563,16 @@ public:
     
     void processSignalingMessage(rtc::CopyOnWriteBuffer const &data) {
         std::vector<uint8_t> decryptedData = std::vector<uint8_t>(data.data(), data.data() + data.size());
-        processSignalingData(decryptedData);
+        
+        if (isGzip(decryptedData)) {
+            if (const auto decompressedData = gunzipData(decryptedData, 2 * 1024 * 1024)) {
+                processSignalingData(decompressedData.value());
+            } else {
+                RTC_LOG(LS_ERROR) << "receiveSignalingData could not decompress gzipped data";
+            }
+        } else {
+            processSignalingData(decryptedData);
+        }
     }
 
     void processSignalingData(const std::vector<uint8_t> &data) {

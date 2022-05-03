@@ -371,13 +371,13 @@ void GroupNetworkManager::resetDtlsSrtpTransport() {
 
     _portAllocator->SetConfiguration({}, {}, 2, webrtc::NO_PRUNE, _turnCustomizer.get());
 
-    _transportChannel.reset(new cricket::P2PTransportChannel("transport", 0, _portAllocator.get(), _asyncResolverFactory.get(), nullptr));
+    auto transportChannel = std::make_unique<cricket::P2PTransportChannel>("transport", 0, _portAllocator.get(), _asyncResolverFactory.get(), nullptr);
 
     cricket::IceConfig iceConfig;
     iceConfig.continual_gathering_policy = cricket::GATHER_CONTINUALLY;
     iceConfig.prioritize_most_likely_candidate_pairs = true;
     iceConfig.regather_on_failed_networks_interval = 2000;
-    _transportChannel->SetIceConfig(iceConfig);
+    transportChannel->SetIceConfig(iceConfig);
 
     cricket::IceParameters localIceParameters(
         _localIceParameters.ufrag,
@@ -385,26 +385,30 @@ void GroupNetworkManager::resetDtlsSrtpTransport() {
         false
     );
 
-    _transportChannel->SetIceParameters(localIceParameters);
+    transportChannel->SetIceParameters(localIceParameters);
     const bool isOutgoing = false;
-    _transportChannel->SetIceRole(isOutgoing ? cricket::ICEROLE_CONTROLLING : cricket::ICEROLE_CONTROLLED);
-    _transportChannel->SetRemoteIceMode(cricket::ICEMODE_LITE);
+    transportChannel->SetIceRole(isOutgoing ? cricket::ICEROLE_CONTROLLING : cricket::ICEROLE_CONTROLLED);
+    transportChannel->SetRemoteIceMode(cricket::ICEMODE_LITE);
 
-    _transportChannel->SignalIceTransportStateChanged.connect(this, &GroupNetworkManager::transportStateChanged);
-    _transportChannel->SignalReadPacket.connect(this, &GroupNetworkManager::transportPacketReceived);
+    transportChannel->SignalIceTransportStateChanged.connect(this, &GroupNetworkManager::transportStateChanged);
+    transportChannel->SignalReadPacket.connect(this, &GroupNetworkManager::transportPacketReceived);
 
     webrtc::CryptoOptions cryptoOptions = GroupNetworkManager::getDefaulCryptoOptions();
-    _dtlsTransport.reset(new cricket::DtlsTransport(_transportChannel.get(), cryptoOptions, nullptr));
+    
+    auto dtlsTransport = std::make_unique<cricket::DtlsTransport>(transportChannel.get(), cryptoOptions, nullptr);
 
-    _dtlsTransport->SignalWritableState.connect(
+    dtlsTransport->SignalWritableState.connect(
         this, &GroupNetworkManager::OnTransportWritableState_n);
-    _dtlsTransport->SignalReceivingState.connect(
+    dtlsTransport->SignalReceivingState.connect(
         this, &GroupNetworkManager::OnTransportReceivingState_n);
 
-    _dtlsTransport->SetDtlsRole(rtc::SSLRole::SSL_SERVER);
-    _dtlsTransport->SetLocalCertificate(_localCertificate);
+    dtlsTransport->SetDtlsRole(rtc::SSLRole::SSL_SERVER);
+    dtlsTransport->SetLocalCertificate(_localCertificate);
 
-    _dtlsSrtpTransport->SetDtlsTransports(_dtlsTransport.get(), nullptr);
+    _dtlsSrtpTransport->SetDtlsTransports(dtlsTransport.get(), nullptr);
+    
+    _transportChannel = std::move(transportChannel);
+    _dtlsTransport = std::move(dtlsTransport);
 }
 
 void GroupNetworkManager::start() {
@@ -460,7 +464,6 @@ void GroupNetworkManager::stop() {
     _dtlsSrtpTransport->SetDtlsTransports(nullptr, nullptr);
 
     _dataChannelInterface.reset();
-    _dtlsTransport.reset();
     _transportChannel.reset();
     _portAllocator.reset();
 
