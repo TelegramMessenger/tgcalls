@@ -929,7 +929,7 @@ public:
     _call(call) {
         _creationTimestamp = rtc::TimeMillis();
 
-        threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this, rtpTransport, ssrc, onAudioFrame = std::move(onAudioFrame), onAudioLevelUpdated = std::move(onAudioLevelUpdated), randomIdGenerator, isRawPcm]() mutable {
+        threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [this, rtpTransport, ssrc, onAudioFrame = std::move(onAudioFrame), onAudioLevelUpdated = std::move(onAudioLevelUpdated), isRawPcm]() mutable {
             cricket::AudioOptions audioOptions;
             audioOptions.audio_jitter_buffer_fast_accelerate = true;
             audioOptions.audio_jitter_buffer_min_delay_ms = 50;
