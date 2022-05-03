@@ -1,16 +1,21 @@
-#import "utils/gzip.h"
+#include "utils/gzip.h"
 
-#import <zlib.h>
+#include <zlib.h>
 
 #include "rtc_base/copy_on_write_buffer.h"
 
 namespace tgcalls {
+namespace {
+
+using uint = decltype(z_stream::avail_in);
+
+} // namespace
 
 bool isGzip(std::vector<uint8_t> const &data) {
     if (data.size() < 2) {
         return false;
     }
-    
+
     if ((data[0] == 0x1f && data[1] == 0x8b) || (data[0] == 0x78 && data[1] == 0x9c)) {
         return true;
     } else {
@@ -27,14 +32,14 @@ absl::optional<std::vector<uint8_t>> gzipData(std::vector<uint8_t> const &data) 
     stream.next_in = (Bytef *)(void *)data.data();
     stream.total_out = 0;
     stream.avail_out = 0;
-    
+
     static const uint ChunkSize = 16384;
-    
+
     std::vector<uint8_t> output;
     int compression = 9;
     if (deflateInit2(&stream, compression, Z_DEFLATED, 31, 8, Z_DEFAULT_STRATEGY) == Z_OK) {
         output.resize(ChunkSize);
-        
+
         while (stream.avail_out == 0) {
             if (stream.total_out >= output.size()) {
                 output.resize(output.size() + ChunkSize);
@@ -46,7 +51,7 @@ absl::optional<std::vector<uint8_t>> gzipData(std::vector<uint8_t> const &data) 
         deflateEnd(&stream);
         output.resize(stream.total_out);
     }
-    
+
     return output;
 }
 
@@ -54,7 +59,7 @@ absl::optional<std::vector<uint8_t>> gunzipData(std::vector<uint8_t> const &data
     if (!isGzip(data)) {
         return absl::nullopt;
     }
-    
+
     z_stream stream;
     stream.zalloc = Z_NULL;
     stream.zfree = Z_NULL;
@@ -62,7 +67,7 @@ absl::optional<std::vector<uint8_t>> gunzipData(std::vector<uint8_t> const &data
     stream.next_in = (Bytef *)data.data();
     stream.total_out = 0;
     stream.avail_out = 0;
-    
+
     std::vector<uint8_t> output;
     if (inflateInit2(&stream, 47) == Z_OK) {
         int status = Z_OK;
@@ -71,7 +76,7 @@ absl::optional<std::vector<uint8_t>> gunzipData(std::vector<uint8_t> const &data
             if (sizeLimit > 0 && stream.total_out > sizeLimit) {
                 return absl::nullopt;
             }
-            
+
             if (stream.total_out >= output.size()) {
                 output.resize(output.size() + data.size() / 2);
             }
@@ -87,7 +92,7 @@ absl::optional<std::vector<uint8_t>> gunzipData(std::vector<uint8_t> const &data
             }
         }
     }
-    
+
     return output;
 }
 
@@ -102,7 +107,7 @@ NSData *TGGZipData(NSData *data, float level) {
     if (data.length == 0 || TGIsGzippedData(data)) {
         return data;
     }
-    
+
     z_stream stream;
     stream.zalloc = Z_NULL;
     stream.zfree = Z_NULL;
@@ -111,9 +116,9 @@ NSData *TGGZipData(NSData *data, float level) {
     stream.next_in = (Bytef *)(void *)data.bytes;
     stream.total_out = 0;
     stream.avail_out = 0;
-    
+
     static const NSUInteger ChunkSize = 16384;
-    
+
     NSMutableData *output = nil;
     int compression = (level < 0.0f) ? Z_DEFAULT_COMPRESSION : (int)(roundf(level * 9));
     if (deflateInit2(&stream, compression, Z_DEFLATED, 31, 8, Z_DEFAULT_STRATEGY) == Z_OK) {
@@ -129,7 +134,7 @@ NSData *TGGZipData(NSData *data, float level) {
         deflateEnd(&stream);
         output.length = stream.total_out;
     }
-    
+
     return output;
 }
 
@@ -138,7 +143,7 @@ NSData * _Nullable TGGUnzipData(NSData *data, uint sizeLimit)
     if (data.length == 0 || !TGIsGzippedData(data)) {
         return nil;
     }
-    
+
     z_stream stream;
     stream.zalloc = Z_NULL;
     stream.zfree = Z_NULL;
@@ -146,7 +151,7 @@ NSData * _Nullable TGGUnzipData(NSData *data, uint sizeLimit)
     stream.next_in = (Bytef *)data.bytes;
     stream.total_out = 0;
     stream.avail_out = 0;
-    
+
     NSMutableData *output = nil;
     if (inflateInit2(&stream, 47) == Z_OK) {
         int status = Z_OK;
@@ -155,7 +160,7 @@ NSData * _Nullable TGGUnzipData(NSData *data, uint sizeLimit)
             if (sizeLimit > 0 && stream.total_out > sizeLimit) {
                 return nil;
             }
-            
+
             if (stream.total_out >= output.length) {
                 output.length = output.length + data.length / 2;
             }
@@ -171,7 +176,7 @@ NSData * _Nullable TGGUnzipData(NSData *data, uint sizeLimit)
             }
         }
     }
-    
+
     return output;
 }
 
