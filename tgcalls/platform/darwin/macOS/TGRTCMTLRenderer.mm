@@ -279,12 +279,13 @@ static inline void getCubeVertexData(size_t frameWidth,
                     memcpy((float *)_vertexBuffer2.contents, &values, sizeof(values));
                 } break;
                 case RTCVideoRotation_90: {
-                    float values[8] = {0.0, 1, 0, 0.0, 1, 1.0, 1.0, 0};
+                    float values[8] = {0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0};
                     memcpy((float *)_vertexBuffer1.contents, &values, sizeof(values));
                     memcpy((float *)_vertexBuffer2.contents, &values, sizeof(values));
                 } break;
                 case RTCVideoRotation_180: {
-                    float values[8] = {0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0};
+                    //[xLimit, yLimit, 0.0, yLimit, xLimit, 0.0, 0.0, 0.0]
+                    float values[8] = {1.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0};
                     memcpy(_vertexBuffer1.contents, &values, sizeof(values));
                     memcpy(_vertexBuffer2.contents, &values, sizeof(values));
                 } break;
