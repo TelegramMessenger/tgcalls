@@ -5,6 +5,8 @@
 #import "Instance.h"
 #import "InstanceImpl.h"
 #import "v2/InstanceV2Impl.h"
+#import "v2/InstanceV2ReferenceImpl.h"
+#import "v2_4_0_0/InstanceV2_4_0_0Impl.h"
 #include "StaticThreads.h"
 
 #import "VideoCaptureInterface.h"
@@ -23,6 +25,9 @@
 #import "platform/darwin/VideoSampleBufferView.h"
 #import "platform/darwin/VideoCaptureView.h"
 #import "platform/darwin/CustomExternalCapturer.h"
+
+#include "platform/darwin/iOS/tgcalls_audio_device_module_ios.h"
+
 #endif
 
 #import "group/GroupInstanceImpl.h"
@@ -36,12 +41,13 @@
 
 @implementation OngoingCallConnectionDescriptionWebrtc
 
-- (instancetype _Nonnull)initWithConnectionId:(int64_t)connectionId hasStun:(bool)hasStun hasTurn:(bool)hasTurn ip:(NSString * _Nonnull)ip port:(int32_t)port username:(NSString * _Nonnull)username password:(NSString * _Nonnull)password {
+- (instancetype _Nonnull)initWithReflectorId:(uint8_t)reflectorId hasStun:(bool)hasStun hasTurn:(bool)hasTurn hasTcp:(bool)hasTcp ip:(NSString * _Nonnull)ip port:(int32_t)port username:(NSString * _Nonnull)username password:(NSString * _Nonnull)password {
     self = [super init];
     if (self != nil) {
-        _connectionId = connectionId;
+        _reflectorId = reflectorId;
         _hasStun = hasStun;
         _hasTurn = hasTurn;
+        _hasTcp = hasTcp;
         _ip = ip;
         _port = port;
         _username = username;
@@ -428,10 +434,10 @@ private:
                     }
                 }
             } else if (videoFrame.video_frame_buffer()->type() == webrtc::VideoFrameBuffer::Type::kNV12) {
-                rtc::scoped_refptr<webrtc::NV12BufferInterface> nv12Buffer = (webrtc::NV12BufferInterface *)videoFrame.video_frame_buffer().get();
+                rtc::scoped_refptr<webrtc::NV12BufferInterface> nv12Buffer(static_cast<webrtc::NV12BufferInterface *>(videoFrame.video_frame_buffer().get()));
                 mappedBuffer = [[CallVideoFrameNV12Buffer alloc] initWithBuffer:nv12Buffer];
             } else if (videoFrame.video_frame_buffer()->type() == webrtc::VideoFrameBuffer::Type::kI420) {
-                rtc::scoped_refptr<webrtc::I420BufferInterface> i420Buffer = (webrtc::I420BufferInterface *)videoFrame.video_frame_buffer().get();
+                rtc::scoped_refptr<webrtc::I420BufferInterface> i420Buffer(static_cast<webrtc::I420BufferInterface *>(videoFrame.video_frame_buffer().get()));
                 mappedBuffer = [[CallVideoFrameI420Buffer alloc] initWithBuffer:i420Buffer];
             }
 
@@ -531,7 +537,7 @@ tgcalls::VideoCaptureInterfaceObject *GetVideoCaptureAssumingSameThread(tgcalls:
     }
     _isProcessingCustomSampleBuffer.value = true;
 
-    tgcalls::StaticThreads::getThreads()->getMediaThread()->PostTask(RTC_FROM_HERE, [interface = _interface, pixelBuffer = CFRetain(pixelBuffer), croppingBuffer = _croppingBuffer, videoRotation = videoRotation, isProcessingCustomSampleBuffer = _isProcessingCustomSampleBuffer]() {
+    tgcalls::StaticThreads::getThreads()->getMediaThread()->PostTask([interface = _interface, pixelBuffer = CFRetain(pixelBuffer), croppingBuffer = _croppingBuffer, videoRotation = videoRotation, isProcessingCustomSampleBuffer = _isProcessingCustomSampleBuffer]() {
         auto capture = GetVideoCaptureAssumingSameThread(interface.get());
         auto source = capture->source();
         if (source) {
@@ -553,7 +559,7 @@ tgcalls::VideoCaptureInterfaceObject *GetVideoCaptureAssumingSameThread(tgcalls:
 
     auto sinkReference = [storedSink sink];
 
-    tgcalls::StaticThreads::getThreads()->getMediaThread()->PostTask(RTC_FROM_HERE, [interface = _interface, sinkReference]() {
+    tgcalls::StaticThreads::getThreads()->getMediaThread()->PostTask([interface = _interface, sinkReference]() {
         interface->setOutput(sinkReference);
     });
 
@@ -796,14 +802,29 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
     return 92;
 }
 
++ (void)ensureRegisteredImplementations {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        tgcalls::Register<tgcalls::InstanceImpl>();
+        tgcalls::Register<tgcalls::InstanceV2_4_0_0Impl>();
+        tgcalls::Register<tgcalls::InstanceV2Impl>();
+        tgcalls::Register<tgcalls::InstanceV2ReferenceImpl>();
+    });
+}
+
 + (NSArray<NSString *> * _Nonnull)versionsWithIncludeReference:(bool)includeReference {
+    [self ensureRegisteredImplementations];
+    
     NSMutableArray<NSString *> *list = [[NSMutableArray alloc] init];
-    [list addObject:@"2.7.7"];
-    [list addObject:@"3.0.0"];
-    if (includeReference) {
-        [list addObject:@"4.0.0"];
+    
+    for (const auto &version : tgcalls::Meta::Versions()) {
+        [list addObject:[NSString stringWithUTF8String:version.c_str()]];
     }
-    [list addObject:@"4.0.1"];
+    
+    [list sortUsingComparator:^NSComparisonResult(NSString * _Nonnull lhs, NSString * _Nonnull rhs) {
+        return [lhs compare:rhs];
+    }];
+    
     return list;
 }
 
@@ -862,20 +883,24 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
         for (OngoingCallConnectionDescriptionWebrtc *connection in connections) {
             if (connection.hasStun) {
                 parsedRtcServers.push_back((tgcalls::RtcServer){
+                    .id = 0,
                     .host = connection.ip.UTF8String,
                     .port = (uint16_t)connection.port,
                     .login = "",
                     .password = "",
-                    .isTurn = false
+                    .isTurn = false,
+                    .isTcp = false
                 });
             }
-            if (connection.hasTurn) {
+            if (connection.hasTurn || connection.hasTcp) {
                 parsedRtcServers.push_back((tgcalls::RtcServer){
+                    .id = connection.reflectorId,
                     .host = connection.ip.UTF8String,
                     .port = (uint16_t)connection.port,
                     .login = connection.username.UTF8String,
                     .password = connection.password.UTF8String,
-                    .isTurn = true
+                    .isTurn = true,
+                    .isTcp = connection.hasTcp
                 });
             }
         }
@@ -911,14 +936,11 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
         
         tgcalls::EncryptionKey encryptionKey(encryptionKeyValue, isOutgoing);
         
-        __weak OngoingCallThreadLocalContextWebrtc *weakSelf = self;
-        static dispatch_once_t onceToken;
-        dispatch_once(&onceToken, ^{
-            tgcalls::Register<tgcalls::InstanceImpl>();
-            tgcalls::Register<tgcalls::InstanceV2Impl>();
-        });
+        [OngoingCallThreadLocalContextWebrtc ensureRegisteredImplementations];
         
+        __weak OngoingCallThreadLocalContextWebrtc *weakSelf = self;
         _tgVoip = tgcalls::Meta::Create([version UTF8String], (tgcalls::Descriptor){
+            .version = [version UTF8String],
             .config = config,
             .persistentState = (tgcalls::PersistentState){ derivedStateValue },
             .endpoints = endpoints,
@@ -1039,9 +1061,11 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
                         [strongSelf signalingDataEmitted:mappedData];
                     }
                 }];
-            }
+            },
+//            .createAudioDeviceModule = [](webrtc::TaskQueueFactory *taskQueueFactory) -> rtc::scoped_refptr<webrtc::AudioDeviceModule> {
+//                return rtc::make_ref_counted<webrtc::tgcalls_ios_adm::AudioDeviceModuleIOS>(false, false, 1);
+//            }
         });
-        
         _state = OngoingCallStateInitializing;
         _signalBars = 4;
     }
@@ -1367,7 +1391,8 @@ private:
     videoContentType:(OngoingGroupCallVideoContentType)videoContentType
     enableNoiseSuppression:(bool)enableNoiseSuppression
     disableAudioInput:(bool)disableAudioInput
-    preferX264:(bool)preferX264 {
+    preferX264:(bool)preferX264
+    logPath:(NSString * _Nonnull)logPath {
     self = [super init];
     if (self != nil) {
         _queue = queue;
@@ -1405,10 +1430,8 @@ private:
         bool disableOutgoingAudioProcessing = false;
 
         tgcalls::GroupConfig config;
-        config.need_log = false;
-#if DEBUG
         config.need_log = true;
-#endif
+        config.logPath.data = std::string(logPath.length == 0 ? "" : logPath.UTF8String);
 
         __weak GroupCallThreadLocalContext *weakSelf = self;
         _instance.reset(new tgcalls::GroupInstanceCustomImpl((tgcalls::GroupInstanceDescriptor){
