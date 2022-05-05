@@ -395,7 +395,7 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
 
     CVPixelBufferLockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
 
-    auto resultBuffer = new rtc::RefCountedObject<webrtc::I420Buffer>(CVPixelBufferGetWidth(pixelBuffer), CVPixelBufferGetHeight(pixelBuffer));
+    auto resultBuffer = rtc::make_ref_counted<webrtc::I420Buffer>(CVPixelBufferGetWidth(pixelBuffer), CVPixelBufferGetHeight(pixelBuffer));
 
     switch (pixelFormat) {
         case kCVPixelFormatType_420YpCbCr8BiPlanarFullRange:
@@ -463,7 +463,7 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
             int resultHeight = (int)(srcHeight * 0.8f);
             resultHeight &= ~1;
 
-            rtc::scoped_refptr<webrtc::NV12Buffer> resultBuffer = new rtc::RefCountedObject<webrtc::NV12Buffer>(resultWidth, resultHeight, srcYStride, srcUVStride);
+            rtc::scoped_refptr<webrtc::NV12Buffer> resultBuffer = rtc::make_ref_counted<webrtc::NV12Buffer>(resultWidth, resultHeight, srcYStride, srcUVStride);
 
             libyuv::NV12Scale(srcY, srcYStride, srcUV, srcUVStride,
                                         resultWidth, resultHeight, resultBuffer->MutableDataY(),

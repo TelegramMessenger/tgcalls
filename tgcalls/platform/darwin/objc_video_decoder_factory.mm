@@ -48,7 +48,7 @@ class ObjCVideoDecoder : public VideoDecoder {
     RTC_OBJC_TYPE(RTCEncodedImage) *encodedImage =
         [[RTC_OBJC_TYPE(RTCEncodedImage) alloc] initWithNativeEncodedImage:input_image];
 
-    return [decoder_ decode:encodedImage
+    return (int32_t)[decoder_ decode:encodedImage
               missingFrames:missing_frames
           codecSpecificInfo:nil
                renderTimeMs:render_time_ms];
@@ -56,8 +56,8 @@ class ObjCVideoDecoder : public VideoDecoder {
 
   int32_t RegisterDecodeCompleteCallback(DecodedImageCallback *callback) override {
     [decoder_ setCallback:^(RTC_OBJC_TYPE(RTCVideoFrame) * frame) {
-      const rtc::scoped_refptr<VideoFrameBuffer> buffer =
-          new rtc::RefCountedObject<ObjCFrameBuffer>(frame.buffer);
+      const auto buffer = rtc::make_ref_counted<ObjCFrameBuffer>(frame.buffer);
+        
       VideoFrame videoFrame =
           VideoFrame::Builder()
               .set_video_frame_buffer(buffer)

@@ -67,10 +67,10 @@ public:
     }
 
     void runAsync(std::function<void()> method) {
-        _thread->PostTask(RTC_FROM_HERE, std::move(method));
+        _thread->PostTask(std::move(method));
     }
     void runDelayed(int delayMs, std::function<void()> method) {
-        _thread->PostDelayedTask(RTC_FROM_HERE, std::move(method), delayMs);
+        _thread->PostDelayedTask(std::move(method), delayMs);
     }
 
 private:

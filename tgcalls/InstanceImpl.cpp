@@ -7,6 +7,7 @@
 #include "VideoCapturerInterface.h"
 
 namespace tgcalls {
+
 namespace {
 
 rtc::Thread *makeManagerThread() {

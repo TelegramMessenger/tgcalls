@@ -1,6 +1,8 @@
 #include "SctpDataChannelProviderInterfaceImpl.h"
 
 #include "p2p/base/dtls_transport.h"
+#include "api/transport/field_trial_based_config.h"
+#include "FieldTrialsConfig.h"
 
 namespace tgcalls {
 
@@ -18,7 +20,7 @@ _onTerminated(onTerminated),
 _onMessageReceived(onMessageReceived) {
     assert(_threads->getNetworkThread()->IsCurrent());
 
-    _sctpTransportFactory.reset(new cricket::SctpTransportFactory(_threads->getNetworkThread()));
+    _sctpTransportFactory.reset(new cricket::SctpTransportFactory(_threads->getNetworkThread(), fieldTrialsBasedConfig));
 
     _sctpTransport = _sctpTransportFactory->CreateSctpTransport(transportChannel);
     _sctpTransport->SignalReadyToSendData.connect(this, &SctpDataChannelProviderInterfaceImpl::sctpReadyToSendData);
