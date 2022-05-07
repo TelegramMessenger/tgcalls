@@ -188,7 +188,7 @@ int InstanceImpl::GetConnectionMaxLayer() {
 std::vector<std::string> InstanceImpl::GetVersions() {
     std::vector<std::string> result;
     result.push_back("2.7.7");
-    result.push_back("3.0.0");
+    result.push_back("5.0.0");
     return result;
 }
 

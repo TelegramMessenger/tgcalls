@@ -73,9 +73,9 @@ enum class SignalingProtocolVersion {
 };
 
 SignalingProtocolVersion signalingProtocolVersion(std::string const &version) {
-    if (version == "4.1.2") {
+    if (version == "10.0.0") {
         return SignalingProtocolVersion::V1;
-    } else if (version == "4.1.3") {
+    } else if (version == "11.0.0") {
         return SignalingProtocolVersion::V2;
     } else {
         RTC_LOG(LS_ERROR) << "signalingProtocolVersion: unknown version " << version;
@@ -1701,8 +1701,8 @@ void InstanceV2ReferenceImpl::setEchoCancellationStrength(int strength) {
 
 std::vector<std::string> InstanceV2ReferenceImpl::GetVersions() {
     std::vector<std::string> result;
-    result.push_back("4.1.2");
-    result.push_back("4.1.3");
+    result.push_back("10.0.0");
+    result.push_back("11.0.0");
     return result;
 }
 

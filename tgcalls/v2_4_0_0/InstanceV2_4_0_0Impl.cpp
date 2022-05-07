@@ -2190,7 +2190,7 @@ void InstanceV2_4_0_0Impl::setEchoCancellationStrength(int strength) {
 
 std::vector<std::string> InstanceV2_4_0_0Impl::GetVersions() {
     std::vector<std::string> result;
-    result.push_back("4.0.0");
+    result.push_back("6.0.0");
     return result;
 }
 
