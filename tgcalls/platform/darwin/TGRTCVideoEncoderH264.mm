@@ -281,6 +281,7 @@ CFStringRef ExtractProfile(const webrtc::H264ProfileLevelId &profile_level_id) {
           return kVTProfileLevel_H264_High_AutoLevel;
       }
   }
+  return {};
 }
 
 // The function returns the max allowed sample rate (pixels per second) that

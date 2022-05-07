@@ -23,11 +23,11 @@ std::unique_ptr<cricket::Port> ReflectorRelayPortFactory::Create(const cricket::
                 break;
             }
         }
-        
+
         if (id == 0) {
             return nullptr;
         }
-        
+
         auto port = ReflectorPort::CreateUnique(
             args.network_thread, args.socket_factory, args.network, udp_socket,
             args.username, args.password, *args.server_address, id,
@@ -35,7 +35,7 @@ std::unique_ptr<cricket::Port> ReflectorRelayPortFactory::Create(const cricket::
         if (!port) {
             return nullptr;
         }
-        return std::move(port);
+        return port;
     } else {
         auto port = cricket::TurnPort::CreateUnique(
             args.network_thread, args.socket_factory, args.network, udp_socket,
@@ -46,7 +46,7 @@ std::unique_ptr<cricket::Port> ReflectorRelayPortFactory::Create(const cricket::
         }
         port->SetTlsCertPolicy(args.config->tls_cert_policy);
         port->SetTurnLoggingId(args.config->turn_logging_id);
-        return std::move(port);
+        return port;
     }
 }
 
@@ -60,11 +60,11 @@ std::unique_ptr<cricket::Port> ReflectorRelayPortFactory::Create(const cricket::
                 break;
             }
         }
-        
+
         if (id == 0) {
             return nullptr;
         }
-        
+
         auto port = ReflectorPort::CreateUnique(
             args.network_thread, args.socket_factory, args.network, min_port,
             max_port, args.username, args.password, *args.server_address, id,
@@ -72,7 +72,7 @@ std::unique_ptr<cricket::Port> ReflectorRelayPortFactory::Create(const cricket::
         if (!port) {
             return nullptr;
         }
-        return std::move(port);
+        return port;
     } else {
         auto port = cricket::TurnPort::CreateUnique(
             args.network_thread, args.socket_factory, args.network, min_port,
@@ -85,7 +85,7 @@ std::unique_ptr<cricket::Port> ReflectorRelayPortFactory::Create(const cricket::
         }
         port->SetTlsCertPolicy(args.config->tls_cert_policy);
         port->SetTurnLoggingId(args.config->turn_logging_id);
-        return std::move(port);
+        return port;
     }
 }
 
