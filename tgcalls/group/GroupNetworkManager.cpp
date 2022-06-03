@@ -369,13 +369,13 @@ GroupNetworkManager::~GroupNetworkManager() {
 }
 
 void GroupNetworkManager::resetDtlsSrtpTransport() {
-    _portAllocator.reset(new cricket::BasicPortAllocator(_networkManager.get(), _socketFactory.get(), _turnCustomizer.get(), nullptr));
-    _portAllocator->set_flags(_portAllocator->flags());
-    _portAllocator->Initialize();
+    std::unique_ptr<cricket::BasicPortAllocator> portAllocator = std::make_unique<cricket::BasicPortAllocator>(_networkManager.get(), _socketFactory.get(), _turnCustomizer.get(), nullptr);
+    portAllocator->set_flags(portAllocator->flags());
+    portAllocator->Initialize();
 
-    _portAllocator->SetConfiguration({}, {}, 2, webrtc::NO_PRUNE, _turnCustomizer.get());
+    portAllocator->SetConfiguration({}, {}, 2, webrtc::NO_PRUNE, _turnCustomizer.get());
 
-    auto transportChannel = std::make_unique<cricket::P2PTransportChannel>("transport", 0, _portAllocator.get(), _asyncResolverFactory.get(), nullptr);
+    auto transportChannel = std::make_unique<cricket::P2PTransportChannel>("transport", 0, portAllocator.get(), _asyncResolverFactory.get(), nullptr);
 
     cricket::IceConfig iceConfig;
     iceConfig.continual_gathering_policy = cricket::GATHER_CONTINUALLY;
@@ -411,8 +411,9 @@ void GroupNetworkManager::resetDtlsSrtpTransport() {
 
     _dtlsSrtpTransport->SetDtlsTransports(dtlsTransport.get(), nullptr);
 
-    _transportChannel = std::move(transportChannel);
+    _portAllocator = std::move(portAllocator);
     _dtlsTransport = std::move(dtlsTransport);
+    _transportChannel = std::move(transportChannel);
 }
 
 void GroupNetworkManager::start() {
@@ -465,11 +466,7 @@ void GroupNetworkManager::stop() {
     _dtlsTransport->SignalWritableState.disconnect(this);
     _dtlsTransport->SignalReceivingState.disconnect(this);
 
-    _dtlsSrtpTransport->SetDtlsTransports(nullptr, nullptr);
-
     _dataChannelInterface.reset();
-    _transportChannel.reset();
-    _portAllocator.reset();
 
     _localIceParameters = PeerIceParameters(rtc::CreateRandomString(cricket::ICE_UFRAG_LENGTH), rtc::CreateRandomString(cricket::ICE_PWD_LENGTH), false);
 

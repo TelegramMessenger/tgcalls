@@ -1958,6 +1958,9 @@ public:
     }
 
     void stop() {
+        _networkManager->perform(RTC_FROM_HERE, [](GroupNetworkManager *networkManager) {
+            networkManager->stop();
+        });
     }
 
     void updateSsrcAudioLevel(uint32_t ssrc, uint8_t audioLevel, bool isSpeech) {
