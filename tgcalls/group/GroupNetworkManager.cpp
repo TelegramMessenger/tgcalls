@@ -411,9 +411,9 @@ void GroupNetworkManager::resetDtlsSrtpTransport() {
 
     _dtlsSrtpTransport->SetDtlsTransports(dtlsTransport.get(), nullptr);
 
-    _portAllocator = std::move(portAllocator);
     _dtlsTransport = std::move(dtlsTransport);
     _transportChannel = std::move(transportChannel);
+    _portAllocator = std::move(portAllocator);
 }
 
 void GroupNetworkManager::start() {
