@@ -2,6 +2,7 @@
 #define TGCALLS_UTILS_GZIP_H
 
 #include <absl/types/optional.h>
+#include <cstdint>
 #include <vector>
 
 namespace tgcalls {
