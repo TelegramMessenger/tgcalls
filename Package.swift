@@ -5,7 +5,7 @@ import PackageDescription
 
 let package = Package(
     name: "TgVoipWebrtc",
-    platforms: [.macOS(.v10_11)],
+    platforms: [.macOS(.v10_12)],
     products: [
         .library(
             name: "TgVoipWebrtc",
