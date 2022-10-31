@@ -31,7 +31,7 @@ namespace tgcalls {
 
 class SignalingPacketTransport;
 
-class SignalingSctpConnection : public sigslot::has_slots<>, public SignalingConnection {
+class SignalingSctpConnection : public sigslot::has_slots<>, public SignalingConnection, public webrtc::DataChannelSink {
 private:
     struct PacketReadState {
         rtc::CopyOnWriteBuffer headerData;
@@ -51,10 +51,15 @@ public:
     virtual void start() override;
     virtual void send(const std::vector<uint8_t> &data) override;
 
-private:
-    void sctpReadyToSendData();
-    void sctpClosedAbruptly(webrtc::RTCError error);
-    void sctpDataReceived(const cricket::ReceiveDataParams& params, const rtc::CopyOnWriteBuffer& buffer);
+    virtual void OnDataReceived(int channel_id,
+                                webrtc::DataMessageType type,
+                                const rtc::CopyOnWriteBuffer& buffer) override;
+    virtual void OnReadyToSend() override;
+    virtual void OnTransportClosed(webrtc::RTCError error) override;
+
+    // Unused
+    virtual void OnChannelClosing(int channel_id) override{}
+    virtual void OnChannelClosed(int channel_id) override{}
 
 private:
     std::shared_ptr<Threads> _threads;

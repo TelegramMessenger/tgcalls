@@ -20,7 +20,6 @@
 #include "rtc_base/net_helpers.h"
 #include "rtc_base/socket_address.h"
 #include "rtc_base/strings/string_builder.h"
-#include "rtc_base/task_utils/to_queued_task.h"
 #include "system_wrappers/include/field_trial.h"
 #include "rtc_base/byte_order.h"
 
@@ -54,27 +53,25 @@ static int GetRelayPreference(cricket::ProtocolType proto) {
     }
 }
 
-ReflectorPort::ReflectorPort(rtc::Thread* thread,
-                             rtc::PacketSocketFactory* factory,
-                             rtc::Network* network,
+ReflectorPort::ReflectorPort(const cricket::CreateRelayPortArgs& args,
                              rtc::AsyncPacketSocket* socket,
-                             const std::string& username,
-                             const std::string& password,
-                             const cricket::ProtocolAddress& server_address,
-                             uint8_t serverId,
-                             const cricket::RelayCredentials& credentials,
-                             int server_priority)
-: Port(thread, cricket::RELAY_PORT_TYPE, factory, network, username, password),
-server_address_(server_address),
-credentials_(credentials),
+                             uint8_t serverId)
+: Port(args.network_thread,
+    cricket::RELAY_PORT_TYPE,
+    args.socket_factory,
+    args.network,
+    args.username,
+    args.password),
+server_address_(*args.server_address),
+credentials_(args.config->credentials),
 socket_(socket),
 error_(0),
 stun_dscp_value_(rtc::DSCP_NO_CHANGE),
 state_(STATE_CONNECTING),
-server_priority_(server_priority) {
+server_priority_(args.config->priority) {
     serverId_ = serverId;
     
-    auto rawPeerTag = parseHex(credentials.password);
+    auto rawPeerTag = parseHex(args.config->credentials.password);
     auto generator = std::mt19937(std::random_device()());
     auto distribution = std::uniform_int_distribution<uint32_t>();
     do {
@@ -84,35 +81,28 @@ server_priority_(server_priority) {
     peer_tag_.AppendData((uint8_t *)&randomTag_, 4);
 }
 
-ReflectorPort::ReflectorPort(rtc::Thread* thread,
-                              rtc::PacketSocketFactory* factory,
-                              rtc::Network* network,
-                              uint16_t min_port,
-                              uint16_t max_port,
-                              const std::string& username,
-                              const std::string& password,
-                              const cricket::ProtocolAddress& server_address,
-                              uint8_t serverId,
-                              const cricket::RelayCredentials& credentials,
-                              int server_priority)
-: Port(thread,
+ReflectorPort::ReflectorPort(const cricket::CreateRelayPortArgs& args,
+                             uint16_t min_port,
+                             uint16_t max_port,
+                             uint8_t serverId)
+: Port(args.network_thread,
        cricket::RELAY_PORT_TYPE,
-       factory,
-       network,
+       args.socket_factory,
+       args.network,
        min_port,
        max_port,
-       username,
-       password),
-server_address_(server_address),
-credentials_(credentials),
+       args.username,
+       args.password),
+server_address_(*args.server_address),
+credentials_(args.config->credentials),
 socket_(NULL),
 error_(0),
 stun_dscp_value_(rtc::DSCP_NO_CHANGE),
 state_(STATE_CONNECTING),
-server_priority_(server_priority) {
+server_priority_(args.config->priority) {
     serverId_ = serverId;
     
-    auto rawPeerTag = parseHex(credentials.password);
+    auto rawPeerTag = parseHex(args.config->credentials.password);
     auto generator = std::mt19937(std::random_device()());
     auto distribution = std::uniform_int_distribution<uint32_t>();
     do {
@@ -241,10 +231,10 @@ void ReflectorPort::SendReflectorHello() {
             timeoutMs = 500;
         }
         
-        thread()->PostDelayedTask(ToQueuedTask(task_safety_.flag(), [this] {
+        thread()->PostDelayedTask(SafeTask(task_safety_.flag(), [this] {
             is_running_ping_task_ = false;
             SendReflectorHello();
-        }), timeoutMs);
+        }), webrtc::TimeDelta::Millis(timeoutMs));
     }
 }
 
@@ -290,7 +280,7 @@ bool ReflectorPort::CreateReflectorClientSocket() {
     if (server_address_.proto == cricket::PROTO_TCP ||
         server_address_.proto == cricket::PROTO_TLS) {
         socket_->SignalConnect.connect(this, &ReflectorPort::OnSocketConnect);
-        socket_->SignalClose.connect(this, &ReflectorPort::OnSocketClose);
+        socket_->SubscribeClose(this, [this](rtc::AsyncPacketSocket* socket, int error) { OnSocketClose(socket, error); });
     } else {
         state_ = STATE_CONNECTED;
     }
@@ -382,7 +372,7 @@ cricket::Connection* ReflectorPort::CreateConnection(const cricket::Candidate& r
         return nullptr;
     }
     
-    cricket::ProxyConnection* conn = new cricket::ProxyConnection(this, 0, remote_candidate);
+    cricket::ProxyConnection* conn = new cricket::ProxyConnection(NewWeakPtr(), 0, remote_candidate);
     AddOrReplaceConnection(conn);
     
     return conn;
@@ -584,7 +574,7 @@ void ReflectorPort::OnReadyToSend(rtc::AsyncPacketSocket* socket) {
     }
 }
 
-bool ReflectorPort::SupportsProtocol(const std::string& protocol) const {
+bool ReflectorPort::SupportsProtocol(absl::string_view protocol) const {
     // Turn port only connects to UDP candidates.
     return protocol == cricket::UDP_PROTOCOL_NAME;
 }
@@ -651,7 +641,8 @@ void ReflectorPort::OnAllocateError(int error_code, const std::string& reason) {
     // We will send SignalPortError asynchronously as this can be sent during
     // port initialization. This way it will not be blocking other port
     // creation.
-    thread()->Post(RTC_FROM_HERE, this, MSG_ALLOCATE_ERROR);
+    thread()->PostTask(
+      SafeTask(task_safety_.flag(), [this] { SignalPortError(this); }));
     std::string address = GetLocalAddress().HostAsSensitiveURIString();
     int port = GetLocalAddress().port();
     if (server_address_.proto == cricket::PROTO_TCP &&
@@ -687,17 +678,6 @@ rtc::DiffServCodePoint ReflectorPort::StunDscpValue() const {
 // static
 bool ReflectorPort::AllowedReflectorPort(int port) {
     return true;
-}
-
-void ReflectorPort::OnMessage(rtc::Message* message) {
-    switch (message->message_id) {
-        case MSG_ALLOCATE_ERROR: {
-            SignalPortError(this);
-            break;
-        }
-        default:
-            Port::OnMessage(message);
-    }
 }
 
 void ReflectorPort::DispatchPacket(const char* data,
