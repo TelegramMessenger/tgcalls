@@ -234,6 +234,8 @@ struct Descriptor {
     std::function<void(float)> remotePrefferedAspectRatioUpdated;
 	std::function<void(const std::vector<uint8_t> &)> signalingDataEmitted;
 	std::function<rtc::scoped_refptr<webrtc::AudioDeviceModule>(webrtc::TaskQueueFactory*)> createAudioDeviceModule;
+    std::string initialInputDeviceId;
+    std::string initialOutputDeviceId;
 };
 
 class Meta {
