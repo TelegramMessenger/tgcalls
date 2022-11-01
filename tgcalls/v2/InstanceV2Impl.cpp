@@ -281,6 +281,8 @@ public:
             _audioChannel->SetRtpTransport(rtpTransport);
         });
 
+        
+        
         std::vector<cricket::AudioCodec> codecs;
         for (const auto &payloadType : mediaContent.payloadTypes) {
             cricket::AudioCodec codec(payloadType.id, payloadType.name, payloadType.clockrate, 0, payloadType.channels);
@@ -297,6 +299,7 @@ public:
         for (const auto &rtpExtension : mediaContent.rtpExtensions) {
             outgoingAudioDescription->AddRtpHeaderExtension(webrtc::RtpExtension(rtpExtension.uri, rtpExtension.id));
         }
+        
         outgoingAudioDescription->set_rtcp_mux(true);
         outgoingAudioDescription->set_rtcp_reduced_size(true);
         outgoingAudioDescription->set_direction(webrtc::RtpTransceiverDirection::kRecvOnly);
@@ -325,11 +328,27 @@ public:
 
         outgoingAudioDescription.reset();
         incomingAudioDescription.reset();
+        
+        cricket::AudioSendParameters audioSendPrameters;
+        audioSendPrameters.codecs = codecs;
+        audioSendPrameters.extensions.emplace_back(webrtc::RtpExtension::kTransportSequenceNumberUri, 1);
+        audioSendPrameters.options.echo_cancellation = true;
+        //audioSendPrameters.options.experimental_ns = false;
+        audioSendPrameters.options.noise_suppression = true;
+        audioSendPrameters.options.auto_gain_control = true;
+        //audioSendPrameters.options.highpass_filter = false;
+        audioSendPrameters.options.typing_detection = false;
+        //audioSendPrameters.max_bandwidth_bps = 16000;
+        audioSendPrameters.rtcp.reduced_size = true;
+        audioSendPrameters.rtcp.remote_estimate = true;
+        _audioChannel->media_channel()->SetSendParameters(audioSendPrameters);
+
 
         //std::unique_ptr<AudioSinkImpl> audioLevelSink(new AudioSinkImpl(onAudioLevelUpdated, _ssrc, std::move(onAudioFrame)));
         //_audioChannel->media_channel()->SetRawAudioSink(ssrc.networkSsrc, std::move(audioLevelSink));
 
         _audioChannel->Enable(true);
+        
     }
 
     ~IncomingV2AudioChannel() {

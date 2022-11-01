@@ -1415,9 +1415,11 @@ public:
     }
 
     void setAudioInputDevice(std::string id) {
+        SetAudioInputDeviceById(_audioDeviceModule.get(), id);
     }
 
     void setAudioOutputDevice(std::string id) {
+        SetAudioOutputDeviceById(_audioDeviceModule.get(), id);
     }
 
     void setIsLowBatteryLevel(bool isLowBatteryLevel) {
