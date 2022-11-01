@@ -66,9 +66,9 @@ void DarwinInterface::configurePlatformAudio(int numChanels) {
     sharedConfiguration.outputNumberOfChannels = numChanels;
     [RTCAudioSessionConfiguration setWebRTCConfiguration:sharedConfiguration];
 
-    [RTCAudioSession sharedInstance].useManualAudio = true;
+    /*[RTCAudioSession sharedInstance].useManualAudio = true;
     [[RTCAudioSession sharedInstance] audioSessionDidActivate:[AVAudioSession sharedInstance]];
-    [RTCAudioSession sharedInstance].isAudioEnabled = true;
+    [RTCAudioSession sharedInstance].isAudioEnabled = true;*/
     
     RTCLogInfo(@"Configuring platform: %@ %@", getPlatformInfo(), [[UIDevice currentDevice] systemVersion]);
 #endif
