@@ -328,7 +328,7 @@ public:
 
         outgoingAudioDescription.reset();
         incomingAudioDescription.reset();
-        
+
 
         //std::unique_ptr<AudioSinkImpl> audioLevelSink(new AudioSinkImpl(onAudioLevelUpdated, _ssrc, std::move(onAudioFrame)));
         //_audioChannel->media_channel()->SetRawAudioSink(ssrc.networkSsrc, std::move(audioLevelSink));
