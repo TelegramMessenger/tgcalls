@@ -872,6 +872,7 @@ public:
     _videoCapture(descriptor.videoCapture) {
         webrtc::field_trial::InitFieldTrialsFromString(
             "WebRTC-DataChannel-Dcsctp/Enabled/"
+            "WebRTC-Audio-MinimizeResamplingOnMobile/Enabled/"
         );
     }
 

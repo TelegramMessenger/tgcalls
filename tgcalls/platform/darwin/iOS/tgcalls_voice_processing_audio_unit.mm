@@ -304,7 +304,9 @@ bool VoiceProcessingAudioUnit::Initialize(Float64 sample_rate) {
     // converted into a postive value to match the UMA APIs.
     RTC_HISTOGRAM_COUNTS_SPARSE_100000(
         "WebRTC.Audio.GetAGCStateErrorCode1", (-1) * result);
-  } else if (agc_is_enabled) {
+  }
+      
+  if (agc_is_enabled) {
     // Remember that the AGC was enabled by default. Will be used in UMA.
     agc_was_enabled_by_default = 1;
   } else {

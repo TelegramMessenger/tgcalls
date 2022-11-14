@@ -375,10 +375,15 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
 	cricket::AudioSendParameters audioSendPrameters;
 	audioSendPrameters.codecs.push_back(opusCodec);
 	audioSendPrameters.extensions.emplace_back(webrtc::RtpExtension::kTransportSequenceNumberUri, 1);
+#if WEBRTC_IOS
+    audioSendPrameters.options.echo_cancellation = false;
+    audioSendPrameters.options.auto_gain_control = false;
+#else
 	audioSendPrameters.options.echo_cancellation = true;
+    audioSendPrameters.options.auto_gain_control = true;
+#endif
 	//audioSendPrameters.options.experimental_ns = false;
 	audioSendPrameters.options.noise_suppression = true;
-	audioSendPrameters.options.auto_gain_control = true;
 	//audioSendPrameters.options.highpass_filter = false;
 	audioSendPrameters.options.typing_detection = false;
 	//audioSendPrameters.max_bandwidth_bps = 16000;
