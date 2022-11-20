@@ -385,7 +385,7 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
 	//audioSendPrameters.options.experimental_ns = false;
 	audioSendPrameters.options.noise_suppression = true;
 	//audioSendPrameters.options.highpass_filter = false;
-	audioSendPrameters.options.typing_detection = false;
+	//audioSendPrameters.options.typing_detection = false;
 	//audioSendPrameters.max_bandwidth_bps = 16000;
 	audioSendPrameters.rtcp.reduced_size = true;
 	audioSendPrameters.rtcp.remote_estimate = true;
@@ -552,7 +552,7 @@ void MediaManager::beginStatsTimer(int timeoutMs) {
             return;
         }
         strong->collectStats();
-    }, timeoutMs);
+    }, webrtc::TimeDelta::Millis(timeoutMs));
 }
 
 void MediaManager::beginLevelsTimer(int timeoutMs) {
@@ -567,7 +567,7 @@ void MediaManager::beginLevelsTimer(int timeoutMs) {
         strong->_audioLevelUpdated(effectiveLevel);
 
         strong->beginLevelsTimer(100);
-    }, timeoutMs);
+    }, webrtc::TimeDelta::Millis(timeoutMs));
 }
 
 void MediaManager::collectStats() {

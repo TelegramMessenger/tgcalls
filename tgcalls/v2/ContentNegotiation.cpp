@@ -1,6 +1,7 @@
 #include "v2/ContentNegotiation.h"
 
 #include "rtc_base/rtc_certificate_generator.h"
+#include "media/base/media_engine.h"
 
 #include <sstream>
 
@@ -214,16 +215,11 @@ ContentNegotiationContext::~ContentNegotiationContext() {
     
 }
 
-void ContentNegotiationContext::copyCodecsFromChannelManager(cricket::ChannelManager *channelManager, bool randomize) {
-    cricket::AudioCodecs audioSendCodecs;
-    cricket::AudioCodecs audioRecvCodecs;
-    cricket::VideoCodecs videoSendCodecs;
-    cricket::VideoCodecs videoRecvCodecs;
-    
-    channelManager->GetSupportedAudioSendCodecs(&audioSendCodecs);
-    channelManager->GetSupportedAudioReceiveCodecs(&audioRecvCodecs);
-    channelManager->GetSupportedVideoSendCodecs(&videoSendCodecs);
-    channelManager->GetSupportedVideoReceiveCodecs(&videoRecvCodecs);
+void ContentNegotiationContext::copyCodecsFromChannelManager(cricket::MediaEngineInterface *mediaEngine, bool randomize) {
+    cricket::AudioCodecs audioSendCodecs = mediaEngine->voice().send_codecs();
+    cricket::AudioCodecs audioRecvCodecs = mediaEngine->voice().recv_codecs();
+    cricket::VideoCodecs videoSendCodecs = mediaEngine->video().send_codecs();
+    cricket::VideoCodecs videoRecvCodecs = mediaEngine->video().recv_codecs();
     
     for (const auto &codec : audioSendCodecs) {
         if (codec.name == "opus") {

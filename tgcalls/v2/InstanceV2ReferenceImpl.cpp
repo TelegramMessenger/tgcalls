@@ -25,7 +25,6 @@
 #include "api/call/audio_sink.h"
 #include "modules/audio_processing/audio_buffer.h"
 #include "absl/strings/match.h"
-#include "pc/channel_manager.h"
 #include "audio/audio_state.h"
 #include "modules/audio_coding/neteq/default_neteq_factory.h"
 #include "modules/audio_coding/include/audio_coding_module.h"
@@ -382,7 +381,7 @@ public:
     ~InstanceV2ReferenceImplInternal() {
         _currentStrongSink.reset();
 
-        _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [&]() {
+        _threads->getWorkerThread()->BlockingCall([&]() {
             _audioDeviceModule = nullptr;
         });
 
@@ -444,7 +443,7 @@ public:
 
         _signalingConnection->start();
 
-        _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [&]() {
+        _threads->getWorkerThread()->BlockingCall([&]() {
             _audioDeviceModule = createAudioDeviceModule();
         });
 
@@ -690,7 +689,7 @@ public:
             cricket::AudioOptions audioSourceOptions;
             rtc::scoped_refptr<webrtc::AudioSourceInterface> audioSource = _peerConnectionFactory->CreateAudioSource(audioSourceOptions);
 
-            rtc::scoped_refptr<webrtc::AudioTrackInterface> audioTrack = _peerConnectionFactory->CreateAudioTrack("0", audioSource);
+            rtc::scoped_refptr<webrtc::AudioTrackInterface> audioTrack = _peerConnectionFactory->CreateAudioTrack("0", audioSource.get());
             webrtc::RTCErrorOr<rtc::scoped_refptr<webrtc::RtpTransceiverInterface>> audioTransceiverOrError = _peerConnection->AddTransceiver(audioTrack, transceiverInit);
             if (audioTransceiverOrError.ok()) {
                 _outgoingAudioTrack = audioTrack;
@@ -732,7 +731,7 @@ public:
                         }
 
                         strong->sendPendingSignalingServiceData(cause);
-                    }, delayMs);
+                    }, webrtc::TimeDelta::Millis(delayMs));
                 }
             }
         );
@@ -815,7 +814,7 @@ public:
             strong->writeStateLogRecords();
 
             strong->beginLogTimer(1000);
-        }, delayMs);
+        }, webrtc::TimeDelta::Millis(delayMs));
     }
 
     void writeStateLogRecords() {

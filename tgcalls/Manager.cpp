@@ -137,7 +137,7 @@ void Manager::sendSignalingAsync(int delayMs, int cause) {
 		}
 	};
 	if (delayMs) {
-		_thread->PostDelayedTask(std::move(task), delayMs);
+		_thread->PostDelayedTask(std::move(task), webrtc::TimeDelta::Millis(delayMs));
 	} else {
 		_thread->PostTask(std::move(task));
 	}
@@ -214,7 +214,7 @@ void Manager::start() {
 					}
 				};
 				if (delayMs) {
-					thread->PostDelayedTask(task, delayMs);
+					thread->PostDelayedTask(task, webrtc::TimeDelta::Millis(delayMs));
 				} else {
 					thread->PostTask(task);
 				}

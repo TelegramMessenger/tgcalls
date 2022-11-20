@@ -28,19 +28,13 @@ std::unique_ptr<cricket::Port> ReflectorRelayPortFactory::Create(const cricket::
             return nullptr;
         }
 
-        auto port = ReflectorPort::CreateUnique(
-            args.network_thread, args.socket_factory, args.network, udp_socket,
-            args.username, args.password, *args.server_address, id,
-            args.config->credentials, args.config->priority);
+        auto port = ReflectorPort::Create(args, udp_socket, id);
         if (!port) {
             return nullptr;
         }
         return port;
     } else {
-        auto port = cricket::TurnPort::CreateUnique(
-            args.network_thread, args.socket_factory, args.network, udp_socket,
-            args.username, args.password, *args.server_address,
-            args.config->credentials, args.config->priority, args.turn_customizer);
+        auto port = cricket::TurnPort::Create(args, udp_socket);
         if (!port) {
             return nullptr;
         }
@@ -65,21 +59,13 @@ std::unique_ptr<cricket::Port> ReflectorRelayPortFactory::Create(const cricket::
             return nullptr;
         }
 
-        auto port = ReflectorPort::CreateUnique(
-            args.network_thread, args.socket_factory, args.network, min_port,
-            max_port, args.username, args.password, *args.server_address, id,
-            args.config->credentials, args.config->priority);
+        auto port = ReflectorPort::Create(args, min_port, max_port, id);
         if (!port) {
             return nullptr;
         }
         return port;
     } else {
-        auto port = cricket::TurnPort::CreateUnique(
-            args.network_thread, args.socket_factory, args.network, min_port,
-            max_port, args.username, args.password, *args.server_address,
-            args.config->credentials, args.config->priority,
-            args.config->tls_alpn_protocols, args.config->tls_elliptic_curves,
-            args.turn_customizer, args.config->tls_cert_verifier);
+        auto port = cricket::TurnPort::Create(args, min_port, max_port);
         if (!port) {
             return nullptr;
         }

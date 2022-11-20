@@ -87,36 +87,36 @@ SignalingSctpConnection::SignalingSctpConnection(std::shared_ptr<Threads> thread
 _threads(threads),
 _emitData(emitData),
 _onIncomingData(onIncomingData) {
-    _threads->getNetworkThread()->Invoke<void>(RTC_FROM_HERE, [&]() {
+    _threads->getNetworkThread()->BlockingCall([&]() {
         _packetTransport = std::make_unique<SignalingPacketTransport>(threads, emitData);
 
-        _sctpTransportFactory = std::make_unique<cricket::SctpTransportFactory>(_threads->getNetworkThread(), fieldTrialsBasedConfig);
+        _sctpTransportFactory.reset(new cricket::SctpTransportFactory(_threads->getNetworkThread()));
 
         _sctpTransport = _sctpTransportFactory->CreateSctpTransport(_packetTransport.get());
-        _sctpTransport->SignalReadyToSendData.connect(this, &SignalingSctpConnection::sctpReadyToSendData);
-        _sctpTransport->SignalDataReceived.connect(this, &SignalingSctpConnection::sctpDataReceived);
-        _sctpTransport->SignalClosedAbruptly.connect(this, &SignalingSctpConnection::sctpClosedAbruptly);
+        _sctpTransport->SetDataChannelSink(this);
+
+        // TODO: should we disconnect the data channel sink?
 
         _sctpTransport->Start(5000, 5000, 262144);
     });
 }
 
-void SignalingSctpConnection::sctpReadyToSendData() {
+void SignalingSctpConnection::OnReadyToSend() {
     assert(_threads->getNetworkThread()->IsCurrent());
 }
 
-void SignalingSctpConnection::sctpClosedAbruptly(webrtc::RTCError error) {
+void SignalingSctpConnection::OnTransportClosed(webrtc::RTCError error) {
     assert(_threads->getNetworkThread()->IsCurrent());
 }
 
-void SignalingSctpConnection::sctpDataReceived(const cricket::ReceiveDataParams& params, const rtc::CopyOnWriteBuffer& buffer) {
+void SignalingSctpConnection::OnDataReceived(int channel_id, webrtc::DataMessageType type, const rtc::CopyOnWriteBuffer& buffer) {
     assert(_threads->getNetworkThread()->IsCurrent());
 
     _onIncomingData(std::vector<uint8_t>(buffer.data(), buffer.data() + buffer.size()));
 }
 
 SignalingSctpConnection::~SignalingSctpConnection() {
-    _threads->getNetworkThread()->Invoke<void>(RTC_FROM_HERE, [&]() {
+    _threads->getNetworkThread()->BlockingCall([&]() {
         _sctpTransport.reset();
         _sctpTransportFactory.reset();
         _packetTransport.reset();
@@ -127,13 +127,13 @@ void SignalingSctpConnection::start() {
 }
 
 void SignalingSctpConnection::receiveExternal(const std::vector<uint8_t> &data) {
-    _threads->getNetworkThread()->Invoke<void>(RTC_FROM_HERE, [&]() {
+    _threads->getNetworkThread()->BlockingCall([&]() {
         _packetTransport->receiveData(data);
     });
 }
 
 void SignalingSctpConnection::send(const std::vector<uint8_t> &data) {
-    _threads->getNetworkThread()->Invoke<void>(RTC_FROM_HERE, [&]() {
+    _threads->getNetworkThread()->BlockingCall([&]() {
         webrtc::SendDataParams params;
         params.type = webrtc::DataMessageType::kBinary;
         params.ordered = true;
