@@ -192,7 +192,7 @@ public:
             _outgoingAudioChannel->SetLocalContent(outgoingAudioDescription.get(), webrtc::SdpType::kOffer, errorDesc);
             _outgoingAudioChannel->SetRemoteContent(incomingAudioDescription.get(), webrtc::SdpType::kAnswer, errorDesc);
         });
-
+        
         setIsMuted(false);
     }
 
@@ -329,6 +329,7 @@ public:
 
         outgoingAudioDescription.reset();
         incomingAudioDescription.reset();
+
 
         //std::unique_ptr<AudioSinkImpl> audioLevelSink(new AudioSinkImpl(onAudioLevelUpdated, _ssrc, std::move(onAudioFrame)));
         //_audioChannel->media_channel()->SetRawAudioSink(ssrc.networkSsrc, std::move(audioLevelSink));
@@ -867,6 +868,8 @@ public:
     _remotePrefferedAspectRatioUpdated(descriptor.remotePrefferedAspectRatioUpdated),
     _signalingDataEmitted(descriptor.signalingDataEmitted),
     _createAudioDeviceModule(descriptor.createAudioDeviceModule),
+    _initialInputDeviceId(std::move(descriptor.initialInputDeviceId)),
+    _initialOutputDeviceId(std::move(descriptor.initialOutputDeviceId)),
     _statsLogPath(descriptor.config.statsLogPath),
     _eventLog(std::make_unique<webrtc::RtcEventLogNull>()),
     _taskQueueFactory(webrtc::CreateDefaultTaskQueueFactory()),
@@ -1018,8 +1021,6 @@ public:
 
         PlatformInterface::SharedInstance()->configurePlatformAudio();
 
-        //setAudioInputDevice(_initialInputDeviceId);
-        //setAudioOutputDevice(_initialOutputDeviceId);
 
         _threads->getWorkerThread()->BlockingCall([&]() {
             _audioDeviceModule = createAudioDeviceModule();
@@ -1034,6 +1035,8 @@ public:
         mediaDeps.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactory();
 
         mediaDeps.adm = _audioDeviceModule;
+        
+
 
         _availableVideoFormats = mediaDeps.video_encoder_factory->GetSupportedFormats();
 
@@ -1081,6 +1084,8 @@ public:
 
         beginQualityTimer(0);
         beginLogTimer(0);
+        
+        
     }
 
     void beginQualityTimer(int delayMs) {
@@ -1932,11 +1937,15 @@ public:
     }
 
     void setAudioInputDevice(std::string id) {
-
+        _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [&]() {
+            SetAudioInputDeviceById(_audioDeviceModule.get(), id);
+        });
     }
 
     void setAudioOutputDevice(std::string id) {
-
+        _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [&]() {
+            SetAudioOutputDeviceById(_audioDeviceModule.get(), id);
+        });
     }
 
     void setIsLowBatteryLevel(bool isLowBatteryLevel) {
@@ -2099,6 +2108,8 @@ private:
     webrtc::RtpTransport *_rtpTransport = nullptr;
     std::unique_ptr<ChannelManager> _channelManager;
     std::unique_ptr<webrtc::VideoBitrateAllocatorFactory> _videoBitrateAllocatorFactory;
+    std::string _initialInputDeviceId;
+    std::string _initialOutputDeviceId;
 
     std::unique_ptr<ContentNegotiationContext> _contentNegotiationContext;
 
