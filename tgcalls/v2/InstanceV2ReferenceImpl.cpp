@@ -375,6 +375,7 @@ public:
     _videoCapture(descriptor.videoCapture) {
         webrtc::field_trial::InitFieldTrialsFromString(
             "WebRTC-DataChannel-Dcsctp/Enabled/"
+            "WebRTC-Audio-iOS-Holding/Enabled/"
         );
     }
 
@@ -1306,7 +1307,7 @@ public:
             } else {
                 _videoCapture = videoCapture;
 
-                auto videoTrack = _peerConnectionFactory->CreateVideoTrack("1", videoCaptureImpl->source());
+                auto videoTrack = _peerConnectionFactory->CreateVideoTrack("1", videoCaptureImpl->source().get());
                 if (videoTrack) {
                     webrtc::RtpTransceiverInit transceiverInit;
                     transceiverInit.stream_ids = { "0" };
@@ -1623,7 +1624,7 @@ InstanceV2ReferenceImpl::InstanceV2ReferenceImpl(Descriptor &&descriptor) {
     _internal.reset(new ThreadLocalObject<InstanceV2ReferenceImplInternal>(_threads->getMediaThread(), [descriptor = std::move(descriptor), threads = _threads]() mutable {
         return new InstanceV2ReferenceImplInternal(std::move(descriptor), threads);
     }));
-    _internal->perform(RTC_FROM_HERE, [](InstanceV2ReferenceImplInternal *internal) {
+    _internal->perform([](InstanceV2ReferenceImplInternal *internal) {
         internal->start();
     });
 }
@@ -1633,55 +1634,55 @@ InstanceV2ReferenceImpl::~InstanceV2ReferenceImpl() {
 }
 
 void InstanceV2ReferenceImpl::receiveSignalingData(const std::vector<uint8_t> &data) {
-    _internal->perform(RTC_FROM_HERE, [data](InstanceV2ReferenceImplInternal *internal) {
+    _internal->perform([data](InstanceV2ReferenceImplInternal *internal) {
         internal->receiveSignalingData(data);
     });
 }
 
 void InstanceV2ReferenceImpl::setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture) {
-    _internal->perform(RTC_FROM_HERE, [videoCapture](InstanceV2ReferenceImplInternal *internal) {
+    _internal->perform([videoCapture](InstanceV2ReferenceImplInternal *internal) {
         internal->setVideoCapture(videoCapture);
     });
 }
 
 void InstanceV2ReferenceImpl::setRequestedVideoAspect(float aspect) {
-    _internal->perform(RTC_FROM_HERE, [aspect](InstanceV2ReferenceImplInternal *internal) {
+    _internal->perform([aspect](InstanceV2ReferenceImplInternal *internal) {
         internal->setRequestedVideoAspect(aspect);
     });
 }
 
 void InstanceV2ReferenceImpl::setNetworkType(NetworkType networkType) {
-    _internal->perform(RTC_FROM_HERE, [networkType](InstanceV2ReferenceImplInternal *internal) {
+    _internal->perform([networkType](InstanceV2ReferenceImplInternal *internal) {
         internal->setNetworkType(networkType);
     });
 }
 
 void InstanceV2ReferenceImpl::setMuteMicrophone(bool muteMicrophone) {
-    _internal->perform(RTC_FROM_HERE, [muteMicrophone](InstanceV2ReferenceImplInternal *internal) {
+    _internal->perform([muteMicrophone](InstanceV2ReferenceImplInternal *internal) {
         internal->setMuteMicrophone(muteMicrophone);
     });
 }
 
 void InstanceV2ReferenceImpl::setIncomingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
-    _internal->perform(RTC_FROM_HERE, [sink](InstanceV2ReferenceImplInternal *internal) {
+    _internal->perform([sink](InstanceV2ReferenceImplInternal *internal) {
         internal->setIncomingVideoOutput(sink);
     });
 }
 
 void InstanceV2ReferenceImpl::setAudioInputDevice(std::string id) {
-    _internal->perform(RTC_FROM_HERE, [id](InstanceV2ReferenceImplInternal *internal) {
+    _internal->perform([id](InstanceV2ReferenceImplInternal *internal) {
         internal->setAudioInputDevice(id);
     });
 }
 
 void InstanceV2ReferenceImpl::setAudioOutputDevice(std::string id) {
-    _internal->perform(RTC_FROM_HERE, [id](InstanceV2ReferenceImplInternal *internal) {
+    _internal->perform([id](InstanceV2ReferenceImplInternal *internal) {
         internal->setAudioOutputDevice(id);
     });
 }
 
 void InstanceV2ReferenceImpl::setIsLowBatteryLevel(bool isLowBatteryLevel) {
-    _internal->perform(RTC_FROM_HERE, [isLowBatteryLevel](InstanceV2ReferenceImplInternal *internal) {
+    _internal->perform([isLowBatteryLevel](InstanceV2ReferenceImplInternal *internal) {
         internal->setIsLowBatteryLevel(isLowBatteryLevel);
     });
 }
@@ -1737,7 +1738,7 @@ void InstanceV2ReferenceImpl::stop(std::function<void(FinalState)> completion) {
     if (_logSink) {
         debugLog = _logSink->result();
     }
-    _internal->perform(RTC_FROM_HERE, [completion, debugLog = std::move(debugLog)](InstanceV2ReferenceImplInternal *internal) mutable {
+    _internal->perform([completion, debugLog = std::move(debugLog)](InstanceV2ReferenceImplInternal *internal) mutable {
         internal->stop([completion, debugLog = std::move(debugLog)](FinalState finalState) mutable {
             finalState.debugLog = debugLog;
             completion(finalState);

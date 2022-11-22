@@ -16,8 +16,8 @@
 #include "rtc_base/checks.h"
 #include "rtc_base/logging.h"
 #include "rtc_base/ref_count.h"
-#include "rtc_base/ref_counted_object.h"
 #include "system_wrappers/include/metrics.h"
+#include "api/make_ref_counted.h"
 
 #if defined(WEBRTC_IOS)
 #include "tgcalls_audio_device_ios.h"

@@ -949,7 +949,7 @@ public:
             auto videoCaptureImpl = GetVideoCaptureAssumingSameThread(_videoCapture.get());
 
             _threads->getWorkerThread()->BlockingCall([&]() {
-                _outgoingVideoChannel->media_channel()->SetVideoSend(_mainSsrc, NULL, videoCaptureImpl->source());
+                _outgoingVideoChannel->media_channel()->SetVideoSend(_mainSsrc, NULL, videoCaptureImpl->source().get());
             });
 
             const auto weak = std::weak_ptr<OutgoingVideoChannel>(shared_from_this());
@@ -1240,7 +1240,7 @@ public:
             _audioDeviceModule = nullptr;
         });
 
-        _networking->perform(RTC_FROM_HERE, [](NativeNetworkingImpl *networking) {
+        _networking->perform([](NativeNetworkingImpl *networking) {
             networking->stop();
         });
 
@@ -1364,7 +1364,7 @@ public:
 
         _videoBitrateAllocatorFactory = webrtc::CreateBuiltinVideoBitrateAllocatorFactory();
 
-        _networking->perform(RTC_FROM_HERE, [](NativeNetworkingImpl *networking) {
+        _networking->perform([](NativeNetworkingImpl *networking) {
             networking->start();
         });
 
@@ -1480,7 +1480,7 @@ public:
     void sendInitialSetup() {
         const auto weak = std::weak_ptr<InstanceV2_4_0_0ImplInternal>(shared_from_this());
 
-        _networking->perform(RTC_FROM_HERE, [weak, threads = _threads, isOutgoing = _encryptionKey.isOutgoing](NativeNetworkingImpl *networking) {
+        _networking->perform([weak, threads = _threads, isOutgoing = _encryptionKey.isOutgoing](NativeNetworkingImpl *networking) {
             auto localFingerprint = networking->getLocalFingerprint();
             std::string hash = localFingerprint->algorithm;
             std::string fingerprint = localFingerprint->GetRfc4572Fingerprint();
@@ -1568,7 +1568,7 @@ public:
                 sslSetup = initialSetup->fingerprints[0].setup;
             }
 
-            _networking->perform(RTC_FROM_HERE, [threads = _threads, remoteIceParameters = std::move(remoteIceParameters), fingerprint = std::move(fingerprint), sslSetup = std::move(sslSetup)](NativeNetworkingImpl *networking) {
+            _networking->perform([threads = _threads, remoteIceParameters = std::move(remoteIceParameters), fingerprint = std::move(fingerprint), sslSetup = std::move(sslSetup)](NativeNetworkingImpl *networking) {
                 networking->setRemoteParams(remoteIceParameters, fingerprint.get(), sslSetup);
             });
 
@@ -1830,7 +1830,7 @@ public:
         if (_pendingIceCandidates.size() == 0) {
             return;
         }
-        _networking->perform(RTC_FROM_HERE, [threads = _threads, parsedCandidates = _pendingIceCandidates](NativeNetworkingImpl *networking) {
+        _networking->perform([threads = _threads, parsedCandidates = _pendingIceCandidates](NativeNetworkingImpl *networking) {
             networking->addCandidates(parsedCandidates);
         });
         _pendingIceCandidates.clear();
@@ -1864,7 +1864,7 @@ public:
         auto data = message.serialize();
         std::string stringData(data.begin(), data.end());
         RTC_LOG(LS_INFO) << "sendDataChannelMessage: " << stringData;
-        _networking->perform(RTC_FROM_HERE, [stringData = std::move(stringData)](NativeNetworkingImpl *networking) {
+        _networking->perform([stringData = std::move(stringData)](NativeNetworkingImpl *networking) {
             networking->sendDataChannelMessage(stringData);
         });
     }
@@ -2144,7 +2144,7 @@ InstanceV2_4_0_0Impl::InstanceV2_4_0_0Impl(Descriptor &&descriptor) {
     _internal.reset(new ThreadLocalObject<InstanceV2_4_0_0ImplInternal>(_threads->getMediaThread(), [descriptor = std::move(descriptor), threads = _threads]() mutable {
         return new InstanceV2_4_0_0ImplInternal(std::move(descriptor), threads);
     }));
-    _internal->perform(RTC_FROM_HERE, [](InstanceV2_4_0_0ImplInternal *internal) {
+    _internal->perform([](InstanceV2_4_0_0ImplInternal *internal) {
         internal->start();
     });
 }
@@ -2154,55 +2154,55 @@ InstanceV2_4_0_0Impl::~InstanceV2_4_0_0Impl() {
 }
 
 void InstanceV2_4_0_0Impl::receiveSignalingData(const std::vector<uint8_t> &data) {
-    _internal->perform(RTC_FROM_HERE, [data](InstanceV2_4_0_0ImplInternal *internal) {
+    _internal->perform([data](InstanceV2_4_0_0ImplInternal *internal) {
         internal->receiveSignalingData(data);
     });
 }
 
 void InstanceV2_4_0_0Impl::setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture) {
-    _internal->perform(RTC_FROM_HERE, [videoCapture](InstanceV2_4_0_0ImplInternal *internal) {
+    _internal->perform([videoCapture](InstanceV2_4_0_0ImplInternal *internal) {
         internal->setVideoCapture(videoCapture);
     });
 }
 
 void InstanceV2_4_0_0Impl::setRequestedVideoAspect(float aspect) {
-    _internal->perform(RTC_FROM_HERE, [aspect](InstanceV2_4_0_0ImplInternal *internal) {
+    _internal->perform([aspect](InstanceV2_4_0_0ImplInternal *internal) {
         internal->setRequestedVideoAspect(aspect);
     });
 }
 
 void InstanceV2_4_0_0Impl::setNetworkType(NetworkType networkType) {
-    _internal->perform(RTC_FROM_HERE, [networkType](InstanceV2_4_0_0ImplInternal *internal) {
+    _internal->perform([networkType](InstanceV2_4_0_0ImplInternal *internal) {
         internal->setNetworkType(networkType);
     });
 }
 
 void InstanceV2_4_0_0Impl::setMuteMicrophone(bool muteMicrophone) {
-    _internal->perform(RTC_FROM_HERE, [muteMicrophone](InstanceV2_4_0_0ImplInternal *internal) {
+    _internal->perform([muteMicrophone](InstanceV2_4_0_0ImplInternal *internal) {
         internal->setMuteMicrophone(muteMicrophone);
     });
 }
 
 void InstanceV2_4_0_0Impl::setIncomingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
-    _internal->perform(RTC_FROM_HERE, [sink](InstanceV2_4_0_0ImplInternal *internal) {
+    _internal->perform([sink](InstanceV2_4_0_0ImplInternal *internal) {
         internal->setIncomingVideoOutput(sink);
     });
 }
 
 void InstanceV2_4_0_0Impl::setAudioInputDevice(std::string id) {
-    _internal->perform(RTC_FROM_HERE, [id](InstanceV2_4_0_0ImplInternal *internal) {
+    _internal->perform([id](InstanceV2_4_0_0ImplInternal *internal) {
         internal->setAudioInputDevice(id);
     });
 }
 
 void InstanceV2_4_0_0Impl::setAudioOutputDevice(std::string id) {
-    _internal->perform(RTC_FROM_HERE, [id](InstanceV2_4_0_0ImplInternal *internal) {
+    _internal->perform([id](InstanceV2_4_0_0ImplInternal *internal) {
         internal->setAudioOutputDevice(id);
     });
 }
 
 void InstanceV2_4_0_0Impl::setIsLowBatteryLevel(bool isLowBatteryLevel) {
-    _internal->perform(RTC_FROM_HERE, [isLowBatteryLevel](InstanceV2_4_0_0ImplInternal *internal) {
+    _internal->perform([isLowBatteryLevel](InstanceV2_4_0_0ImplInternal *internal) {
         internal->setIsLowBatteryLevel(isLowBatteryLevel);
     });
 }
@@ -2257,7 +2257,7 @@ void InstanceV2_4_0_0Impl::stop(std::function<void(FinalState)> completion) {
     if (_logSink) {
         debugLog = _logSink->result();
     }
-    _internal->perform(RTC_FROM_HERE, [completion, debugLog = std::move(debugLog)](InstanceV2_4_0_0ImplInternal *internal) mutable {
+    _internal->perform([completion, debugLog = std::move(debugLog)](InstanceV2_4_0_0ImplInternal *internal) mutable {
         internal->stop([completion, debugLog = std::move(debugLog)](FinalState finalState) mutable {
             finalState.debugLog = debugLog;
             completion(finalState);

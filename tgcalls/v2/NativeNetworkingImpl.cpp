@@ -225,7 +225,7 @@ _dataChannelMessageReceived(configuration.dataChannelMessageReceived) {
     
     _networkMonitorFactory = PlatformInterface::SharedInstance()->createNetworkMonitorFactory();
     _socketFactory.reset(new rtc::BasicPacketSocketFactory(_threads->getNetworkThread()->socketserver()));
-    _networkManager = std::make_unique<rtc::BasicNetworkManager>(_networkMonitorFactory.get(), nullptr);
+    _networkManager = std::make_unique<rtc::BasicNetworkManager>(_networkMonitorFactory.get(), _threads->getNetworkThread()->socketserver());
     
     _asyncResolverFactory = std::make_unique<webrtc::WrappingAsyncDnsResolverFactory>(std::make_unique<webrtc::BasicAsyncResolverFactory>());
     

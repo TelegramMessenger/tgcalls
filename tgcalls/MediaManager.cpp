@@ -293,6 +293,7 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
 		"WebRTC-FlexFEC-03/Enabled/"
 		"WebRTC-FlexFEC-03-Advertised/Enabled/"
         "WebRTC-Turn-AllowSystemPorts/Enabled/"
+        "WebRTC-Audio-iOS-Holding/Enabled/"
 	);
 
 	PlatformInterface::SharedInstance()->configurePlatformAudio();
@@ -772,10 +773,10 @@ void MediaManager::checkIsSendingVideoChanged(bool wasSending) {
         configureSendingVideoIfNeeded();
 
         if (_enableFlexfec) {
-            _videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, GetVideoCaptureAssumingSameThread(_videoCapture.get())->source());
+            _videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, GetVideoCaptureAssumingSameThread(_videoCapture.get())->source().get());
             _videoChannel->SetVideoSend(_ssrcVideo.fecOutgoing, NULL, nullptr);
         } else {
-            _videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, GetVideoCaptureAssumingSameThread(_videoCapture.get())->source());
+            _videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, GetVideoCaptureAssumingSameThread(_videoCapture.get())->source().get());
         }
 
 		_videoChannel->OnReadyToSend(_isConnected);

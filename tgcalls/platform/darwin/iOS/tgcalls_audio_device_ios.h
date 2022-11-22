@@ -11,10 +11,13 @@
 #ifndef TGCALLS_AUDIO_AUDIO_DEVICE_IOS_H_
 #define TGCALLS_AUDIO_AUDIO_DEVICE_IOS_H_
 
+#include <atomic>
 #include <memory>
 
+#include "api/scoped_refptr.h"
 #include "api/sequence_checker.h"
 #include "sdk/objc/native/src/audio/audio_session_observer.h"
+#include "api/task_queue/pending_task_safety_flag.h"
 #include "modules/audio_device/audio_device_generic.h"
 #include "rtc_base/buffer.h"
 #include "rtc_base/thread.h"
@@ -45,8 +48,7 @@ namespace tgcalls_ios_adm {
 // same thread.
 class AudioDeviceIOS : public AudioDeviceGeneric,
                        public AudioSessionObserver,
-                       public VoiceProcessingAudioUnitObserver,
-                       public rtc::MessageHandler {
+                       public VoiceProcessingAudioUnitObserver {
  public:
   explicit AudioDeviceIOS(bool bypass_voice_processing, bool disable_recording, int numChannels);
   ~AudioDeviceIOS() override;
@@ -158,9 +160,6 @@ class AudioDeviceIOS : public AudioDeviceGeneric,
                             UInt32 num_frames,
                             AudioBufferList* io_data) override;
 
-  // Handles messages from posts.
-  void OnMessage(rtc::Message* msg) override;
-
   bool IsInterrupted();
 
  private:
@@ -169,7 +168,7 @@ class AudioDeviceIOS : public AudioDeviceGeneric,
   void HandleInterruptionEnd();
   void HandleValidRouteChange();
   void HandleCanPlayOrRecordChange(bool can_play_or_record);
-  void HandleSampleRateChange(float sample_rate);
+  void HandleSampleRateChange();
   void HandlePlayoutGlitchDetected();
   void HandleOutputVolumeChange();
 
@@ -214,10 +213,6 @@ class AudioDeviceIOS : public AudioDeviceGeneric,
                            
   const bool disable_recording_;
   const int numChannels_;
-
-  // Ensures that methods are called from the same thread as this object is
-  // created on.
-  SequenceChecker thread_checker_;
 
   // Native I/O audio thread checker.
   SequenceChecker io_thread_checker_;
@@ -269,13 +264,13 @@ class AudioDeviceIOS : public AudioDeviceGeneric,
   rtc::BufferT<int16_t> record_audio_buffer_;
 
   // Set to 1 when recording is active and 0 otherwise.
-  volatile int recording_;
+  std::atomic<int> recording_;
 
   // Set to 1 when playout is active and 0 otherwise.
-  volatile int playing_;
+  std::atomic<int> playing_;
 
   // Set to true after successful call to Init(), false otherwise.
-  bool initialized_ RTC_GUARDED_BY(thread_checker_);
+  bool initialized_ RTC_GUARDED_BY(thread_);
 
   // Set to true after successful call to InitRecording() or InitPlayout(),
   // false otherwise.
@@ -286,23 +281,27 @@ class AudioDeviceIOS : public AudioDeviceGeneric,
 
   // Audio interruption observer instance.
   RTCNativeAudioSessionDelegateAdapter* audio_session_observer_
-      RTC_GUARDED_BY(thread_checker_);
+      RTC_GUARDED_BY(thread_);
 
   // Set to true if we've activated the audio session.
-  bool has_configured_session_ RTC_GUARDED_BY(thread_checker_);
+  bool has_configured_session_ RTC_GUARDED_BY(thread_);
 
   // Counts number of detected audio glitches on the playout side.
-  int64_t num_detected_playout_glitches_ RTC_GUARDED_BY(thread_checker_);
+  int64_t num_detected_playout_glitches_ RTC_GUARDED_BY(thread_);
   int64_t last_playout_time_ RTC_GUARDED_BY(io_thread_checker_);
 
   // Counts number of playout callbacks per call.
-  // The value isupdated on the native I/O thread and later read on the
-  // creating thread (see thread_checker_) but at this stage no audio is
-  // active. Hence, it is a "thread safe" design and no lock is needed.
+  // The value is updated on the native I/O thread and later read on the
+  // creating `thread_` but at this stage no audio is active.
+  // Hence, it is a "thread safe" design and no lock is needed.
   int64_t num_playout_callbacks_;
 
   // Contains the time for when the last output volume change was detected.
-  int64_t last_output_volume_change_time_ RTC_GUARDED_BY(thread_checker_);
+  int64_t last_output_volume_change_time_ RTC_GUARDED_BY(thread_);
+
+  // Avoids running pending task after `this` is Terminated.
+  rtc::scoped_refptr<PendingTaskSafetyFlag> safety_ =
+      PendingTaskSafetyFlag::Create();
 };
 }  // namespace tgcalls_ios_adm
 }  // namespace webrtc
