@@ -1937,13 +1937,13 @@ public:
     }
 
     void setAudioInputDevice(std::string id) {
-        _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [&]() {
+        _threads->getWorkerThread()->BlockingCall([&]() {
             SetAudioInputDeviceById(_audioDeviceModule.get(), id);
         });
     }
 
     void setAudioOutputDevice(std::string id) {
-        _threads->getWorkerThread()->Invoke<void>(RTC_FROM_HERE, [&]() {
+        _threads->getWorkerThread()->BlockingCall([&]() {
             SetAudioOutputDeviceById(_audioDeviceModule.get(), id);
         });
     }
