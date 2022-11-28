@@ -20,6 +20,8 @@
 #include "modules/audio_device/include/audio_device.h"
 #include "rtc_base/checks.h"
 
+#include "platform/darwin/iOS/CallAudioTone.h"
+
 namespace webrtc {
 
 class AudioDeviceGeneric;
@@ -125,6 +127,8 @@ class AudioDeviceModuleIOS : public AudioDeviceModule {
   int32_t EnableBuiltInNS(bool enable) override;
 
   int32_t GetPlayoutUnderrunCount() const override;
+    
+  void setTone(std::shared_ptr<tgcalls::CallAudioTone> tone);
 
 #if defined(WEBRTC_IOS)
   int GetPlayoutAudioParameters(AudioParameters* params) const override;

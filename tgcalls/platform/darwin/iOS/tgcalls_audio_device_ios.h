@@ -25,6 +25,8 @@
 #include "sdk/objc/base/RTCMacros.h"
 #include "tgcalls_voice_processing_audio_unit.h"
 
+#include "platform/darwin/iOS/CallAudioTone.h"
+
 RTC_FWD_DECL_OBJC_CLASS(RTCNativeAudioSessionDelegateAdapter);
 
 namespace webrtc {
@@ -147,6 +149,8 @@ class AudioDeviceIOS : public AudioDeviceGeneric,
   void OnValidRouteChange() override;
   void OnCanPlayOrRecordChange(bool can_play_or_record) override;
   void OnChangedOutputVolume() override;
+                           
+  void setTone(std::shared_ptr<tgcalls::CallAudioTone> tone);
 
   // VoiceProcessingAudioUnitObserver methods.
   OSStatus OnDeliverRecordedData(AudioUnitRenderActionFlags* flags,
@@ -302,6 +306,9 @@ class AudioDeviceIOS : public AudioDeviceGeneric,
   // Avoids running pending task after `this` is Terminated.
   rtc::scoped_refptr<PendingTaskSafetyFlag> safety_ =
       PendingTaskSafetyFlag::Create();
+                           
+  std::atomic<bool> _hasTone;
+  std::shared_ptr<tgcalls::CallAudioTone> _tone;
 };
 }  // namespace tgcalls_ios_adm
 }  // namespace webrtc

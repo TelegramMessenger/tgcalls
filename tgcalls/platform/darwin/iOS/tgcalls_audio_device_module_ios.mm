@@ -667,6 +667,10 @@ AudioDeviceModuleIOS::AudioDeviceModuleIOS(bool bypass_voice_processing, bool di
     return ok;
   }
 
+  void AudioDeviceModuleIOS::setTone(std::shared_ptr<tgcalls::CallAudioTone> tone) {
+    audio_device_->setTone(tone);
+  }
+
 #if defined(WEBRTC_IOS)
   int AudioDeviceModuleIOS::GetPlayoutAudioParameters(
       AudioParameters* params) const {

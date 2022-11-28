@@ -362,6 +362,14 @@ void AudioDeviceIOS::OnChangedOutputVolume() {
   thread_->PostTask(SafeTask(safety_, [this] { HandleOutputVolumeChange(); }));
 }
 
+void AudioDeviceIOS::setTone(std::shared_ptr<tgcalls::CallAudioTone> tone) {
+    RTC_DCHECK(thread_);
+    thread_->PostTask(SafeTask(safety_, [this, tone] {
+        _tone = tone;
+        _hasTone.store(true);
+    }));
+}
+
 OSStatus AudioDeviceIOS::OnDeliverRecordedData(AudioUnitRenderActionFlags* flags,
                                                const AudioTimeStamp* time_stamp,
                                                UInt32 bus_number,
@@ -466,6 +474,46 @@ OSStatus AudioDeviceIOS::OnGetPlayoutData(AudioUnitRenderActionFlags* flags,
   fine_audio_buffer_->GetPlayoutData(
       rtc::ArrayView<int16_t>(static_cast<int16_t*>(audio_buffer->mData), num_frames * audio_buffer->mNumberChannels),
       kFixedPlayoutDelayEstimate);
+
+  if (_hasTone.load()) {
+      int16_t *mixDestination = static_cast<int16_t*>(audio_buffer->mData);
+      
+      auto tone = _tone;
+      if (tone) {
+          size_t destinationOffset = 0;
+          size_t destinationMax = num_frames * audio_buffer->mNumberChannels;
+          std::vector<int16_t> const &samples = tone->samples();
+          size_t toneOffset = tone->offset();
+          
+          while (toneOffset < samples.size() && destinationOffset < destinationMax) {
+              for (int i = 0; i < audio_buffer->mNumberChannels; i++) {
+                  int32_t current = mixDestination[destinationOffset];
+                  current = current + samples[toneOffset];
+                  if (current > INT16_MAX) {
+                      current = INT16_MAX;
+                  }
+                  if (current < INT16_MIN) {
+                      current = INT16_MIN;
+                  }
+                  mixDestination[destinationOffset] = current;
+                  destinationOffset++;
+              }
+              toneOffset++;
+          }
+          tone->setOffset(toneOffset);
+          if (tone->offset() >= tone->samples().size()) {
+              tone->setLoopCount(tone->loopCount() - 1);
+              tone->setOffset(0);
+              if (tone->loopCount() <= 0) {
+                  _tone.reset();
+                  _hasTone.store(false);
+              }
+          }
+      } else {
+          _hasTone.store(false);
+      }
+  }
+
   return noErr;
 }
 
