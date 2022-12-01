@@ -83,6 +83,12 @@ public:
         return _impl->SetPlayoutDevice(index);
     }
 
+#ifdef TGCALLS_UWP_DESKTOP
+    virtual int32_t SetPlayoutDevice(std::string deviceId) override {
+        return _impl->SetPlayoutDevice(deviceId);
+    }
+#endif
+
     virtual int32_t SetPlayoutDevice(WindowsDeviceType device) override {
         return _impl->SetPlayoutDevice(device);
     }
@@ -90,6 +96,12 @@ public:
     virtual int32_t SetRecordingDevice(uint16_t index) override {
         return _impl->SetRecordingDevice(index);
     }
+
+#ifdef TGCALLS_UWP_DESKTOP
+    virtual int32_t SetRecordingDevice(std::string deviceId) override {
+        return _impl->SetRecordingDevice(deviceId);
+    }
+#endif
 
     virtual int32_t SetRecordingDevice(WindowsDeviceType device) override {
         return _impl->SetRecordingDevice(device);

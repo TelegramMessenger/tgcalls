@@ -90,6 +90,16 @@ void SetAudioOutputDeviceById(webrtc::AudioDeviceModule *adm, const std::string 
 	if (id == "default" || id.empty()) {
 		return finish();
 	}
+#ifdef TGCALLS_UWP_DESKTOP
+	const auto result = adm->SetPlayoutDevice(id);
+	if (result != 0) {
+		RTC_LOG(LS_ERROR) << "setAudioOutputDevice(" << id << ") failed: " << result << ".";
+	} else {
+		RTC_LOG(LS_INFO) << "setAudioOutputDevice(" << id << ") success.";
+		specific = true;
+	}
+	return finish();
+#else // TGCALLS_UWP_DESKTOP
 	const auto count = adm
 		? adm->PlayoutDevices()
 		: int16_t(-666);
@@ -115,6 +125,7 @@ void SetAudioOutputDeviceById(webrtc::AudioDeviceModule *adm, const std::string 
 	}
 	RTC_LOG(LS_ERROR) << "setAudioOutputDevice(" << id << "): Could not find playout device.";
 	return finish();
+#endif // TGCALLS_UWP_DESKTOP
 }
 
 } // namespace tgcalls
