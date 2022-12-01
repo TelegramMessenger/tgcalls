@@ -42,6 +42,16 @@ void SetAudioInputDeviceById(webrtc::AudioDeviceModule *adm, const std::string &
 	if (id == "default" || id.empty()) {
 		return finish();
 	}
+#ifdef TGCALLS_UWP_DESKTOP
+	const auto result = adm->SetRecordingDevice(id);
+	if (result != 0) {
+		RTC_LOG(LS_ERROR) << "setAudioInputDevice(" << id << ") failed: " << result << ".";
+	} else {
+		RTC_LOG(LS_INFO) << "setAudioInputDevice(" << id << ") success.";
+		specific = true;
+	}
+	return finish();
+#else // TGCALLS_UWP_DESKTOP
 	const auto count = adm
 		? adm->RecordingDevices()
 		: int16_t(-666);
@@ -68,6 +78,7 @@ void SetAudioInputDeviceById(webrtc::AudioDeviceModule *adm, const std::string &
 	}
 	RTC_LOG(LS_ERROR) << "setAudioInputDevice(" << id << "): Could not find recording device.";
 	return finish();
+#endif // TGCALLS_UWP_DESKTOP
 }
 
 void SetAudioOutputDeviceById(webrtc::AudioDeviceModule *adm, const std::string &id) {
