@@ -24,6 +24,7 @@ public:
     }
 
     void receiveData(std::vector<uint8_t> const &data) {
+        RTC_LOG(LS_INFO) << "SignalingPacketTransport: adding data of " << data.size() << " bytes";
         SignalReadPacket.emit(this, (const char *)data.data(), data.size(), -1, 0);
     }
 
@@ -93,6 +94,7 @@ _onIncomingData(onIncomingData) {
         _sctpTransportFactory.reset(new cricket::SctpTransportFactory(_threads->getNetworkThread()));
 
         _sctpTransport = _sctpTransportFactory->CreateSctpTransport(_packetTransport.get());
+        _sctpTransport->OpenStream(0);
         _sctpTransport->SetDataChannelSink(this);
 
         // TODO: should we disconnect the data channel sink?
@@ -103,6 +105,31 @@ _onIncomingData(onIncomingData) {
 
 void SignalingSctpConnection::OnReadyToSend() {
     assert(_threads->getNetworkThread()->IsCurrent());
+    
+    _isReadyToSend = true;
+    
+    auto pendingData = _pendingData;
+    _pendingData.clear();
+    
+    for (const auto &data : pendingData) {
+        webrtc::SendDataParams params;
+        params.type = webrtc::DataMessageType::kBinary;
+        params.ordered = true;
+        
+        rtc::CopyOnWriteBuffer payload;
+        payload.AppendData(data.data(), data.size());
+        
+        cricket::SendDataResult result;
+        _sctpTransport->SendData(0, params, payload, &result);
+            
+        if (result == cricket::SendDataResult::SDR_SUCCESS) {
+            RTC_LOG(LS_INFO) << "SignalingSctpConnection: sent data of " << data.size() << " bytes";
+        } else {
+            _isReadyToSend = false;
+            _pendingData.push_back(data);
+            RTC_LOG(LS_INFO) << "SignalingSctpConnection: send error, storing data until ready to send (" << _pendingData.size() << " items)";
+        }
+    }
 }
 
 void SignalingSctpConnection::OnTransportClosed(webrtc::RTCError error) {
@@ -134,15 +161,28 @@ void SignalingSctpConnection::receiveExternal(const std::vector<uint8_t> &data) 
 
 void SignalingSctpConnection::send(const std::vector<uint8_t> &data) {
     _threads->getNetworkThread()->BlockingCall([&]() {
-        webrtc::SendDataParams params;
-        params.type = webrtc::DataMessageType::kBinary;
-        params.ordered = true;
-
-        rtc::CopyOnWriteBuffer payload;
-        payload.AppendData(data.data(), data.size());
-
-        cricket::SendDataResult result;
-        _sctpTransport->SendData(0, params, payload, &result);
+        if (_isReadyToSend) {
+            webrtc::SendDataParams params;
+            params.type = webrtc::DataMessageType::kBinary;
+            params.ordered = true;
+            
+            rtc::CopyOnWriteBuffer payload;
+            payload.AppendData(data.data(), data.size());
+            
+            cricket::SendDataResult result;
+            _sctpTransport->SendData(0, params, payload, &result);
+            
+            if (result == cricket::SendDataResult::SDR_ERROR) {
+                _isReadyToSend = false;
+                _pendingData.push_back(data);
+                RTC_LOG(LS_INFO) << "SignalingSctpConnection: send error, storing data until ready to send (" << _pendingData.size() << " items)";
+            } else {
+                RTC_LOG(LS_INFO) << "SignalingSctpConnection: sent data of " << data.size() << " bytes";
+            }
+        } else {
+            _pendingData.push_back(data);
+            RTC_LOG(LS_INFO) << "SignalingSctpConnection: not ready to send, storing data until ready to send (" << _pendingData.size() << " items)";
+        }
     });
 }
 

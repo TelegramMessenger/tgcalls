@@ -1535,6 +1535,8 @@ public:
     void receiveSignalingData(const std::vector<uint8_t> &data) {
         if (_signalingConnection) {
             _signalingConnection->receiveExternal(data);
+        } else {
+            RTC_LOG(LS_ERROR) << "receiveSignalingData: signalingConnection is not available";
         }
     }
 

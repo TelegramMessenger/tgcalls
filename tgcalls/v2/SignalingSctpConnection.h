@@ -69,6 +69,9 @@ private:
     std::unique_ptr<SignalingPacketTransport> _packetTransport;
     std::unique_ptr<cricket::SctpTransportFactory> _sctpTransportFactory;
     std::unique_ptr<cricket::SctpTransportInternal> _sctpTransport;
+    
+    bool _isReadyToSend = false;
+    std::vector<std::vector<uint8_t>> _pendingData;
 };
 
 }  // namespace tgcalls
