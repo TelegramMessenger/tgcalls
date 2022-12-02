@@ -105,6 +105,11 @@ AudioDeviceModuleIOS::AudioDeviceModuleIOS(bool bypass_voice_processing, bool di
       return -1;
     }
     initialized_ = true;
+      
+    if (pendingAudioTone_) {
+      audio_device_->setTone(pendingAudioTone_);
+      pendingAudioTone_ = nullptr;
+    }
     return 0;
   }
 
@@ -718,7 +723,11 @@ AudioDeviceModuleIOS::AudioDeviceModuleIOS(bool bypass_voice_processing, bool di
   }
 
   void AudioDeviceModuleIOS::setTone(std::shared_ptr<tgcalls::CallAudioTone> tone) {
-    audio_device_->setTone(tone);
+    if (audio_device_) {
+      audio_device_->setTone(tone);
+    } else {
+      pendingAudioTone_ = tone;
+    }
   }
 
 #if defined(WEBRTC_IOS)

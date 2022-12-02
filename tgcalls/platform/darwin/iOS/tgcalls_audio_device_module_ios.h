@@ -147,6 +147,8 @@ class AudioDeviceModuleIOS : public AudioDeviceModule {
   const std::unique_ptr<TaskQueueFactory> task_queue_factory_;
   std::unique_ptr<AudioDeviceIOS> audio_device_;
   std::unique_ptr<AudioDeviceBuffer> audio_device_buffer_;
+    
+  std::shared_ptr<tgcalls::CallAudioTone> pendingAudioTone_;
 };
 }  // namespace tgcalls_ios_adm
 }  // namespace webrtc
