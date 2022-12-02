@@ -313,6 +313,14 @@ bool AudioDeviceIOS::Recording() const {
   return recording_.load();
 }
 
+void AudioDeviceIOS::setIsBufferPlaying(bool isBufferPlaying) {
+  isBufferPlaying_ = isBufferPlaying;
+}
+
+void AudioDeviceIOS::setIsBufferRecording(bool isBufferRecording) {
+  isBufferRecording_ = isBufferRecording;
+}
+
 int32_t AudioDeviceIOS::PlayoutDelay(uint16_t& delayMS) const {
   delayMS = kFixedPlayoutDelayEstimate;
   return 0;
@@ -414,7 +422,10 @@ OSStatus AudioDeviceIOS::OnDeliverRecordedData(AudioUnitRenderActionFlags* flags
   // Get a pointer to the recorded audio and send it to the WebRTC ADB.
   // Use the FineAudioBuffer instance to convert between native buffer size
   // and the 10ms buffer size used by WebRTC.
-  fine_audio_buffer_->DeliverRecordedData(record_audio_buffer_, kFixedRecordDelayEstimate);
+ 
+  if (isBufferRecording_) {
+    fine_audio_buffer_->DeliverRecordedData(record_audio_buffer_, kFixedRecordDelayEstimate);
+  }
   return noErr;
 }
 
@@ -471,9 +482,12 @@ OSStatus AudioDeviceIOS::OnGetPlayoutData(AudioUnitRenderActionFlags* flags,
   // Read decoded 16-bit PCM samples from WebRTC (using a size that matches
   // the native I/O audio unit) and copy the result to the audio buffer in the
   // `io_data` destination.
-  fine_audio_buffer_->GetPlayoutData(
-      rtc::ArrayView<int16_t>(static_cast<int16_t*>(audio_buffer->mData), num_frames * audio_buffer->mNumberChannels),
-      kFixedPlayoutDelayEstimate);
+  if (isBufferPlaying_) {
+    fine_audio_buffer_->GetPlayoutData(
+      rtc::ArrayView<int16_t>(static_cast<int16_t*>(audio_buffer->mData), num_frames * audio_buffer->mNumberChannels), kFixedPlayoutDelayEstimate);
+  } else {
+    memset(audio_buffer->mData, 0, num_frames * audio_buffer->mNumberChannels * sizeof(int16_t));
+  }
 
   if (_hasTone.load()) {
       int16_t *mixDestination = static_cast<int16_t*>(audio_buffer->mData);
@@ -485,29 +499,36 @@ OSStatus AudioDeviceIOS::OnGetPlayoutData(AudioUnitRenderActionFlags* flags,
           std::vector<int16_t> const &samples = tone->samples();
           size_t toneOffset = tone->offset();
           
-          while (toneOffset < samples.size() && destinationOffset < destinationMax) {
-              for (int i = 0; i < audio_buffer->mNumberChannels; i++) {
-                  int32_t current = mixDestination[destinationOffset];
-                  current = current + samples[toneOffset];
-                  if (current > INT16_MAX) {
-                      current = INT16_MAX;
+          while (destinationOffset < destinationMax) {
+              while (toneOffset < samples.size() && destinationOffset < destinationMax) {
+                  for (int i = 0; i < audio_buffer->mNumberChannels; i++) {
+                      int32_t current = mixDestination[destinationOffset];
+                      current = current + samples[toneOffset];
+                      if (current > INT16_MAX) {
+                          current = INT16_MAX;
+                      }
+                      if (current < INT16_MIN) {
+                          current = INT16_MIN;
+                      }
+                      mixDestination[destinationOffset] = current;
+                      destinationOffset++;
                   }
-                  if (current < INT16_MIN) {
-                      current = INT16_MIN;
-                  }
-                  mixDestination[destinationOffset] = current;
-                  destinationOffset++;
+                  toneOffset++;
               }
-              toneOffset++;
+              if (toneOffset >= samples.size()) {
+                  if (tone->loopCount() <= 1) {
+                      _tone.reset();
+                      tone.reset();
+                      _hasTone.store(false);
+                      break;
+                  } else {
+                      tone->setLoopCount(tone->loopCount() - 1);
+                      toneOffset = 0;
+                  }
+              }
           }
-          tone->setOffset(toneOffset);
-          if (tone->offset() >= tone->samples().size()) {
-              tone->setLoopCount(tone->loopCount() - 1);
-              tone->setOffset(0);
-              if (tone->loopCount() <= 0) {
-                  _tone.reset();
-                  _hasTone.store(false);
-              }
+          if (tone) {
+              tone->setOffset(toneOffset);
           }
       } else {
           _hasTone.store(false);

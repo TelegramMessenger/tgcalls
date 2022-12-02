@@ -533,13 +533,12 @@ AudioDeviceModuleIOS::AudioDeviceModuleIOS(bool bypass_voice_processing, bool di
     return audio_device_->RecordingIsInitialized();
   }
 
-  int32_t AudioDeviceModuleIOS::StartPlayout() {
+  int32_t AudioDeviceModuleIOS::InternalStartPlayout() {
     RTC_DLOG(LS_INFO) << __FUNCTION__;
     CHECKinitialized_();
-    if (Playing()) {
+    if (audio_device_->Playing()) {
       return 0;
     }
-    audio_device_buffer_.get()->StartPlayout();
     int32_t result = audio_device_->StartPlayout();
     RTC_DLOG(LS_INFO) << "output: " << result;
     RTC_HISTOGRAM_BOOLEAN("WebRTC.Audio.StartPlayoutSuccess",
@@ -547,11 +546,38 @@ AudioDeviceModuleIOS::AudioDeviceModuleIOS(bool bypass_voice_processing, bool di
     return result;
   }
 
+  int32_t AudioDeviceModuleIOS::StartPlayout() {
+    RTC_DLOG(LS_INFO) << __FUNCTION__;
+    CHECKinitialized_();
+    if (audio_device_->Playing()) {
+      if (!audioBufferPlayoutStarted_) {
+        audioBufferPlayoutStarted_ = true;
+        audio_device_buffer_.get()->StartPlayout();
+        audio_device_->setIsBufferPlaying(true);
+      }
+      internalIsPlaying_ = true;
+      return 0;
+    }
+    audio_device_buffer_.get()->StartPlayout();
+    audio_device_->setIsBufferPlaying(true);
+    audioBufferPlayoutStarted_ = true;
+    int32_t result = audio_device_->StartPlayout();
+    RTC_DLOG(LS_INFO) << "output: " << result;
+    RTC_HISTOGRAM_BOOLEAN("WebRTC.Audio.StartPlayoutSuccess",
+                          static_cast<int>(result == 0));
+    internalIsPlaying_ = true;
+    return result;
+  }
+
   int32_t AudioDeviceModuleIOS::StopPlayout() {
     RTC_DLOG(LS_INFO) << __FUNCTION__;
     CHECKinitialized_();
     int32_t result = audio_device_->StopPlayout();
-    audio_device_buffer_.get()->StopPlayout();
+    if (audioBufferPlayoutStarted_) {
+      audio_device_buffer_.get()->StopPlayout();
+      audioBufferPlayoutStarted_ = false;
+      audio_device_->setIsBufferPlaying(false);
+    }
     RTC_DLOG(LS_INFO) << "output: " << result;
     RTC_HISTOGRAM_BOOLEAN("WebRTC.Audio.StopPlayoutSuccess",
                           static_cast<int>(result == 0));
@@ -561,16 +587,36 @@ AudioDeviceModuleIOS::AudioDeviceModuleIOS(bool bypass_voice_processing, bool di
   bool AudioDeviceModuleIOS::Playing() const {
     RTC_DLOG(LS_INFO) << __FUNCTION__;
     CHECKinitialized__BOOL();
-    return audio_device_->Playing();
+    return internalIsPlaying_;
   }
 
-  int32_t AudioDeviceModuleIOS::StartRecording() {
+  int32_t AudioDeviceModuleIOS::InternalStartRecording() {
     RTC_DLOG(LS_INFO) << __FUNCTION__;
     CHECKinitialized_();
     if (Recording()) {
       return 0;
     }
+    int32_t result = audio_device_->StartRecording();
+    RTC_DLOG(LS_INFO) << "output: " << result;
+    RTC_HISTOGRAM_BOOLEAN("WebRTC.Audio.StartRecordingSuccess",
+                          static_cast<int>(result == 0));
+    return result;
+}
+
+  int32_t AudioDeviceModuleIOS::StartRecording() {
+    RTC_DLOG(LS_INFO) << __FUNCTION__;
+    CHECKinitialized_();
+    if (Recording()) {
+      if (!audioBufferRecordingStarted_) {
+        audioBufferRecordingStarted_ = true;
+        audio_device_buffer_.get()->StartRecording();
+        audio_device_->setIsBufferRecording(true);
+      }
+      return 0;
+    }
     audio_device_buffer_.get()->StartRecording();
+    audioBufferRecordingStarted_ = true;
+    audio_device_->setIsBufferRecording(true);
     int32_t result = audio_device_->StartRecording();
     RTC_DLOG(LS_INFO) << "output: " << result;
     RTC_HISTOGRAM_BOOLEAN("WebRTC.Audio.StartRecordingSuccess",
@@ -582,7 +628,11 @@ AudioDeviceModuleIOS::AudioDeviceModuleIOS(bool bypass_voice_processing, bool di
     RTC_DLOG(LS_INFO) << __FUNCTION__;
     CHECKinitialized_();
     int32_t result = audio_device_->StopRecording();
-    audio_device_buffer_.get()->StopRecording();
+    if (audioBufferRecordingStarted_) {
+      audioBufferRecordingStarted_ = false;
+      audio_device_buffer_.get()->StopRecording();
+        audio_device_->setIsBufferRecording(false);
+    }
     RTC_DLOG(LS_INFO) << "output: " << result;
     RTC_HISTOGRAM_BOOLEAN("WebRTC.Audio.StopRecordingSuccess",
                           static_cast<int>(result == 0));

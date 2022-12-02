@@ -71,9 +71,11 @@ class AudioDeviceModuleIOS : public AudioDeviceModule {
   bool RecordingIsInitialized() const override;
 
   // Audio transport control
+  int32_t InternalStartPlayout();
   int32_t StartPlayout() override;
   int32_t StopPlayout() override;
   bool Playing() const override;
+  int32_t InternalStartRecording();
   int32_t StartRecording() override;
   int32_t StopRecording() override;
   bool Recording() const override;
@@ -139,6 +141,9 @@ class AudioDeviceModuleIOS : public AudioDeviceModule {
   const bool disable_recording_;
   const int numChannels_;
   bool initialized_ = false;
+  bool internalIsPlaying_ = false;
+  bool audioBufferPlayoutStarted_ = false;
+  bool audioBufferRecordingStarted_ = false;
   const std::unique_ptr<TaskQueueFactory> task_queue_factory_;
   std::unique_ptr<AudioDeviceIOS> audio_device_;
   std::unique_ptr<AudioDeviceBuffer> audio_device_buffer_;

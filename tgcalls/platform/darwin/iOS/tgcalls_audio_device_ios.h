@@ -74,6 +74,9 @@ class AudioDeviceIOS : public AudioDeviceGeneric,
   int32_t StartRecording() override;
   int32_t StopRecording() override;
   bool Recording() const override;
+                           
+  void setIsBufferPlaying(bool isBufferPlaying);
+  void setIsBufferRecording(bool isBufferRecording);
 
   // These methods returns hard-coded delay values and not dynamic delay
   // estimates. The reason is that iOS supports a built-in AEC and the WebRTC
@@ -309,6 +312,9 @@ class AudioDeviceIOS : public AudioDeviceGeneric,
                            
   std::atomic<bool> _hasTone;
   std::shared_ptr<tgcalls::CallAudioTone> _tone;
+                           
+  bool isBufferPlaying_ = false;
+  bool isBufferRecording_ = false;
 };
 }  // namespace tgcalls_ios_adm
 }  // namespace webrtc
