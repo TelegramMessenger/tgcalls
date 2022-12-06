@@ -781,18 +781,20 @@ void MediaManager::configureSendingVideoIfNeeded() {
             break;
     }
     videoSendParameters.rtcp.remote_estimate = true;
-    _videoChannel->SetSendParameters(videoSendParameters);
-
-    if (_enableFlexfec) {
-        cricket::StreamParams videoSendStreamParams;
-        cricket::SsrcGroup videoSendSsrcGroup(cricket::kFecFrSsrcGroupSemantics, {_ssrcVideo.outgoing, _ssrcVideo.fecOutgoing});
-        videoSendStreamParams.ssrcs = {_ssrcVideo.outgoing};
-        videoSendStreamParams.ssrc_groups.push_back(videoSendSsrcGroup);
-        videoSendStreamParams.cname = "cname";
-        _videoChannel->AddSendStream(videoSendStreamParams);
-    } else {
-        _videoChannel->AddSendStream(cricket::StreamParams::CreateLegacy(_ssrcVideo.outgoing));
-    }
+    StaticThreads::getWorkerThread()->BlockingCall([&] {
+        _videoChannel->SetSendParameters(videoSendParameters);
+        
+        if (_enableFlexfec) {
+            cricket::StreamParams videoSendStreamParams;
+            cricket::SsrcGroup videoSendSsrcGroup(cricket::kFecFrSsrcGroupSemantics, {_ssrcVideo.outgoing, _ssrcVideo.fecOutgoing});
+            videoSendStreamParams.ssrcs = {_ssrcVideo.outgoing};
+            videoSendStreamParams.ssrc_groups.push_back(videoSendSsrcGroup);
+            videoSendStreamParams.cname = "cname";
+            _videoChannel->AddSendStream(videoSendStreamParams);
+        } else {
+            _videoChannel->AddSendStream(cricket::StreamParams::CreateLegacy(_ssrcVideo.outgoing));
+        }
+    });
 
     adjustBitratePreferences(true);
 }
@@ -803,19 +805,25 @@ void MediaManager::checkIsSendingVideoChanged(bool wasSending) {
 		return;
 	} else if (sending) {
         configureSendingVideoIfNeeded();
+        
+        rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source = GetVideoCaptureAssumingSameThread(_videoCapture.get())->source();
 
-        if (_enableFlexfec) {
-            _videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, GetVideoCaptureAssumingSameThread(_videoCapture.get())->source().get());
-            _videoChannel->SetVideoSend(_ssrcVideo.fecOutgoing, NULL, nullptr);
-        } else {
-            _videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, GetVideoCaptureAssumingSameThread(_videoCapture.get())->source().get());
-        }
-
-		_videoChannel->OnReadyToSend(_isConnected);
-		_videoChannel->SetSend(_isConnected);
+        StaticThreads::getWorkerThread()->BlockingCall([&] {
+            if (_enableFlexfec) {
+                _videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, source.get());
+                _videoChannel->SetVideoSend(_ssrcVideo.fecOutgoing, NULL, nullptr);
+            } else {
+                _videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, source.get());
+            }
+            
+            _videoChannel->OnReadyToSend(_isConnected);
+            _videoChannel->SetSend(_isConnected);
+        });
 	} else {
-		_videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, nullptr);
-		_videoChannel->SetVideoSend(_ssrcVideo.fecOutgoing, NULL, nullptr);
+        StaticThreads::getWorkerThread()->BlockingCall([&] {
+            _videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, nullptr);
+            _videoChannel->SetVideoSend(_ssrcVideo.fecOutgoing, NULL, nullptr);
+        });
 	}
 
     adjustBitratePreferences(true);
