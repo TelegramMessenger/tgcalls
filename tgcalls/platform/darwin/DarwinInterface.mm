@@ -60,18 +60,6 @@ std::unique_ptr<rtc::NetworkMonitorFactory> DarwinInterface::createNetworkMonito
 }
 
 void DarwinInterface::configurePlatformAudio(int numChanels) {
-#ifdef WEBRTC_IOS
-    RTCAudioSessionConfiguration *sharedConfiguration = [RTCAudioSessionConfiguration webRTCConfiguration];
-    sharedConfiguration.categoryOptions |= AVAudioSessionCategoryOptionMixWithOthers;
-    sharedConfiguration.outputNumberOfChannels = numChanels;
-    [RTCAudioSessionConfiguration setWebRTCConfiguration:sharedConfiguration];
-
-    [RTCAudioSession sharedInstance].useManualAudio = true;
-    [[RTCAudioSession sharedInstance] audioSessionDidActivate:[AVAudioSession sharedInstance]];
-    [RTCAudioSession sharedInstance].isAudioEnabled = true;
-    
-    RTCLogInfo(@"Configuring platform: %@ %@", getPlatformInfo(), [[UIDevice currentDevice] systemVersion]);
-#endif
 }
 
 std::unique_ptr<webrtc::VideoEncoderFactory> DarwinInterface::makeVideoEncoderFactory(bool preferHardwareEncoding, bool isScreencast) {

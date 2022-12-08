@@ -5,7 +5,6 @@
 #include "p2p/base/p2p_transport_channel.h"
 #include "p2p/base/basic_async_resolver_factory.h"
 #include "api/packet_socket_factory.h"
-#include "rtc_base/task_utils/to_queued_task.h"
 #include "rtc_base/rtc_certificate_generator.h"
 #include "p2p/base/ice_credentials_iterator.h"
 #include "api/jsep_ice_candidate.h"
@@ -74,7 +73,7 @@ public:
         _wrappedSocket->SignalReadyToSend.connect(this, &WrappedAsyncPacketSocket::onReadyToSend);
         _wrappedSocket->SignalAddressReady.connect(this, &WrappedAsyncPacketSocket::onAddressReady);
         _wrappedSocket->SignalConnect.connect(this, &WrappedAsyncPacketSocket::onConnect);
-        _wrappedSocket->SignalClose.connect(this, &WrappedAsyncPacketSocket::onClose);
+        _wrappedSocket->SubscribeClose(this, [this](AsyncPacketSocket* socket, int error) { onClose(socket, error); });
     }
     
     virtual ~WrappedAsyncPacketSocket() override {
@@ -83,7 +82,7 @@ public:
         _wrappedSocket->SignalReadyToSend.disconnect(this);
         _wrappedSocket->SignalAddressReady.disconnect(this);
         _wrappedSocket->SignalConnect.disconnect(this);
-        _wrappedSocket->SignalClose.disconnect(this);
+        _wrappedSocket->UnsubscribeClose(this);
         
         _wrappedSocket.reset();
     }
@@ -226,7 +225,7 @@ _dataChannelMessageReceived(configuration.dataChannelMessageReceived) {
     
     _networkMonitorFactory = PlatformInterface::SharedInstance()->createNetworkMonitorFactory();
     _socketFactory.reset(new rtc::BasicPacketSocketFactory(_threads->getNetworkThread()->socketserver()));
-    _networkManager = std::make_unique<rtc::BasicNetworkManager>(_networkMonitorFactory.get(), nullptr);
+    _networkManager = std::make_unique<rtc::BasicNetworkManager>(_networkMonitorFactory.get(), _threads->getNetworkThread()->socketserver());
     
     _asyncResolverFactory = std::make_unique<webrtc::WrappingAsyncDnsResolverFactory>(std::make_unique<webrtc::BasicAsyncResolverFactory>());
     
@@ -323,8 +322,11 @@ void NativeNetworkingImpl::resetDtlsSrtpTransport() {
 
     _portAllocator->SetConfiguration(stunServers, turnServers, 0, webrtc::NO_PRUNE, _turnCustomizer.get());
 
+    webrtc::IceTransportInit iceTransportInit;
+    iceTransportInit.set_port_allocator(_portAllocator.get());
+    iceTransportInit.set_async_dns_resolver_factory(_asyncResolverFactory.get());
     
-    _transportChannel = cricket::P2PTransportChannel::Create("transport", 0, _portAllocator.get(), _asyncResolverFactory.get());
+    _transportChannel = cricket::P2PTransportChannel::Create("transport", 0, std::move(iceTransportInit));
 
     cricket::IceConfig iceConfig;
     iceConfig.continual_gathering_policy = cricket::GATHER_CONTINUALLY;
@@ -490,7 +492,7 @@ void NativeNetworkingImpl::checkConnectionTimeout() {
         }
 
         strong->checkConnectionTimeout();
-    }, 1000);
+    }, webrtc::TimeDelta::Millis(1000));
 }
 
 void NativeNetworkingImpl::candidateGathered(cricket::IceTransportInternal *transport, const cricket::Candidate &candidate) {

@@ -5,7 +5,7 @@ import PackageDescription
 
 let package = Package(
     name: "TgVoipWebrtc",
-    platforms: [.macOS(.v10_11)],
+    platforms: [.macOS(.v10_12)],
     products: [
         .library(
             name: "TgVoipWebrtc",
@@ -38,6 +38,8 @@ let package = Package(
                       "tgcalls/platform/darwin/VideoCameraCapturer.h",
                       "tgcalls/platform/darwin/CustomExternalCapturer.mm",
                       "tgcalls/platform/darwin/CustomExternalCapturer.h",
+                      "tgcalls/legacy/InstanceImplLegacy.h",
+                      "tgcalls/legacy/InstanceImplLegacy.cpp"
                      ],
             publicHeadersPath: "macos/PublicHeaders",
             cxxSettings: [

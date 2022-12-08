@@ -20,12 +20,12 @@ _onTerminated(onTerminated),
 _onMessageReceived(onMessageReceived) {
     assert(_threads->getNetworkThread()->IsCurrent());
 
-    _sctpTransportFactory.reset(new cricket::SctpTransportFactory(_threads->getNetworkThread(), fieldTrialsBasedConfig));
+    _sctpTransportFactory.reset(new cricket::SctpTransportFactory(_threads->getNetworkThread()));
 
     _sctpTransport = _sctpTransportFactory->CreateSctpTransport(transportChannel);
-    _sctpTransport->SignalReadyToSendData.connect(this, &SctpDataChannelProviderInterfaceImpl::sctpReadyToSendData);
-    _sctpTransport->SignalDataReceived.connect(this, &SctpDataChannelProviderInterfaceImpl::sctpDataReceived);
-    _sctpTransport->SignalClosedAbruptly.connect(this, &SctpDataChannelProviderInterfaceImpl::sctpClosedAbruptly);
+    _sctpTransport->SetDataChannelSink(this);
+
+    // TODO: should we disconnect the data channel sink?
 
     webrtc::InternalDataChannelInit dataChannelInit;
     dataChannelInit.id = 0;
@@ -99,13 +99,13 @@ void SctpDataChannelProviderInterfaceImpl::updateIsConnected(bool isConnected) {
     }
 }
 
-void SctpDataChannelProviderInterfaceImpl::sctpReadyToSendData() {
+void SctpDataChannelProviderInterfaceImpl::OnReadyToSend() {
     assert(_threads->getNetworkThread()->IsCurrent());
 
     _dataChannel->OnTransportReady(true);
 }
 
-void SctpDataChannelProviderInterfaceImpl::sctpClosedAbruptly(webrtc::RTCError error) {
+void SctpDataChannelProviderInterfaceImpl::OnTransportClosed(webrtc::RTCError error) {
     assert(_threads->getNetworkThread()->IsCurrent());
 
     if (_onTerminated) {
@@ -113,10 +113,13 @@ void SctpDataChannelProviderInterfaceImpl::sctpClosedAbruptly(webrtc::RTCError e
     }
 }
 
-void SctpDataChannelProviderInterfaceImpl::sctpDataReceived(const cricket::ReceiveDataParams& params, const rtc::CopyOnWriteBuffer& buffer) {
+void SctpDataChannelProviderInterfaceImpl::OnDataReceived(int channel_id, webrtc::DataMessageType type, const rtc::CopyOnWriteBuffer& buffer) {
     assert(_threads->getNetworkThread()->IsCurrent());
 
-    _dataChannel->OnDataReceived(params, buffer);
+    _dataChannel->OnDataReceived(cricket::ReceiveDataParams {
+        .sid = channel_id,
+        .type = type
+        }, buffer);
 }
 
 bool SctpDataChannelProviderInterfaceImpl::SendData(
@@ -151,7 +154,7 @@ void SctpDataChannelProviderInterfaceImpl::AddSctpDataStream(int sid) {
 void SctpDataChannelProviderInterfaceImpl::RemoveSctpDataStream(int sid) {
     assert(_threads->getNetworkThread()->IsCurrent());
 
-    _threads->getNetworkThread()->Invoke<void>(RTC_FROM_HERE, [this, sid]() {
+    _threads->getNetworkThread()->BlockingCall([this, sid]() {
         _sctpTransport->ResetStream(sid);
     });
 }

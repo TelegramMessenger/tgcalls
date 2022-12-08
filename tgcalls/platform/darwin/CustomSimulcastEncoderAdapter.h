@@ -12,6 +12,7 @@
 #ifndef TGCALLS_CUSTOM_SIMULCAST_ENCODER_ADAPTER_H_
 #define TGCALLS_CUSTOM_SIMULCAST_ENCODER_ADAPTER_H_
 
+#include <atomic>
 #include <list>
 #include <memory>
 #include <stack>
@@ -27,7 +28,6 @@
 #include "api/video_codecs/video_encoder_factory.h"
 #include "common_video/framerate_controller.h"
 #include "modules/video_coding/include/video_codec_interface.h"
-#include "rtc_base/atomic_ops.h"
 #include "rtc_base/experiments/encoder_info_settings.h"
 #include "rtc_base/system/no_unique_address.h"
 #include "rtc_base/system/rtc_export.h"
@@ -40,6 +40,9 @@ namespace webrtc {
 // interfaces should be called from the encoder task queue.
 class RTC_EXPORT CustomSimulcastEncoderAdapter : public VideoEncoder {
  public:
+  // TODO(bugs.webrtc.org/11000): Remove when downstream usage is gone.
+  CustomSimulcastEncoderAdapter(VideoEncoderFactory* primarty_factory,
+                          const SdpVideoFormat& format);
   // `primary_factory` produces the first-choice encoders to use.
   // `fallback_factory`, if non-null, is used to create fallback encoder that
   // will be used if InitEncode() fails for the primary encoder.
@@ -164,7 +167,7 @@ class RTC_EXPORT CustomSimulcastEncoderAdapter : public VideoEncoder {
 
   void OverrideFromFieldTrial(VideoEncoder::EncoderInfo* info) const;
 
-  volatile int inited_;  // Accessed atomically.
+  std::atomic<int> inited_;
   VideoEncoderFactory* const primary_encoder_factory_;
   VideoEncoderFactory* const hardware_encoder_factory_;
   const SdpVideoFormat video_format_;

@@ -16,7 +16,6 @@
 #include "p2p/client/basic_port_allocator.h"
 #include "rtc_base/async_packet_socket.h"
 #include "rtc_base/ssl_certificate.h"
-#include "rtc_base/task_utils/pending_task_safety_flag.h"
 
 namespace webrtc {
 class TurnCustomizer;
@@ -42,97 +41,46 @@ public:
     
     // Create a TURN port using the shared UDP socket, `socket`.
     static std::unique_ptr<ReflectorPort> Create(
-                                                 rtc::Thread* thread,
-                                                 rtc::PacketSocketFactory* factory,
-                                                 rtc::Network* network,
+                                                 const cricket::CreateRelayPortArgs& args,
                                                  rtc::AsyncPacketSocket* socket,
-                                                 const std::string& username,  // ice username.
-                                                 const std::string& password,  // ice password.
-                                                 const cricket::ProtocolAddress& server_address,
-                                                 uint8_t serverId,
-                                                 const cricket::RelayCredentials& credentials,
-                                                 int server_priority) {
+                                                 uint8_t serverId) {
         // Do basic parameter validation.
-        if (credentials.username.size() > 32) {
+        if (args.config->credentials.username.size() > 32) {
             RTC_LOG(LS_ERROR) << "Attempt to use REFLECTOR with a too long username "
-            << "of length " << credentials.username.size();
+            << "of length " << args.config->credentials.username.size();
             return nullptr;
         }
         // Do not connect to low-numbered ports. The default STUN port is 3478.
-        if (!AllowedReflectorPort(server_address.address.port())) {
+        if (!AllowedReflectorPort(args.server_address->address.port())) {
             RTC_LOG(LS_ERROR) << "Attempt to use REFLECTOR to connect to port "
-            << server_address.address.port();
+            << args.server_address->address.port();
             return nullptr;
         }
         // Using `new` to access a non-public constructor.
-        return absl::WrapUnique(
-                                new ReflectorPort(thread, factory, network, socket, username, password,
-                                                  server_address, serverId, credentials, server_priority));
-    }
-    
-    // TODO(steveanton): Remove once downstream clients have moved to `Create`.
-    static std::unique_ptr<ReflectorPort> CreateUnique(
-                                                       rtc::Thread* thread,
-                                                       rtc::PacketSocketFactory* factory,
-                                                       rtc::Network* network,
-                                                       rtc::AsyncPacketSocket* socket,
-                                                       const std::string& username,  // ice username.
-                                                       const std::string& password,  // ice password.
-                                                       const cricket::ProtocolAddress& server_address,
-                                                       uint8_t serverId,
-                                                       const cricket::RelayCredentials& credentials,
-                                                       int server_priority) {
-        return Create(thread, factory, network, socket, username, password,
-                      server_address, serverId, credentials, server_priority);
+        return absl::WrapUnique(new ReflectorPort(args, socket, serverId));
     }
     
     // Create a TURN port that will use a new socket, bound to `network` and
     // using a port in the range between `min_port` and `max_port`.
     static std::unique_ptr<ReflectorPort> Create(
-                                                 rtc::Thread* thread,
-                                                 rtc::PacketSocketFactory* factory,
-                                                 rtc::Network* network,
+                                                 const cricket::CreateRelayPortArgs& args,
                                                  uint16_t min_port,
                                                  uint16_t max_port,
-                                                 const std::string& username,  // ice username.
-                                                 const std::string& password,  // ice password.
-                                                 const cricket::ProtocolAddress& server_address,
-                                                 uint8_t serverId,
-                                                 const cricket::RelayCredentials& credentials,
-                                                 int server_priority) {
+                                                 uint8_t serverId) {
         // Do basic parameter validation.
-        if (credentials.username.size() > 32) {
+        if (args.config->credentials.username.size() > 32) {
             RTC_LOG(LS_ERROR) << "Attempt to use TURN with a too long username "
-            << "of length " << credentials.username.size();
+            << "of length " << args.config->credentials.username.size();
             return nullptr;
         }
         // Do not connect to low-numbered ports. The default STUN port is 3478.
-        if (!AllowedReflectorPort(server_address.address.port())) {
+        if (!AllowedReflectorPort(args.server_address->address.port())) {
             RTC_LOG(LS_ERROR) << "Attempt to use TURN to connect to port "
-            << server_address.address.port();
+            << args.server_address->address.port();
             return nullptr;
         }
         // Using `new` to access a non-public constructor.
-        return absl::WrapUnique(new ReflectorPort(
-                                                  thread, factory, network, min_port, max_port, username, password,
-                                                  server_address, serverId, credentials, server_priority));
-    }
-    
-    // TODO(steveanton): Remove once downstream clients have moved to `Create`.
-    static std::unique_ptr<ReflectorPort> CreateUnique(
-                                                       rtc::Thread* thread,
-                                                       rtc::PacketSocketFactory* factory,
-                                                       rtc::Network* network,
-                                                       uint16_t min_port,
-                                                       uint16_t max_port,
-                                                       const std::string& username,  // ice username.
-                                                       const std::string& password,  // ice password.
-                                                       const cricket::ProtocolAddress& server_address,
-                                                       uint8_t serverId,
-                                                       const cricket::RelayCredentials& credentials,
-                                                       int server_priority) {
-        return Create(thread, factory, network, min_port, max_port, username,
-                      password, server_address, serverId, credentials, server_priority);
+        return absl::WrapUnique(new ReflectorPort(args, min_port, max_port, serverId));
     }
     
     ~ReflectorPort() override;
@@ -180,7 +128,7 @@ public:
     void OnSentPacket(rtc::AsyncPacketSocket* socket,
                       const rtc::SentPacket& sent_packet) override;
     virtual void OnReadyToSend(rtc::AsyncPacketSocket* socket);
-    bool SupportsProtocol(const std::string& protocol) const override;
+    bool SupportsProtocol(absl::string_view protocol) const override;
     
     void OnSocketConnect(rtc::AsyncPacketSocket* socket);
     void OnSocketClose(rtc::AsyncPacketSocket* socket, int error);
@@ -213,41 +161,22 @@ public:
     void HandleConnectionDestroyed(cricket::Connection* conn) override;
     
 protected:
-    ReflectorPort(rtc::Thread* thread,
-                  rtc::PacketSocketFactory* factory,
-                  rtc::Network* network,
+    ReflectorPort(const cricket::CreateRelayPortArgs& args,
                   rtc::AsyncPacketSocket* socket,
-                  const std::string& username,
-                  const std::string& password,
-                  const cricket::ProtocolAddress& server_address,
-                  uint8_t serverId,
-                  const cricket::RelayCredentials& credentials,
-                  int server_priority);
+                  uint8_t serverId);
     
-    ReflectorPort(rtc::Thread* thread,
-                  rtc::PacketSocketFactory* factory,
-                  rtc::Network* network,
+    ReflectorPort(const cricket::CreateRelayPortArgs& args,
                   uint16_t min_port,
                   uint16_t max_port,
-                  const std::string& username,
-                  const std::string& password,
-                  const cricket::ProtocolAddress& server_address,
-                  uint8_t serverId,
-                  const cricket::RelayCredentials& credentials,
-                  int server_priority);
+                  uint8_t serverId);
     
     rtc::DiffServCodePoint StunDscpValue() const override;
     
 private:
-    enum {
-        MSG_ALLOCATE_ERROR = MSG_FIRST_AVAILABLE
-    };
-    
     typedef std::map<rtc::Socket::Option, int> SocketOptionsMap;
     typedef std::set<rtc::SocketAddress> AttemptedServerSet;
     
     static bool AllowedReflectorPort(int port);
-    void OnMessage(rtc::Message* pmsg) override;
     
     bool CreateReflectorClientSocket();
     

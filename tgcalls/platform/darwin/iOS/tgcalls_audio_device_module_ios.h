@@ -20,6 +20,8 @@
 #include "modules/audio_device/include/audio_device.h"
 #include "rtc_base/checks.h"
 
+#include "platform/darwin/iOS/CallAudioTone.h"
+
 namespace webrtc {
 
 class AudioDeviceGeneric;
@@ -69,9 +71,11 @@ class AudioDeviceModuleIOS : public AudioDeviceModule {
   bool RecordingIsInitialized() const override;
 
   // Audio transport control
+  int32_t InternalStartPlayout();
   int32_t StartPlayout() override;
   int32_t StopPlayout() override;
   bool Playing() const override;
+  int32_t InternalStartRecording();
   int32_t StartRecording() override;
   int32_t StopRecording() override;
   bool Recording() const override;
@@ -125,6 +129,8 @@ class AudioDeviceModuleIOS : public AudioDeviceModule {
   int32_t EnableBuiltInNS(bool enable) override;
 
   int32_t GetPlayoutUnderrunCount() const override;
+    
+  void setTone(std::shared_ptr<tgcalls::CallAudioTone> tone);
 
 #if defined(WEBRTC_IOS)
   int GetPlayoutAudioParameters(AudioParameters* params) const override;
@@ -135,9 +141,14 @@ class AudioDeviceModuleIOS : public AudioDeviceModule {
   const bool disable_recording_;
   const int numChannels_;
   bool initialized_ = false;
+  bool internalIsPlaying_ = false;
+  bool audioBufferPlayoutStarted_ = false;
+  bool audioBufferRecordingStarted_ = false;
   const std::unique_ptr<TaskQueueFactory> task_queue_factory_;
   std::unique_ptr<AudioDeviceIOS> audio_device_;
   std::unique_ptr<AudioDeviceBuffer> audio_device_buffer_;
+    
+  std::shared_ptr<tgcalls::CallAudioTone> pendingAudioTone_;
 };
 }  // namespace tgcalls_ios_adm
 }  // namespace webrtc

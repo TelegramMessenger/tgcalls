@@ -831,14 +831,14 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
 + (tgcalls::ProtocolVersion)protocolVersionFromLibraryVersion:(NSString *)version {
     if ([version isEqualToString:@"2.7.7"]) {
         return tgcalls::ProtocolVersion::V0;
-    } else if ([version isEqualToString:@"3.0.0"]) {
+    } else if ([version isEqualToString:@"5.0.0"]) {
         return tgcalls::ProtocolVersion::V1;
     } else {
         return tgcalls::ProtocolVersion::V0;
     }
 }
 
-- (instancetype _Nonnull)initWithVersion:(NSString * _Nonnull)version queue:(id<OngoingCallThreadLocalContextQueueWebrtc> _Nonnull)queue proxy:(VoipProxyServerWebrtc * _Nullable)proxy networkType:(OngoingCallNetworkTypeWebrtc)networkType dataSaving:(OngoingCallDataSavingWebrtc)dataSaving derivedState:(NSData * _Nonnull)derivedState key:(NSData * _Nonnull)key isOutgoing:(bool)isOutgoing connections:(NSArray<OngoingCallConnectionDescriptionWebrtc *> * _Nonnull)connections maxLayer:(int32_t)maxLayer allowP2P:(BOOL)allowP2P allowTCP:(BOOL)allowTCP enableStunMarking:(BOOL)enableStunMarking logPath:(NSString * _Nonnull)logPath statsLogPath:(NSString * _Nonnull)statsLogPath sendSignalingData:(void (^)(NSData * _Nonnull))sendSignalingData videoCapturer:(OngoingCallThreadLocalContextVideoCapturer * _Nullable)videoCapturer preferredVideoCodec:(NSString * _Nullable)preferredVideoCodec audioInputDeviceId: (NSString * _Nonnull)audioInputDeviceId {
+- (instancetype _Nonnull)initWithVersion:(NSString * _Nonnull)version queue:(id<OngoingCallThreadLocalContextQueueWebrtc> _Nonnull)queue proxy:(VoipProxyServerWebrtc * _Nullable)proxy networkType:(OngoingCallNetworkTypeWebrtc)networkType dataSaving:(OngoingCallDataSavingWebrtc)dataSaving derivedState:(NSData * _Nonnull)derivedState key:(NSData * _Nonnull)key isOutgoing:(bool)isOutgoing connections:(NSArray<OngoingCallConnectionDescriptionWebrtc *> * _Nonnull)connections maxLayer:(int32_t)maxLayer allowP2P:(BOOL)allowP2P allowTCP:(BOOL)allowTCP enableStunMarking:(BOOL)enableStunMarking logPath:(NSString * _Nonnull)logPath statsLogPath:(NSString * _Nonnull)statsLogPath sendSignalingData:(void (^)(NSData * _Nonnull))sendSignalingData videoCapturer:(OngoingCallThreadLocalContextVideoCapturer * _Nullable)videoCapturer preferredVideoCodec:(NSString * _Nullable)preferredVideoCodec inputDeviceId: (NSString * _Nonnull)inputDeviceId outputDeviceId: (NSString * _Nonnull)outputDeviceId {
     self = [super init];
     if (self != nil) {
         _version = version;
@@ -949,8 +949,8 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
             .initialNetworkType = callControllerNetworkTypeForType(networkType),
             .encryptionKey = encryptionKey,
             .mediaDevicesConfig = tgcalls::MediaDevicesConfig {
-                .audioInputId = [audioInputDeviceId UTF8String],
-                .audioOutputId = [@"" UTF8String]
+                .audioInputId = [inputDeviceId UTF8String],
+                .audioOutputId = [outputDeviceId UTF8String]
             },
             .videoCapture = [_videoCapturer getInterface],
             .stateUpdated = [weakSelf, queue](tgcalls::State state) {
@@ -1062,6 +1062,8 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
                     }
                 }];
             },
+            .initialInputDeviceId = inputDeviceId.UTF8String,
+            .initialOutputDeviceId = outputDeviceId.UTF8String,
 //            .createAudioDeviceModule = [](webrtc::TaskQueueFactory *taskQueueFactory) -> rtc::scoped_refptr<webrtc::AudioDeviceModule> {
 //                return rtc::make_ref_counted<webrtc::tgcalls_ios_adm::AudioDeviceModuleIOS>(false, false, 1);
 //            }
@@ -1306,10 +1308,14 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
 }
 
 - (void)switchAudioOutput:(NSString * _Nonnull)deviceId {
-    _tgVoip->setAudioOutputDevice(deviceId.UTF8String);
+    if (_tgVoip) {
+        _tgVoip->setAudioOutputDevice(deviceId.UTF8String);
+    }
 }
 - (void)switchAudioInput:(NSString * _Nonnull)deviceId {
-    _tgVoip->setAudioInputDevice(deviceId.UTF8String);
+    if (_tgVoip) {
+        _tgVoip->setAudioInputDevice(deviceId.UTF8String);
+    }
 }
 
 - (void)addExternalAudioData:(NSData * _Nonnull)data {

@@ -266,7 +266,7 @@ public:
             strong->render();
 
             strong->beginRenderTimer((int)(1.0 * 1000.0 / 120.0));
-        }, timeoutMs);
+        }, webrtc::TimeDelta::Millis(timeoutMs));
     }
 
     void render() {
@@ -625,7 +625,7 @@ public:
                                     strong->_pendingRequestTimeDelayTaskId = 0;
 
                                     strong->requestSegmentsIfNeeded();
-                                }, 1000);
+                                }, webrtc::TimeDelta::Millis(1000));
                             } else {
                                 strong->_nextSegmentTimestamp = adjustedTimestamp;
                                 strong->requestSegmentsIfNeeded();
@@ -914,7 +914,7 @@ public:
                     return;
                 }
                 strong->checkPendingSegments();
-            }, std::max((int32_t)minDelayedRequestTimeout, 10));
+            }, webrtc::TimeDelta::Millis(std::max((int32_t)minDelayedRequestTimeout, 10)));
         }
 
         if (shouldRequestMoreSegments) {

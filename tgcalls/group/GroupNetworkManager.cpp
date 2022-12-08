@@ -5,7 +5,6 @@
 #include "p2p/base/p2p_transport_channel.h"
 #include "p2p/base/basic_async_resolver_factory.h"
 #include "api/packet_socket_factory.h"
-#include "rtc_base/task_utils/to_queued_task.h"
 #include "rtc_base/rtc_certificate_generator.h"
 #include "p2p/base/ice_credentials_iterator.h"
 #include "api/jsep_ice_candidate.h"
@@ -339,7 +338,7 @@ _audioActivityUpdated(audioActivityUpdated) {
     _networkMonitorFactory = PlatformInterface::SharedInstance()->createNetworkMonitorFactory();
 
     _socketFactory.reset(new rtc::BasicPacketSocketFactory(_threads->getNetworkThread()->socketserver()));
-    _networkManager = std::make_unique<rtc::BasicNetworkManager>(_networkMonitorFactory.get());
+    _networkManager = std::make_unique<rtc::BasicNetworkManager>(_networkMonitorFactory.get(), _threads->getNetworkThread()->socketserver());
     _asyncResolverFactory = std::make_unique<webrtc::BasicAsyncResolverFactory>();
 
     _dtlsSrtpTransport = std::make_unique<WrappedDtlsSrtpTransport>(true, fieldTrials, [this](webrtc::RtpPacketReceived const &packet, bool isUnresolved) {
@@ -375,7 +374,11 @@ void GroupNetworkManager::resetDtlsSrtpTransport() {
 
     portAllocator->SetConfiguration({}, {}, 2, webrtc::NO_PRUNE, _turnCustomizer.get());
 
-    auto transportChannel = std::make_unique<cricket::P2PTransportChannel>("transport", 0, portAllocator.get(), _asyncResolverFactory.get(), nullptr);
+    webrtc::IceTransportInit iceTransportInit;
+    iceTransportInit.set_port_allocator(portAllocator.get());
+    iceTransportInit.set_async_resolver_factory(_asyncResolverFactory.get());
+
+    auto transportChannel = cricket::P2PTransportChannel::Create("transport", 0, std::move(iceTransportInit));
 
     cricket::IceConfig iceConfig;
     iceConfig.continual_gathering_policy = cricket::GATHER_CONTINUALLY;
@@ -542,7 +545,7 @@ void GroupNetworkManager::checkConnectionTimeout() {
         }
 
         strong->checkConnectionTimeout();
-    }, 1000);
+    }, webrtc::TimeDelta::Millis(1000));
 }
 
 void GroupNetworkManager::candidateGathered(cricket::IceTransportInternal *transport, const cricket::Candidate &candidate) {
