@@ -325,7 +325,7 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
 
     StaticThreads::getWorkerThread()->BlockingCall([&] {
         _audioDeviceModule = this->createAudioDeviceModule();
-        
+
         /*if (!_audioDeviceModule) {
             return;
         }*/
@@ -335,12 +335,12 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
         _mediaEngine->Init();
     });
 
-	setAudioInputDevice(devicesConfig.audioInputId);
-	setAudioOutputDevice(devicesConfig.audioOutputId);
-	setInputVolume(devicesConfig.inputVolume);
-	setOutputVolume(devicesConfig.outputVolume);
-
     StaticThreads::getWorkerThread()->BlockingCall([&] {
+        setAudioInputDevice(devicesConfig.audioInputId);
+        setAudioOutputDevice(devicesConfig.audioOutputId);
+        setInputVolume(devicesConfig.inputVolume);
+        setOutputVolume(devicesConfig.outputVolume);
+
         webrtc::Call::Config callConfig(_eventLog.get());
         callConfig.task_queue_factory = _taskQueueFactory.get();
         callConfig.trials = &fieldTrialsBasedConfig;
@@ -473,18 +473,18 @@ MediaManager::~MediaManager() {
     StaticThreads::getWorkerThread()->BlockingCall([&] {
         _call->SignalChannelNetworkState(webrtc::MediaType::AUDIO, webrtc::kNetworkDown);
         _call->SignalChannelNetworkState(webrtc::MediaType::VIDEO, webrtc::kNetworkDown);
-        
+
         _audioChannel->OnReadyToSend(false);
         _audioChannel->SetSend(false);
         _audioChannel->SetAudioSend(_ssrcAudio.outgoing, false, nullptr, &_audioSource);
-        
+
         _audioChannel->SetPlayout(false);
-        
+
         _audioChannel->RemoveRecvStream(_ssrcAudio.incoming);
         _audioChannel->RemoveSendStream(_ssrcAudio.outgoing);
-        
+
         _audioChannel->SetInterface(nullptr);
-        
+
         _audioChannel.reset();
     });
 
@@ -503,7 +503,7 @@ MediaManager::~MediaManager() {
         StaticThreads::getWorkerThread()->BlockingCall([&] {
             _videoChannel->OnReadyToSend(false);
             _videoChannel->SetSend(false);
-            
+
             if (_enableFlexfec) {
                 _videoChannel->RemoveSendStream(_ssrcVideo.outgoing);
                 _videoChannel->RemoveSendStream(_ssrcVideo.fecOutgoing);
@@ -515,11 +515,11 @@ MediaManager::~MediaManager() {
 
     StaticThreads::getWorkerThread()->BlockingCall([&] {
         _videoChannel->SetInterface(nullptr);
-        
+
         _videoChannel.reset();
-        
+
         _audioDeviceModule = nullptr;
-        
+
         _call.reset();
         _mediaEngine.reset();
     });
@@ -600,7 +600,7 @@ void MediaManager::collectStats() {
     StaticThreads::getWorkerThread()->BlockingCall([&] {
         stats = _call->GetStats();
     });
-    
+
     float bitrateNorm = 16.0f;
     switch (_outgoingVideoState) {
         case VideoState::Active:
@@ -703,7 +703,7 @@ void MediaManager::setSendVideo(std::shared_ptr<VideoCaptureInterface> videoCapt
         } else {
             _videoChannel->RemoveSendStream(_ssrcVideo.outgoing);
         }
-        
+
         if (videoCapture) {
             if (_enableFlexfec) {
                 cricket::StreamParams videoSendStreamParams;
@@ -783,7 +783,7 @@ void MediaManager::configureSendingVideoIfNeeded() {
     videoSendParameters.rtcp.remote_estimate = true;
     StaticThreads::getWorkerThread()->BlockingCall([&] {
         _videoChannel->SetSendParameters(videoSendParameters);
-        
+
         if (_enableFlexfec) {
             cricket::StreamParams videoSendStreamParams;
             cricket::SsrcGroup videoSendSsrcGroup(cricket::kFecFrSsrcGroupSemantics, {_ssrcVideo.outgoing, _ssrcVideo.fecOutgoing});
@@ -805,7 +805,7 @@ void MediaManager::checkIsSendingVideoChanged(bool wasSending) {
 		return;
 	} else if (sending) {
         configureSendingVideoIfNeeded();
-        
+
         rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source = GetVideoCaptureAssumingSameThread(_videoCapture.get())->source();
 
         StaticThreads::getWorkerThread()->BlockingCall([&] {
@@ -815,7 +815,7 @@ void MediaManager::checkIsSendingVideoChanged(bool wasSending) {
             } else {
                 _videoChannel->SetVideoSend(_ssrcVideo.outgoing, NULL, source.get());
             }
-            
+
             _videoChannel->OnReadyToSend(_isConnected);
             _videoChannel->SetSend(_isConnected);
         });
@@ -939,7 +939,7 @@ void MediaManager::checkIsReceivingVideoChanged(bool wasReceiving) {
 
 void MediaManager::setMuteOutgoingAudio(bool mute) {
 	setOutgoingAudioState(mute ? AudioState::Muted : AudioState::Active);
-    
+
     StaticThreads::getWorkerThread()->BlockingCall([&] {
         _audioChannel->SetAudioSend(_ssrcAudio.outgoing, _isConnected && (_outgoingAudioState == AudioState::Active), nullptr, &_audioSource);
     });

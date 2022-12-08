@@ -70,7 +70,7 @@ public:
         _thread->PostTask(std::move(method));
     }
     void runDelayed(int delayMs, std::function<void()> method) {
-        _thread->PostDelayedTask(std::move(method), delayMs);
+        _thread->PostDelayedTask(std::move(method), webrtc::TimeDelta::Millis(delayMs));
     }
 
 private:

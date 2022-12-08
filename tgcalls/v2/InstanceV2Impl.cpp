@@ -192,7 +192,7 @@ public:
             _outgoingAudioChannel->SetLocalContent(outgoingAudioDescription.get(), webrtc::SdpType::kOffer, errorDesc);
             _outgoingAudioChannel->SetRemoteContent(incomingAudioDescription.get(), webrtc::SdpType::kAnswer, errorDesc);
         });
-        
+
         setIsMuted(false);
     }
 
@@ -282,8 +282,8 @@ public:
             _audioChannel->SetRtpTransport(rtpTransport);
         });
 
-        
-        
+
+
         std::vector<cricket::AudioCodec> codecs;
         for (const auto &payloadType : mediaContent.payloadTypes) {
             cricket::AudioCodec codec(payloadType.id, payloadType.name, payloadType.clockrate, 0, payloadType.channels);
@@ -300,7 +300,7 @@ public:
         for (const auto &rtpExtension : mediaContent.rtpExtensions) {
             outgoingAudioDescription->AddRtpHeaderExtension(webrtc::RtpExtension(rtpExtension.uri, rtpExtension.id));
         }
-        
+
         outgoingAudioDescription->set_rtcp_mux(true);
         outgoingAudioDescription->set_rtcp_reduced_size(true);
         outgoingAudioDescription->set_direction(webrtc::RtpTransceiverDirection::kRecvOnly);
@@ -335,7 +335,7 @@ public:
         //_audioChannel->media_channel()->SetRawAudioSink(ssrc.networkSsrc, std::move(audioLevelSink));
 
         _audioChannel->Enable(true);
-        
+
     }
 
     ~IncomingV2AudioChannel() {
@@ -868,11 +868,11 @@ public:
     _remotePrefferedAspectRatioUpdated(descriptor.remotePrefferedAspectRatioUpdated),
     _signalingDataEmitted(descriptor.signalingDataEmitted),
     _createAudioDeviceModule(descriptor.createAudioDeviceModule),
-    _initialInputDeviceId(std::move(descriptor.initialInputDeviceId)),
-    _initialOutputDeviceId(std::move(descriptor.initialOutputDeviceId)),
     _statsLogPath(descriptor.config.statsLogPath),
     _eventLog(std::make_unique<webrtc::RtcEventLogNull>()),
     _taskQueueFactory(webrtc::CreateDefaultTaskQueueFactory()),
+    _initialInputDeviceId(std::move(descriptor.initialInputDeviceId)),
+    _initialOutputDeviceId(std::move(descriptor.initialOutputDeviceId)),
     _videoCapture(descriptor.videoCapture) {
         webrtc::field_trial::InitFieldTrialsFromString(
             "WebRTC-DataChannel-Dcsctp/Enabled/"
@@ -1035,7 +1035,7 @@ public:
         mediaDeps.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactory();
 
         mediaDeps.adm = _audioDeviceModule;
-        
+
 
 
         _availableVideoFormats = mediaDeps.video_encoder_factory->GetSupportedFormats();
@@ -1084,8 +1084,8 @@ public:
 
         beginQualityTimer(0);
         beginLogTimer(0);
-        
-        
+
+
     }
 
     void beginQualityTimer(int delayMs) {
