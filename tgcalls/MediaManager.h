@@ -157,6 +157,7 @@ private:
 	std::unique_ptr<cricket::VideoMediaChannel> _videoChannel;
 	std::unique_ptr<webrtc::VideoBitrateAllocatorFactory> _videoBitrateAllocatorFactory;
 	std::shared_ptr<VideoCaptureInterface> _videoCapture;
+	std::shared_ptr<bool> _videoCaptureGuard;
     bool _isScreenCapture = false;
     std::shared_ptr<VideoSinkInterfaceProxyImpl> _incomingVideoSinkProxy;
 

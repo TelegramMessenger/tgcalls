@@ -672,6 +672,7 @@ void MediaManager::setSendVideo(std::shared_ptr<VideoCaptureInterface> videoCapt
     const auto wasReceiving = computeIsReceivingVideo();
 
     if (_videoCapture) {
+		_videoCaptureGuard = nullptr;
 		GetVideoCaptureAssumingSameThread(_videoCapture.get())->setStateUpdated(nullptr);
     }
     _videoCapture = videoCapture;
@@ -679,13 +680,19 @@ void MediaManager::setSendVideo(std::shared_ptr<VideoCaptureInterface> videoCapt
         _videoCapture->setPreferredAspectRatio(_preferredAspectRatio);
 
 		const auto thread = _thread;
-		const auto weak = std::weak_ptr<MediaManager>(shared_from_this());
         const auto object = GetVideoCaptureAssumingSameThread(_videoCapture.get());
         _isScreenCapture = object->isScreenCapture();
+        _videoCaptureGuard = std::make_shared<bool>(true);
+        const auto guard = std::weak_ptr{ _videoCaptureGuard };
 		object->setStateUpdated([=](VideoState state) {
 			thread->PostTask([=] {
-				if (const auto strong = weak.lock()) {
-					strong->setOutgoingVideoState(state);
+				// Checking this special guard instead of weak_ptr(this)
+				// ensures that we won't call setOutgoingVideoState after
+				// the _videoCapture was already changed and the old
+				// stateUpdated was already null-ed, but the event
+				// at that time was already posted.
+				if (guard.lock()) {
+					setOutgoingVideoState(state);
 				}
 			});
 		});
