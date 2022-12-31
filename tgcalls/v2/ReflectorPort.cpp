@@ -550,6 +550,10 @@ bool ReflectorPort::HandleIncomingPacket(rtc::AsyncPacketSocket* socket,
     if (state_ != STATE_READY) {
         state_ = STATE_READY;
         
+        RTC_LOG(LS_INFO)
+        << ToString()
+        << ": REFLECTOR " << server_address_.address.ToString() << " is now ready";
+        
         std::ostringstream ipFormat;
         ipFormat << "reflector-" << (uint32_t)serverId_ << "-" << randomTag_ << ".reflector";
         rtc::SocketAddress candidateAddress(ipFormat.str(), server_address_.address.port());
