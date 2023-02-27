@@ -166,6 +166,8 @@ PersistentState InstanceImpl::getPersistentState() {
 }
 
 void InstanceImpl::stop(std::function<void(FinalState)> completion) {
+    RTC_LOG(LS_INFO) << "Stopping InstanceImpl";
+    
     std::string debugLog = _logSink->result();
 
     _manager->perform([completion, debugLog = std::move(debugLog)](Manager *manager) {
