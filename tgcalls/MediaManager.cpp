@@ -1027,7 +1027,7 @@ void MediaManager::fillCallStats(CallStats &callStats) {
     if (_videoCodecOut.has_value()) {
         callStats.outgoingCodec = _videoCodecOut->name;
     }
-    callStats.bitrateRecords = std::move(_bitrateRecords);
+    callStats.bitrateRecords = _bitrateRecords;
 }
 
 void MediaManager::setAudioInputDevice(std::string id) {
