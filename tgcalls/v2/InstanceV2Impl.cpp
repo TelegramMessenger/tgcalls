@@ -1086,7 +1086,9 @@ public:
         beginQualityTimer(0);
         beginLogTimer(0);
 
-
+        NativeNetworkingImpl::State initialNetworkState;
+        initialNetworkState.isReadyToSendData = false;
+        onNetworkStateUpdated(initialNetworkState);
     }
 
     void beginQualityTimer(int delayMs) {
