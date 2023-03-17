@@ -1037,7 +1037,8 @@ public:
 
         mediaDeps.adm = _audioDeviceModule;
 
-
+        webrtc:: AudioProcessingBuilder builder;
+        mediaDeps.audio_processing = builder.Create();
 
         _availableVideoFormats = mediaDeps.video_encoder_factory->GetSupportedFormats();
 
