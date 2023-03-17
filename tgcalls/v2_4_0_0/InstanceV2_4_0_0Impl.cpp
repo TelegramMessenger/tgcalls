@@ -1332,6 +1332,10 @@ public:
         mediaDeps.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactory();
 
         mediaDeps.adm = _audioDeviceModule;
+        
+        webrtc:: AudioProcessingBuilder builder;
+        mediaDeps.audio_processing = builder.Create();
+
 
         _availableVideoFormats = mediaDeps.video_encoder_factory->GetSupportedFormats();
 

@@ -458,6 +458,11 @@ public:
 
         cricket::MediaEngineDependencies mediaDeps;
         mediaDeps.adm = _audioDeviceModule;
+        
+        webrtc:: AudioProcessingBuilder builder;
+        mediaDeps.audio_processing = builder.Create();
+
+        
         mediaDeps.task_queue_factory = peerConnectionFactoryDependencies.task_queue_factory.get();
         mediaDeps.audio_encoder_factory = webrtc::CreateAudioEncoderFactory<webrtc::AudioEncoderOpus>();
         mediaDeps.audio_decoder_factory = webrtc::CreateAudioDecoderFactory<webrtc::AudioDecoderOpus>();
