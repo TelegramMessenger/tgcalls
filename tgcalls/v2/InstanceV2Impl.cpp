@@ -136,13 +136,12 @@ public:
             audioOptions.noise_suppression = true;
         }
 
-        std::ostringstream contentId;
-        contentId << _ssrc;
+        const auto contentId = std::to_string(_ssrc);
 
         std::vector<std::string> streamIds;
-        streamIds.push_back(contentId.str());
+        streamIds.push_back(contentId);
 
-        _outgoingAudioChannel = _channelManager->CreateVoiceChannel(call, cricket::MediaConfig(), contentId.str(), false, NativeNetworkingImpl::getDefaulCryptoOptions(), audioOptions);
+        _outgoingAudioChannel = _channelManager->CreateVoiceChannel(call, cricket::MediaConfig(), contentId, false, NativeNetworkingImpl::getDefaulCryptoOptions(), audioOptions);
         _threads->getNetworkThread()->BlockingCall([&]() {
             _outgoingAudioChannel->SetRtpTransport(rtpTransport);
         });
@@ -272,12 +271,9 @@ public:
         audioOptions.audio_jitter_buffer_fast_accelerate = true;
         audioOptions.audio_jitter_buffer_min_delay_ms = 50;
 
-        std::ostringstream contentId;
-        contentId << _ssrc;
+        const auto streamId = std::to_string(_ssrc);
 
-        std::string streamId = contentId.str();
-
-        _audioChannel = _channelManager->CreateVoiceChannel(call, cricket::MediaConfig(), contentId.str(), false, NativeNetworkingImpl::getDefaulCryptoOptions(), audioOptions);
+        _audioChannel = _channelManager->CreateVoiceChannel(call, cricket::MediaConfig(), streamId, false, NativeNetworkingImpl::getDefaulCryptoOptions(), audioOptions);
         _threads->getNetworkThread()->BlockingCall([&]() {
             _audioChannel->SetRtpTransport(rtpTransport);
         });
@@ -401,10 +397,7 @@ public:
         cricket::VideoOptions videoOptions;
         videoOptions.is_screencast = isScreencast;
 
-        std::ostringstream contentId;
-        contentId << mediaContent.ssrc;
-
-        _outgoingVideoChannel = _channelManager->CreateVideoChannel(call, cricket::MediaConfig(), contentId.str(), false, NativeNetworkingImpl::getDefaulCryptoOptions(), videoOptions, videoBitrateAllocatorFactory);
+        _outgoingVideoChannel = _channelManager->CreateVideoChannel(call, cricket::MediaConfig(), std::to_string(mediaContent.ssrc), false, NativeNetworkingImpl::getDefaulCryptoOptions(), videoOptions, videoBitrateAllocatorFactory);
         _threads->getNetworkThread()->BlockingCall([&]() {
             _outgoingVideoChannel->SetRtpTransport(rtpTransport);
         });
@@ -702,10 +695,9 @@ public:
 
         _videoBitrateAllocatorFactory = webrtc::CreateBuiltinVideoBitrateAllocatorFactory();
 
-        std::ostringstream contentId;
-        contentId << mediaContent.ssrc;
+        const auto contentId = std::to_string(mediaContent.ssrc);
 
-        _videoChannel = _channelManager->CreateVideoChannel(call, cricket::MediaConfig(), contentId.str(), false, NativeNetworkingImpl::getDefaulCryptoOptions(), cricket::VideoOptions(), _videoBitrateAllocatorFactory.get());
+        _videoChannel = _channelManager->CreateVideoChannel(call, cricket::MediaConfig(), contentId, false, NativeNetworkingImpl::getDefaulCryptoOptions(), cricket::VideoOptions(), _videoBitrateAllocatorFactory.get());
         _threads->getNetworkThread()->BlockingCall([&]() {
             _videoChannel->SetRtpTransport(rtpTransport);
         });
@@ -750,7 +742,7 @@ public:
         videoRecvStreamParams.ssrcs = allSsrcs;
 
         videoRecvStreamParams.cname = "cname";
-        videoRecvStreamParams.set_stream_ids({ contentId.str() });
+        videoRecvStreamParams.set_stream_ids({ contentId });
 
         auto incomingVideoDescription = std::make_unique<cricket::VideoContentDescription>();
         for (const auto &rtpExtension : mediaContent.rtpExtensions) {
@@ -1978,14 +1970,10 @@ public:
         for (const auto &record : _networkStateLogRecords) {
             json11::Json::object jsonRecord;
 
-            std::ostringstream timestampString;
-
             if (baseTimestamp == 0) {
                 baseTimestamp = record.timestamp;
             }
-            timestampString << (record.timestamp - baseTimestamp);
-
-            jsonRecord.insert(std::make_pair("t", json11::Json(timestampString.str())));
+            jsonRecord.insert(std::make_pair("t", json11::Json(std::to_string(record.timestamp - baseTimestamp))));
             jsonRecord.insert(std::make_pair("c", json11::Json(record.record.isConnected ? 1 : 0)));
             if (record.record.route) {
                 jsonRecord.insert(std::make_pair("local", json11::Json(record.record.route->localDescription)));

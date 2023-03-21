@@ -102,15 +102,11 @@ static int stringToInt(std::string const &string) {
 }
 
 static std::string intToString(int value) {
-    std::ostringstream stringStream;
-    stringStream << value;
-    return stringStream.str();
+    return std::to_string(value);
 }
 
 static std::string uint32ToString(uint32_t value) {
-    std::ostringstream stringStream;
-    stringStream << value;
-    return stringStream.str();
+    return std::to_string(value);
 }
 
 static uint32_t stringToUInt32(std::string const &string) {
@@ -129,6 +125,7 @@ static uint16_t stringToUInt16(std::string const &string) {
 
 static std::string formatTimestampMillis(int64_t timestamp) {
     std::ostringstream stringStream;
+    stringStream.imbue(std::locale::classic());
     stringStream << std::fixed << std::setprecision(3) << (double)timestamp / 1000.0;
     return stringStream.str();
 }
@@ -939,7 +936,7 @@ public:
             std::string streamId = std::string("stream") + ssrc.name();
 
             _audioChannel = _channelManager->CreateVoiceChannel(_call, cricket::MediaConfig(), std::string("audio") + uint32ToString(ssrc.networkSsrc), false, GroupNetworkManager::getDefaulCryptoOptions(), audioOptions);
-            
+
             _threads->getNetworkThread()->BlockingCall([&]() {
                 _audioChannel->SetRtpTransport(rtpTransport);
             });
@@ -1125,7 +1122,7 @@ public:
             incomingVideoDescription->AddStream(videoRecvStreamParams);
 
             _videoChannel = _channelManager->CreateVideoChannel(_call, cricket::MediaConfig(), std::string("video") + uint32ToString(mid), false, GroupNetworkManager::getDefaulCryptoOptions(), cricket::VideoOptions(), _videoBitrateAllocatorFactory.get());
-            
+
             _threads->getNetworkThread()->BlockingCall([&]() {
                 _videoChannel->SetRtpTransport(rtpTransport);
             });
@@ -1372,7 +1369,7 @@ private:
 class CustomNetEqFactory: public webrtc::NetEqFactory {
 public:
     virtual ~CustomNetEqFactory() = default;
-    
+
     std::unique_ptr<webrtc::NetEq> CreateNetEq(
         const webrtc::NetEq::Config& config,
         const rtc::scoped_refptr<webrtc::AudioDecoderFactory>& decoder_factory, webrtc::Clock* clock
@@ -1395,16 +1392,16 @@ public:
                             int render_sample_rate_hz,
                             int num_render_channels) override {
     }
-    
+
     // Analysis (not changing) of the render signal.
     virtual void AnalyzeRenderAudio(rtc::ArrayView<const float> render_audio) override {
     }
-    
+
     // Analysis (not changing) of the capture signal.
     virtual void AnalyzeCaptureAudio(
                                      rtc::ArrayView<const float> capture_audio) override {
     }
-    
+
     // Collect current metrics from the echo detector.
     virtual Metrics GetMetrics() const override {
         return webrtc::EchoDetector::Metrics();
@@ -1476,7 +1473,7 @@ public:
             _rtpTransport->SignalSentPacket.disconnect(this);
             _rtpTransport->SignalRtcpPacketReceived.disconnect(this);
         });
-        
+
         _channelManager = nullptr;
 
         _threads->getWorkerThread()->BlockingCall([this]() {
@@ -1567,7 +1564,7 @@ public:
             }, _noiseSuppressionConfiguration, nullptr, nullptr);
     #endif
         }
-        
+
         _audioDeviceDataObserverShared = std::make_shared<AudioDeviceDataObserverShared>();
 
         _threads->getWorkerThread()->BlockingCall([this]() mutable {
@@ -1576,7 +1573,7 @@ public:
                 return;
             }
         });
-        
+
         cricket::MediaEngineDependencies mediaDeps;
         mediaDeps.task_queue_factory = _taskQueueFactory.get();
         mediaDeps.audio_encoder_factory = webrtc::CreateAudioEncoderFactory<webrtc::AudioEncoderOpus, webrtc::AudioEncoderL16>();
@@ -1589,7 +1586,7 @@ public:
         if (_audioLevelsUpdated && audioProcessor) {
             webrtc::AudioProcessingBuilder builder;
             builder.SetCapturePostProcessing(std::move(audioProcessor));
-            
+
             builder.SetEchoDetector(rtc::make_ref_counted<CustomEchoDetector>());
 
             mediaDeps.audio_processing = builder.Create();
@@ -3001,7 +2998,7 @@ public:
             _threads->getWorkerThread()->BlockingCall([this]() {
                 _outgoingAudioChannel->media_channel()->SetAudioSend(_outgoingAudioSsrc, !_isMuted, nullptr, &_audioSource);
             });
-            
+
             _outgoingAudioChannel->Enable(!_isMuted);
         }
     }
@@ -3009,10 +3006,10 @@ public:
     void setIsNoiseSuppressionEnabled(bool isNoiseSuppressionEnabled) {
         _noiseSuppressionConfiguration->isEnabled = isNoiseSuppressionEnabled;
     }
-    
+
     void addOutgoingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
         _videoCaptureSink->addSink(sink);
-        
+
         if (_videoCapture) {
             _videoCapture->setOutput(_videoCaptureSink);
         }
