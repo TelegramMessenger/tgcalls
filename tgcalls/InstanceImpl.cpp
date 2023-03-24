@@ -34,7 +34,7 @@ InstanceImpl::InstanceImpl(Descriptor &&descriptor)
     auto networkType = descriptor.initialNetworkType;
 
 	_manager.reset(new ThreadLocalObject<Manager>(getManagerThread(), [descriptor = std::move(descriptor)]() mutable {
-		return new Manager(getManagerThread(), std::move(descriptor));
+		return std::make_shared<Manager>(getManagerThread(), std::move(descriptor));
 	}));
 	_manager->perform([](Manager *manager) {
 		manager->start();

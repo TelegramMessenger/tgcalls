@@ -156,7 +156,7 @@ void Manager::start() {
 		});
 	};
 	_networkManager.reset(new ThreadLocalObject<NetworkManager>(StaticThreads::getNetworkThread(), [weak, thread, sendSignalingMessage, encryptionKey = _encryptionKey, enableP2P = _enableP2P, enableTCP = _enableTCP, enableStunMarking = _enableStunMarking, rtcServers = _rtcServers, proxy = std::move(_proxy)] () mutable {
-		return new NetworkManager(
+		return std::make_shared<NetworkManager>(
             StaticThreads::getNetworkThread(),
 			encryptionKey,
 			enableP2P,
@@ -222,7 +222,7 @@ void Manager::start() {
 	}));
 	bool isOutgoing = _encryptionKey.isOutgoing;
 	_mediaManager.reset(new ThreadLocalObject<MediaManager>(StaticThreads::getMediaThread(), [weak, isOutgoing, protocolVersion = _protocolVersion, thread, sendSignalingMessage, videoCapture = _videoCapture, mediaDevicesConfig = _mediaDevicesConfig, enableHighBitrateVideo = _enableHighBitrateVideo, signalBarsUpdated = _signalBarsUpdated, audioLevelUpdated = _audioLevelUpdated, preferredCodecs = _preferredCodecs, createAudioDeviceModule = _createAudioDeviceModule]() {
-		return new MediaManager(
+		return std::make_shared<MediaManager>(
             StaticThreads::getMediaThread(),
 			isOutgoing,
             protocolVersion,

@@ -1251,14 +1251,15 @@ public:
     void start() {
         const auto weak = std::weak_ptr<InstanceV2_4_0_0ImplInternal>(shared_from_this());
 
-        _networking.reset(new ThreadLocalObject<NativeNetworkingImpl>(_threads->getNetworkThread(), [weak, threads = _threads, isOutgoing = _encryptionKey.isOutgoing, rtcServers = _rtcServers]() {
-            return new NativeNetworkingImpl(NativeNetworkingImpl::Configuration{
+        _networking.reset(new ThreadLocalObject<NativeNetworkingImpl>(_threads->getNetworkThread(), [weak, threads = _threads, encryptionKey = _encryptionKey, isOutgoing = _encryptionKey.isOutgoing, rtcServers = _rtcServers]() {
+            return std::make_shared<NativeNetworkingImpl>(InstanceNetworking::Configuration{
+                .encryptionKey = encryptionKey,
                 .isOutgoing = isOutgoing,
                 .enableStunMarking = false,
                 .enableTCP = false,
                 .enableP2P = true,
                 .rtcServers = rtcServers,
-                .stateUpdated = [threads, weak](const NativeNetworkingImpl::State &state) {
+                .stateUpdated = [threads, weak](const InstanceNetworking::State &state) {
                     threads->getMediaThread()->PostTask([=] {
                         const auto strong = weak.lock();
                         if (!strong) {
@@ -1836,7 +1837,7 @@ public:
         _pendingIceCandidates.clear();
     }
 
-    void onNetworkStateUpdated(NativeNetworkingImpl::State const &state) {
+    void onNetworkStateUpdated(InstanceNetworking::State const &state) {
         State mappedState;
         if (state.isReadyToSendData) {
             mappedState = State::Established;
@@ -2142,7 +2143,7 @@ InstanceV2_4_0_0Impl::InstanceV2_4_0_0Impl(Descriptor &&descriptor) {
 
     _threads = StaticThreads::getThreads();
     _internal.reset(new ThreadLocalObject<InstanceV2_4_0_0ImplInternal>(_threads->getMediaThread(), [descriptor = std::move(descriptor), threads = _threads]() mutable {
-        return new InstanceV2_4_0_0ImplInternal(std::move(descriptor), threads);
+        return std::make_shared<InstanceV2_4_0_0ImplInternal>(std::move(descriptor), threads);
     }));
     _internal->perform([](InstanceV2_4_0_0ImplInternal *internal) {
         internal->start();

@@ -8,6 +8,7 @@
 #include <map>
 
 #include "Stats.h"
+#include "DirectConnectionChannel.h"
 
 namespace rtc {
 template <typename VideoFrameT>
@@ -236,6 +237,7 @@ struct Descriptor {
 	std::function<rtc::scoped_refptr<webrtc::AudioDeviceModule>(webrtc::TaskQueueFactory*)> createAudioDeviceModule;
     std::string initialInputDeviceId;
     std::string initialOutputDeviceId;
+    std::shared_ptr<DirectConnectionChannel> directConnectionChannel;
 };
 
 class Meta {
