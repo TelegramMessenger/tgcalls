@@ -360,6 +360,17 @@ private:
     int64_t _keepalivePingInterval = 1000;
 };
 
+class DirectRtpTransport : public webrtc::RtpTransport {
+public:
+    explicit DirectRtpTransport() :
+    webrtc::RtpTransport(true) {
+    }
+    
+    virtual bool IsSrtpActive() const override {
+        return true;
+    }
+};
+
 DirectNetworkingImpl::DirectNetworkingImpl(Configuration &&configuration) :
 _threads(std::move(configuration.threads)),
 _isOutgoing(configuration.isOutgoing),
@@ -375,7 +386,7 @@ _dataChannelMessageReceived(configuration.dataChannelMessageReceived) {
     
     _localCertificate = rtc::RTCCertificateGenerator::GenerateCertificate(rtc::KeyParams(rtc::KT_ECDSA), absl::nullopt);
     
-    _rtpTransport = std::make_unique<webrtc::RtpTransport>(true);
+    _rtpTransport = std::make_unique<DirectRtpTransport>();
     
     _rtpTransport->SignalReadyToSend.connect(this, &DirectNetworkingImpl::DtlsReadyToSend);
     _rtpTransport->SignalRtcpPacketReceived.connect(this, &DirectNetworkingImpl::OnRtcpPacketReceived_n);

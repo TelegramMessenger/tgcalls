@@ -52,6 +52,7 @@ struct Message;
 class SctpDataChannelProviderInterfaceImpl;
 class Threads;
 class DirectPacketTransport;
+class DirectRtpTransport;
 
 class DirectNetworkingImpl : public InstanceNetworking, public sigslot::has_slots<>, public std::enable_shared_from_this<DirectNetworkingImpl> {
 public:
@@ -96,7 +97,7 @@ private:
     
     std::shared_ptr<DirectConnectionChannel> _directConnectionChannel;
     std::shared_ptr<DirectPacketTransport> _packetTransport;
-    std::unique_ptr<webrtc::RtpTransport> _rtpTransport;
+    std::unique_ptr<DirectRtpTransport> _rtpTransport;
     std::unique_ptr<SctpDataChannelProviderInterfaceImpl> _dataChannelInterface;
 
     std::function<void(const DirectNetworkingImpl::State &)> _stateUpdated;
