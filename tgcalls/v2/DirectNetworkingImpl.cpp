@@ -38,6 +38,7 @@ public:
         EncryptionKey const &encryptionKey,
         std::shared_ptr<DirectConnectionChannel> channel, std::function<void(bool)> &&isConnectedUpdated
     ) :
+    _isConnectedUpdated(std::move(isConnectedUpdated)),
     _thread(thread),
     _encryption(
         EncryptedConnection::Type::Transport,
@@ -45,8 +46,7 @@ public:
         [=](int delayMs, int cause) {
             assert(false);
         }),
-    _channel(channel),
-    _isConnectedUpdated(std::move(isConnectedUpdated)) {
+    _channel(channel) {
         assert(_thread->IsCurrent());
     }
     
@@ -112,24 +112,21 @@ public:
         rtc::CopyOnWriteBuffer buffer;
         buffer.AppendData(data, len);
         
-        if (const auto prepared = _encryption.prepareForSending(Message { AudioDataMessage { buffer } })) {
+        Message message = flags == 0 ? Message { AudioDataMessage { buffer } } : Message { VideoDataMessage { buffer } };
+        
+        if (const auto prepared = _encryption.prepareForSending(message)) {
             rtc::PacketOptions packetOptions;
-            //_transportChannel->SendPacket((const char *)prepared->bytes.data(), prepared->bytes.size(), packetOptions, 0);
             
-            auto packet = std::make_unique<std::vector<uint8_t>>(prepared->bytes.data(), prepared->bytes.data() + prepared->bytes.size());
+            rtc::ByteBufferWriter bufferWriter;
+            bufferWriter.WriteUInt32((uint32_t)prepared->bytes.size());
+            bufferWriter.WriteBytes(reinterpret_cast<const char *>(prepared->bytes.data()), prepared->bytes.size());
+            while (bufferWriter.Length() % 4 != 0) {
+                bufferWriter.WriteUInt8(0);
+            }
+            
+            auto packet = std::make_unique<std::vector<uint8_t>>(bufferWriter.Data(), bufferWriter.Data() + bufferWriter.Length());
             _channel->sendPacket(std::move(packet));
         }
-        
-        /*rtc::ByteBufferWriter bufferWriter;
-        bufferWriter.WriteUInt32((uint32_t)len);
-        bufferWriter.WriteBytes(data, len);
-        while (bufferWriter.Length() % 4 != 0) {
-            bufferWriter.WriteUInt8(0);
-        }
-        
-        auto packet = std::make_unique<std::vector<uint8_t>>(bufferWriter.Data(), bufferWriter.Data() + bufferWriter.Length());
-        
-        _channel->sendPacket(std::move(packet));*/
         
         rtc::SentPacket sentPacket;
         sentPacket.packet_id = options.packet_id;
@@ -303,7 +300,16 @@ private:
             }
             
             if (!isSpecialPacket) {
-                if (auto decrypted = _encryption.handleIncomingPacket(reinterpret_cast<const char *>(packet->data()), packet->size())) {
+                rtc::ByteBufferReader dataPacketReader(reinterpret_cast<const char *>(packet->data()), packet->size());
+                uint32_t dataSize = 0;
+                if (!dataPacketReader.ReadUInt32(&dataSize)) {
+                    return;
+                }
+                if (dataSize > packet->size() - 4) {
+                    return;
+                }
+                
+                if (auto decrypted = _encryption.handleIncomingPacket(reinterpret_cast<const char *>(packet->data()) + 4, dataSize)) {
                     handleIncomingMessage(decrypted->main);
                     for (auto &message : decrypted->additional) {
                         handleIncomingMessage(message);
@@ -315,6 +321,8 @@ private:
                             _transportMessageReceived(std::move(message));
                         }
                     }*/
+                } else {
+                    RTC_LOG(LS_ERROR) << "DirectPacketTransport: could not decrypt incoming packet";
                 }
                 
                 /*uint32_t dataSize = 0;
@@ -333,6 +341,10 @@ private:
         const auto data = &message.message.data;
         if (const auto dataMessage = absl::get_if<AudioDataMessage>(data)) {
             SignalReadPacket(this, reinterpret_cast<const char *>(dataMessage->data.data()), dataMessage->data.size(), rtc::TimeMicros(), 0);
+        } else if (const auto dataMessage = absl::get_if<VideoDataMessage>(data)) {
+            SignalReadPacket(this, reinterpret_cast<const char *>(dataMessage->data.data()), dataMessage->data.size(), rtc::TimeMicros(), 1);
+        } else {
+            RTC_LOG(LS_INFO) << "DirectPacketTransport: unknown incoming message";
         }
     }
     

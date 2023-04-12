@@ -78,7 +78,7 @@ SignalingProtocolVersion signalingProtocolVersion(std::string const &version) {
     } else if (version == "8.0.0") {
         return SignalingProtocolVersion::V2;
     } else if (version == "9.0.0") {
-        return SignalingProtocolVersion::V3;
+        return SignalingProtocolVersion::V2;
     } else {
         RTC_LOG(LS_ERROR) << "signalingProtocolVersion: unknown version " << version;
 
