@@ -628,7 +628,7 @@ public:
 
             _outgoingAudioChannel->Enable(!_isMuted);
             _threads->getWorkerThread()->BlockingCall([&]() {
-                _outgoingAudioChannel->media_channel()->SetAudioSend(_ssrc, !_isMuted, nullptr, _audioSource);
+                _outgoingAudioChannel->media_send_channel()->AsVoiceSendChannel()->SetAudioSend(_ssrc, !_isMuted, nullptr, _audioSource);
             });
         }
     }
@@ -726,7 +726,7 @@ public:
     }
 
     void setVolume(double value) {
-        _audioChannel->media_channel()->SetOutputVolume(_ssrc, value);
+        _audioChannel->media_receive_channel()->AsVoiceReceiveChannel()->SetOutputVolume(_ssrc, value);
     }
 
     void updateActivity() {
@@ -918,15 +918,15 @@ public:
             _outgoingVideoChannel->SetLocalContent(outgoingVideoDescription.get(), webrtc::SdpType::kOffer, errorDesc);
             _outgoingVideoChannel->SetRemoteContent(incomingVideoDescription.get(), webrtc::SdpType::kAnswer, errorDesc);
 
-            webrtc::RtpParameters rtpParameters = _outgoingVideoChannel->media_channel()->GetRtpSendParameters(mediaContent.ssrc);
+            webrtc::RtpParameters rtpParameters = _outgoingVideoChannel->media_send_channel()->GetRtpSendParameters(mediaContent.ssrc);
 
-            _outgoingVideoChannel->media_channel()->SetRtpSendParameters(mediaContent.ssrc, rtpParameters);
+            _outgoingVideoChannel->media_send_channel()->SetRtpSendParameters(mediaContent.ssrc, rtpParameters);
         });
 
         _outgoingVideoChannel->Enable(false);
 
         threads->getWorkerThread()->BlockingCall([&]() {
-            _outgoingVideoChannel->media_channel()->SetVideoSend(mediaContent.ssrc, NULL, nullptr);
+            _outgoingVideoChannel->media_send_channel()->AsVideoSendChannel()->SetVideoSend(mediaContent.ssrc, NULL, nullptr);
         });
     }
 
@@ -947,7 +947,7 @@ public:
             auto videoCaptureImpl = GetVideoCaptureAssumingSameThread(_videoCapture.get());
 
             _threads->getWorkerThread()->BlockingCall([&]() {
-                _outgoingVideoChannel->media_channel()->SetVideoSend(_mainSsrc, NULL, videoCaptureImpl->source().get());
+                _outgoingVideoChannel->media_send_channel()->AsVideoSendChannel()->SetVideoSend(_mainSsrc, NULL, videoCaptureImpl->source().get());
             });
 
             const auto weak = std::weak_ptr<OutgoingVideoChannel>(shared_from_this());
@@ -1014,7 +1014,7 @@ public:
             _outgoingVideoChannel->Enable(false);
 
             _threads->getWorkerThread()->BlockingCall([&]() {
-                _outgoingVideoChannel->media_channel()->SetVideoSend(_mainSsrc, NULL, nullptr);
+                _outgoingVideoChannel->media_send_channel()->AsVideoSendChannel()->SetVideoSend(_mainSsrc, NULL, nullptr);
             });
         }
     }
@@ -1165,7 +1165,7 @@ public:
             _videoChannel->SetLocalContent(outgoingVideoDescription.get(), webrtc::SdpType::kOffer, errorDesc);
             _videoChannel->SetRemoteContent(incomingVideoDescription.get(), webrtc::SdpType::kAnswer, errorDesc);
 
-            _videoChannel->media_channel()->SetSink(_mainVideoSsrc, _videoSink.get());
+            _videoChannel->media_receive_channel()->AsVideoReceiveChannel()->SetSink(_mainVideoSsrc, _videoSink.get());
         });
 
         _videoChannel->Enable(true);
@@ -1286,11 +1286,13 @@ public:
                     });
                 },
                 .rtcpPacketReceived = [threads, weak](rtc::CopyOnWriteBuffer const &packet, int64_t timestamp) {
-                    const auto strong = weak.lock();
-                    if (!strong) {
-                        return;
-                    }
-                    strong->_call->Receiver()->DeliverPacket(webrtc::MediaType::ANY, packet, timestamp);
+                    threads->getWorkerThread()->PostTask([=] {
+                        const auto strong = weak.lock();
+                        if (!strong) {
+                            return;
+                        }
+                        strong->_call->Receiver()->DeliverRtcpPacket(std::move(packet));
+                    });
                 },
                 .dataChannelStateUpdated = [threads, weak](bool isDataChannelOpen) {
                     threads->getMediaThread()->PostTask([=] {

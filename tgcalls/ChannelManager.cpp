@@ -70,14 +70,21 @@ cricket::VoiceChannel* ChannelManager::CreateVoiceChannel(
     return temp;
   }
   RTC_DCHECK_RUN_ON(worker_thread_);
-  cricket::VoiceMediaChannel* media_channel = media_engine_->voice().CreateMediaChannel(
-      call, media_config, options, crypto_options);
-  if (!media_channel) {
+  cricket::VoiceMediaChannel* send_channel = media_engine_->voice().CreateMediaChannel(
+      cricket::MediaChannel::Role::kSend,
+      call, media_config, options, crypto_options,
+      webrtc::AudioCodecPairId::Create());
+  cricket::VoiceMediaChannel* receive_channel = media_engine_->voice().CreateMediaChannel(
+      cricket::MediaChannel::Role::kReceive,
+      call, media_config, options, crypto_options,
+      webrtc::AudioCodecPairId::Create());
+  if (!send_channel || !receive_channel) {
     return nullptr;
   }
   auto voice_channel = std::make_unique<cricket::VoiceChannel>(
       worker_thread_, network_thread_, signaling_thread_,
-      absl::WrapUnique(media_channel), mid, srtp_required, crypto_options,
+      absl::WrapUnique(send_channel), absl::WrapUnique(receive_channel),
+      mid, srtp_required, crypto_options,
       &ssrc_generator_);
   cricket::VoiceChannel* voice_channel_ptr = voice_channel.get();
   voice_channels_.push_back(std::move(voice_channel));
@@ -112,15 +119,21 @@ cricket::VideoChannel* ChannelManager::CreateVideoChannel(
     return temp;
   }
   RTC_DCHECK_RUN_ON(worker_thread_);
-  cricket::VideoMediaChannel* media_channel = media_engine_->video().CreateMediaChannel(
+  cricket::VideoMediaChannel* send_channel = media_engine_->video().CreateMediaChannel(
+      cricket::MediaChannel::Role::kSend,
       call, media_config, options, crypto_options,
       video_bitrate_allocator_factory);
-  if (!media_channel) {
+  cricket::VideoMediaChannel* receive_channel = media_engine_->video().CreateMediaChannel(
+      cricket::MediaChannel::Role::kReceive,
+      call, media_config, options, crypto_options,
+      video_bitrate_allocator_factory);
+  if (!send_channel || !receive_channel) {
     return nullptr;
   }
   auto video_channel = std::make_unique<cricket::VideoChannel>(
       worker_thread_, network_thread_, signaling_thread_,
-      absl::WrapUnique(media_channel), mid, srtp_required, crypto_options,
+      absl::WrapUnique(send_channel), absl::WrapUnique(receive_channel),
+      mid, srtp_required, crypto_options,
       &ssrc_generator_);
   cricket::VideoChannel* video_channel_ptr = video_channel.get();
   video_channels_.push_back(std::move(video_channel));

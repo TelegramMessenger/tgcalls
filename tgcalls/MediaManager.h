@@ -6,6 +6,8 @@
 #include "rtc_base/third_party/sigslot/sigslot.h"
 #include "api/transport/field_trial_based_config.h"
 #include "pc/rtp_sender.h"
+#include "media/base/media_channel.h"
+#include "media/base/media_channel_impl.h"
 
 #include "Instance.h"
 #include "Message.h"
@@ -81,7 +83,7 @@ private:
 		uint32_t fecOutgoing = 0;
 	};
 
-	class NetworkInterfaceImpl : public cricket::MediaChannel::NetworkInterface {
+	class NetworkInterfaceImpl : public cricket::MediaChannelNetworkInterface {
 	public:
 		NetworkInterfaceImpl(MediaManager *mediaManager, bool isVideo);
 		bool SendPacket(rtc::CopyOnWriteBuffer *packet, const rtc::PacketOptions& options) override;

@@ -986,7 +986,7 @@ public:
 
             if (_ssrc.actualSsrc != 1) {
                 std::unique_ptr<AudioSinkImpl> audioLevelSink(new AudioSinkImpl(std::move(onAudioLevelUpdated), _ssrc, std::move(onAudioFrame)));
-                _audioChannel->media_channel()->SetRawAudioSink(ssrc.networkSsrc, std::move(audioLevelSink));
+                _audioChannel->media_receive_channel()->AsVoiceReceiveChannel()->SetRawAudioSink(ssrc.networkSsrc, std::move(audioLevelSink));
             }
         });
 
@@ -1005,7 +1005,7 @@ public:
 
     void setVolume(double value) {
         _threads->getWorkerThread()->BlockingCall([this, value]() {
-            _audioChannel->media_channel()->SetOutputVolume(_ssrc.networkSsrc, value);
+            _audioChannel->media_receive_channel()->AsVoiceReceiveChannel()->SetOutputVolume(_ssrc.networkSsrc, value);
         });
     }
 
@@ -1131,7 +1131,7 @@ public:
             _videoChannel->SetLocalContent(outgoingVideoDescription.get(), webrtc::SdpType::kOffer, errorDesc);
             _videoChannel->SetRemoteContent(incomingVideoDescription.get(), webrtc::SdpType::kAnswer, errorDesc);
             _videoChannel->SetPayloadTypeDemuxingEnabled(false);
-            _videoChannel->media_channel()->SetSink(_mainVideoSsrc, _videoSink.get());
+            _videoChannel->media_receive_channel()->AsVideoReceiveChannel()->SetSink(_mainVideoSsrc, _videoSink.get());
         });
 
         _videoChannel->Enable(true);
@@ -1664,10 +1664,10 @@ public:
             _outgoingVideoChannel->SetRtpTransport(nullptr);
         });
         _threads->getWorkerThread()->BlockingCall([this]() {
-            _outgoingVideoChannel->media_channel()->SetVideoSend(_outgoingVideoSsrcs.simulcastLayers[0].ssrc, nullptr, nullptr);
+            _outgoingVideoChannel->media_send_channel()->AsVideoSendChannel()->SetVideoSend(_outgoingVideoSsrcs.simulcastLayers[0].ssrc, nullptr, nullptr);
             _channelManager->DestroyChannel(_outgoingVideoChannel);
         });
-		_outgoingVideoChannel = nullptr;
+        _outgoingVideoChannel = nullptr;
     }
 
     void createOutgoingVideoChannel() {
@@ -1767,7 +1767,7 @@ public:
 
         if (_videoContentType == VideoContentType::Screencast) {
             _threads->getWorkerThread()->BlockingCall([this]() {
-                webrtc::RtpParameters rtpParameters = _outgoingVideoChannel->media_channel()->GetRtpSendParameters(_outgoingVideoSsrcs.simulcastLayers[0].ssrc);
+                webrtc::RtpParameters rtpParameters = _outgoingVideoChannel->media_send_channel()->GetRtpSendParameters(_outgoingVideoSsrcs.simulcastLayers[0].ssrc);
                 if (rtpParameters.encodings.size() == 3) {
                     for (int i = 0; i < (int)rtpParameters.encodings.size(); i++) {
                         if (i == 0) {
@@ -1801,11 +1801,11 @@ public:
                     rtpParameters.encodings[0].max_bitrate_bps = (800000 + 100000) * 2;
                 }
 
-                _outgoingVideoChannel->media_channel()->SetRtpSendParameters(_outgoingVideoSsrcs.simulcastLayers[0].ssrc, rtpParameters);
+                _outgoingVideoChannel->media_send_channel()->SetRtpSendParameters(_outgoingVideoSsrcs.simulcastLayers[0].ssrc, rtpParameters);
             });
         } else {
             _threads->getWorkerThread()->BlockingCall([this]() {
-                webrtc::RtpParameters rtpParameters = _outgoingVideoChannel->media_channel()->GetRtpSendParameters(_outgoingVideoSsrcs.simulcastLayers[0].ssrc);
+                webrtc::RtpParameters rtpParameters = _outgoingVideoChannel->media_send_channel()->GetRtpSendParameters(_outgoingVideoSsrcs.simulcastLayers[0].ssrc);
                 if (rtpParameters.encodings.size() == 3) {
                     for (int i = 0; i < (int)rtpParameters.encodings.size(); i++) {
                         if (i == 0) {
@@ -1839,7 +1839,7 @@ public:
                     rtpParameters.encodings[0].max_bitrate_bps = (800000 + 100000) * 2;
                 }
 
-                _outgoingVideoChannel->media_channel()->SetRtpSendParameters(_outgoingVideoSsrcs.simulcastLayers[0].ssrc, rtpParameters);
+                _outgoingVideoChannel->media_send_channel()->SetRtpSendParameters(_outgoingVideoSsrcs.simulcastLayers[0].ssrc, rtpParameters);
             });
         }
     }
@@ -1857,9 +1857,9 @@ public:
         }
         _threads->getWorkerThread()->BlockingCall([this, videoSource]() {
             if (_getVideoSource) {
-                _outgoingVideoChannel->media_channel()->SetVideoSend(_outgoingVideoSsrcs.simulcastLayers[0].ssrc, nullptr, videoSource.get());
+                _outgoingVideoChannel->media_send_channel()->AsVideoSendChannel()->SetVideoSend(_outgoingVideoSsrcs.simulcastLayers[0].ssrc, nullptr, videoSource.get());
             } else {
-                _outgoingVideoChannel->media_channel()->SetVideoSend(_outgoingVideoSsrcs.simulcastLayers[0].ssrc, nullptr, nullptr);
+                _outgoingVideoChannel->media_send_channel()->AsVideoSendChannel()->SetVideoSend(_outgoingVideoSsrcs.simulcastLayers[0].ssrc, nullptr, nullptr);
             }
         });
     }
@@ -1874,7 +1874,7 @@ public:
             _outgoingAudioChannel->SetRtpTransport(nullptr);
         });
         _threads->getWorkerThread()->BlockingCall([this]() {
-            _outgoingAudioChannel->media_channel()->SetAudioSend(_outgoingAudioSsrc, false, nullptr, &_audioSource);
+            _outgoingAudioChannel->media_send_channel()->AsVoiceSendChannel()->SetAudioSend(_outgoingAudioSsrc, false, nullptr, &_audioSource);
             _channelManager->DestroyChannel(_outgoingAudioChannel);
         });
         _outgoingAudioChannel = nullptr;
@@ -2251,9 +2251,11 @@ public:
 
     void OnRtcpPacketReceived_n(rtc::CopyOnWriteBuffer *buffer, int64_t packet_time_us) {
         rtc::CopyOnWriteBuffer packet = *buffer;
-        if (_call) {
-            _call->Receiver()->DeliverPacket(webrtc::MediaType::ANY, packet, packet_time_us);
-        }
+        _threads->getWorkerThread()->PostTask([this, packet]() {
+            if (_call) {
+                _call->Receiver()->DeliverRtcpPacket(std::move(packet));
+            }
+        });
     }
 
     void adjustBitratePreferences(bool resetStartBitrate) {
@@ -2282,9 +2284,9 @@ public:
         settings.max_bitrate_bps = preferences.max_bitrate_bps;
 
         _call->GetTransportControllerSend()->SetSdpBitrateParameters(preferences);
-		_threads->getWorkerThread()->BlockingCall([&]() {
-			_call->SetClientBitratePreferences(settings);
-		});
+        _threads->getWorkerThread()->BlockingCall([&]() {
+            _call->SetClientBitratePreferences(settings);
+        });
     }
 
     void setIsRtcConnected(bool isConnected) {
@@ -2389,8 +2391,8 @@ public:
     }
 
     void receiveRtcpPacket(rtc::CopyOnWriteBuffer const &packet, int64_t timestamp) {
-        _threads->getWorkerThread()->PostTask([this, packet, timestamp]() {
-            _call->Receiver()->DeliverPacket(webrtc::MediaType::ANY, packet, timestamp);
+        _threads->getWorkerThread()->PostTask([this, packet]() {
+            _call->Receiver()->DeliverRtcpPacket(std::move(packet));
         });
     }
 
@@ -2834,7 +2836,7 @@ public:
         }
 
         _getVideoSource = std::move(getVideoSource);
-		updateVideoSend();
+        updateVideoSend();
         if (resetBitrate) {
             adjustBitratePreferences(true);
         }
@@ -2996,7 +2998,7 @@ public:
     void onUpdatedIsMuted() {
         if (_outgoingAudioChannel) {
             _threads->getWorkerThread()->BlockingCall([this]() {
-                _outgoingAudioChannel->media_channel()->SetAudioSend(_outgoingAudioSsrc, !_isMuted, nullptr, &_audioSource);
+                _outgoingAudioChannel->media_send_channel()->AsVoiceSendChannel()->SetAudioSend(_outgoingAudioSsrc, !_isMuted, nullptr, &_audioSource);
             });
 
             _outgoingAudioChannel->Enable(!_isMuted);

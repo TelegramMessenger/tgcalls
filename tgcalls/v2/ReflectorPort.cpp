@@ -68,7 +68,7 @@ socket_(socket),
 error_(0),
 stun_dscp_value_(rtc::DSCP_NO_CHANGE),
 state_(STATE_CONNECTING),
-server_priority_(args.config->priority) {
+server_priority_(args.relative_priority) {
     serverId_ = serverId;
     
     auto rawPeerTag = parseHex(args.config->credentials.password);
@@ -99,7 +99,7 @@ socket_(NULL),
 error_(0),
 stun_dscp_value_(rtc::DSCP_NO_CHANGE),
 state_(STATE_CONNECTING),
-server_priority_(args.config->priority) {
+server_priority_(args.relative_priority) {
     serverId_ = serverId;
     
     auto rawPeerTag = parseHex(args.config->credentials.password);
