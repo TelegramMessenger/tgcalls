@@ -3350,14 +3350,14 @@ private:
                 return nullptr;
             }
         };
-        if (_videoContentType == VideoContentType::Screencast) {
-            FakeAudioDeviceModule::Options options;
-            options.num_channels = 1;
-            return check(FakeAudioDeviceModule::Creator(nullptr, _externalAudioRecorder, options)(_taskQueueFactory.get()));
-        } else if (_createAudioDeviceModule) {
+        if (_createAudioDeviceModule) {
             if (const auto result = check(_createAudioDeviceModule(_taskQueueFactory.get()))) {
                 return result;
             }
+        } else if (_videoContentType == VideoContentType::Screencast) {
+            FakeAudioDeviceModule::Options options;
+            options.num_channels = 1;
+            return check(FakeAudioDeviceModule::Creator(nullptr, _externalAudioRecorder, options)(_taskQueueFactory.get()));
         }
         return check(create(webrtc::AudioDeviceModule::kPlatformDefaultAudio));
     }
