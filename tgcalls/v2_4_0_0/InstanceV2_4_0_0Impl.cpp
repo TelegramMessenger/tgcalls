@@ -1208,6 +1208,7 @@ public:
     InstanceV2_4_0_0ImplInternal(Descriptor &&descriptor, std::shared_ptr<Threads> threads) :
     _threads(threads),
     _rtcServers(descriptor.rtcServers),
+    _enableP2P(descriptor.config.enableP2P),
     _encryptionKey(std::move(descriptor.encryptionKey)),
     _stateUpdated(descriptor.stateUpdated),
     _signalBarsUpdated(descriptor.signalBarsUpdated),
@@ -1249,14 +1250,15 @@ public:
     void start() {
         const auto weak = std::weak_ptr<InstanceV2_4_0_0ImplInternal>(shared_from_this());
 
-        _networking.reset(new ThreadLocalObject<NativeNetworkingImpl>(_threads->getNetworkThread(), [weak, threads = _threads, isOutgoing = _encryptionKey.isOutgoing, rtcServers = _rtcServers]() {
-            return new NativeNetworkingImpl(NativeNetworkingImpl::Configuration{
+        _networking.reset(new ThreadLocalObject<NativeNetworkingImpl>(_threads->getNetworkThread(), [weak, threads = _threads, encryptionKey = _encryptionKey, isOutgoing = _encryptionKey.isOutgoing, rtcServers = _rtcServers, enableP2P = _enableP2P]() {
+            return std::make_shared<NativeNetworkingImpl>(InstanceNetworking::Configuration{
+                .encryptionKey = encryptionKey,
                 .isOutgoing = isOutgoing,
                 .enableStunMarking = false,
                 .enableTCP = false,
-                .enableP2P = true,
+                .enableP2P = enableP2P,
                 .rtcServers = rtcServers,
-                .stateUpdated = [threads, weak](const NativeNetworkingImpl::State &state) {
+                .stateUpdated = [threads, weak](const InstanceNetworking::State &state) {
                     threads->getMediaThread()->PostTask([=] {
                         const auto strong = weak.lock();
                         if (!strong) {
@@ -1838,7 +1840,7 @@ public:
         _pendingIceCandidates.clear();
     }
 
-    void onNetworkStateUpdated(NativeNetworkingImpl::State const &state) {
+    void onNetworkStateUpdated(InstanceNetworking::State const &state) {
         State mappedState;
         if (state.isReadyToSendData) {
             mappedState = State::Established;
@@ -2074,6 +2076,7 @@ private:
 private:
     std::shared_ptr<Threads> _threads;
     std::vector<RtcServer> _rtcServers;
+    bool _enableP2P = false;
     EncryptionKey _encryptionKey;
     std::function<void(State)> _stateUpdated;
     std::function<void(int)> _signalBarsUpdated;
@@ -2144,7 +2147,7 @@ InstanceV2_4_0_0Impl::InstanceV2_4_0_0Impl(Descriptor &&descriptor) {
 
     _threads = StaticThreads::getThreads();
     _internal.reset(new ThreadLocalObject<InstanceV2_4_0_0ImplInternal>(_threads->getMediaThread(), [descriptor = std::move(descriptor), threads = _threads]() mutable {
-        return new InstanceV2_4_0_0ImplInternal(std::move(descriptor), threads);
+        return std::make_shared<InstanceV2_4_0_0ImplInternal>(std::move(descriptor), threads);
     }));
     _internal->perform([](InstanceV2_4_0_0ImplInternal *internal) {
         internal->start();

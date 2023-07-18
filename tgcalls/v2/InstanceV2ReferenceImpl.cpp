@@ -325,8 +325,8 @@ struct StateLogRecord {
 struct NetworkStateLogRecord {
     bool isConnected = false;
     bool isFailed = false;
-    absl::optional<NativeNetworkingImpl::RouteDescription> route;
-    absl::optional<NativeNetworkingImpl::ConnectionDescription> connection;
+    absl::optional<InstanceNetworking::RouteDescription> route;
+    absl::optional<InstanceNetworking::ConnectionDescription> connection;
 
     bool operator==(NetworkStateLogRecord const &rhs) const {
         if (isConnected != rhs.isConnected) {
@@ -611,10 +611,10 @@ public:
                 return;
             }
 
-            NativeNetworkingImpl::ConnectionDescription connectionDescription;
+            InstanceNetworking::ConnectionDescription connectionDescription;
 
-            connectionDescription.local = NativeNetworkingImpl::connectionDescriptionFromCandidate(event.selected_candidate_pair.local);
-            connectionDescription.remote = NativeNetworkingImpl::connectionDescriptionFromCandidate(event.selected_candidate_pair.remote);
+            connectionDescription.local = InstanceNetworking::connectionDescriptionFromCandidate(event.selected_candidate_pair.local);
+            connectionDescription.remote = InstanceNetworking::connectionDescriptionFromCandidate(event.selected_candidate_pair.remote);
 
             if (!strong->_currentConnectionDescription || strong->_currentConnectionDescription.value() != connectionDescription) {
                 strong->_currentConnectionDescription = std::move(connectionDescription);
@@ -1463,7 +1463,7 @@ public:
             if (record.record.connection) {
                 json11::Json::object jsonConnection;
 
-                auto serializeCandidate = [](NativeNetworkingImpl::ConnectionDescription::CandidateDescription const &candidate) -> json11::Json::object {
+                auto serializeCandidate = [](InstanceNetworking::ConnectionDescription::CandidateDescription const &candidate) -> json11::Json::object {
                     json11::Json::object jsonCandidate;
 
                     jsonCandidate.insert(std::make_pair("type", json11::Json(candidate.type)));
@@ -1563,7 +1563,7 @@ private:
 
     bool _isConnected = false;
     bool _isFailed = false;
-    absl::optional<NativeNetworkingImpl::ConnectionDescription> _currentConnectionDescription;
+    absl::optional<InstanceNetworking::ConnectionDescription> _currentConnectionDescription;
 
     absl::optional<NetworkStateLogRecord> _currentNetworkStateLogRecord;
     std::vector<StateLogRecord<NetworkStateLogRecord>> _networkStateLogRecords;
@@ -1619,7 +1619,7 @@ InstanceV2ReferenceImpl::InstanceV2ReferenceImpl(Descriptor &&descriptor) {
 
     _threads = StaticThreads::getThreads();
     _internal.reset(new ThreadLocalObject<InstanceV2ReferenceImplInternal>(_threads->getMediaThread(), [descriptor = std::move(descriptor), threads = _threads]() mutable {
-        return new InstanceV2ReferenceImplInternal(std::move(descriptor), threads);
+        return std::make_shared<InstanceV2ReferenceImplInternal>(std::move(descriptor), threads);
     }));
     _internal->perform([](InstanceV2ReferenceImplInternal *internal) {
         internal->start();
