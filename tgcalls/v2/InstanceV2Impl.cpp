@@ -976,7 +976,7 @@ public:
                                 if (!strong) {
                                     return;
                                 }
-                                
+
                                 strong->sendCandidate(candidate);
                             });
                         },
@@ -1013,8 +1013,8 @@ public:
                                 strong->onDataChannelMessage(message);
                             });
                         },
+                        .threads = threads,
                         .directConnectionChannel = directConnectionChannel,
-                        .threads = threads
                 }));
             } else {
                 return std::static_pointer_cast<InstanceNetworking>(std::make_shared<NativeNetworkingImpl>(InstanceNetworking::Configuration{
@@ -1040,7 +1040,7 @@ public:
                             if (!strong) {
                                 return;
                             }
-                            
+
                             strong->sendCandidate(candidate);
                         });
                     },
@@ -1077,8 +1077,8 @@ public:
                             strong->onDataChannelMessage(message);
                         });
                     },
+                    .threads = threads,
                     .directConnectionChannel = directConnectionChannel,
-                    .threads = threads
                 }));
             }
         }));
@@ -1551,12 +1551,12 @@ public:
             auto localFingerprint = networking->getLocalFingerprint();
             std::string hash;
             std::string fingerprint;
-            
+
             if (localFingerprint) {
                 hash = localFingerprint->algorithm;
                 fingerprint = localFingerprint->GetRfc4572Fingerprint();
             }
-            
+
             std::string setup;
             if (isOutgoing) {
                 setup = "actpass";
@@ -2158,7 +2158,7 @@ private:
     std::function<rtc::scoped_refptr<webrtc::AudioDeviceModule>(webrtc::TaskQueueFactory*)> _createAudioDeviceModule;
     MediaDevicesConfig _devicesConfig;
     FilePath _statsLogPath;
-    
+
     std::unique_ptr<SignalingConnection> _signalingConnection;
     std::unique_ptr<EncryptedConnection> _signalingEncryptedConnection;
 
