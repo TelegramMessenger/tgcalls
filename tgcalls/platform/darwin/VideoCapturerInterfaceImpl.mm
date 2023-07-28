@@ -163,7 +163,18 @@
     if (!didSelectPreferredFormat) {
         for (AVCaptureDeviceFormat *format in sortedFormats) {
             CMVideoDimensions dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription);
-            if (dimensions.width >= 640 || dimensions.height >= 640) {
+            if (dimensions.width >= 720 && dimensions.height >= 720) {
+                didSelectPreferredFormat = true;
+                bestFormat = format;
+                break;
+            }
+        }
+    }
+    if (!didSelectPreferredFormat) {
+        for (AVCaptureDeviceFormat *format in sortedFormats) {
+            CMVideoDimensions dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription);
+            if (dimensions.width >= 640 && dimensions.height >= 640) {
+                didSelectPreferredFormat = true;
                 bestFormat = format;
                 break;
             }
