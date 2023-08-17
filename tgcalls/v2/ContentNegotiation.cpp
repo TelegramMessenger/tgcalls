@@ -394,6 +394,8 @@ std::unique_ptr<ContentNegotiationContext::NegotiationContents> ContentNegotiati
         return nullptr;
     }
 
+    _needNegotiation = false;
+
     _pendingOutgoingOffer = std::make_unique<PendingOutgoingOffer>();
     _pendingOutgoingOffer->exchangeId = _uniqueRandomIdGenerator->GenerateId();
 
@@ -619,7 +621,6 @@ void ContentNegotiationContext::setAnswer(std::unique_ptr<ContentNegotiationCont
     }
 
     _pendingOutgoingOffer.reset();
-    _needNegotiation = false;
 
     _outgoingChannels.clear();
 
