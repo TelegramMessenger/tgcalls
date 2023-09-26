@@ -1353,6 +1353,7 @@ public:
                             outgoingAudioContent.value(),
                             _threads
                         ));
+                        _outgoingAudioChannel->setIsMuted(_isMicrophoneMuted);
                     }
                 }
             }
