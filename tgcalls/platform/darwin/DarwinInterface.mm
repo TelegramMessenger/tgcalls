@@ -16,6 +16,10 @@
 #include "DarwinVideoSource.h"
 #include "objc_video_encoder_factory.h"
 #include "objc_video_decoder_factory.h"
+#include "sdk/objc/native/src/objc_frame_buffer.h"
+#import "sdk/objc/components/video_frame_buffer/RTCCVPixelBuffer.h"
+
+#import "DarwinFFMpeg.h"
 
 #ifdef WEBRTC_IOS
 #include "platform/darwin/iOS/RTCAudioSession.h"
@@ -129,8 +133,26 @@ rtc::scoped_refptr<WrappedAudioDeviceModule> DarwinInterface::wrapAudioDeviceMod
 #endif
 }
 
+void DarwinInterface::setupVideoDecoding(AVCodecContext *codecContext) {
+    return setupDarwinVideoDecoding(codecContext);
+}
+
+rtc::scoped_refptr<webrtc::VideoFrameBuffer> DarwinInterface::createPlatformFrameFromData(AVFrame const *frame) {
+    return createDarwinPlatformFrameFromData(frame);
+}
+
 std::unique_ptr<PlatformInterface> CreatePlatformInterface() {
 	return std::make_unique<DarwinInterface>();
+}
+
+DarwinVideoFrame::DarwinVideoFrame(CVPixelBufferRef pixelBuffer) {
+    _pixelBuffer = CVPixelBufferRetain(pixelBuffer);
+}
+
+DarwinVideoFrame::~DarwinVideoFrame() {
+    if (_pixelBuffer) {
+        CVPixelBufferRelease(_pixelBuffer);
+    }
 }
 
 } // namespace tgcalls

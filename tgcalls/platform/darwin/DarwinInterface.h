@@ -3,7 +3,22 @@
 
 #include "platform/PlatformInterface.h"
 
+#import <CoreVideo/CoreVideo.h>
+
 namespace tgcalls {
+
+class DarwinVideoFrame : public PlatformVideoFrame {
+public:
+    DarwinVideoFrame(CVPixelBufferRef pixelBuffer);
+    virtual ~DarwinVideoFrame();
+    
+    CVPixelBufferRef pixelBuffer() const {
+        return _pixelBuffer;
+    }
+    
+private:
+    CVPixelBufferRef _pixelBuffer = nullptr;
+};
 
 class DarwinInterface : public PlatformInterface {
 public:
@@ -16,7 +31,8 @@ public:
     virtual void adaptVideoSource(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> videoSource, int width, int height, int fps) override;
 	std::unique_ptr<VideoCapturerInterface> makeVideoCapturer(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, std::string deviceId, std::function<void(VideoState)> stateUpdated, std::function<void(PlatformCaptureInfo)> captureInfoUpdated, std::shared_ptr<PlatformContext> platformContext, std::pair<int, int> &outResolution) override;
     virtual rtc::scoped_refptr<WrappedAudioDeviceModule> wrapAudioDeviceModule(rtc::scoped_refptr<webrtc::AudioDeviceModule> module) override;
-
+    virtual void setupVideoDecoding(AVCodecContext *codecContext) override;
+    virtual rtc::scoped_refptr<webrtc::VideoFrameBuffer> createPlatformFrameFromData(AVFrame const *frame) override;
 };
 
 } // namespace tgcalls
