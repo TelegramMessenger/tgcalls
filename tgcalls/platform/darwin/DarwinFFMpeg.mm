@@ -15,6 +15,8 @@ static enum AVPixelFormat getDarwinPreferredPixelFormat(__unused AVCodecContext 
 }
 
 void setupDarwinVideoDecoding(AVCodecContext *codecContext) {
+    return;
+    
 #if TARGET_IPHONE_SIMULATOR
 #else
     if (!codecContext) {
