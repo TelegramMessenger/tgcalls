@@ -1080,8 +1080,8 @@ int32_t AudioDeviceIOS::SetPlayoutDevice(uint16_t index) {
 }
 
 int32_t AudioDeviceIOS::SetPlayoutDevice(AudioDeviceModule::WindowsDeviceType) {
-  RTC_DCHECK_NOTREACHED() << "Not implemented";
-  return -1;
+  RTC_LOG_F(LS_WARNING) << "Not implemented";
+  return 0;
 }
 
 int32_t AudioDeviceIOS::InitMicrophone() {
@@ -1143,36 +1143,36 @@ int32_t AudioDeviceIOS::MicrophoneVolumeIsAvailable(bool& available) {
 }
 
 int32_t AudioDeviceIOS::SetMicrophoneVolume(uint32_t volume) {
-  RTC_DCHECK_NOTREACHED() << "Not implemented";
+  RTC_LOG_F(LS_WARNING) << "Not implemented";
   return -1;
 }
 
 int32_t AudioDeviceIOS::MicrophoneVolume(uint32_t& volume) const {
-  RTC_DCHECK_NOTREACHED() << "Not implemented";
+  RTC_LOG_F(LS_WARNING) << "Not implemented";
   return -1;
 }
 
 int32_t AudioDeviceIOS::MaxMicrophoneVolume(uint32_t& maxVolume) const {
-  RTC_DCHECK_NOTREACHED() << "Not implemented";
+  RTC_LOG_F(LS_WARNING) << "Not implemented";
   return -1;
 }
 
 int32_t AudioDeviceIOS::MinMicrophoneVolume(uint32_t& minVolume) const {
-  RTC_DCHECK_NOTREACHED() << "Not implemented";
+  RTC_LOG_F(LS_WARNING) << "Not implemented";
   return -1;
 }
 
 int32_t AudioDeviceIOS::PlayoutDeviceName(uint16_t index,
                                           char name[kAdmMaxDeviceNameSize],
                                           char guid[kAdmMaxGuidSize]) {
-  RTC_DCHECK_NOTREACHED() << "Not implemented";
+  RTC_LOG_F(LS_WARNING) << "Not implemented";
   return -1;
 }
 
 int32_t AudioDeviceIOS::RecordingDeviceName(uint16_t index,
                                             char name[kAdmMaxDeviceNameSize],
                                             char guid[kAdmMaxGuidSize]) {
-  RTC_DCHECK_NOTREACHED() << "Not implemented";
+  RTC_LOG_F(LS_WARNING) << "Not implemented";
   return -1;
 }
 
@@ -1182,8 +1182,8 @@ int32_t AudioDeviceIOS::SetRecordingDevice(uint16_t index) {
 }
 
 int32_t AudioDeviceIOS::SetRecordingDevice(AudioDeviceModule::WindowsDeviceType) {
-  RTC_DCHECK_NOTREACHED() << "Not implemented";
-  return -1;
+  RTC_LOG_F(LS_WARNING) << "Not implemented";
+  return 0;
 }
 
 int32_t AudioDeviceIOS::PlayoutIsAvailable(bool& available) {
