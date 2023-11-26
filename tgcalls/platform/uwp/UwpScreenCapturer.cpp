@@ -54,10 +54,10 @@ void UwpScreenCapturer::create() {
 	}
 
 	HRESULT hr = D3D11CreateDevice(
-      /*adapter=*/nullptr, D3D_DRIVER_TYPE_HARDWARE,
-      /*software_rasterizer=*/nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-      /*feature_levels=*/nullptr, /*feature_levels_size=*/0, D3D11_SDK_VERSION,
-      d3d11_device_.put(), /*feature_level=*/nullptr, /*device_context=*/nullptr);
+	  /*adapter=*/nullptr, D3D_DRIVER_TYPE_HARDWARE,
+	  /*software_rasterizer=*/nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+	  /*feature_levels=*/nullptr, /*feature_levels_size=*/0, D3D11_SDK_VERSION,
+	  d3d11_device_.put(), /*feature_level=*/nullptr, /*device_context=*/nullptr);
 	if (hr == DXGI_ERROR_UNSUPPORTED) {
 		// If a hardware device could not be created, use WARP which is a high speed
 		// software device.
@@ -216,8 +216,10 @@ void UwpScreenCapturer::OnFrameArrived(DispatcherQueueTimer const& sender, winrt
 		src_data += map_info.RowPitch;
 	}
 
-	// Transfer ownership of |image_data| to the output_frame.
-	OnFrame(std::move(image_data), image_width, image_height);
+	if (_state == VideoState::Active && !item_closed_) {
+		// Transfer ownership of |image_data| to the output_frame.
+		OnFrame(std::move(image_data), image_width, image_height);
+	}
 
 	d3d_context->Unmap(mapped_texture_.get(), 0);
 
@@ -292,11 +294,11 @@ void UwpScreenCapturer::setPreferredCaptureAspectRatio(float aspectRatio) {
 }
 
 void UwpScreenCapturer::setOnFatalError(std::function<void ()> error) {
-    if (_fatalError) {
-        error();
-    } else {
-        _onFatalError = std::move(error);
-    }
+	if (_fatalError) {
+		error();
+	} else {
+		_onFatalError = std::move(error);
+	}
 }
 
 void UwpScreenCapturer::setOnPause(std::function<void(bool)> pause) {
