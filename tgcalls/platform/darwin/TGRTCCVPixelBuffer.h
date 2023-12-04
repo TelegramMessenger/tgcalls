@@ -6,6 +6,7 @@
 @interface TGRTCCVPixelBuffer : RTCCVPixelBuffer
 
 @property (nonatomic) bool shouldBeMirrored;
+@property (nonatomic) int deviceRelativeVideoRotation;
 
 @end
 

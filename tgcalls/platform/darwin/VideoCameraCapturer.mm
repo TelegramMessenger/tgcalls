@@ -519,6 +519,7 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
         (AVCaptureDeviceInput *)((AVCaptureInputPort *)connection.inputPorts.firstObject).input;
         usingFrontCamera = AVCaptureDevicePositionFront == deviceInput.device.position;
     }
+    int deviceRelativeVideoRotation = usingFrontCamera ? RTCVideoRotation_90 : RTCVideoRotation_90;
     if (!_rotationLock) {
         RTCVideoRotation updatedRotation = _rotation;
         switch (_orientation) {
@@ -572,6 +573,7 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
     
     TGRTCCVPixelBuffer *rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:pixelBuffer];
     rtcPixelBuffer.shouldBeMirrored = usingFrontCamera;
+    rtcPixelBuffer.deviceRelativeVideoRotation = deviceRelativeVideoRotation;
     
     TGRTCCVPixelBuffer *uncroppedRtcPixelBuffer = rtcPixelBuffer;
 
@@ -609,6 +611,7 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
         if (width < rtcPixelBuffer.width || height < rtcPixelBuffer.height) {
             rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:pixelBuffer adaptedWidth:width adaptedHeight:height cropWidth:width cropHeight:height cropX:cropX cropY:cropY];
             rtcPixelBuffer.shouldBeMirrored = usingFrontCamera;
+            rtcPixelBuffer.deviceRelativeVideoRotation = deviceRelativeVideoRotation;
             
             CVPixelBufferRef outputPixelBufferRef = NULL;
             OSType pixelFormat = CVPixelBufferGetPixelFormatType(rtcPixelBuffer.pixelBuffer);
@@ -621,6 +624,7 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
                 if ([rtcPixelBuffer cropAndScaleTo:outputPixelBufferRef withTempBuffer:_croppingBuffer.data()]) {
                     rtcPixelBuffer = [[TGRTCCVPixelBuffer alloc] initWithPixelBuffer:outputPixelBufferRef];
                     rtcPixelBuffer.shouldBeMirrored = usingFrontCamera;
+                    rtcPixelBuffer.deviceRelativeVideoRotation = deviceRelativeVideoRotation;
                 }
                 CVPixelBufferRelease(outputPixelBufferRef);
             }
