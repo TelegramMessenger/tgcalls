@@ -837,6 +837,11 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
     _captureSession = captureSession;
     _captureSession.sessionPreset = AVCaptureSessionPresetInputPriority;
     _captureSession.usesApplicationAudioSession = true;
+    if (@available(iOS 16.0, *)) {
+        if (_captureSession.isMultitaskingCameraAccessSupported) {
+            _captureSession.multitaskingCameraAccessEnabled = true;
+        }
+    }
     [self setupVideoDataOutput];
     // Add the output.
     if (![_captureSession canAddOutput:_videoDataOutput]) {
