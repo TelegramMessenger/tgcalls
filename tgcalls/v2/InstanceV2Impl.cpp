@@ -371,7 +371,7 @@ public:
             _audioChannel->SetRemoteContent(incomingAudioDescription.get(), webrtc::SdpType::kAnswer, errorDesc);
             
             std::unique_ptr<AudioSinkImpl> audioLevelSink(new AudioSinkImpl(std::move(onAudioLevelUpdated)));
-            _audioChannel->media_channel()->SetRawAudioSink(ssrc, std::move(audioLevelSink));
+            _audioChannel->media_receive_channel()->SetRawAudioSink(ssrc, std::move(audioLevelSink));
         });
 
         outgoingAudioDescription.reset();
