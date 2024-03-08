@@ -68,21 +68,23 @@ class WrappedAsyncPacketSocket : public rtc::AsyncPacketSocket {
 public:
     WrappedAsyncPacketSocket(std::unique_ptr<rtc::AsyncPacketSocket> &&wrappedSocket) :
     _wrappedSocket(std::move(wrappedSocket)) {
-        _wrappedSocket->SignalReadPacket.connect(this, &WrappedAsyncPacketSocket::onReadPacket);
+        _wrappedSocket->RegisterReceivedPacketCallback([this](AsyncPacketSocket *socket, rtc::ReceivedPacket const &packet) {
+            this->onReadPacket(packet);
+        });
         _wrappedSocket->SignalSentPacket.connect(this, &WrappedAsyncPacketSocket::onSentPacket);
         _wrappedSocket->SignalReadyToSend.connect(this, &WrappedAsyncPacketSocket::onReadyToSend);
         _wrappedSocket->SignalAddressReady.connect(this, &WrappedAsyncPacketSocket::onAddressReady);
         _wrappedSocket->SignalConnect.connect(this, &WrappedAsyncPacketSocket::onConnect);
-        _wrappedSocket->SubscribeClose(this, [this](AsyncPacketSocket* socket, int error) { onClose(socket, error); });
+        _wrappedSocket->SubscribeCloseEvent(this, [this](AsyncPacketSocket* socket, int error) { onClose(socket, error); });
     }
     
     virtual ~WrappedAsyncPacketSocket() override {
-        _wrappedSocket->SignalReadPacket.disconnect(this);
+        _wrappedSocket->DeregisterReceivedPacketCallback();
         _wrappedSocket->SignalSentPacket.disconnect(this);
         _wrappedSocket->SignalReadyToSend.disconnect(this);
         _wrappedSocket->SignalAddressReady.disconnect(this);
         _wrappedSocket->SignalConnect.disconnect(this);
-        _wrappedSocket->UnsubscribeClose(this);
+        _wrappedSocket->UnsubscribeCloseEvent(this);
         
         _wrappedSocket.reset();
     }
@@ -131,8 +133,8 @@ public:
     }
     
 private:
-    void onReadPacket(AsyncPacketSocket *socket, const char *data, size_t size, const rtc::SocketAddress &address, const int64_t &timestamp) {
-        SignalReadPacket.emit(this, data, size, address, timestamp);
+    void onReadPacket(rtc::ReceivedPacket const &packet) {
+        NotifyPacketReceived(packet);
     }
     
     void onSentPacket(AsyncPacketSocket *socket, const rtc::SentPacket &packet) {
@@ -227,14 +229,17 @@ _dataChannelMessageReceived(configuration.dataChannelMessageReceived) {
     _socketFactory.reset(new rtc::BasicPacketSocketFactory(_threads->getNetworkThread()->socketserver()));
     _networkManager = std::make_unique<rtc::BasicNetworkManager>(_networkMonitorFactory.get(), _threads->getNetworkThread()->socketserver());
     
-    _asyncResolverFactory = std::make_unique<webrtc::WrappingAsyncDnsResolverFactory>(std::make_unique<webrtc::BasicAsyncResolverFactory>());
+    _asyncResolverFactory = std::make_unique<webrtc::BasicAsyncDnsResolverFactory>();
     
     _dtlsSrtpTransport = std::make_unique<webrtc::DtlsSrtpTransport>(true, fieldTrialsBasedConfig);
     _dtlsSrtpTransport->SetDtlsTransports(nullptr, nullptr);
     _dtlsSrtpTransport->SetActiveResetSrtpParams(false);
-    _dtlsSrtpTransport->SignalReadyToSend.connect(this, &NativeNetworkingImpl::DtlsReadyToSend);
-    //_dtlsSrtpTransport->SignalRtpPacketReceived.connect(this, &NativeNetworkingImpl::RtpPacketReceived_n);
-    _dtlsSrtpTransport->SignalRtcpPacketReceived.connect(this, &NativeNetworkingImpl::OnRtcpPacketReceived_n);
+    _dtlsSrtpTransport->SubscribeReadyToSend(this, [this](bool value) {
+        this->DtlsReadyToSend(value);
+    });
+    _dtlsSrtpTransport->SubscribeRtcpPacketReceived(this, [this](rtc::CopyOnWriteBuffer *packet, int64_t timestamp) {
+        this->OnRtcpPacketReceived_n(packet, timestamp);
+    });
     
     resetDtlsSrtpTransport();
 }
@@ -346,7 +351,9 @@ void NativeNetworkingImpl::resetDtlsSrtpTransport() {
 
     _transportChannel->SignalCandidateGathered.connect(this, &NativeNetworkingImpl::candidateGathered);
     _transportChannel->SignalIceTransportStateChanged.connect(this, &NativeNetworkingImpl::transportStateChanged);
-    _transportChannel->SignalCandidatePairChanged.connect(this, &NativeNetworkingImpl::candidatePairChanged);
+    _transportChannel->SetCandidatePairChangeCallback([this](cricket::CandidatePairChangeEvent const &event) {
+        this->candidatePairChanged(event);
+    });
     _transportChannel->SignalNetworkRouteChanged.connect(this, &NativeNetworkingImpl::transportRouteChanged);
 
     webrtc::CryptoOptions cryptoOptions = NativeNetworkingImpl::getDefaulCryptoOptions();
@@ -633,9 +640,6 @@ void NativeNetworkingImpl::notifyStateUpdated() {
 }
 
 void NativeNetworkingImpl::sctpReadyToSendData() {
-}
-
-void NativeNetworkingImpl::sctpDataReceived(const cricket::ReceiveDataParams& params, const rtc::CopyOnWriteBuffer& buffer) {
 }
 
 } // namespace tgcalls

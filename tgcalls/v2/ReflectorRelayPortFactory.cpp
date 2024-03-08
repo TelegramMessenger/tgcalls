@@ -28,7 +28,7 @@ std::unique_ptr<cricket::Port> ReflectorRelayPortFactory::Create(const cricket::
             return nullptr;
         }
 
-        auto port = ReflectorPort::Create(args, udp_socket, id);
+        auto port = ReflectorPort::Create(args, udp_socket, id, args.relative_priority);
         if (!port) {
             return nullptr;
         }
@@ -59,7 +59,7 @@ std::unique_ptr<cricket::Port> ReflectorRelayPortFactory::Create(const cricket::
             return nullptr;
         }
 
-        auto port = ReflectorPort::Create(args, min_port, max_port, id);
+        auto port = ReflectorPort::Create(args, min_port, max_port, id, args.relative_priority);
         if (!port) {
             return nullptr;
         }

@@ -268,12 +268,12 @@ CommonCodecs AssignPayloadTypesAndDefaultCodecs(CommonFormats &&formats) {
 	auto result = CommonCodecs();
 	result.list.reserve(2 * formats.list.size() - 2);
 	for (const auto &format : formats.list) {
-		cricket::VideoCodec codec(format);
+        cricket::VideoCodec codec = cricket::CreateVideoCodec(format);
 		codec.id = payload_type;
 		AddDefaultFeedbackParams(&codec);
 
 		if (inputIndex++ == formats.myEncoderIndex) {
-			result.myEncoderIndex = result.list.size();
+			result.myEncoderIndex = (int)result.list.size();
 		}
 		result.list.push_back(codec);
 
@@ -287,7 +287,7 @@ CommonCodecs AssignPayloadTypesAndDefaultCodecs(CommonFormats &&formats) {
 		// Add associated RTX codec for non-FEC codecs.
 		if (!absl::EqualsIgnoreCase(codec.name, cricket::kUlpfecCodecName) &&
 			!absl::EqualsIgnoreCase(codec.name, cricket::kFlexfecCodecName)) {
-			result.list.push_back(cricket::VideoCodec::CreateRtxCodec(payload_type, codec.id));
+			result.list.push_back(cricket::CreateVideoRtxCodec(payload_type, codec.id));
 
 			// Increment payload type.
 			++payload_type;

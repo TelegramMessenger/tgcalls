@@ -175,11 +175,11 @@ void NetworkManager::start() {
 
     _portAllocator->SetConfiguration(stunServers, turnServers, 2, webrtc::NO_PRUNE, _turnCustomizer.get());
 
-    _asyncResolverFactory = std::make_unique<webrtc::BasicAsyncResolverFactory>();
+    _asyncResolverFactory = std::make_unique<webrtc::BasicAsyncDnsResolverFactory>();
 
     webrtc::IceTransportInit iceTransportInit;
     iceTransportInit.set_port_allocator(_portAllocator.get());
-    iceTransportInit.set_async_resolver_factory(_asyncResolverFactory.get());
+    iceTransportInit.set_async_dns_resolver_factory(_asyncResolverFactory.get());
 
     _transportChannel = cricket::P2PTransportChannel::Create("transport", 0, std::move(iceTransportInit));
 

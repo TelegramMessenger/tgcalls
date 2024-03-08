@@ -264,9 +264,7 @@ static void decompressionOutputCallback(void *decoderRef,
 - (void)destroyDecompressionSession {
   if (_decompressionSession) {
 #if defined(WEBRTC_IOS)
-    if ([UIDevice isIOS11OrLater]) {
-      VTDecompressionSessionWaitForAsynchronousFrames(_decompressionSession);
-    }
+  VTDecompressionSessionWaitForAsynchronousFrames(_decompressionSession);
 #endif
     VTDecompressionSessionInvalidate(_decompressionSession);
     CFRelease(_decompressionSession);

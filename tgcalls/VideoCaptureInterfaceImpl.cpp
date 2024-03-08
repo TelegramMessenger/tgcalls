@@ -21,7 +21,7 @@ VideoCaptureInterfaceObject::~VideoCaptureInterfaceObject() {
 	}
 }
 
-rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> VideoCaptureInterfaceObject::source() {
+webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> VideoCaptureInterfaceObject::source() {
 	return _videoSource;
 }
 

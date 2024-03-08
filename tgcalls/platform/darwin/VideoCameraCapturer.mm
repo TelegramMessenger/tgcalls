@@ -30,7 +30,7 @@ namespace {
 
 static const int64_t kNanosecondsPerSecond = 1000000000;
 
-static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> nativeSource) {
+static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> nativeSource) {
     webrtc::VideoTrackSourceProxy *proxy_source =
     static_cast<webrtc::VideoTrackSourceProxy *>(nativeSource.get());
     return static_cast<tgcalls::DarwinVideoTrackSource *>(proxy_source->internal());
@@ -72,7 +72,7 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
 @end
 
 @interface VideoCameraCapturer () <AVCaptureVideoDataOutputSampleBufferDelegate> {
-    rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _source;
+    webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _source;
     
     // Live on main thread.
     bool _isFrontCamera;
@@ -125,7 +125,7 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
 
 @implementation VideoCameraCapturer
 
-- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source useFrontCamera:(bool)useFrontCamera keepLandscape:(bool)keepLandscape isActiveUpdated:(void (^)(bool))isActiveUpdated rotationUpdated:(void (^)(int))rotationUpdated {
+- (instancetype)initWithSource:(webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source useFrontCamera:(bool)useFrontCamera keepLandscape:(bool)keepLandscape isActiveUpdated:(void (^)(bool))isActiveUpdated rotationUpdated:(void (^)(int))rotationUpdated {
     self = [super init];
     if (self != nil) {
         _source = source;
@@ -386,7 +386,7 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
 
 #pragma mark AVCaptureVideoDataOutputSampleBufferDelegate
 
-- (rtc::scoped_refptr<webrtc::VideoFrameBuffer>)prepareI420Buffer:(CVPixelBufferRef)pixelBuffer {
+- (webrtc::scoped_refptr<webrtc::VideoFrameBuffer>)prepareI420Buffer:(CVPixelBufferRef)pixelBuffer {
     if (!pixelBuffer) {
         return nullptr;
     }
@@ -436,7 +436,7 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
     return resultBuffer;
 }
 
-- (rtc::scoped_refptr<webrtc::VideoFrameBuffer>)prepareNV12Buffer:(CVPixelBufferRef)pixelBuffer {
+- (webrtc::scoped_refptr<webrtc::VideoFrameBuffer>)prepareNV12Buffer:(CVPixelBufferRef)pixelBuffer {
     if (!pixelBuffer) {
         return nullptr;
     }
@@ -463,7 +463,7 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
             int resultHeight = (int)(srcHeight * 0.8f);
             resultHeight &= ~1;
 
-            rtc::scoped_refptr<webrtc::NV12Buffer> resultBuffer = rtc::make_ref_counted<webrtc::NV12Buffer>(resultWidth, resultHeight, srcYStride, srcUVStride);
+            webrtc::scoped_refptr<webrtc::NV12Buffer> resultBuffer = rtc::make_ref_counted<webrtc::NV12Buffer>(resultWidth, resultHeight, srcYStride, srcUVStride);
 
             libyuv::NV12Scale(srcY, srcYStride, srcUV, srcUVStride,
                                         resultWidth, resultHeight, resultBuffer->MutableDataY(),
@@ -680,7 +680,7 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
                 
                 const int64_t timestamp_us = frame.timeStampNs / rtc::kNumNanosecsPerMicrosec;
 
-                rtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer;
+                webrtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer;
                 buffer = new rtc::RefCountedObject<webrtc::ObjCFrameBuffer>(frame.buffer);
                 
                 webrtc::VideoRotation rotation = static_cast<webrtc::VideoRotation>(frame.rotation);

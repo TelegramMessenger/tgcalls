@@ -6,7 +6,7 @@
 namespace tgcalls {
 
 void setupDarwinVideoDecoding(AVCodecContext *codecContext);
-rtc::scoped_refptr<webrtc::VideoFrameBuffer> createDarwinPlatformFrameFromData(AVFrame const *frame);
+webrtc::scoped_refptr<webrtc::VideoFrameBuffer> createDarwinPlatformFrameFromData(AVFrame const *frame);
 
 } // namespace tgcalls
 

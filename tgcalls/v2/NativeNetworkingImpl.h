@@ -87,7 +87,6 @@ private:
     void OnRtcpPacketReceived_n(rtc::CopyOnWriteBuffer *packet, int64_t packet_time_us);
 
     void sctpReadyToSendData();
-    void sctpDataReceived(const cricket::ReceiveDataParams& params, const rtc::CopyOnWriteBuffer& buffer);
     
     void notifyStateUpdated();
 
@@ -119,7 +118,7 @@ private:
 
     std::unique_ptr<SctpDataChannelProviderInterfaceImpl> _dataChannelInterface;
 
-    rtc::scoped_refptr<rtc::RTCCertificate> _localCertificate;
+    webrtc::scoped_refptr<rtc::RTCCertificate> _localCertificate;
     PeerIceParameters _localIceParameters;
     absl::optional<PeerIceParameters> _remoteIceParameters;
 

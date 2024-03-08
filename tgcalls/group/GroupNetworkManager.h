@@ -57,7 +57,7 @@ public:
     static webrtc::CryptoOptions getDefaulCryptoOptions();
 
     GroupNetworkManager(
-        const webrtc::WebRtcKeyValueConfig& fieldTrials,
+        const webrtc::FieldTrialsView& fieldTrials,
         std::function<void(const State &)> stateUpdated,
         std::function<void(uint32_t, int)> unknownSsrcPacketReceived,
         std::function<void(bool)> dataChannelStateUpdated,
@@ -96,7 +96,6 @@ private:
     void OnRtcpPacketReceived_n(rtc::CopyOnWriteBuffer *packet, int64_t packet_time_us);
 
     void sctpReadyToSendData();
-    void sctpDataReceived(const cricket::ReceiveDataParams& params, const rtc::CopyOnWriteBuffer& buffer);
 
     std::shared_ptr<Threads> _threads;
     std::function<void(const GroupNetworkManager::State &)> _stateUpdated;
@@ -110,14 +109,14 @@ private:
     std::unique_ptr<rtc::BasicNetworkManager> _networkManager;
     std::unique_ptr<webrtc::TurnCustomizer> _turnCustomizer;
     std::unique_ptr<cricket::BasicPortAllocator> _portAllocator;
-    std::unique_ptr<webrtc::BasicAsyncResolverFactory> _asyncResolverFactory;
+    std::unique_ptr<webrtc::AsyncDnsResolverFactoryInterface> _asyncResolverFactory;
     std::unique_ptr<cricket::P2PTransportChannel> _transportChannel;
     std::unique_ptr<cricket::DtlsTransport> _dtlsTransport;
     std::unique_ptr<webrtc::DtlsSrtpTransport> _dtlsSrtpTransport;
 
     std::unique_ptr<SctpDataChannelProviderInterfaceImpl> _dataChannelInterface;
 
-    rtc::scoped_refptr<rtc::RTCCertificate> _localCertificate;
+    webrtc::scoped_refptr<rtc::RTCCertificate> _localCertificate;
     PeerIceParameters _localIceParameters;
     absl::optional<PeerIceParameters> _remoteIceParameters;
 

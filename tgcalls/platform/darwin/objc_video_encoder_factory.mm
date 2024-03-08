@@ -17,7 +17,7 @@
 #import "base/RTCVideoEncoderFactory.h"
 #import "components/video_codec/RTCCodecSpecificInfoH264+Private.h"
 #ifndef WEBRTC_DISABLE_H265
-#import "components/video_codec/RTCCodecSpecificInfoH265+Private.h"
+#import "RTCCodecSpecificInfoH265+Private.h"
 #endif
 #import "sdk/objc/api/peerconnection/RTCEncodedImage+Private.h"
 #import "sdk/objc/api/peerconnection/RTCVideoCodecInfo+Private.h"

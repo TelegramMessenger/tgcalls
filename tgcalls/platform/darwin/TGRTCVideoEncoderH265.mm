@@ -36,6 +36,7 @@
 #include "rtc_base/time_utils.h"
 #include "sdk/objc/Framework/Classes/VideoToolbox/nalu_rewriter.h"
 #include "system_wrappers/include/clock.h"
+#include "h265_nalu_rewriter.h"
 
 @interface RTC_OBJC_TYPE (RTCVideoEncoderH265)
 ()
@@ -590,10 +591,9 @@ void compressionOutputCallback(void* encoder,
                           : RTCVideoContentTypeUnspecified;
   frame.flags = webrtc::VideoSendTiming::kInvalid;
 
-  int qp;
-  _h265BitstreamParser.ParseBitstream(buffer->data(), buffer->size());
-  _h265BitstreamParser.GetLastSliceQp(&qp);
-  frame.qp = @(qp);
+  _h265BitstreamParser.ParseBitstream(rtc::ArrayView<const uint8_t>(buffer->data(), buffer->size()));
+  absl::optional<int> qp = _h265BitstreamParser.GetLastSliceQp();
+  frame.qp = @(qp.value_or(1));
 
   BOOL res = _callback(frame, codecSpecificInfo);
   if (!res) {

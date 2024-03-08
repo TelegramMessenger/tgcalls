@@ -287,7 +287,7 @@ public:
     bool _voiceActivity = false;
 
 public:
-    WrappedDtlsSrtpTransport(bool rtcp_mux_enabled, const webrtc::WebRtcKeyValueConfig& fieldTrials, std::function<void(webrtc::RtpPacketReceived const &, bool)> &&processRtpPacket) :
+    WrappedDtlsSrtpTransport(bool rtcp_mux_enabled, const webrtc::FieldTrialsView& fieldTrials, std::function<void(webrtc::RtpPacketReceived const &, bool)> &&processRtpPacket) :
     webrtc::DtlsSrtpTransport(rtcp_mux_enabled, fieldTrials),
     _processRtpPacket(std::move(processRtpPacket)) {
     }
@@ -299,7 +299,7 @@ public:
         maybeUpdateRtpVoiceActivity(packet, _voiceActivity);
         return webrtc::DtlsSrtpTransport::SendRtpPacket(packet, options, flags);
     }
-
+    
     void ProcessRtpPacket(webrtc::RtpPacketReceived const &packet, bool isUnresolved) override {
         _processRtpPacket(packet, isUnresolved);
     }
@@ -316,7 +316,7 @@ webrtc::CryptoOptions GroupNetworkManager::getDefaulCryptoOptions() {
 }
 
 GroupNetworkManager::GroupNetworkManager(
-    const webrtc::WebRtcKeyValueConfig& fieldTrials,
+    const webrtc::FieldTrialsView &fieldTrials,
     std::function<void(const State &)> stateUpdated,
     std::function<void(uint32_t, int)> unknownSsrcPacketReceived,
     std::function<void(bool)> dataChannelStateUpdated,
@@ -339,15 +339,16 @@ _audioActivityUpdated(audioActivityUpdated) {
 
     _socketFactory.reset(new rtc::BasicPacketSocketFactory(_threads->getNetworkThread()->socketserver()));
     _networkManager = std::make_unique<rtc::BasicNetworkManager>(_networkMonitorFactory.get(), _threads->getNetworkThread()->socketserver());
-    _asyncResolverFactory = std::make_unique<webrtc::BasicAsyncResolverFactory>();
+    _asyncResolverFactory = std::make_unique<webrtc::BasicAsyncDnsResolverFactory>();
 
     _dtlsSrtpTransport = std::make_unique<WrappedDtlsSrtpTransport>(true, fieldTrials, [this](webrtc::RtpPacketReceived const &packet, bool isUnresolved) {
         this->RtpPacketReceived_n(packet, isUnresolved);
     });
     _dtlsSrtpTransport->SetDtlsTransports(nullptr, nullptr);
     _dtlsSrtpTransport->SetActiveResetSrtpParams(false);
-    _dtlsSrtpTransport->SignalReadyToSend.connect(this, &GroupNetworkManager::DtlsReadyToSend);
-    //_dtlsSrtpTransport->SignalRtpPacketReceived.connect(this, &GroupNetworkManager::RtpPacketReceived_n);
+    _dtlsSrtpTransport->SubscribeReadyToSend(this, [this](bool value) {
+        this->DtlsReadyToSend(value);
+    });
 
     resetDtlsSrtpTransport();
 }
@@ -376,7 +377,7 @@ void GroupNetworkManager::resetDtlsSrtpTransport() {
 
     webrtc::IceTransportInit iceTransportInit;
     iceTransportInit.set_port_allocator(portAllocator.get());
-    iceTransportInit.set_async_resolver_factory(_asyncResolverFactory.get());
+    iceTransportInit.set_async_dns_resolver_factory(_asyncResolverFactory.get());
 
     auto transportChannel = cricket::P2PTransportChannel::Create("transport", 0, std::move(iceTransportInit));
 
@@ -648,9 +649,6 @@ void GroupNetworkManager::UpdateAggregateStates_n() {
 }
 
 void GroupNetworkManager::sctpReadyToSendData() {
-}
-
-void GroupNetworkManager::sctpDataReceived(const cricket::ReceiveDataParams& params, const rtc::CopyOnWriteBuffer& buffer) {
 }
 
 } // namespace tgcalls

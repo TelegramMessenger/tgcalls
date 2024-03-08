@@ -31,6 +31,7 @@
 #include "rtc_base/time_utils.h"
 #include "rtc_base/thread.h"
 #include "sdk/objc/components/video_codec/nalu_rewriter.h"
+#include "h265_nalu_rewriter.h"
 
 #include "StaticThreads.h"
 
@@ -328,9 +329,7 @@ static void tg_h265DecompressionOutputCallback(void* decoder,
 - (void)destroyDecompressionSession {
   if (_decompressionSession) {
 #if defined(WEBRTC_IOS)
-    if ([UIDevice isIOS11OrLater]) {
-      VTDecompressionSessionWaitForAsynchronousFrames(_decompressionSession);
-    }
+    VTDecompressionSessionWaitForAsynchronousFrames(_decompressionSession);
 #endif
     VTDecompressionSessionInvalidate(_decompressionSession);
     CFRelease(_decompressionSession);

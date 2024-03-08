@@ -2052,7 +2052,7 @@ public:
     }
 
 private:
-    rtc::scoped_refptr<webrtc::AudioDeviceModule> createAudioDeviceModule() {
+    webrtc::scoped_refptr<webrtc::AudioDeviceModule> createAudioDeviceModule() {
         const auto create = [&](webrtc::AudioDeviceModule::AudioLayer layer) {
 #ifdef WEBRTC_IOS
             return rtc::make_ref_counted<webrtc::tgcalls_ios_adm::AudioDeviceModuleIOS>(false, false, 1);
@@ -2062,7 +2062,7 @@ private:
                 _taskQueueFactory.get());
 #endif
         };
-        const auto check = [&](const rtc::scoped_refptr<webrtc::AudioDeviceModule> &result) {
+        const auto check = [&](const webrtc::scoped_refptr<webrtc::AudioDeviceModule> &result) {
             return (result && result->Init() == 0) ? result : nullptr;
         };
         if (_createAudioDeviceModule) {
@@ -2085,7 +2085,7 @@ private:
     std::function<void(AudioState, VideoState)> _remoteMediaStateUpdated;
     std::function<void(float)> _remotePrefferedAspectRatioUpdated;
     std::function<void(const std::vector<uint8_t> &)> _signalingDataEmitted;
-    std::function<rtc::scoped_refptr<webrtc::AudioDeviceModule>(webrtc::TaskQueueFactory*)> _createAudioDeviceModule;
+    std::function<webrtc::scoped_refptr<webrtc::AudioDeviceModule>(webrtc::TaskQueueFactory*)> _createAudioDeviceModule;
 
     std::unique_ptr<SignalingEncryption> _signalingEncryption;
 
@@ -2097,7 +2097,7 @@ private:
     std::unique_ptr<webrtc::TaskQueueFactory> _taskQueueFactory;
     std::unique_ptr<webrtc::Call> _call;
     webrtc::LocalAudioSinkAdapter _audioSource;
-    rtc::scoped_refptr<webrtc::AudioDeviceModule> _audioDeviceModule;
+    webrtc::scoped_refptr<webrtc::AudioDeviceModule> _audioDeviceModule;
 
     std::unique_ptr<rtc::UniqueRandomIdGenerator> _uniqueRandomIdGenerator;
     webrtc::RtpTransport *_rtpTransport = nullptr;

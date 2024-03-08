@@ -43,7 +43,7 @@ public:
     static std::unique_ptr<ReflectorPort> Create(
                                                  const cricket::CreateRelayPortArgs& args,
                                                  rtc::AsyncPacketSocket* socket,
-                                                 uint8_t serverId) {
+                                                 uint8_t serverId, int server_priority) {
         // Do basic parameter validation.
         if (args.config->credentials.username.size() > 32) {
             RTC_LOG(LS_ERROR) << "Attempt to use REFLECTOR with a too long username "
@@ -57,7 +57,7 @@ public:
             return nullptr;
         }
         // Using `new` to access a non-public constructor.
-        return absl::WrapUnique(new ReflectorPort(args, socket, serverId));
+        return absl::WrapUnique(new ReflectorPort(args, socket, serverId, server_priority));
     }
     
     // Create a TURN port that will use a new socket, bound to `network` and
@@ -66,7 +66,7 @@ public:
                                                  const cricket::CreateRelayPortArgs& args,
                                                  uint16_t min_port,
                                                  uint16_t max_port,
-                                                 uint8_t serverId) {
+                                                 uint8_t serverId, int server_priority) {
         // Do basic parameter validation.
         if (args.config->credentials.username.size() > 32) {
             RTC_LOG(LS_ERROR) << "Attempt to use TURN with a too long username "
@@ -80,7 +80,7 @@ public:
             return nullptr;
         }
         // Using `new` to access a non-public constructor.
-        return absl::WrapUnique(new ReflectorPort(args, min_port, max_port, serverId));
+        return absl::WrapUnique(new ReflectorPort(args, min_port, max_port, serverId, server_priority));
     }
     
     ~ReflectorPort() override;
@@ -112,18 +112,11 @@ public:
     int GetOption(rtc::Socket::Option opt, int* value) override;
     int GetError() override;
     
-    bool HandleIncomingPacket(rtc::AsyncPacketSocket* socket,
-                              const char* data,
-                              size_t size,
-                              const rtc::SocketAddress& remote_addr,
-                              int64_t packet_time_us) override;
+    virtual bool HandleIncomingPacket(rtc::AsyncPacketSocket* socket,
+                                      const rtc::ReceivedPacket& packet) override;
     bool CanHandleIncomingPacketsFrom(
                                       const rtc::SocketAddress& addr) const override;
-    virtual void OnReadPacket(rtc::AsyncPacketSocket* socket,
-                              const char* data,
-                              size_t size,
-                              const rtc::SocketAddress& remote_addr,
-                              const int64_t& packet_time_us);
+    virtual void OnReadPacket(rtc::AsyncPacketSocket* socket, rtc::ReceivedPacket const &packet);
     
     void OnSentPacket(rtc::AsyncPacketSocket* socket,
                       const rtc::SentPacket& sent_packet) override;
@@ -163,12 +156,12 @@ public:
 protected:
     ReflectorPort(const cricket::CreateRelayPortArgs& args,
                   rtc::AsyncPacketSocket* socket,
-                  uint8_t serverId);
+                  uint8_t serverId, int server_priority);
     
     ReflectorPort(const cricket::CreateRelayPortArgs& args,
                   uint16_t min_port,
                   uint16_t max_port,
-                  uint8_t serverId);
+                  uint8_t serverId, int server_priority);
     
     rtc::DiffServCodePoint StunDscpValue() const override;
     
@@ -187,11 +180,7 @@ private:
     
     void OnAllocateError(int error_code, const std::string& reason);
     
-    void DispatchPacket(const char* data,
-                        size_t size,
-                        const rtc::SocketAddress& remote_addr,
-                        cricket::ProtocolType proto,
-                        int64_t packet_time_us);
+    void DispatchPacket(rtc::ReceivedPacket const &packet, cricket::ProtocolType proto);
     
     int Send(const void* data, size_t size, const rtc::PacketOptions& options);
     

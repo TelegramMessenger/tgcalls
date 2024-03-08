@@ -18,7 +18,7 @@ struct PlatformCaptureInfo;
 
 class VideoCapturerInterfaceImpl : public VideoCapturerInterface {
 public:
-	VideoCapturerInterfaceImpl(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, std::string deviceId, std::function<void(VideoState)> stateUpdated, std::function<void(PlatformCaptureInfo)> captureInfoUpdated, std::pair<int, int> &outResolution);
+	VideoCapturerInterfaceImpl(webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, std::string deviceId, std::function<void(VideoState)> stateUpdated, std::function<void(PlatformCaptureInfo)> captureInfoUpdated, std::pair<int, int> &outResolution);
 	~VideoCapturerInterfaceImpl() override;
 
 	void setState(VideoState state) override;
@@ -32,7 +32,7 @@ public:
     id getInternalReference();
 
 private:
-	rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _source;
+	webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _source;
 	VideoCapturerInterfaceImplHolder *_implReference;
 };
 

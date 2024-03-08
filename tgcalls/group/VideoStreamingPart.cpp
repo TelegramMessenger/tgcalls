@@ -614,7 +614,7 @@ public:
 
             return VideoStreamingPartFrame(_endpointId, videoFrame, _frame.pts(_videoStream, _firstFramePts), _frameIndex);
         } else {
-            rtc::scoped_refptr<webrtc::I420Buffer> i420Buffer = webrtc::I420Buffer::Copy(
+            webrtc::scoped_refptr<webrtc::I420Buffer> i420Buffer = webrtc::I420Buffer::Copy(
                 _frame.frame()->width,
                 _frame.frame()->height,
                 _frame.frame()->data[0],

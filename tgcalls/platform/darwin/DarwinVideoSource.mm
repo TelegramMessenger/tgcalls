@@ -66,7 +66,7 @@ void DarwinVideoTrackSource::OnCapturedFrame(RTC_OBJC_TYPE(RTCVideoFrame) * fram
     return;
   }
 
-  rtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer;
+  webrtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer;
   if (adapted_width == frame.width && adapted_height == frame.height) {
     // No adaption - optimized path.
     @autoreleasepool {
@@ -90,7 +90,7 @@ void DarwinVideoTrackSource::OnCapturedFrame(RTC_OBJC_TYPE(RTCVideoFrame) * fram
     @autoreleasepool {
     // Adapted I420 frame.
     // TODO(magjed): Optimize this I420 path.
-    rtc::scoped_refptr<webrtc::I420Buffer> i420_buffer = webrtc::I420Buffer::Create(adapted_width, adapted_height);
+    webrtc::scoped_refptr<webrtc::I420Buffer> i420_buffer = webrtc::I420Buffer::Create(adapted_width, adapted_height);
     buffer = new rtc::RefCountedObject<webrtc::ObjCFrameBuffer>(frame.buffer);
     i420_buffer->CropAndScaleFrom(*buffer->ToI420(), crop_x, crop_y, crop_width, crop_height);
     buffer = i420_buffer;
@@ -135,11 +135,11 @@ bool DarwinVideoTrackSource::OnCapturedFrame(const webrtc::VideoFrame& frame) {
       return false;
     }
 
-    rtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer;
+    webrtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer;
     if (adapted_width == frame.width() && adapted_height == frame.height()) {
         buffer = frame.video_frame_buffer();
     } else {
-        rtc::scoped_refptr<webrtc::I420Buffer> i420_buffer = webrtc::I420Buffer::Create(adapted_width, adapted_height);
+        webrtc::scoped_refptr<webrtc::I420Buffer> i420_buffer = webrtc::I420Buffer::Create(adapted_width, adapted_height);
         buffer = frame.video_frame_buffer();
         i420_buffer->CropAndScaleFrom(*buffer->ToI420(), crop_x, crop_y, crop_width, crop_height);
         buffer = i420_buffer;

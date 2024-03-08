@@ -27,7 +27,7 @@ void setupDarwinVideoDecoding(AVCodecContext *codecContext) {
 #endif
 }
 
-rtc::scoped_refptr<webrtc::VideoFrameBuffer> createDarwinPlatformFrameFromData(AVFrame const *frame) {
+webrtc::scoped_refptr<webrtc::VideoFrameBuffer> createDarwinPlatformFrameFromData(AVFrame const *frame) {
     if (!frame) {
         return nullptr;
     }

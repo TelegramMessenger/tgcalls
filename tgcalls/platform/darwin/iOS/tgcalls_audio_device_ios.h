@@ -307,7 +307,7 @@ class AudioDeviceIOS : public AudioDeviceGeneric,
   int64_t last_output_volume_change_time_ RTC_GUARDED_BY(thread_);
 
   // Avoids running pending task after `this` is Terminated.
-  rtc::scoped_refptr<PendingTaskSafetyFlag> safety_ =
+  webrtc::scoped_refptr<PendingTaskSafetyFlag> safety_ =
       PendingTaskSafetyFlag::Create();
                            
   std::atomic<bool> _hasTone;

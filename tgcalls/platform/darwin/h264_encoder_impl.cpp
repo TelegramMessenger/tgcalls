@@ -229,7 +229,7 @@ int32_t H264EncoderX264Impl::Encode(const VideoFrame& frame, const std::vector<V
         }
     }
     
-    rtc::scoped_refptr<I420BufferInterface> frame_buffer = frame.video_frame_buffer()->ToI420();
+    webrtc::scoped_refptr<I420BufferInterface> frame_buffer = frame.video_frame_buffer()->ToI420();
     
     pic_.img.plane[0] = (uint8_t *)frame_buffer->DataY();
     pic_.img.i_stride[0] = frame_buffer->StrideY();

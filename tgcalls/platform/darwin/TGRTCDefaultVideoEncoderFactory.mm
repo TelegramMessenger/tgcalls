@@ -109,11 +109,13 @@
       if (_preferHardwareH264) {
           return [[TGRTCVideoEncoderH264 alloc] initWithCodecInfo:info];
       } else {
-          cricket::VideoCodec videoCodec;
-          videoCodec.name = info.name.UTF8String;
+          
+          webrtc::SdpVideoFormat videoFormat(info.name.UTF8String);
           for (NSString *key in info.parameters) {
-              videoCodec.SetParam(key.UTF8String, info.parameters[key].UTF8String);
+              videoFormat.parameters.insert(std::make_pair(key.UTF8String, info.parameters[key].UTF8String));
           }
+          
+          cricket::VideoCodec videoCodec = cricket::CreateVideoCodec(videoFormat);
           
 #ifdef TGCALLS_ENABLE_X264
           if (_preferX264) {

@@ -482,7 +482,7 @@ int CustomSimulcastEncoderAdapter::Encode(
   }
 
   // Temporary thay may hold the result of texture to i420 buffer conversion.
-  rtc::scoped_refptr<VideoFrameBuffer> src_buffer;
+  webrtc::scoped_refptr<VideoFrameBuffer> src_buffer;
   int src_width = input_image.width();
   int src_height = input_image.height();
 
@@ -535,7 +535,7 @@ int CustomSimulcastEncoderAdapter::Encode(
       if (src_buffer == nullptr) {
         src_buffer = input_image.video_frame_buffer();
       }
-      rtc::scoped_refptr<VideoFrameBuffer> dst_buffer =
+      webrtc::scoped_refptr<VideoFrameBuffer> dst_buffer =
           src_buffer->Scale(layer.width(), layer.height());
       if (!dst_buffer) {
         RTC_LOG(LS_ERROR) << "Failed to scale video frame";

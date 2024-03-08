@@ -8,7 +8,7 @@ namespace tgcalls {
 
 class AudioDeviceModuleMacos : public DefaultWrappedAudioDeviceModule {
 public:
-    AudioDeviceModuleMacos(rtc::scoped_refptr<webrtc::AudioDeviceModule> impl) :
+    AudioDeviceModuleMacos(webrtc::scoped_refptr<webrtc::AudioDeviceModule> impl) :
     DefaultWrappedAudioDeviceModule(impl) {
     }
 

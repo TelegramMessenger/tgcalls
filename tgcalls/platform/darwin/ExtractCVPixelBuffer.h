@@ -5,7 +5,7 @@
 
 namespace tgcalls {
 
-rtc::scoped_refptr<webrtc::VideoFrameBuffer> extractCVPixelBuffer(void *data);
+webrtc::scoped_refptr<webrtc::VideoFrameBuffer> extractCVPixelBuffer(void *data);
 
 } // namespace tgcalls
 

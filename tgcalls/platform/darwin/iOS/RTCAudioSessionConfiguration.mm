@@ -82,7 +82,7 @@ static RTC_OBJC_TYPE(RTCAudioSessionConfiguration) *gWebRTCConfiguration = nil;
     NSUInteger processorCount = [NSProcessInfo processInfo].processorCount;
     // Use best sample rate and buffer duration if the CPU has more than one
     // core.
-    if (processorCount > 1 && [UIDevice deviceType] != RTCDeviceTypeIPhone4S) {
+    if (processorCount > 1) {
       _sampleRate = kRTCAudioSessionHighPerformanceSampleRate;
       _ioBufferDuration = kRTCAudioSessionHighPerformanceIOBufferDuration;
     } else {
