@@ -161,12 +161,15 @@ private:
 	std::unique_ptr<cricket::VoiceMediaSendChannelInterface> _audioSendChannel;
     std::unique_ptr<cricket::VoiceMediaReceiveChannelInterface> _audioReceiveChannel;
 	std::unique_ptr<cricket::VideoMediaSendChannelInterface> _videoSendChannel;
+    bool _haveVideoSendChannel = false;
     std::unique_ptr<cricket::VideoMediaReceiveChannelInterface> _videoReceiveChannel;
 	std::unique_ptr<webrtc::VideoBitrateAllocatorFactory> _videoBitrateAllocatorFactory;
 	std::shared_ptr<VideoCaptureInterface> _videoCapture;
 	std::shared_ptr<bool> _videoCaptureGuard;
     bool _isScreenCapture = false;
     std::shared_ptr<VideoSinkInterfaceProxyImpl> _incomingVideoSinkProxy;
+    webrtc::RtpHeaderExtensionMap _audioRtpHeaderExtensionMap;
+    webrtc::RtpHeaderExtensionMap _videoRtpHeaderExtensionMap;
 
     float _localPreferredVideoAspectRatio = 0.0f;
     float _preferredAspectRatio = 0.0f;

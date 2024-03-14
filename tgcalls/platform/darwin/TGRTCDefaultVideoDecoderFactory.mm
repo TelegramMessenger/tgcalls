@@ -69,7 +69,7 @@
 #if !defined(WEBRTC_DISABLE_H265)
 #ifdef WEBRTC_IOS
     if (@available(iOS 11.0, *)) {
-        //[result addObject:h265Info];
+        [result addObject:h265Info];
     }
 #else // WEBRTC_IOS
     if (@available(macOS 10.13, *)) {

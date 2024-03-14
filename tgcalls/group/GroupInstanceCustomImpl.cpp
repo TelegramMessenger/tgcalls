@@ -954,7 +954,7 @@ public:
             opusCodec.SetParam(cricket::kCodecParamUseInbandFec, 1);
             opusCodec.SetParam(cricket::kCodecParamPTime, opusPTimeMs);
 
-            cricket::AudioCodec pcmCodec = cricket::CreateAudioCodec(111, "l16", 48000, 1);
+            cricket::AudioCodec pcmCodec = cricket::CreateAudioCodec(112, "l16", 48000, 1);
 
             auto outgoingAudioDescription = std::make_unique<cricket::AudioContentDescription>();
             if (!isRawPcm) {
@@ -1585,6 +1585,7 @@ public:
         webrtc::PeerConnectionFactoryDependencies peerConnectionFactoryDeps;
         peerConnectionFactoryDeps.signaling_thread = _threads->getMediaThread();
         peerConnectionFactoryDeps.worker_thread = _threads->getWorkerThread();
+        peerConnectionFactoryDeps.network_thread = _threads->getNetworkThread();
         peerConnectionFactoryDeps.task_queue_factory = webrtc::CreateDefaultTaskQueueFactory();
         peerConnectionFactoryDeps.network_monitor_factory = PlatformInterface::SharedInstance()->createNetworkMonitorFactory();
 
@@ -1623,7 +1624,7 @@ public:
         setAudioOutputDevice(_initialOutputDeviceId);
 
         _threads->getWorkerThread()->BlockingCall([&]() {
-            webrtc::CallConfig callConfig(_webrtcEnvironment);
+            webrtc::CallConfig callConfig(_webrtcEnvironment, _threads->getNetworkThread());
             callConfig.neteq_factory = _netEqFactory.get();
             callConfig.audio_state = _channelManager->media_engine()->voice().GetAudioState();
             _call = peerConnectionFactoryDeps.media_factory->CreateCall(callConfig);
@@ -2275,7 +2276,9 @@ public:
     void OnRtcpPacketReceived_n(rtc::CopyOnWriteBuffer *buffer, int64_t packet_time_us) {
         rtc::CopyOnWriteBuffer packet = *buffer;
         if (_call) {
-            _call->Receiver()->DeliverRtcpPacket(packet);
+            _threads->getWorkerThread()->PostTask([this, packet]() {
+                _call->Receiver()->DeliverRtcpPacket(packet);
+            });
         }
     }
 
@@ -2304,8 +2307,8 @@ public:
         settings.start_bitrate_bps = preferences.start_bitrate_bps;
         settings.max_bitrate_bps = preferences.max_bitrate_bps;
 
-        _call->GetTransportControllerSend()->SetSdpBitrateParameters(preferences);
 		_threads->getWorkerThread()->BlockingCall([&]() {
+            _call->GetTransportControllerSend()->SetSdpBitrateParameters(preferences);
 			_call->SetClientBitratePreferences(settings);
 		});
     }
@@ -2926,6 +2929,11 @@ public:
             std::vector<cricket::Candidate> iceCandidates;
             for (auto const &candidate : parsedTransport.candidates) {
                 rtc::SocketAddress address(candidate.ip, stringToInt(candidate.port));
+                
+                std::string candidateType = candidate.type;
+                if (candidateType == "host") {
+                    candidateType = "local";
+                }
 
                 cricket::Candidate parsedCandidate(
                     /*component=*/stringToInt(candidate.component),
@@ -2934,7 +2942,7 @@ public:
                     /*priority=*/stringToUInt32(candidate.priority),
                     /*username=*/parsedTransport.ufrag,
                     /*password=*/parsedTransport.pwd,
-                    /*type=*/candidate.type,
+                    /*type=*/candidateType,
                     /*generation=*/stringToUInt32(candidate.generation),
                     /*foundation=*/candidate.foundation,
                     /*network_id=*/stringToUInt16(candidate.network),
