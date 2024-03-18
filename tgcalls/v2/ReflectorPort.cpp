@@ -614,7 +614,7 @@ bool ReflectorPort::HandleIncomingPacket(rtc::AsyncPacketSocket* socket, rtc::Re
                 if (packet_time_us.has_value()) {
                     packet_timestamp = packet_time_us->us_or(-1);
                 }
-                DispatchPacket(rtc::ReceivedPacket::CreateFromLegacy(data + 16 + 4 + 4, dataSize, packet_timestamp, remote_addr), cricket::ProtocolType::PROTO_UDP);
+                DispatchPacket(rtc::ReceivedPacket::CreateFromLegacy(data + 16 + 4 + 4, dataSize, packet_timestamp, candidateAddress), cricket::ProtocolType::PROTO_UDP);
             }
         }
     }
