@@ -371,9 +371,8 @@ cricket::Connection* ReflectorPort::CreateConnection(const cricket::Candidate& r
     if (remoteHostname.empty()) {
         return nullptr;
     }
-    std::ostringstream ipFormat;
-    ipFormat << "reflector-" << std::to_string((uint32_t)serverId_) << "-";
-    if (!absl::StartsWith(remoteHostname, ipFormat.str()) || !absl::EndsWith(remoteHostname, ".reflector")) {
+    const auto ipFormat = "reflector-" + std::to_string((uint32_t)serverId_) + "-";
+    if (!absl::StartsWith(remoteHostname, ipFormat) || !absl::EndsWith(remoteHostname, ".reflector")) {
         return nullptr;
     }
     if (remote_candidate.address().port() != server_address_.address.port()) {
@@ -444,8 +443,7 @@ int ReflectorPort::SendTo(const void* data,
     if (resolvedPeerTagIt != resolved_peer_tags_by_hostname_.end()) {
         resolvedPeerTag = resolvedPeerTagIt->second;
     } else {
-        std::ostringstream prefixFormat;
-        prefixFormat << "reflector-" << std::to_string((uint32_t)serverId_) << "-";
+        const auto prefixFormat = "reflector-" + std::to_string((uint32_t)serverId_) + "-";
         std::string suffixFormat = ".reflector";
         if (!absl::StartsWith(syntheticHostname, prefixFormat) || !absl::EndsWith(syntheticHostname, suffixFormat)) {
             RTC_LOG(LS_ERROR) << ToString()
@@ -563,9 +561,8 @@ bool ReflectorPort::HandleIncomingPacket(rtc::AsyncPacketSocket* socket, rtc::Re
         << ToString()
         << ": REFLECTOR " << server_address_.address.ToString() << " is now ready";
         
-        std::ostringstream ipFormat;
-        ipFormat << "reflector-" << std::to_string((uint32_t)serverId_) << "-" << randomTag_ << ".reflector";
-        rtc::SocketAddress candidateAddress(ipFormat.str(), server_address_.address.port());
+        const auto ipFormat = "reflector-" + std::to_string((uint32_t)serverId_) + "-" + std::to_string(randomTag_) + ".reflector";
+        rtc::SocketAddress candidateAddress(ipFormat, server_address_.address.port());
         
         // For relayed candidate, Base is the candidate itself.
         AddAddress(candidateAddress,          // Candidate address.
@@ -605,9 +602,8 @@ bool ReflectorPort::HandleIncomingPacket(rtc::AsyncPacketSocket* socket, rtc::Re
                 << ToString()
                 << ": Received data packet with invalid size tag";
             } else {
-                std::ostringstream ipFormat;
-                ipFormat << "reflector-" << std::to_string((uint32_t)serverId_) << "-" << std::to_string(senderTag) << ".reflector";
-                rtc::SocketAddress candidateAddress(ipFormat.str(), server_address_.address.port());
+                const auto ipFormat = "reflector-" + std::to_string((uint32_t)serverId_) + "-" + std::to_string(senderTag) + ".reflector";
+                rtc::SocketAddress candidateAddress(ipFormat, server_address_.address.port());
                 candidateAddress.SetResolvedIP(server_address_.address.ipaddr());
                 
                 int64_t packet_timestamp = -1;
