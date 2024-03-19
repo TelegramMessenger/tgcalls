@@ -3364,7 +3364,7 @@ private:
 #else
             return webrtc::AudioDeviceModule::Create(
                 layer,
-                _taskQueueFactory.get());
+                &_webrtcEnvironment.task_queue_factory());
 #endif
         };
         const auto check = [&](const webrtc::scoped_refptr<webrtc::AudioDeviceModule> &result) -> webrtc::scoped_refptr<WrappedAudioDeviceModule> {
