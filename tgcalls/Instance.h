@@ -1,6 +1,7 @@
 #ifndef TGCALLS_INSTANCE_H
 #define TGCALLS_INSTANCE_H
 
+#include <cstdint>
 #include <functional>
 #include <vector>
 #include <string>
