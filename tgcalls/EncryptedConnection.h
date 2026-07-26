@@ -44,6 +44,14 @@ public:
     absl::optional<rtc::CopyOnWriteBuffer> encryptRawPacket(rtc::CopyOnWriteBuffer const &buffer);
     absl::optional<rtc::CopyOnWriteBuffer> decryptRawPacket(rtc::CopyOnWriteBuffer const &buffer);
 
+    // Pump-host seam (v2wasm): seal/open a full plaintext packet whose first
+    // 4 bytes are the seq chosen by the caller. Additive only — existing
+    // methods and their counter handling are untouched.
+    absl::optional<rtc::CopyOnWriteBuffer> encryptFullPlaintextPacket(rtc::CopyOnWriteBuffer const &packet);
+    // Decrypt + verify + replay-check; returns the full plaintext INCLUDING
+    // the 4-byte seq (decryptRawPacket strips it).
+    absl::optional<rtc::CopyOnWriteBuffer> decryptFullPlaintextPacket(rtc::CopyOnWriteBuffer const &buffer);
+
 private:
     struct DelayIntervals {
         // In milliseconds.

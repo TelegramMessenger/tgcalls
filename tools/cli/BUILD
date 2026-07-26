@@ -34,4 +34,8 @@ cc_binary(
         "//submodules/TgVoipWebrtc:tgcalls_core",
         "//submodules/TgVoipWebrtc/tgcalls/tools/go_sfu",
     ],
+    data = [
+        "//submodules/TgVoipWebrtc:reference_core_wasm",
+        "//submodules/TgVoipWebrtc:variant_core_wasm",
+    ],
 )

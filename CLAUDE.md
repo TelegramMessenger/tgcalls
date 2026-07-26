@@ -160,6 +160,8 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
 - `--reflector-list addr,addr,...` — comma-separated list, one picked at random
 - `--version VER` — caller tgcalls protocol version (default: `13.0.0`)
 - `--version2 VER` — callee tgcalls protocol version (default: same as `--version`). Enables cross-version interop testing.
+- `--wasm-core PATH` — run the caller's pump core as a runtime-loaded WASM module (PATH to reference-core-abi1.wasm); `NONE` = native backend
+- `--wasm-core2 PATH` — same for the callee (defaults to `--wasm-core`; `NONE` forces native)
 - `--participants N` — number of CustomImpl participants in group mode (default: 3)
 - `--reference-participants N` — number of ReferenceImpl (PeerConnection-based) participants in group mode (default: 0). Total = `--participants` + `--reference-participants`.
 - `--duration N` — test duration in seconds (default: 10)
@@ -169,6 +171,7 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
 - `--churn-cycles N` — number of join/leave cycles in group-churn mode (default: 100)
 - `--network-scenario NAME` — network simulation test scenario (e.g., `step-down-up`). Group mode only.
 - `--quiet` — summary output only
+- `--log-file PATH` — write RTC_LOG output to a file — log sinks are process-global, so one flag captures both sides; needed to observe `[core]` marker lines
 
 ### Modes
 - **P2P**: Direct loopback, `enableP2P=true`, no servers configured
@@ -183,6 +186,7 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
 - `submodules/TgVoipWebrtc/tgcalls/tgcalls/` — tgcalls library source
 - `submodules/TgVoipWebrtc/tgcalls/tgcalls/group/` — group call implementations (GroupInstanceCustomImpl, GroupInstanceReferenceImpl, GroupNetworkManager, GroupJoinPayloadInternal)
 - `submodules/TgVoipWebrtc/tgcalls/tgcalls/v2/` — v2 implementation (InstanceV2Impl, InstanceV2ReferenceImpl, InstanceV2CompatImpl, NativeNetworkingImpl, SignalingSctpConnection, SignalingTranslator)
+- `submodules/TgVoipWebrtc/tgcalls/tgcalls/v2wasm/` — pump-boundary call core: `CallCoreABI.h` (C ABI v1, a PeerConnection-projection contract since Phase 2.5; since Phase 2.6 also the raw signaling-packet boundary, N-channel data-channel surface, and audio/ICE config knobs), `ReferenceCallCore` (portable control logic, the parity baseline; since Phase 2.6 owns V1/V2 signaling framing via `SignalingFraming`/`CoreGzip`/`CoreBase64`), `CallCoreHost` (harness — since Phase 2.6 seals/routes core-framed packets rather than parsing signaling JSON itself), `InstanceV2PumpImpl` (versions `10.0.0-pump`/`11.0.0-pump`, wire-compatible with 10.0.0/11.0.0); Phase 2 adds the `reference-core-abi1.wasm` module + WAMR backend; Phase 2.5 adds a second module, `variant-core-abi1.wasm` (`VariantCallCore`, wasm-only), demonstrating behavior changes (SDP munge, adaptive bitrate cap, periodic ICE restart) with no harness/CLI rebuild; Phase 2.6 extends the variant demo with signaling padding, a V1 keepalive, an `exp0` data-channel ping/pong, and APM/config-knob demos
 - `submodules/TgVoipWebrtc/BUILD` — contains `tgcalls_core` target (C++ only, macOS-native) and `TgVoipWebrtc` target (iOS, ObjC)
 - `third-party/webrtc/` — WebRTC source and BUILD
 - `third-party/webrtc/webrtc/net/dcsctp/` — dc-sctp (SCTP implementation)
@@ -199,4 +203,5 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
 When working in these areas, additional `CLAUDE.md` files load automatically:
 - `submodules/TgVoipWebrtc/tgcalls/tools/cli/CLAUDE.md` — CLI test tool architecture (P2P/Reflector, Group), supported version matrix
 - `submodules/TgVoipWebrtc/tgcalls/tools/go_sfu/CLAUDE.md` — Go SFU internals: build integration, bandwidth adaptation, transport-cc feedback, network simulation
+- `submodules/TgVoipWebrtc/tgcalls/tgcalls/v2wasm/CLAUDE.md` — pump-boundary call core (native + WASM): the ABI, backends, `--wasm-core` usage, invariants
 - `submodules/TgVoipWebrtc/CLAUDE.md` — tgcalls library internals: macOS/Linux build patches, SCTP signaling, InstanceV2CompatImpl, GroupInstanceCustomImpl/ReferenceImpl, video pitfalls, known issues

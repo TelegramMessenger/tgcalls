@@ -26,6 +26,9 @@
 #include "v2/InstanceV2Impl.h"
 #include "v2/InstanceV2CompatImpl.h"
 #include "v2/InstanceV2ReferenceImpl.h"
+#include "v2wasm/InstanceV2PumpImpl.h"
+
+#include "third-party/json11.hpp"
 
 #include "modules/audio_device/include/audio_device.h"
 #include "api/task_queue/task_queue_factory.h"
@@ -219,6 +222,9 @@ int main(int argc, char* argv[]) {
     std::string reflectorList;
     std::string version = "13.0.0";
     std::string version2;
+    std::string wasmCore;
+    std::string wasmCore2;
+    std::string logFile;
     double dropRate = 0.0;
     int delayMinMs = 0;
     int delayMaxMs = 0;
@@ -246,6 +252,12 @@ int main(int argc, char* argv[]) {
             version = argv[++i];
         } else if (std::string(argv[i]) == "--version2" && i + 1 < argc) {
             version2 = argv[++i];
+        } else if (std::string(argv[i]) == "--wasm-core" && i + 1 < argc) {
+            wasmCore = argv[++i];
+        } else if (std::string(argv[i]) == "--wasm-core2" && i + 1 < argc) {
+            wasmCore2 = argv[++i];
+        } else if (std::string(argv[i]) == "--log-file" && i + 1 < argc) {
+            logFile = argv[++i];
         } else if (std::string(argv[i]) == "--participants" && i + 1 < argc) {
             participants = std::atoi(argv[++i]);
         } else if (std::string(argv[i]) == "--reference-participants" && i + 1 < argc) {
@@ -281,6 +293,15 @@ int main(int argc, char* argv[]) {
 
     if (version2.empty()) {
         version2 = version;
+    }
+    if (wasmCore == "NONE") {
+        wasmCore = "";
+    }
+    if (wasmCore2.empty()) {
+        wasmCore2 = wasmCore;
+    }
+    if (wasmCore2 == "NONE") {
+        wasmCore2 = "";
     }
 
     // If --reflector-list provided, pick one at random
@@ -371,6 +392,7 @@ int main(int argc, char* argv[]) {
     tgcalls::Register<tgcalls::InstanceV2Impl>();
     tgcalls::Register<tgcalls::InstanceV2CompatImpl>();
     tgcalls::Register<tgcalls::InstanceV2ReferenceImpl>();
+    tgcalls::Register<tgcalls::InstanceV2PumpImpl>();
 
     // Create shared encryption key
     auto keyData = std::make_shared<std::array<uint8_t, 256>>();
@@ -407,6 +429,10 @@ int main(int argc, char* argv[]) {
             .receiveTimeout = 10.0,
             .enableP2P = (mode == "p2p"),
             .statsLogPath = {callerStatsPath},
+            // rtc log sinks are process-global, so wiring logPath on just the caller
+            // captures RTC_LOG output for both sides of the call.
+            .logPath = {logFile},
+            .customParameters = wasmCore.empty() ? std::string() : json11::Json(json11::Json::object{{"wasm_core_path", wasmCore}}).dump(),
         },
         .rtcServers = (mode == "reflector")
             ? std::vector<tgcalls::RtcServer>{makeReflectorServer(reflectorHost, reflectorPort, callerPeerTag)}
@@ -442,6 +468,7 @@ int main(int argc, char* argv[]) {
             .receiveTimeout = 10.0,
             .enableP2P = (mode == "p2p"),
             .statsLogPath = {calleeStatsPath},
+            .customParameters = wasmCore2.empty() ? std::string() : json11::Json(json11::Json::object{{"wasm_core_path", wasmCore2}}).dump(),
         },
         .rtcServers = (mode == "reflector")
             ? std::vector<tgcalls::RtcServer>{makeReflectorServer(reflectorHost, reflectorPort, calleePeerTag)}
