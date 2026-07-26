@@ -41,7 +41,6 @@ private:
     int _iceRestarts = 0;
     int _lastCapKbps = 0;
     int _padCount = 0;
-    int _keepaliveCount = 0;
     bool _apmApplied = false;
     bool _configApplied = false;
 };

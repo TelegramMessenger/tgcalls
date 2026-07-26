@@ -28,6 +28,7 @@
 #include "v2/ExternalSignalingConnection.h"
 #include "v2/SignalingSctpConnection.h"
 #include "v2wasm/CoreBase64.h"
+#include "v2wasm/EmbeddedCoreModule.h"
 #include "v2wasm/NativeCoreBackend.h"
 #include "v2wasm/WamrCoreBackend.h"
 
@@ -304,12 +305,13 @@ VideoCaptureInterfaceObject *GetVideoCaptureAssumingSameThread(VideoCaptureInter
         : nullptr;
 }
 
-std::string stripPumpSuffix(std::string const &version) {
-    const std::string suffix = "-pump";
-    if (version.size() > suffix.size() && version.compare(version.size() - suffix.size(), suffix.size(), suffix) == 0) {
-        return version.substr(0, version.size() - suffix.size());
-    }
-    return version;
+// Substrate is intrinsic to the negotiated version string, never taken from
+// configuration: 18.0.0 runs the core natively, 19.0.0 runs the same source
+// as the embedded wasm module. An unrecognized version falls back to native,
+// mirroring stock's unknown-version -> V2 defaulting
+// (v2/InstanceV2ReferenceImpl.cpp:79).
+bool versionUsesWasmCore(std::string const &version) {
+    return version == "19.0.0";
 }
 
 std::string coreStringField(json11::Json const &object, std::string const &key) {
@@ -475,7 +477,7 @@ ReducedStats reduceStatsReport(const webrtc::scoped_refptr<const webrtc::RTCStat
 
 CallCoreHost::CallCoreHost(Descriptor &&descriptor, std::shared_ptr<Threads> threads) :
 _threads(threads),
-_wireVersion(stripPumpSuffix(descriptor.version)),
+_version(descriptor.version),
 _rtcServers(descriptor.rtcServers),
 _enableP2P(descriptor.config.enableP2P),
 _encryptionKey(std::move(descriptor.encryptionKey)),
@@ -489,7 +491,8 @@ _createAudioDeviceModule(descriptor.createAudioDeviceModule),
 _createWrappedAudioDeviceModule(descriptor.createWrappedAudioDeviceModule),
 _statsLogPath(descriptor.config.statsLogPath),
 _videoCapture(descriptor.videoCapture) {
-    _useSctpSignalingTransport = (_wireVersion != "10.0.0");
+    // Both shipped versions are wire 11.0.0, whose signaling runs over SCTP.
+    _useSctpSignalingTransport = true;
     webrtc::field_trial::InitFieldTrialsFromString(
         "WebRTC-DataChannel-Dcsctp/Enabled/"
         "WebRTC-Audio-iOS-Holding/Enabled/"
@@ -607,27 +610,41 @@ void CallCoreHost::start() {
     }
     const std::string configJson = json11::Json(json11::Json::object{
         {"abiVersion", 1},
-        {"wireVersion", _wireVersion},
         {"isOutgoing", _encryptionKey.isOutgoing},
         {"enableP2P", _enableP2P},
         {"customParameters", _customParameters},
         {"rtcServers", std::move(rtcServers)},
     }).dump();
 
-    std::string wasmCorePath;
+    std::unique_ptr<CallCoreBackend> core;
+#if TGCALLS_ALLOW_EXTERNAL_WASM_CORE
+    // CLI/dev only. This key arrives from the server, so shipping it would be
+    // a remote-code-execution surface: WAMR bounds the module's memory, but
+    // the module drives negotiation and signaling through its host imports.
+    // The app target never defines this macro, so neither this block nor the
+    // filesystem loader exists in the shipped binary.
     {
         std::string parsingError;
         const auto custom = json11::Json::parse(_customParameters, parsingError);
         if (custom.is_object() && custom["wasm_core_path"].is_string()) {
-            wasmCorePath = custom["wasm_core_path"].string_value();
+            const auto path = custom["wasm_core_path"].string_value();
+            if (!path.empty()) {
+                RTC_LOG(LS_INFO) << "CallCoreHost: WAMR core backend (external): " << path;
+                core = std::make_unique<WamrCoreBackend>(path);
+            }
         }
     }
-    if (!wasmCorePath.empty()) {
-        RTC_LOG(LS_INFO) << "CallCoreHost: using WAMR core backend: " << wasmCorePath;
-        _core = std::make_unique<WamrCoreBackend>(wasmCorePath);
-    } else {
-        _core = std::make_unique<NativeCoreBackend>();
+#endif
+    if (!core) {
+        if (versionUsesWasmCore(_version)) {
+            RTC_LOG(LS_INFO) << "CallCoreHost: WAMR core backend (embedded)";
+            core = std::make_unique<WamrCoreBackend>(v2wasm::kReferenceCoreWasm, v2wasm::kReferenceCoreWasmSize);
+        } else {
+            RTC_LOG(LS_INFO) << "CallCoreHost: native core backend";
+            core = std::make_unique<NativeCoreBackend>();
+        }
     }
+    _core = std::move(core);
 
     const auto emitToQueue = [this](const uint8_t *data, size_t len) {
         std::string parsingError;

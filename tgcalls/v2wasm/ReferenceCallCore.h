@@ -62,9 +62,6 @@ protected:
     void emitMappedState();
     void handleStop();
     void sendSignalingMessage(json11::Json::object &&message);
-    // Bare V1 keepalive packet (empty message + pending acks/resends);
-    // no-op on V2 wires. Variant seam.
-    void sendSignalingKeepalive();
 
     std::function<void(json11::Json::object &&)> _emit;
     std::unique_ptr<SignalingFraming> _framing;
@@ -72,7 +69,6 @@ protected:
     // config
     bool _isOutgoing = false;
     bool _enableP2P = false;
-    std::string _wireVersion;
     std::vector<json11::Json> _rtcServers;
 
     // clock (from event nowMs)

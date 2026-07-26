@@ -94,8 +94,12 @@ void InstanceV2PumpImpl::setEchoCancellationStrength(int strength) {
 
 std::vector<std::string> InstanceV2PumpImpl::GetVersions() {
     std::vector<std::string> result;
-    result.push_back("10.0.0-pump");
-    result.push_back("11.0.0-pump");
+    // Same class, same harness, same core source for both: the ONLY
+    // difference is which backend CallCoreHost constructs (see
+    // versionUsesWasmCore). That is what makes an 18-vs-19 A/B attributable
+    // to the substrate and nothing else.
+    result.push_back("18.0.0");
+    result.push_back("19.0.0");
     return result;
 }
 

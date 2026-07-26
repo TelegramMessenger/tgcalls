@@ -87,7 +87,7 @@ private:
     std::shared_ptr<Threads> _threads;
 
     // descriptor
-    std::string _wireVersion;
+    std::string _version;
     std::vector<RtcServer> _rtcServers;
     bool _enableP2P = false;
     EncryptionKey _encryptionKey;

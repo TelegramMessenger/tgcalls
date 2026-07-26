@@ -206,13 +206,6 @@ void VariantCallCore::onStats(json11::Json const &event) {
         emitLog("variant: ice_restart " + std::to_string(_iceRestarts));
     }
 
-    // V1 keepalive demo: a bare empty framing packet every 5 stats ticks on
-    // the 10.0.0 wire — stock peers parse and discard empty messages.
-    if (_wireVersion == "10.0.0" && _statsTicks % 5 == 0) {
-        sendSignalingKeepalive();
-        _keepaliveCount += 1;
-        emitLog("variant: keepalive " + std::to_string(_keepaliveCount));
-    }
     // Session-config demos: one-shot APM toggle and a benign SetConfiguration.
     if (!_apmApplied && _statsTicks >= 10) {
         _apmApplied = true;

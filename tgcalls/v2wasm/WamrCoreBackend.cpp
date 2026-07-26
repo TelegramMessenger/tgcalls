@@ -59,8 +59,14 @@ int32_t WamrCoreBackend::hostInflateNative(wasm_exec_env_t execEnv, uint8_t *in,
     return tgcalls_host_inflate(in, inLen, out, outCap);
 }
 
+#if TGCALLS_ALLOW_EXTERNAL_WASM_CORE
 WamrCoreBackend::WamrCoreBackend(std::string modulePath) :
 _modulePath(std::move(modulePath)) {
+}
+#endif
+
+WamrCoreBackend::WamrCoreBackend(const uint8_t *moduleBytes, size_t moduleSize) :
+_moduleBytes(moduleBytes, moduleBytes + moduleSize) {
 }
 
 WamrCoreBackend::~WamrCoreBackend() {
@@ -79,14 +85,8 @@ WamrCoreBackend::~WamrCoreBackend() {
     // The process-wide runtime stays initialized (shared across calls).
 }
 
-bool WamrCoreBackend::create(std::string const &configJson, EmitFn emit) {
-    _emit = std::move(emit);
-
-    if (!ensureWamrRuntime()) {
-        RTC_LOG(LS_ERROR) << "WamrCoreBackend: runtime init failed";
-        return false;
-    }
-
+#if TGCALLS_ALLOW_EXTERNAL_WASM_CORE
+bool WamrCoreBackend::readModuleFromFile() {
     FILE *file = fopen(_modulePath.c_str(), "rb");
     if (!file) {
         RTC_LOG(LS_ERROR) << "WamrCoreBackend: cannot open module: " << _modulePath;
@@ -105,6 +105,27 @@ bool WamrCoreBackend::create(std::string const &configJson, EmitFn emit) {
     fclose(file);
     if (read != (size_t)size) {
         RTC_LOG(LS_ERROR) << "WamrCoreBackend: short read of module";
+        return false;
+    }
+    return true;
+}
+#endif
+
+bool WamrCoreBackend::create(std::string const &configJson, EmitFn emit) {
+    _emit = std::move(emit);
+
+    if (!ensureWamrRuntime()) {
+        RTC_LOG(LS_ERROR) << "WamrCoreBackend: runtime init failed";
+        return false;
+    }
+
+#if TGCALLS_ALLOW_EXTERNAL_WASM_CORE
+    if (!_modulePath.empty() && !readModuleFromFile()) {
+        return false;
+    }
+#endif
+    if (_moduleBytes.empty()) {
+        RTC_LOG(LS_ERROR) << "WamrCoreBackend: no module bytes";
         return false;
     }
 

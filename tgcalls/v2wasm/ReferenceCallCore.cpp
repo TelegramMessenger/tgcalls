@@ -12,11 +12,6 @@ namespace {
 
 constexpr int kAbiVersion = 1;
 constexpr int kStatsTimerToken = 1;
-// Timer tokens 2-4 are reserved for the signaling framing (resend / ack /
-// deferred-service causes). kStatsTimerToken stays 1.
-constexpr int kFramingResendTimerToken = 2;
-constexpr int kFramingAcksTimerToken = 3;
-constexpr int kFramingServiceNowTimerToken = 4;
 constexpr int kAudioMaxBitrateBps = 32 * 1024;      // stock: 32 * 1024
 constexpr int kVideoMaxBitrateBps = 1200 * 1024;    // stock: 1200 * 1024
 
@@ -31,7 +26,6 @@ ReferenceCallCore::ReferenceCallCore(json11::Json const &config, std::function<v
 _emit(std::move(emit)) {
     _isOutgoing = config["isOutgoing"].bool_value();
     _enableP2P = config["enableP2P"].bool_value();
-    _wireVersion = stringField(config, "wireVersion");
     for (const auto &server : config["rtcServers"].array_items()) {
         _rtcServers.push_back(server);
     }
@@ -46,22 +40,13 @@ _emit(std::move(emit)) {
         emitLog("signaling in: " + message);
         handleSignalingData(message);
     };
-    framingDelegate.requestService = [this](int cause, int delayMs) {
-        int token = kFramingServiceNowTimerToken;
-        if (cause == SignalingFraming::kServiceCauseAcks) {
-            token = kFramingAcksTimerToken;
-        } else if (cause == SignalingFraming::kServiceCauseResend) {
-            token = kFramingResendTimerToken;
-        }
-        this->emit({ {"@type", "set_timer"}, {"token", token}, {"delayMs", delayMs} });
-    };
     framingDelegate.log = [this](std::string const &line) {
         emitLog(line);
     };
     framingDelegate.nowMs = [this]() {
         return _nowMs;
     };
-    _framing = std::make_unique<SignalingFraming>(_wireVersion != "10.0.0", std::move(framingDelegate));
+    _framing = std::make_unique<SignalingFraming>(std::move(framingDelegate));
 
     this->emit({ {"@type", "core_ready"}, {"abiVersion", kAbiVersion} });
 
@@ -237,12 +222,6 @@ void ReferenceCallCore::onEvent(json11::Json const &event) {
         if (token == kStatsTimerToken) {
             emit({ {"@type", "pc_get_stats"} });
             emit({ {"@type", "set_timer"}, {"token", kStatsTimerToken}, {"delayMs", 1000} });
-        } else if (token == kFramingResendTimerToken) {
-            _framing->onServiceTimer(SignalingFraming::kServiceCauseResend);
-        } else if (token == kFramingAcksTimerToken) {
-            _framing->onServiceTimer(SignalingFraming::kServiceCauseAcks);
-        } else if (token == kFramingServiceNowTimerToken) {
-            _framing->onServiceTimer(SignalingFraming::kServiceCauseNow);
         }
     } else if (type == "stats") {
         onStats(event);
@@ -327,10 +306,6 @@ void ReferenceCallCore::mungeOutgoingSignalingMessage(json11::Json::object &mess
 
 void ReferenceCallCore::onDataChannelEvent(json11::Json const &event) {
     (void)event;
-}
-
-void ReferenceCallCore::sendSignalingKeepalive() {
-    _framing->sendKeepalive();
 }
 
 std::string ReferenceCallCore::mungeLocalDescription(std::string const &type, std::string const &sdp) {

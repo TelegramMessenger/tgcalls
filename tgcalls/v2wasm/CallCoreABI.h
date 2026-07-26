@@ -35,7 +35,7 @@
 //   ≲10 Hz / KB-scale envelope (enforcement: Phase-4 metering).
 //
 // Config (tgcalls_core_create):
-//   { "abiVersion": 1, "wireVersion": "11.0.0", "isOutgoing": bool,
+//   { "abiVersion": 1, "isOutgoing": bool,
 //     "enableP2P": bool, "customParameters": string,
 //     "rtcServers": [ { "host": s, "port": n, "login": s, "password": s,
 //                       "isTurn": bool, "isTcp": bool } ] }
@@ -163,9 +163,8 @@
 //                       = counter. The host enforces a strictly increasing
 //                       counter (AEAD IV freshness), seals with the native
 //                       key, and sends via the native transport routing.
-//                       Framing (gzip, acks, resend timers via set_timer,
-//                       service packets) is entirely core-owned; the
-//                       reference core reproduces stock EncryptedConnection
+//                       Framing (seq + gzip) is entirely core-owned; the
+//                       reference core reproduces stock's wire 11.0.0
 //                       framing byte-for-byte.
 //   set_timer           { token: n, delayMs: n }
 //   pc_get_stats        {}                      -> stats event
