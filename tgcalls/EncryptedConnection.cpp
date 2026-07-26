@@ -533,6 +533,7 @@ auto EncryptedConnection::processPacket(
     auto firstMessageRequiringAck = true;
     auto newRequiringAckReceived = false;
 
+    const auto packetCounter = CounterFromSeq(packetSeq);
     auto currentSeq = packetSeq;
     auto currentCounter = CounterFromSeq(currentSeq);
     rtc::ByteBufferReader reader(rtc::ArrayView<const uint8_t>(
@@ -564,7 +565,9 @@ auto EncryptedConnection::processPacket(
             const auto messageRequiresAck = ((currentSeq & kMessageRequiresAckSeqBit) != 0);
             const auto skipMessage = messageRequiresAck
                 ? !registerSentAck(currentCounter, firstMessageRequiringAck)
-                : (additionalMessage && !registerIncomingCounter(currentCounter));
+                : (additionalMessage
+                    && (currentCounter > packetCounter
+                        || !registerIncomingCounter(currentCounter)));
             if (messageRequiresAck) {
                 firstMessageRequiringAck = false;
                 if (!skipMessage) {
@@ -619,6 +622,7 @@ auto EncryptedConnection::processRawPacket(
     auto firstMessageRequiringAck = true;
     auto newRequiringAckReceived = false;
 
+    const auto packetCounter = CounterFromSeq(packetSeq);
     auto currentSeq = packetSeq;
     auto currentCounter = CounterFromSeq(currentSeq);
     rtc::ByteBufferReader reader(rtc::ArrayView<const uint8_t>(
@@ -653,7 +657,9 @@ auto EncryptedConnection::processRawPacket(
                 const auto messageRequiresAck = ((currentSeq & kMessageRequiresAckSeqBit) != 0);
                 const auto skipMessage = messageRequiresAck
                     ? !registerSentAck(currentCounter, firstMessageRequiringAck)
-                    : (additionalMessage && !registerIncomingCounter(currentCounter));
+                    : (additionalMessage
+                        && (currentCounter > packetCounter
+                            || !registerIncomingCounter(currentCounter)));
                 if (messageRequiresAck) {
                     firstMessageRequiringAck = false;
                     if (!skipMessage) {

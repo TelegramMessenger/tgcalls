@@ -261,6 +261,7 @@ bool CustomDcSctpSocket::IsConsistent() const {
       return (tcb_ != nullptr && !t1_init_->is_running() &&
               !t1_cookie_->is_running() && t2_shutdown_->is_running());
   }
+  return {};
 }
 
 constexpr absl::string_view CustomDcSctpSocket::ToString(CustomDcSctpSocket::State state) {
@@ -282,6 +283,7 @@ constexpr absl::string_view CustomDcSctpSocket::ToString(CustomDcSctpSocket::Sta
     case CustomDcSctpSocket::State::kShutdownAckSent:
       return "SHUTDOWN_ACK_SENT";
   }
+  return "UNKNOWN";
 }
 
 void CustomDcSctpSocket::SetState(State state, absl::string_view reason) {
@@ -598,6 +600,7 @@ SocketState CustomDcSctpSocket::state() const {
     case State::kShutdownAckSent:
       return SocketState::kShuttingDown;
   }
+  return {};
 }
 
 void CustomDcSctpSocket::SetMaxMessageSize(size_t max_message_size) {
@@ -1818,7 +1821,7 @@ CustomDcSctpSocket::GetHandoverStateAndClose() {
     InternalClose(ErrorKind::kNoError, "handover");
   }
 
-  return std::move(state);
+  return state;
 }
 
 }  // namespace dcsctp
