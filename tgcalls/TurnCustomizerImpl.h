@@ -10,8 +10,8 @@ public:
     TurnCustomizerImpl();
     virtual ~TurnCustomizerImpl();
 
-    void MaybeModifyOutgoingStunMessage(cricket::PortInterface* port, cricket::StunMessage* message) override;
-    bool AllowChannelData(cricket::PortInterface* port, const void *data, size_t size, bool payload) override;
+    void MaybeModifyOutgoingStunMessage(webrtc::PortInterface* port, webrtc::StunMessage* message) override;
+    bool AllowChannelData(webrtc::PortInterface* port, const void *data, size_t size, bool payload) override;
 };
 
 } // namespace tgcalls

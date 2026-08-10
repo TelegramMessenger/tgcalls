@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include "rtc_base/thread.h"
+#include "rtc_base/third_party/sigslot/sigslot.h"
 
 #include "EncryptedConnection.h"
 #include "Instance.h"
@@ -17,19 +18,19 @@
 #include <functional>
 #include <memory>
 
-namespace rtc {
+namespace webrtc {
 class BasicPacketSocketFactory;
 class BasicNetworkManager;
 class PacketTransportInternal;
 struct NetworkRoute;
-} // namespace rtc
+} // namespace webrtc
 
-namespace cricket {
+namespace webrtc {
 class BasicPortAllocator;
 class P2PTransportChannel;
 class IceTransportInternal;
 class RelayPortFactoryInterface;
-} // namespace cricket
+} // namespace webrtc
 
 namespace webrtc {
 class BasicAsyncResolverFactory;
@@ -53,7 +54,7 @@ public:
     };
 
 	NetworkManager(
-		rtc::Thread *thread,
+		webrtc::Thread *thread,
 		EncryptionKey encryptionKey,
 		bool enableP2P,
         bool enableTCP,
@@ -77,15 +78,15 @@ public:
 
 private:
     void checkConnectionTimeout();
-	void candidateGathered(cricket::IceTransportInternal *transport, const cricket::Candidate &candidate);
-	void candidateGatheringState(cricket::IceTransportInternal *transport);
-	void transportStateChanged(cricket::IceTransportInternal *transport);
-	void transportReadyToSend(cricket::IceTransportInternal *transport);
-	void transportPacketReceived(rtc::PacketTransportInternal *transport, const char *bytes, size_t size, const int64_t &timestamp, int unused);
-    void transportRouteChanged(absl::optional<rtc::NetworkRoute> route);
+	void candidateGathered(webrtc::IceTransportInternal *transport, const webrtc::Candidate &candidate);
+	void candidateGatheringState(webrtc::IceTransportInternal *transport);
+	void transportStateChanged(webrtc::IceTransportInternal *transport);
+	void transportReadyToSend(webrtc::IceTransportInternal *transport);
+	void transportPacketReceived(webrtc::PacketTransportInternal *transport, const char *bytes, size_t size, const int64_t &timestamp, int unused);
+    void transportRouteChanged(absl::optional<webrtc::NetworkRoute> route);
     void addTrafficStats(int64_t byteCount, bool isIncoming);
 
-	rtc::Thread *_thread = nullptr;
+	webrtc::Thread *_thread = nullptr;
     bool _enableP2P = false;
     bool _enableTCP = false;
     bool _enableStunMarking = false;
@@ -97,14 +98,14 @@ private:
 	std::function<void(DecryptedMessage &&)> _transportMessageReceived;
 	std::function<void(Message &&)> _sendSignalingMessage;
 
-    std::unique_ptr<rtc::NetworkMonitorFactory> _networkMonitorFactory;
-	std::unique_ptr<rtc::BasicPacketSocketFactory> _socketFactory;
-	std::unique_ptr<rtc::BasicNetworkManager> _networkManager;
+    std::unique_ptr<webrtc::NetworkMonitorFactory> _networkMonitorFactory;
+	std::unique_ptr<webrtc::BasicPacketSocketFactory> _socketFactory;
+	std::unique_ptr<webrtc::BasicNetworkManager> _networkManager;
     std::unique_ptr<webrtc::TurnCustomizer> _turnCustomizer;
-    std::unique_ptr<cricket::RelayPortFactoryInterface> _relayPortFactory;
-	std::unique_ptr<cricket::BasicPortAllocator> _portAllocator;
+    std::unique_ptr<webrtc::RelayPortFactoryInterface> _relayPortFactory;
+	std::unique_ptr<webrtc::BasicPortAllocator> _portAllocator;
 	std::unique_ptr<webrtc::AsyncDnsResolverFactoryInterface> _asyncResolverFactory;
-	std::unique_ptr<cricket::P2PTransportChannel> _transportChannel;
+	std::unique_ptr<webrtc::P2PTransportChannel> _transportChannel;
 
     PeerIceParameters _localIceParameters;
     absl::optional<PeerIceParameters> _remoteIceParameters;

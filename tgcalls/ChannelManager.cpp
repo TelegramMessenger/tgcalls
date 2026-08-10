@@ -3,6 +3,7 @@
 #include "absl/algorithm/container.h"
 #include "absl/memory/memory.h"
 #include "absl/strings/match.h"
+#include "api/environment/environment_factory.h"
 #include "api/media_types.h"
 #include "api/sequence_checker.h"
 #include "media/base/media_constants.h"
@@ -11,22 +12,23 @@
 namespace tgcalls {
 // static
 std::unique_ptr<ChannelManager> ChannelManager::Create(
-    std::unique_ptr<cricket::MediaEngineInterface> media_engine,
-    rtc::Thread* worker_thread,
-    rtc::Thread* network_thread) {
+    std::unique_ptr<webrtc::MediaEngineInterface> media_engine,
+    webrtc::Thread* worker_thread,
+    webrtc::Thread* network_thread) {
   RTC_DCHECK(network_thread);
   RTC_DCHECK(worker_thread);
   return absl::WrapUnique(new ChannelManager(
       std::move(media_engine), worker_thread, network_thread));
 }
 ChannelManager::ChannelManager(
-    std::unique_ptr<cricket::MediaEngineInterface> media_engine,
-    rtc::Thread* worker_thread,
-    rtc::Thread* network_thread)
+    std::unique_ptr<webrtc::MediaEngineInterface> media_engine,
+    webrtc::Thread* worker_thread,
+    webrtc::Thread* network_thread)
     : media_engine_(std::move(media_engine)),
-      signaling_thread_(rtc::Thread::Current()),
+      signaling_thread_(webrtc::Thread::Current()),
       worker_thread_(worker_thread),
-      network_thread_(network_thread) {
+      network_thread_(network_thread),
+      environment_(webrtc::CreateEnvironment()) {
   RTC_DCHECK_RUN_ON(signaling_thread_);
   RTC_DCHECK(worker_thread_);
   RTC_DCHECK(network_thread_);
@@ -46,23 +48,23 @@ ChannelManager::~ChannelManager() {
     // it requires destruction to happen on the worker thread. Instead of
     // marking the pointer as non-const, we live with this const_cast<> in the
     // destructor.
-    const_cast<std::unique_ptr<cricket::MediaEngineInterface>&>(media_engine_).reset();
+    const_cast<std::unique_ptr<webrtc::MediaEngineInterface>&>(media_engine_).reset();
   });
 }
-cricket::VoiceChannel* ChannelManager::CreateVoiceChannel(
+webrtc::ChannelInterface* ChannelManager::CreateVoiceChannel(
     webrtc::Call* call,
-    const cricket::MediaConfig& media_config,
+    const webrtc::MediaConfig& media_config,
     const std::string& mid,
     bool srtp_required,
     const webrtc::CryptoOptions& crypto_options,
-    const cricket::AudioOptions& options) {
+    const webrtc::AudioOptions& options) {
   RTC_DCHECK(call);
   RTC_DCHECK(media_engine_);
   // TODO(bugs.webrtc.org/11992): Remove this workaround after updates in
   // PeerConnection and add the expectation that we're already on the right
   // thread.
   if (!worker_thread_->IsCurrent()) {
-    cricket::VoiceChannel* temp = nullptr;
+    webrtc::ChannelInterface* temp = nullptr;
     worker_thread_->BlockingCall([&] {
       temp = CreateVoiceChannel(call, media_config, mid, srtp_required,
                                 crypto_options, options);
@@ -70,37 +72,38 @@ cricket::VoiceChannel* ChannelManager::CreateVoiceChannel(
     return temp;
   }
   RTC_DCHECK_RUN_ON(worker_thread_);
-  std::unique_ptr<cricket::VoiceMediaSendChannelInterface> send_media_channel = media_engine_->voice().CreateSendChannel(
-      call, media_config, options, crypto_options, webrtc::AudioCodecPairId::Create());
+  std::unique_ptr<webrtc::VoiceMediaSendChannelInterface> send_media_channel = media_engine_->voice().CreateSendChannel(
+      environment_, call, media_config, options, crypto_options);
   if (!send_media_channel) {
     return nullptr;
   }
-  std::unique_ptr<cricket::VoiceMediaReceiveChannelInterface> receive_media_channel = media_engine_->voice().CreateReceiveChannel(
-        call, media_config, options, crypto_options, webrtc::AudioCodecPairId::Create());
+  std::unique_ptr<webrtc::VoiceMediaReceiveChannelInterface> receive_media_channel = media_engine_->voice().CreateReceiveChannel(
+      environment_, call, media_config, options, crypto_options);
   if (!receive_media_channel) {
     return nullptr;
   }
-  auto voice_channel = std::make_unique<cricket::VoiceChannel>(
+  auto voice_channel = std::make_unique<webrtc::BaseChannel>(
       worker_thread_, network_thread_, signaling_thread_,
-      std::move(send_media_channel), std::move(receive_media_channel), mid, srtp_required, crypto_options,
+      std::move(send_media_channel), std::move(receive_media_channel), mid,
+      webrtc::MediaType::AUDIO, srtp_required, crypto_options,
       &ssrc_generator_);
-  cricket::VoiceChannel* voice_channel_ptr = voice_channel.get();
+  webrtc::ChannelInterface* voice_channel_ptr = voice_channel.get();
   voice_channels_.push_back(std::move(voice_channel));
   return voice_channel_ptr;
 }
-void ChannelManager::DestroyVoiceChannel(cricket::VoiceChannel* channel) {
+void ChannelManager::DestroyVoiceChannel(webrtc::ChannelInterface* channel) {
   TRACE_EVENT0("webrtc", "ChannelManager::DestroyVoiceChannel");
   RTC_DCHECK_RUN_ON(worker_thread_);
   voice_channels_.erase(absl::c_find_if(
       voice_channels_, [&](const auto& p) { return p.get() == channel; }));
 }
-cricket::VideoChannel* ChannelManager::CreateVideoChannel(
+webrtc::ChannelInterface* ChannelManager::CreateVideoChannel(
     webrtc::Call* call,
-    const cricket::MediaConfig& media_config,
+    const webrtc::MediaConfig& media_config,
     const std::string& mid,
     bool srtp_required,
     const webrtc::CryptoOptions& crypto_options,
-    const cricket::VideoOptions& options,
+    const webrtc::VideoOptions& options,
     webrtc::VideoBitrateAllocatorFactory* video_bitrate_allocator_factory) {
   RTC_DCHECK(call);
   RTC_DCHECK(media_engine_);
@@ -108,7 +111,7 @@ cricket::VideoChannel* ChannelManager::CreateVideoChannel(
   // PeerConnection and add the expectation that we're already on the right
   // thread.
   if (!worker_thread_->IsCurrent()) {
-    cricket::VideoChannel* temp = nullptr;
+    webrtc::ChannelInterface* temp = nullptr;
     worker_thread_->BlockingCall([&] {
       temp = CreateVideoChannel(call, media_config, mid, srtp_required,
                                 crypto_options, options,
@@ -117,32 +120,35 @@ cricket::VideoChannel* ChannelManager::CreateVideoChannel(
     return temp;
   }
   RTC_DCHECK_RUN_ON(worker_thread_);
-  std::unique_ptr<cricket::VideoMediaSendChannelInterface> send_media_channel = media_engine_->video().CreateSendChannel(
-      call, media_config, options, crypto_options,
-      video_bitrate_allocator_factory);
+  std::unique_ptr<webrtc::VideoMediaSendChannelInterface> send_media_channel = media_engine_->video().CreateSendChannel(
+      environment_, call, media_config, options, crypto_options,
+      video_bitrate_allocator_factory,
+      webrtc::VideoMediaSendChannelInterface::EncoderSwitchRequestCallback(),
+      nullptr);
   if (!send_media_channel) {
     return nullptr;
   }
-  std::unique_ptr<cricket::VideoMediaReceiveChannelInterface> receive_media_channel = media_engine_->video().CreateReceiveChannel(
-    call, media_config, options, crypto_options);
+  std::unique_ptr<webrtc::VideoMediaReceiveChannelInterface> receive_media_channel = media_engine_->video().CreateReceiveChannel(
+      environment_, call, media_config, crypto_options);
   if (!receive_media_channel) {
     return nullptr;
   }
-  auto video_channel = std::make_unique<cricket::VideoChannel>(
+  auto video_channel = std::make_unique<webrtc::BaseChannel>(
       worker_thread_, network_thread_, signaling_thread_,
-      std::move(send_media_channel), std::move(receive_media_channel), mid, srtp_required, crypto_options,
+      std::move(send_media_channel), std::move(receive_media_channel), mid,
+      webrtc::MediaType::VIDEO, srtp_required, crypto_options,
       &ssrc_generator_);
-  cricket::VideoChannel* video_channel_ptr = video_channel.get();
+  webrtc::ChannelInterface* video_channel_ptr = video_channel.get();
   video_channels_.push_back(std::move(video_channel));
   return video_channel_ptr;
 }
-void ChannelManager::DestroyVideoChannel(cricket::VideoChannel* channel) {
+void ChannelManager::DestroyVideoChannel(webrtc::ChannelInterface* channel) {
   TRACE_EVENT0("webrtc", "ChannelManager::DestroyVideoChannel");
   RTC_DCHECK_RUN_ON(worker_thread_);
   video_channels_.erase(absl::c_find_if(
       video_channels_, [&](const auto& p) { return p.get() == channel; }));
 }
-void ChannelManager::DestroyChannel(cricket::ChannelInterface* channel) {
+void ChannelManager::DestroyChannel(webrtc::ChannelInterface* channel) {
   RTC_DCHECK(channel);
   if (!worker_thread_->IsCurrent()) {
     // TODO(tommi): Do this asynchronously when we have a way to make sure that
@@ -151,11 +157,11 @@ void ChannelManager::DestroyChannel(cricket::ChannelInterface* channel) {
     worker_thread_->BlockingCall([&] { DestroyChannel(channel); });
     return;
   }
-  if (channel->media_type() == cricket::MEDIA_TYPE_AUDIO) {
-    DestroyVoiceChannel(static_cast<cricket::VoiceChannel*>(channel));
+  if (channel->media_type() == webrtc::MediaType::AUDIO) {
+    DestroyVoiceChannel(channel);
   } else {
-    RTC_DCHECK_EQ(channel->media_type(), cricket::MEDIA_TYPE_VIDEO);
-    DestroyVideoChannel(static_cast<cricket::VideoChannel*>(channel));
+    RTC_DCHECK_EQ(channel->media_type(), webrtc::MediaType::VIDEO);
+    DestroyVideoChannel(channel);
   }
 }
 }  // namespace tgcalls

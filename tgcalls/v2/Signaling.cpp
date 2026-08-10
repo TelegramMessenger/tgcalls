@@ -817,11 +817,11 @@ absl::optional<Message> Message::parse(const std::vector<uint8_t> &data) {
     }
 }
 
-MediaContent convertContentInfoToSignalingContent(cricket::ContentInfo const &content) {
+MediaContent convertContentInfoToSignalingContent(webrtc::ContentInfo const &content) {
     MediaContent mappedContent;
 
     switch (content.media_description()->type()) {
-        case cricket::MediaType::MEDIA_TYPE_AUDIO: {
+        case webrtc::MediaType::AUDIO: {
             mappedContent.type = MediaContent::Type::Audio;
 
             for (const auto &codec : content.media_description()->as_audio()->codecs()) {
@@ -849,7 +849,7 @@ MediaContent convertContentInfoToSignalingContent(cricket::ContentInfo const &co
             }
             break;
         }
-        case cricket::MediaType::MEDIA_TYPE_VIDEO: {
+        case webrtc::MediaType::VIDEO: {
             mappedContent.type = MediaContent::Type::Video;
 
             for (const auto &codec : content.media_description()->as_video()->codecs()) {
@@ -900,20 +900,20 @@ MediaContent convertContentInfoToSignalingContent(cricket::ContentInfo const &co
     return mappedContent;
 }
 
-cricket::ContentInfo convertSignalingContentToContentInfo(std::string const &contentId, MediaContent const &content, webrtc::RtpTransceiverDirection direction) {
-    std::unique_ptr<cricket::MediaContentDescription> contentDescription;
+webrtc::ContentInfo convertSignalingContentToContentInfo(std::string const &contentId, MediaContent const &content, webrtc::RtpTransceiverDirection direction) {
+    std::unique_ptr<webrtc::MediaContentDescription> contentDescription;
 
     switch (content.type) {
         case MediaContent::Type::Audio: {
-            auto audioDescription = std::make_unique<cricket::AudioContentDescription>();
+            auto audioDescription = std::make_unique<webrtc::AudioContentDescription>();
 
             for (const auto &payloadType : content.payloadTypes) {
-                cricket::AudioCodec mappedCodec = cricket::CreateAudioCodec((int)payloadType.id, payloadType.name, (int)payloadType.clockrate, payloadType.channels);
+                webrtc::Codec mappedCodec = webrtc::CreateAudioCodec(webrtc::PayloadType((int)payloadType.id), payloadType.name, (int)payloadType.clockrate, payloadType.channels);
                 for (const auto &parameter : payloadType.parameters) {
-                    mappedCodec.params.insert(parameter);
+                    mappedCodec.SetParam(parameter.first, parameter.second);
                 }
                 for (const auto &feedbackParam : payloadType.feedbackTypes) {
-                    mappedCodec.AddFeedbackParam(cricket::FeedbackParam(feedbackParam.type, feedbackParam.subtype));
+                    mappedCodec.AddFeedbackParam(webrtc::FeedbackParam(feedbackParam.type, feedbackParam.subtype));
                 }
                 audioDescription->AddCodec(mappedCodec);
             }
@@ -923,17 +923,15 @@ cricket::ContentInfo convertSignalingContentToContentInfo(std::string const &con
             break;
         }
         case MediaContent::Type::Video: {
-            auto videoDescription = std::make_unique<cricket::VideoContentDescription>();
+            auto videoDescription = std::make_unique<webrtc::VideoContentDescription>();
 
             for (const auto &payloadType : content.payloadTypes) {
-                webrtc::SdpVideoFormat videoFormat(payloadType.name);
+                webrtc::Codec mappedCodec = webrtc::CreateVideoCodec(webrtc::PayloadType((int)payloadType.id), payloadType.name);
                 for (const auto &parameter : payloadType.parameters) {
-                    videoFormat.parameters.insert(parameter);
+                    mappedCodec.SetParam(parameter.first, parameter.second);
                 }
-                cricket::VideoCodec mappedCodec = cricket::CreateVideoCodec(videoFormat);
-                mappedCodec.id = (int)payloadType.id;
                 for (const auto &feedbackParam : payloadType.feedbackTypes) {
-                    mappedCodec.AddFeedbackParam(cricket::FeedbackParam(feedbackParam.type, feedbackParam.subtype));
+                    mappedCodec.AddFeedbackParam(webrtc::FeedbackParam(feedbackParam.type, feedbackParam.subtype));
                 }
                 videoDescription->AddCodec(mappedCodec);
             }
@@ -948,12 +946,12 @@ cricket::ContentInfo convertSignalingContentToContentInfo(std::string const &con
         }
     }
 
-    cricket::StreamParams streamParams;
+    webrtc::StreamParams streamParams;
     streamParams.id = contentId;
     streamParams.set_stream_ids({ contentId });
     streamParams.add_ssrc(content.ssrc);
     for (const auto &ssrcGroup : content.ssrcGroups) {
-        streamParams.ssrc_groups.push_back(cricket::SsrcGroup(ssrcGroup.semantics, ssrcGroup.ssrcs));
+        streamParams.ssrc_groups.push_back(webrtc::SsrcGroup(ssrcGroup.semantics, ssrcGroup.ssrcs));
         for (const auto &ssrc : ssrcGroup.ssrcs) {
             if (!streamParams.has_ssrc(ssrc)) {
                 streamParams.add_ssrc(ssrc);
@@ -969,11 +967,7 @@ cricket::ContentInfo convertSignalingContentToContentInfo(std::string const &con
     contentDescription->set_direction(direction);
     contentDescription->set_rtcp_mux(true);
 
-    cricket::ContentInfo mappedContentInfo(cricket::MediaProtocolType::kRtp);
-    mappedContentInfo.name = contentId;
-    mappedContentInfo.rejected = false;
-    mappedContentInfo.bundle_only = false;
-    mappedContentInfo.set_media_description(std::move(contentDescription));
+    webrtc::ContentInfo mappedContentInfo(webrtc::MediaProtocolType::kRtp, contentId, std::move(contentDescription), false, false);
 
     return mappedContentInfo;
 }

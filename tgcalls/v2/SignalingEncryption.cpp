@@ -11,12 +11,12 @@ SignalingEncryption::~SignalingEncryption() {
 
 }
 
-absl::optional<rtc::CopyOnWriteBuffer> SignalingEncryption::encryptOutgoing(std::vector<uint8_t> const &data) {
-    return _connection->encryptRawPacket(rtc::CopyOnWriteBuffer(data.data(), data.size()));
+absl::optional<webrtc::CopyOnWriteBuffer> SignalingEncryption::encryptOutgoing(std::vector<uint8_t> const &data) {
+    return _connection->encryptRawPacket(webrtc::CopyOnWriteBuffer(data.data(), data.size()));
 }
 
-absl::optional<rtc::CopyOnWriteBuffer> SignalingEncryption::decryptIncoming(std::vector<uint8_t> const &data) {
-    return _connection->decryptRawPacket(rtc::CopyOnWriteBuffer(data.data(), data.size()));
+absl::optional<webrtc::CopyOnWriteBuffer> SignalingEncryption::decryptIncoming(std::vector<uint8_t> const &data) {
+    return _connection->decryptRawPacket(webrtc::CopyOnWriteBuffer(data.data(), data.size()));
 }
 
 } // namespace tgcalls

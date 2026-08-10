@@ -32,7 +32,7 @@ constexpr int kNumBuffers = 1;
 } // namespace
 
 UwpScreenCapturer::UwpScreenCapturer(
-	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink, GraphicsCaptureItem item)
+	std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink, GraphicsCaptureItem item)
 : _sink(sink),
 item_(item) {
 }
@@ -366,7 +366,7 @@ void UwpScreenCapturer::OnFrame(std::vector<uint8_t> bytes, int width, int heigh
 	uint8_t* plane_uv = plane_y + videoFrameLength;
 	int32_t stride_uv = stride_y / 2;
 
-	rtc::scoped_refptr<webrtc::I420Buffer> buffer = webrtc::I420Buffer::Create(
+	webrtc::scoped_refptr<webrtc::I420Buffer> buffer = webrtc::I420Buffer::Create(
 		dst_width, dst_height, dst_stride_y, dst_stride_uv, dst_stride_uv);
 
 	const int conversionResult = libyuv::ConvertToI420(
@@ -387,7 +387,7 @@ void UwpScreenCapturer::OnFrame(std::vector<uint8_t> bytes, int width, int heigh
 		webrtc::VideoFrame::Builder()
 		.set_video_frame_buffer(buffer)
 		.set_timestamp_rtp(0)
-		.set_timestamp_ms(rtc::TimeMillis())
+		.set_timestamp_ms(webrtc::TimeMillis())
 		.set_rotation(webrtc::kVideoRotation_0)
 		.build();
 

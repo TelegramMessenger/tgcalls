@@ -1,13 +1,13 @@
 #include "SctpDataChannelProviderInterfaceImpl.h"
 
 #include "p2p/base/dtls_transport.h"
-#include "api/transport/field_trial_based_config.h"
+#include "api/environment/environment_factory.h"
 #include "FieldTrialsConfig.h"
 
 namespace tgcalls {
 
 SctpDataChannelProviderInterfaceImpl::SctpDataChannelProviderInterfaceImpl(
-    rtc::PacketTransportInternal *transportChannel,
+    webrtc::PacketTransportInternal *transportChannel,
     bool isOutgoing,
     std::function<void(bool)> onStateChanged,
     std::function<void()> onTerminated,
@@ -18,12 +18,14 @@ _weakFactory(this),
 _threads(std::move(threads)),
 _onStateChanged(onStateChanged),
 _onTerminated(onTerminated),
-_onMessageReceived(onMessageReceived) {
+_onMessageReceived(onMessageReceived),
+_environment(webrtc::CreateEnvironment()) {
     assert(_threads->getNetworkThread()->IsCurrent());
 
-    _sctpTransportFactory.reset(new cricket::SctpTransportFactory(_threads->getNetworkThread()));
+    _sctpTransportFactory.reset(new webrtc::SctpTransportFactory(_threads->getNetworkThread()));
+    _dtlsTransportAdapter.reset(new TgcallDtlsTransportAdapter(transportChannel));
 
-    _sctpTransport = _sctpTransportFactory->CreateSctpTransport(transportChannel);
+    _sctpTransport = _sctpTransportFactory->CreateSctpTransport(_environment, _dtlsTransportAdapter.get());
     _sctpTransport->SetDataChannelSink(this);
 
     // TODO: should we disconnect the data channel sink?
@@ -37,13 +39,15 @@ _onMessageReceived(onMessageReceived) {
         "data",
         true,
         dataChannelInit,
+        std::optional<int>(262144),
+        webrtc::PendingTaskSafetyFlag::Create(),
         _threads->getNetworkThread(),
         _threads->getNetworkThread()
     );
 
     _dataChannel->RegisterObserver(this);
     
-    AddSctpDataStream(webrtc::StreamId(0));
+    AddSctpDataStream(webrtc::StreamId(0), webrtc::PriorityValue(webrtc::Priority::kMedium));
 }
 
 SctpDataChannelProviderInterfaceImpl::~SctpDataChannelProviderInterfaceImpl() {
@@ -104,7 +108,11 @@ void SctpDataChannelProviderInterfaceImpl::updateIsConnected(bool isConnected) {
     if (isConnected) {
         if (!_isSctpTransportStarted) {
             _isSctpTransportStarted = true;
-            _sctpTransport->Start(5000, 5000, 262144);
+            webrtc::SctpOptions sctpOptions;
+            sctpOptions.local_port = 5000;
+            sctpOptions.remote_port = 5000;
+            sctpOptions.max_message_size = 262144;
+            _sctpTransport->Start(sctpOptions);
         }
     }
 }
@@ -123,7 +131,11 @@ void SctpDataChannelProviderInterfaceImpl::OnTransportClosed(webrtc::RTCError er
     }
 }
 
-void SctpDataChannelProviderInterfaceImpl::OnDataReceived(int channel_id, webrtc::DataMessageType type, const rtc::CopyOnWriteBuffer& buffer) {
+void SctpDataChannelProviderInterfaceImpl::OnTransportConnected() {
+    assert(_threads->getNetworkThread()->IsCurrent());
+}
+
+void SctpDataChannelProviderInterfaceImpl::OnDataReceived(int channel_id, webrtc::DataMessageType type, const webrtc::CopyOnWriteBuffer& buffer) {
     assert(_threads->getNetworkThread()->IsCurrent());
 
     _dataChannel->OnDataReceived(type, buffer);
@@ -132,17 +144,18 @@ void SctpDataChannelProviderInterfaceImpl::OnDataReceived(int channel_id, webrtc
 webrtc::RTCError SctpDataChannelProviderInterfaceImpl::SendData(
     webrtc::StreamId sid,
     const webrtc::SendDataParams& params,
-    const rtc::CopyOnWriteBuffer& payload
+    const webrtc::CopyOnWriteBuffer& payload
 ) {
     assert(_threads->getNetworkThread()->IsCurrent());
 
     return _sctpTransport->SendData(sid.stream_id_int(), params, payload);
 }
 
-void SctpDataChannelProviderInterfaceImpl::AddSctpDataStream(webrtc::StreamId sid) {
+webrtc::RTCError SctpDataChannelProviderInterfaceImpl::AddSctpDataStream(webrtc::StreamId sid, webrtc::PriorityValue priority) {
   assert(_threads->getNetworkThread()->IsCurrent());
 
-    _sctpTransport->OpenStream(sid.stream_id_int());
+    _sctpTransport->OpenStream(sid.stream_id_int(), priority);
+    return webrtc::RTCError::OK();
 }
 
 void SctpDataChannelProviderInterfaceImpl::RemoveSctpDataStream(webrtc::StreamId sid) {

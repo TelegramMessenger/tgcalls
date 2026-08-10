@@ -94,7 +94,7 @@ absl::optional<FeedbackType> FeedbackType_parse(json11::Json::object const &obje
 json11::Json::object RtpExtension_serialize(webrtc::RtpExtension const &rtpExtension) {
     json11::Json::object object;
 
-    object.insert(std::make_pair("id", json11::Json(rtpExtension.id)));
+    object.insert(std::make_pair("id", json11::Json(rtpExtension.id.value())));
     object.insert(std::make_pair("uri", json11::Json(rtpExtension.uri)));
 
     return object;
@@ -111,7 +111,7 @@ absl::optional<webrtc::RtpExtension> RtpExtension_parse(json11::Json::object con
         return absl::nullopt;
     }
 
-    return webrtc::RtpExtension(uri->second.string_value(), id->second.int_value());
+    return webrtc::RtpExtension(uri->second.string_value(), webrtc::RtpHeaderExtensionId(id->second.int_value()));
 }
 
 json11::Json::object PayloadType_serialize(PayloadType const &payloadType) {
@@ -511,9 +511,8 @@ std::vector<uint8_t> MediaStateMessage_serialize(const MediaStateMessage * const
             videoStateValue = "active";
             break;
         }
-        default: {
+                default: {
             RTC_FATAL() << "Unknown videoState";
-            break;
         }
     }
     object.insert(std::make_pair("videoState", json11::Json(videoStateValue)));
@@ -557,9 +556,8 @@ std::vector<uint8_t> MediaStateMessage_serialize(const MediaStateMessage * const
             screencastStateValue = "active";
             break;
         }
-        default: {
+                default: {
             RTC_FATAL() << "Unknown videoState";
-            break;
         }
     }
     object.insert(std::make_pair("screencastState", json11::Json(screencastStateValue)));

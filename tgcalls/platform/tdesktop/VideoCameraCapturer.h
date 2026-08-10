@@ -16,10 +16,10 @@
 namespace tgcalls {
 
 class VideoCameraCapturer
-	: public rtc::VideoSinkInterface<webrtc::VideoFrame> {
+	: public webrtc::VideoSinkInterface<webrtc::VideoFrame> {
 public:
 	explicit VideoCameraCapturer(
-		std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
+		std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
 	~VideoCameraCapturer();
 
 	void setState(VideoState state);
@@ -39,8 +39,8 @@ private:
 	void destroy();
 	void failed();
 
-	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _sink;
-	rtc::scoped_refptr<webrtc::VideoCaptureModule> _module;
+	std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> _sink;
+	webrtc::scoped_refptr<webrtc::VideoCaptureModule> _module;
 	webrtc::VideoCaptureCapability _capability;
 
 	VideoState _state = VideoState::Inactive;

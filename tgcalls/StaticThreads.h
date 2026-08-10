@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <memory>
 
-namespace rtc {
+namespace webrtc {
 class Thread;
 }
 
@@ -12,9 +12,9 @@ namespace tgcalls {
 class Threads {
 public:
   virtual ~Threads() = default;
-  virtual rtc::Thread *getNetworkThread() = 0;
-  virtual rtc::Thread *getMediaThread() = 0;
-  virtual rtc::Thread *getWorkerThread() = 0;
+  virtual webrtc::Thread *getNetworkThread() = 0;
+  virtual webrtc::Thread *getMediaThread() = 0;
+  virtual webrtc::Thread *getWorkerThread() = 0;
 
   // it is not possible to decrease pool size
   static void setPoolSize(size_t size);
@@ -22,10 +22,10 @@ public:
 };
 
 namespace StaticThreads {
-rtc::Thread *getNetworkThread();
-rtc::Thread *getMediaThread();
-rtc::Thread *getWorkerThread();
+webrtc::Thread *getNetworkThread();
+webrtc::Thread *getMediaThread();
+webrtc::Thread *getWorkerThread();
 std::shared_ptr<Threads> &getThreads();
 }
 
-};
+}

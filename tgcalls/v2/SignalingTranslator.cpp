@@ -17,23 +17,23 @@ std::string contentIdBySsrc(uint32_t ssrc) {
     return result.str();
 }
 
-cricket::ConnectionRole connectionRoleFromSetup(const std::string &setup) {
+webrtc::ConnectionRole connectionRoleFromSetup(const std::string &setup) {
     if (setup == "active") {
-        return cricket::CONNECTIONROLE_ACTIVE;
+        return webrtc::CONNECTIONROLE_ACTIVE;
     } else if (setup == "passive") {
-        return cricket::CONNECTIONROLE_PASSIVE;
+        return webrtc::CONNECTIONROLE_PASSIVE;
     } else if (setup == "actpass") {
-        return cricket::CONNECTIONROLE_ACTPASS;
+        return webrtc::CONNECTIONROLE_ACTPASS;
     } else {
-        return cricket::CONNECTIONROLE_NONE;
+        return webrtc::CONNECTIONROLE_NONE;
     }
 }
 
-std::string setupFromConnectionRole(cricket::ConnectionRole role) {
+std::string setupFromConnectionRole(webrtc::ConnectionRole role) {
     switch (role) {
-        case cricket::CONNECTIONROLE_ACTIVE: return "active";
-        case cricket::CONNECTIONROLE_PASSIVE: return "passive";
-        case cricket::CONNECTIONROLE_ACTPASS: return "actpass";
+        case webrtc::CONNECTIONROLE_ACTIVE: return "active";
+        case webrtc::CONNECTIONROLE_PASSIVE: return "passive";
+        case webrtc::CONNECTIONROLE_ACTPASS: return "actpass";
         default: return "actpass";
     }
 }
@@ -45,7 +45,7 @@ SignalingTranslator::SignalingTranslator(bool isOutgoing)
 }
 
 signaling::InitialSetupMessage SignalingTranslator::extractInitialSetup(
-    const cricket::SessionDescription *desc) {
+    const webrtc::SessionDescription *desc) {
     signaling::InitialSetupMessage result;
 
     if (!desc->contents().empty()) {
@@ -70,15 +70,15 @@ signaling::InitialSetupMessage SignalingTranslator::extractInitialSetup(
 }
 
 signaling::NegotiateChannelsMessage SignalingTranslator::extractNegotiateChannels(
-    const cricket::SessionDescription *desc, uint32_t exchangeId) {
+    const webrtc::SessionDescription *desc, uint32_t exchangeId) {
     signaling::NegotiateChannelsMessage result;
     result.exchangeId = exchangeId;
 
     for (const auto &content : desc->contents()) {
         // Skip data channel (SCTP) contents — only extract audio/video
         if (content.media_description() &&
-            content.media_description()->type() != cricket::MediaType::MEDIA_TYPE_AUDIO &&
-            content.media_description()->type() != cricket::MediaType::MEDIA_TYPE_VIDEO) {
+            content.media_description()->type() != webrtc::MediaType::MEDIA_TYPE_AUDIO &&
+            content.media_description()->type() != webrtc::MediaType::MEDIA_TYPE_VIDEO) {
             continue;
         }
         result.contents.push_back(
@@ -125,7 +125,7 @@ uint32_t SignalingTranslator::lastReceivedExchangeId() const {
 }
 
 std::unique_ptr<webrtc::SessionDescriptionInterface> SignalingTranslator::buildRemoteDescription(
-    const cricket::SessionDescription *localDescription) {
+    const webrtc::SessionDescription *localDescription) {
     if (!hasCompleteRemoteDescription()) {
         return nullptr;
     }
@@ -153,14 +153,14 @@ std::unique_ptr<webrtc::SessionDescriptionInterface> SignalingTranslator::buildR
 std::unique_ptr<webrtc::SessionDescriptionInterface> SignalingTranslator::buildDescription(
     const signaling::InitialSetupMessage &setup,
     const signaling::NegotiateChannelsMessage &channels,
-    const cricket::SessionDescription *localDescription) {
+    const webrtc::SessionDescription *localDescription) {
 
     // The remote description type is the opposite of our local role:
     // - If we're outgoing (caller), the remote is the callee sending an answer
     // - If we're incoming (callee), the remote is the caller sending an offer
     webrtc::SdpType sdpType = _isOutgoing ? webrtc::SdpType::kAnswer : webrtc::SdpType::kOffer;
 
-    auto cricketDesc = std::make_unique<cricket::SessionDescription>();
+    auto cricketDesc = std::make_unique<webrtc::SessionDescription>();
     auto transportDesc = makeTransportDescription(setup, sdpType == webrtc::SdpType::kOffer);
 
     std::vector<std::string> contentNames;
@@ -175,8 +175,8 @@ std::unique_ptr<webrtc::SessionDescriptionInterface> SignalingTranslator::buildD
             std::string contentId = localContent.name;
             contentNames.push_back(contentId);
 
-            if ((mediaType == cricket::MediaType::MEDIA_TYPE_AUDIO ||
-                 mediaType == cricket::MediaType::MEDIA_TYPE_VIDEO) &&
+            if ((mediaType == webrtc::MediaType::MEDIA_TYPE_AUDIO ||
+                 mediaType == webrtc::MediaType::MEDIA_TYPE_VIDEO) &&
                 channelIndex < (int)channels.contents.size()) {
                 // Populate from signaling message
                 auto contentInfo = signaling::convertSignalingContentToContentInfo(
@@ -187,14 +187,14 @@ std::unique_ptr<webrtc::SessionDescriptionInterface> SignalingTranslator::buildD
                 // Add rejected content matching the local m-line (e.g. data channel)
                 auto clonedDesc = localContent.media_description()->Clone();
                 clonedDesc->set_direction(webrtc::RtpTransceiverDirection::kInactive);
-                cricket::ContentInfo rejectedContent(localContent.type);
+                webrtc::ContentInfo rejectedContent(localContent.type);
                 rejectedContent.name = contentId;
                 rejectedContent.rejected = true;
                 rejectedContent.set_media_description(std::move(clonedDesc));
                 cricketDesc->AddContent(std::move(rejectedContent));
             }
 
-            cricketDesc->AddTransportInfo(cricket::TransportInfo(contentId, transportDesc));
+            cricketDesc->AddTransportInfo(webrtc::TransportInfo(contentId, transportDesc));
         }
     } else {
         // Building a remote offer (callee side), or no local description available.
@@ -212,12 +212,12 @@ std::unique_ptr<webrtc::SessionDescriptionInterface> SignalingTranslator::buildD
             auto contentInfo = signaling::convertSignalingContentToContentInfo(
                 contentId, content, direction);
             cricketDesc->AddContent(std::move(contentInfo));
-            cricketDesc->AddTransportInfo(cricket::TransportInfo(contentId, transportDesc));
+            cricketDesc->AddTransportInfo(webrtc::TransportInfo(contentId, transportDesc));
         }
     }
 
     if (!contentNames.empty()) {
-        cricket::ContentGroup bundleGroup(cricket::GROUP_TYPE_BUNDLE);
+        webrtc::ContentGroup bundleGroup(webrtc::GROUP_TYPE_BUNDLE);
         for (const auto &name : contentNames) {
             bundleGroup.AddContentName(name);
         }
@@ -232,12 +232,12 @@ std::unique_ptr<webrtc::SessionDescriptionInterface> SignalingTranslator::buildD
     return jsepDesc;
 }
 
-cricket::TransportDescription SignalingTranslator::makeTransportDescription(
+webrtc::TransportDescription SignalingTranslator::makeTransportDescription(
     const signaling::InitialSetupMessage &setup, bool isRemoteOffer) {
-    cricket::TransportDescription transportDesc;
+    webrtc::TransportDescription transportDesc;
     transportDesc.ice_ufrag = setup.ufrag;
     transportDesc.ice_pwd = setup.pwd;
-    transportDesc.ice_mode = cricket::ICEMODE_FULL;
+    transportDesc.ice_mode = webrtc::ICEMODE_FULL;
 
     if (!setup.fingerprints.empty()) {
         auto fingerprint = rtc::SSLFingerprint::CreateUniqueFromRfc4572(

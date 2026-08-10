@@ -55,16 +55,16 @@ namespace tgcalls {
 namespace {
 
 // SFU JSON uses RFC 5245 ICE candidate type names ("host", "srflx", "prflx",
-// "relay"). cricket::Candidate stores its type using WebRTC-internal names
+// "relay"). webrtc::Candidate stores its type using WebRTC-internal names
 // ("local", "stun", "prflx", "relay" — see api/candidate.cc). Without this
 // mapping, "host"/"srflx" candidates trip RTC_DCHECK(c.is_relay()) in
 // p2p/base/connection.cc:86 (GetRtcEventLogCandidateType) because none of
 // is_local()/is_stun()/is_prflx()/is_relay() returns true.
 absl::string_view mapIceCandidateTypeToInternal(const std::string &type) {
-    if (type == "host") return cricket::LOCAL_PORT_TYPE;
-    if (type == "srflx") return cricket::STUN_PORT_TYPE;
-    if (type == "prflx") return cricket::PRFLX_PORT_TYPE;
-    if (type == "relay") return cricket::RELAY_PORT_TYPE;
+    if (type == "host") return webrtc::LOCAL_PORT_TYPE;
+    if (type == "srflx") return webrtc::STUN_PORT_TYPE;
+    if (type == "prflx") return webrtc::PRFLX_PORT_TYPE;
+    if (type == "relay") return webrtc::RELAY_PORT_TYPE;
     return type;
 }
 
@@ -106,8 +106,8 @@ public:
         if (onIceCandidate) onIceCandidate(candidate);
     }
 
-    void OnIceCandidatesRemoved(const std::vector<cricket::Candidate>&) override {}
-    void OnIceSelectedCandidatePairChanged(const cricket::CandidatePairChangeEvent&) override {}
+    void OnIceCandidatesRemoved(const std::vector<webrtc::Candidate>&) override {}
+    void OnIceSelectedCandidatePairChanged(const webrtc::CandidatePairChangeEvent&) override {}
     void OnAddTrack(webrtc::scoped_refptr<webrtc::RtpReceiverInterface>, const std::vector<webrtc::scoped_refptr<webrtc::MediaStreamInterface>>&) override {}
     void OnRemoveTrack(webrtc::scoped_refptr<webrtc::RtpReceiverInterface>) override {}
 };
@@ -565,7 +565,7 @@ public:
         _networkMonitorFactory = PlatformInterface::SharedInstance()->createNetworkMonitorFactory();
         _socketFactory = std::make_unique<rtc::BasicPacketSocketFactory>(_threads->getNetworkThread()->socketserver());
         _networkManager = std::make_unique<rtc::BasicNetworkManager>(_networkMonitorFactory.get(), _threads->getNetworkThread()->socketserver());
-        pcDeps.allocator = std::make_unique<cricket::BasicPortAllocator>(_networkManager.get(), _socketFactory.get());
+        pcDeps.allocator = std::make_unique<webrtc::BasicPortAllocator>(_networkManager.get(), _socketFactory.get());
 
         auto pcOrError = _peerConnectionFactory->CreatePeerConnectionOrError(config, std::move(pcDeps));
         if (!pcOrError.ok()) {
@@ -593,7 +593,7 @@ public:
         }
 
         // 5. Add outgoing audio transceiver.
-        cricket::AudioOptions audioOpts;
+        webrtc::AudioOptions audioOpts;
         auto audioSource = _peerConnectionFactory->CreateAudioSource(audioOpts);
         auto audioTrack = _peerConnectionFactory->CreateAudioTrack("audio0", audioSource.get());
 
@@ -646,7 +646,7 @@ public:
             videoInit.direction = webrtc::RtpTransceiverDirection::kSendOnly;
             videoInit.stream_ids = {"video"};
 
-            auto videoResult = _peerConnection->AddTransceiver(cricket::MEDIA_TYPE_VIDEO, videoInit);
+            auto videoResult = _peerConnection->AddTransceiver(webrtc::MediaType::VIDEO, videoInit);
             if (videoResult.ok()) {
                 _outgoingVideoTransceiver = videoResult.value();
                 RTC_LOG(LS_INFO) << "GroupRef: Added outgoing video transceiver (no track yet)";
@@ -843,7 +843,7 @@ public:
             int priority = 0;
             try { priority = std::stoi(candidate.priority); } catch (...) {}
 
-            cricket::Candidate c;
+            webrtc::Candidate c;
             c.set_foundation(candidate.foundation);
             c.set_component(std::stoi(candidate.component));
             c.set_protocol(candidate.protocol);
@@ -876,14 +876,14 @@ public:
         }
 
         auto* localCricketDesc = localDesc->description();
-        auto cricketDesc = std::make_unique<cricket::SessionDescription>();
+        auto cricketDesc = std::make_unique<webrtc::SessionDescription>();
         std::vector<std::string> bundleMids;
 
         // Build TransportDescription from SFU response.
-        cricket::TransportDescription transportDesc;
+        webrtc::TransportDescription transportDesc;
         transportDesc.ice_ufrag = _remoteTransport.ufrag;
         transportDesc.ice_pwd = _remoteTransport.pwd;
-        transportDesc.ice_mode = cricket::ICEMODE_LITE;
+        transportDesc.ice_mode = webrtc::ICEMODE_LITE;
 
         if (!_remoteTransport.fingerprints.empty()) {
             auto& fp = _remoteTransport.fingerprints[0];
@@ -892,7 +892,7 @@ public:
                 transportDesc.identity_fingerprint = std::move(fingerprint);
             }
             // SFU sends setup=active (DTLS client).
-            transportDesc.connection_role = cricket::CONNECTIONROLE_ACTIVE;
+            transportDesc.connection_role = webrtc::CONNECTIONROLE_ACTIVE;
         }
 
         // Build a map from mid -> SSRC for remote audio m-lines.
@@ -915,26 +915,26 @@ public:
             auto* localMedia = localContent.media_description();
             if (!localMedia) continue;
 
-            if (localMedia->type() == cricket::MEDIA_TYPE_DATA) {
+            if (localMedia->type() == webrtc::MEDIA_TYPE_DATA) {
                 // --- Data channel: clone from local offer ---
                 auto dataContent = localMedia->Clone();
                 dataContent->set_direction(webrtc::RtpTransceiverDirection::kSendRecv);
 
-                cricket::ContentInfo ci(localContent.type);
+                webrtc::ContentInfo ci(localContent.type);
                 ci.name = mid;
                 ci.rejected = false;
                 ci.bundle_only = false;
                 ci.set_media_description(std::move(dataContent));
 
                 cricketDesc->AddContent(std::move(ci));
-                cricketDesc->AddTransportInfo(cricket::TransportInfo(mid, transportDesc));
+                cricketDesc->AddTransportInfo(webrtc::TransportInfo(mid, transportDesc));
                 bundleMids.push_back(mid);
 
-            } else if (localMedia->type() == cricket::MEDIA_TYPE_AUDIO) {
-                auto audioContent = std::make_unique<cricket::AudioContentDescription>();
+            } else if (localMedia->type() == webrtc::MediaType::AUDIO) {
+                auto audioContent = std::make_unique<webrtc::AudioContentDescription>();
 
                 // Opus codec.
-                cricket::AudioCodec opus = cricket::CreateAudioCodec(111, "opus", 48000, 2);
+                webrtc::AudioCodec opus = webrtc::CreateAudioCodec(111, "opus", 48000, 2);
                 opus.params["minptime"] = "10";
                 opus.params["useinbandfec"] = "1";
                 audioContent->AddCodec(opus);
@@ -974,39 +974,39 @@ public:
 
                     auto ssrcIt = midToSsrc.find(mid);
                     if (ssrcIt != midToSsrc.end()) {
-                        cricket::StreamParams stream;
+                        webrtc::StreamParams stream;
                         stream.cname = "sfu-audio";
                         stream.add_ssrc(ssrcIt->second);
                         audioContent->AddStream(stream);
                     }
                 }
 
-                cricket::ContentInfo ci(cricket::MediaProtocolType::kRtp);
+                webrtc::ContentInfo ci(webrtc::MediaProtocolType::kRtp);
                 ci.name = mid;
                 ci.rejected = false;
                 ci.bundle_only = false;
                 ci.set_media_description(std::move(audioContent));
 
                 cricketDesc->AddContent(std::move(ci));
-                cricketDesc->AddTransportInfo(cricket::TransportInfo(mid, transportDesc));
+                cricketDesc->AddTransportInfo(webrtc::TransportInfo(mid, transportDesc));
                 bundleMids.push_back(mid);
 
-            } else if (localMedia->type() == cricket::MEDIA_TYPE_VIDEO) {
-                auto videoContent = std::make_unique<cricket::VideoContentDescription>();
+            } else if (localMedia->type() == webrtc::MediaType::VIDEO) {
+                auto videoContent = std::make_unique<webrtc::VideoContentDescription>();
 
                 // H264 codec: PT 104 (primary).
-                cricket::VideoCodec h264 = cricket::CreateVideoCodec(104, "H264");
+                webrtc::VideoCodec h264 = webrtc::CreateVideoCodec(104, "H264");
                 h264.SetParam("level-asymmetry-allowed", "1");
                 h264.SetParam("packetization-mode", "1");
                 h264.SetParam("profile-level-id", "42e01f");
-                h264.AddFeedbackParam(cricket::FeedbackParam("nack"));
-                h264.AddFeedbackParam(cricket::FeedbackParam("nack", "pli"));
-                h264.AddFeedbackParam(cricket::FeedbackParam("ccm", "fir"));
-                h264.AddFeedbackParam(cricket::FeedbackParam("goog-remb"));
-                h264.AddFeedbackParam(cricket::FeedbackParam("transport-cc"));
+                h264.AddFeedbackParam(webrtc::FeedbackParam("nack"));
+                h264.AddFeedbackParam(webrtc::FeedbackParam("nack", "pli"));
+                h264.AddFeedbackParam(webrtc::FeedbackParam("ccm", "fir"));
+                h264.AddFeedbackParam(webrtc::FeedbackParam("goog-remb"));
+                h264.AddFeedbackParam(webrtc::FeedbackParam("transport-cc"));
 
                 // RTX codec: PT 105 (apt=104).
-                cricket::VideoCodec rtx = cricket::CreateVideoCodec(105, "rtx");
+                webrtc::VideoCodec rtx = webrtc::CreateVideoCodec(105, "rtx");
                 rtx.SetParam("apt", "104");
 
                 videoContent->AddCodec(h264);
@@ -1043,12 +1043,12 @@ public:
                         if (ep.transceiver && ep.transceiver->mid().has_value() &&
                             ep.transceiver->mid().value() == mid) {
 
-                            cricket::StreamParams stream;
+                            webrtc::StreamParams stream;
                             stream.cname = "sfu-video";
                             std::vector<uint32_t> allSsrcs;
 
                             for (const auto& group : ep.ssrcGroups) {
-                                cricket::SsrcGroup cricketGroup(group.semantics, group.ssrcs);
+                                webrtc::SsrcGroup cricketGroup(group.semantics, group.ssrcs);
                                 stream.ssrc_groups.push_back(cricketGroup);
                                 for (uint32_t s : group.ssrcs) {
                                     if (std::find(allSsrcs.begin(), allSsrcs.end(), s) == allSsrcs.end()) {
@@ -1066,21 +1066,21 @@ public:
                     }
                 }
 
-                cricket::ContentInfo ci(cricket::MediaProtocolType::kRtp);
+                webrtc::ContentInfo ci(webrtc::MediaProtocolType::kRtp);
                 ci.name = mid;
                 ci.rejected = false;
                 ci.bundle_only = false;
                 ci.set_media_description(std::move(videoContent));
 
                 cricketDesc->AddContent(std::move(ci));
-                cricketDesc->AddTransportInfo(cricket::TransportInfo(mid, transportDesc));
+                cricketDesc->AddTransportInfo(webrtc::TransportInfo(mid, transportDesc));
                 bundleMids.push_back(mid);
             }
         }
 
         // Bundle group.
         if (!bundleMids.empty()) {
-            cricket::ContentGroup bundleGroup(cricket::GROUP_TYPE_BUNDLE);
+            webrtc::ContentGroup bundleGroup(webrtc::GROUP_TYPE_BUNDLE);
             for (const auto& name : bundleMids) {
                 bundleGroup.AddContentName(name);
             }
@@ -1099,7 +1099,7 @@ public:
                 int priority = 0;
                 try { priority = std::stoi(candidate.priority); } catch (...) {}
 
-                cricket::Candidate c;
+                webrtc::Candidate c;
                 c.set_foundation(candidate.foundation);
                 c.set_component(std::stoi(candidate.component));
                 c.set_protocol(candidate.protocol);
@@ -1212,7 +1212,7 @@ public:
             init.direction = webrtc::RtpTransceiverDirection::kRecvOnly;
             init.stream_ids = {"video-" + ch.endpointId};
 
-            auto result = _peerConnection->AddTransceiver(cricket::MEDIA_TYPE_VIDEO, init);
+            auto result = _peerConnection->AddTransceiver(webrtc::MediaType::VIDEO, init);
             if (!result.ok()) {
                 RTC_LOG(LS_ERROR) << "GroupRef: Failed to add video transceiver for endpoint "
                                   << ch.endpointId << ": " << result.error().message();
@@ -1346,7 +1346,7 @@ private:
                 init.direction = webrtc::RtpTransceiverDirection::kRecvOnly;
                 init.stream_ids = {std::to_string(ssrc)};
 
-                auto result = _peerConnection->AddTransceiver(cricket::MEDIA_TYPE_AUDIO, init);
+                auto result = _peerConnection->AddTransceiver(webrtc::MediaType::AUDIO, init);
                 if (result.ok()) {
                     info.transceiver = result.value();
                     // Install a per-receiver pass-through transformer BEFORE SDP negotiation
@@ -1401,7 +1401,7 @@ private:
 
         for (auto& content : cricketDesc->contents()) {
             if (!content.media_description() ||
-                content.media_description()->type() != cricket::MEDIA_TYPE_VIDEO ||
+                content.media_description()->type() != webrtc::MediaType::VIDEO ||
                 content.media_description()->direction() != webrtc::RtpTransceiverDirection::kSendOnly) {
                 continue;
             }
@@ -1409,7 +1409,7 @@ private:
             auto* videoDesc = content.media_description()->as_video();
             if (!videoDesc) break;
 
-            cricket::StreamParams stream;
+            webrtc::StreamParams stream;
             stream.id = _outgoingVideoTransceiver->sender()->id();
 
             // Copy CNAME from existing audio stream if available.
@@ -1417,7 +1417,7 @@ private:
             if (localDesc) {
                 for (const auto& c : localDesc->description()->contents()) {
                     auto* media = c.media_description();
-                    if (media && media->type() == cricket::MEDIA_TYPE_AUDIO && !media->streams().empty()) {
+                    if (media && media->type() == webrtc::MediaType::AUDIO && !media->streams().empty()) {
                         stream.cname = media->streams()[0].cname;
                         break;
                     }
@@ -1428,7 +1428,7 @@ private:
             if (stream.cname.empty()) {
                 for (const auto& c : cricketDesc->contents()) {
                     auto* media = c.media_description();
-                    if (media && media->type() == cricket::MEDIA_TYPE_AUDIO && !media->streams().empty()) {
+                    if (media && media->type() == webrtc::MediaType::AUDIO && !media->streams().empty()) {
                         stream.cname = media->streams()[0].cname;
                         break;
                     }
@@ -1444,10 +1444,10 @@ private:
                 stream.add_ssrc(layer.fidSsrc);
                 simSsrcs.push_back(layer.ssrc);
                 stream.ssrc_groups.push_back(
-                    cricket::SsrcGroup(cricket::kFidSsrcGroupSemantics, {layer.ssrc, layer.fidSsrc}));
+                    webrtc::SsrcGroup(webrtc::kFidSsrcGroupSemantics, {layer.ssrc, layer.fidSsrc}));
             }
             stream.ssrc_groups.push_back(
-                cricket::SsrcGroup(cricket::kSimSsrcGroupSemantics, simSsrcs));
+                webrtc::SsrcGroup(webrtc::kSimSsrcGroupSemantics, simSsrcs));
             stream.set_stream_ids({"video"});
 
             videoDesc->mutable_streams().clear();

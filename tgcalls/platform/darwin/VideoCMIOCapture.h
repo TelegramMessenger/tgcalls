@@ -11,7 +11,7 @@
 NS_ASSUME_NONNULL_BEGIN
 
 @interface VideoCMIOCapture : NSObject<CapturerInterface>
-- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source;
+- (instancetype)initWithSource:(webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source;
 - (void)setupCaptureWithDevice:(AVCaptureDevice *)device;
 @end
 

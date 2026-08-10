@@ -2,6 +2,6 @@
 
 namespace tgcalls {
 
-webrtc::FieldTrialBasedConfig fieldTrialsBasedConfig;
+tgcalls::EmptyFieldTrialsView fieldTrialsBasedConfig;
 
 }

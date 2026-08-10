@@ -12,7 +12,7 @@ struct CommonFormats {
 };
 
 struct CommonCodecs {
-	std::vector<cricket::VideoCodec> list;
+        std::vector<webrtc::Codec> list;
 	int myEncoderIndex = -1;
 };
 

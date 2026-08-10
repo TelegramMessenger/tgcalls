@@ -8,12 +8,19 @@
 #include "rtc_base/rtc_certificate_generator.h"
 #include "p2p/base/ice_credentials_iterator.h"
 #include "api/jsep_ice_candidate.h"
-#include "p2p/base/dtls_transport.h"
-#include "p2p/base/dtls_transport_factory.h"
+#include "p2p/base/default_ice_transport_factory.h"
+#include "p2p/dtls/dtls_transport.h"
+#include "p2p/dtls/dtls_transport_factory.h"
 #include "pc/dtls_srtp_transport.h"
 #include "pc/dtls_transport.h"
 #include "pc/jsep_transport_controller.h"
 #include "api/async_dns_resolver.h"
+#include "api/environment/environment_factory.h"
+#include "api/ice_transport_interface.h"
+#include "api/make_ref_counted.h"
+#include "api/transport/ecn_marking.h"
+#include "rtc_base/crypto_random.h"
+#include "rtc_base/time_utils.h"
 
 #include "TurnCustomizerImpl.h"
 #include "ReflectorRelayPortFactory.h"
@@ -39,141 +46,9 @@ bool getCustomParameterBool(std::map<std::string, json11::Json> const &parameter
     }
 }
 
-class CryptStringImpl : public rtc::CryptStringImpl {
+class WrappedBasicPacketSocketFactory : public webrtc::PacketSocketFactory {
 public:
-    CryptStringImpl(std::string const &value) :
-    _value(value) {
-    }
-    
-    virtual ~CryptStringImpl() override {
-    }
-    
-    virtual size_t GetLength() const override {
-        return _value.size();
-    }
-    
-    virtual void CopyTo(char* dest, bool nullterminate) const override {
-        memcpy(dest, _value.data(), _value.size());
-        if (nullterminate) {
-            dest[_value.size()] = 0;
-        }
-    }
-    virtual std::string UrlEncode() const override {
-        return _value;
-    }
-    virtual CryptStringImpl* Copy() const override {
-        return new CryptStringImpl(_value);
-    }
-    
-    virtual void CopyRawTo(std::vector<unsigned char>* dest) const override {
-        dest->resize(_value.size());
-        memcpy(dest->data(), _value.data(), _value.size());
-    }
-    
-private:
-    std::string _value;
-};
-
-class WrappedAsyncPacketSocket : public rtc::AsyncPacketSocket {
-public:
-    WrappedAsyncPacketSocket(std::unique_ptr<rtc::AsyncPacketSocket> &&wrappedSocket) :
-    _wrappedSocket(std::move(wrappedSocket)) {
-        _wrappedSocket->RegisterReceivedPacketCallback([this](AsyncPacketSocket *socket, rtc::ReceivedPacket const &packet) {
-            this->onReadPacket(packet);
-        });
-        _wrappedSocket->SignalSentPacket.connect(this, &WrappedAsyncPacketSocket::onSentPacket);
-        _wrappedSocket->SignalReadyToSend.connect(this, &WrappedAsyncPacketSocket::onReadyToSend);
-        _wrappedSocket->SignalAddressReady.connect(this, &WrappedAsyncPacketSocket::onAddressReady);
-        _wrappedSocket->SignalConnect.connect(this, &WrappedAsyncPacketSocket::onConnect);
-        _wrappedSocket->SubscribeCloseEvent(this, [this](AsyncPacketSocket* socket, int error) { onClose(socket, error); });
-    }
-    
-    virtual ~WrappedAsyncPacketSocket() override {
-        _wrappedSocket->DeregisterReceivedPacketCallback();
-        _wrappedSocket->SignalSentPacket.disconnect(this);
-        _wrappedSocket->SignalReadyToSend.disconnect(this);
-        _wrappedSocket->SignalAddressReady.disconnect(this);
-        _wrappedSocket->SignalConnect.disconnect(this);
-        _wrappedSocket->UnsubscribeCloseEvent(this);
-        
-        _wrappedSocket.reset();
-    }
-
-    virtual rtc::SocketAddress GetLocalAddress() const override {
-        return _wrappedSocket->GetLocalAddress();
-    }
-
-    virtual rtc::SocketAddress GetRemoteAddress() const override {
-        return _wrappedSocket->GetRemoteAddress();
-    }
-
-    virtual int Send(const void* pv, size_t cb, const rtc::PacketOptions& options) override {
-        return _wrappedSocket->Send(pv, cb, options);
-    }
-    
-    virtual int SendTo(const void* pv,
-                       size_t cb,
-                       const rtc::SocketAddress& addr,
-                       const rtc::PacketOptions& options) override {
-        return _wrappedSocket->SendTo(pv, cb, addr, options);
-    }
-
-    virtual int Close() override {
-        return _wrappedSocket->Close();
-    }
-
-    virtual State GetState() const override {
-        return _wrappedSocket->GetState();
-    }
-
-    virtual int GetOption(rtc::Socket::Option opt, int* value) override {
-        return _wrappedSocket->GetOption(opt, value);
-    }
-    
-    virtual int SetOption(rtc::Socket::Option opt, int value) override {
-        return _wrappedSocket->SetOption(opt, value);
-    }
-
-    virtual int GetError() const override {
-        return _wrappedSocket->GetError();
-    }
-    
-    virtual void SetError(int error) override {
-        _wrappedSocket->SetError(error);
-    }
-    
-private:
-    void onReadPacket(rtc::ReceivedPacket const &packet) {
-        NotifyPacketReceived(packet);
-    }
-    
-    void onSentPacket(AsyncPacketSocket *socket, const rtc::SentPacket &packet) {
-        SignalSentPacket.emit(this, packet);
-    }
-
-    void onReadyToSend(AsyncPacketSocket *socket) {
-        SignalReadyToSend.emit(this);
-    }
-    
-    void onAddressReady(AsyncPacketSocket *socket, const rtc::SocketAddress &address) {
-        SignalAddressReady.emit(this, address);
-    }
-
-    void onConnect(AsyncPacketSocket *socket) {
-        SignalConnect.emit(this);
-    }
-    
-    void onClose(AsyncPacketSocket *socket, int value) {
-        SignalClose(this, value);
-    }
-    
-private:
-    std::unique_ptr<rtc::AsyncPacketSocket> _wrappedSocket;
-};
-
-class WrappedBasicPacketSocketFactory : public rtc::PacketSocketFactory {
-public:
-    WrappedBasicPacketSocketFactory(std::unique_ptr<rtc::BasicPacketSocketFactory> &&impl, bool standaloneReflectorMode) :
+    WrappedBasicPacketSocketFactory(std::unique_ptr<webrtc::BasicPacketSocketFactory> &&impl, bool standaloneReflectorMode) :
     _impl(std::move(impl)),
     _standaloneReflectorMode(standaloneReflectorMode) {
     }
@@ -181,40 +56,40 @@ public:
     virtual ~WrappedBasicPacketSocketFactory() {
     }
 
-    virtual rtc::AsyncPacketSocket *CreateUdpSocket(const rtc::SocketAddress& address, uint16_t min_port, uint16_t max_port) override {
+    virtual std::unique_ptr<webrtc::AsyncPacketSocket> CreateUdpSocket(const webrtc::Environment& env, const webrtc::SocketAddress& address, uint16_t min_port, uint16_t max_port) override {
         in_addr v4addr;
         inet_pton(AF_INET, "0.1.2.3", &v4addr);
-        rtc::IPAddress ipAddress(v4addr);
+        webrtc::IPAddress ipAddress(v4addr);
         if (_standaloneReflectorMode && address.ipaddr() == ipAddress && address.port() != 12345) {
             return nullptr;
         } else {
-            rtc::SocketAddress updatedAddress = address;
+            webrtc::SocketAddress updatedAddress = address;
             if (updatedAddress.port() == 12345) {
                 updatedAddress.SetPort(0);
             }
-            return _impl->CreateUdpSocket(updatedAddress, min_port, max_port);
+            return _impl->CreateUdpSocket(env, updatedAddress, min_port, max_port);
         }
     }
     
-    virtual rtc::AsyncListenSocket *CreateServerTcpSocket(const rtc::SocketAddress &local_address, uint16_t min_port, uint16_t max_port, int opts) override {
+    virtual std::unique_ptr<webrtc::AsyncListenSocket> CreateServerTcpSocket(const webrtc::Environment& env, const webrtc::SocketAddress &local_address, uint16_t min_port, uint16_t max_port, int opts) override {
         in_addr v4addr;
         inet_pton(AF_INET, "0.1.2.3", &v4addr);
-        rtc::IPAddress ipAddress(v4addr);
+        webrtc::IPAddress ipAddress(v4addr);
         if (_standaloneReflectorMode && local_address.ipaddr() == ipAddress) {
             return nullptr;
         } else {
-            return _impl->CreateServerTcpSocket(local_address, min_port, max_port, opts);
+            return _impl->CreateServerTcpSocket(env, local_address, min_port, max_port, opts);
         }
     }
 
-    virtual rtc::AsyncPacketSocket *CreateClientTcpSocket(const rtc::SocketAddress &local_address, const rtc::SocketAddress& remote_address, const rtc::ProxyInfo& proxy_info, const std::string &user_agent, const rtc::PacketSocketTcpOptions& tcp_options) override {
+    virtual std::unique_ptr<webrtc::AsyncPacketSocket> CreateClientTcpSocket(const webrtc::Environment& env, const webrtc::SocketAddress &local_address, const webrtc::SocketAddress& remote_address, const webrtc::PacketSocketTcpOptions& tcp_options) override {
         in_addr v4addr;
         inet_pton(AF_INET, "0.1.2.3", &v4addr);
-        rtc::IPAddress ipAddress(v4addr);
+        webrtc::IPAddress ipAddress(v4addr);
         if (_standaloneReflectorMode && local_address.ipaddr() == ipAddress) {
             return nullptr;
         } else {
-            return _impl->CreateClientTcpSocket(local_address, remote_address, proxy_info, user_agent, tcp_options);
+            return _impl->CreateClientTcpSocket(env, local_address, remote_address, tcp_options);
         }
     }
 
@@ -222,39 +97,36 @@ public:
         return _impl->CreateAsyncDnsResolver();
     }
 private:
-    std::unique_ptr<rtc::BasicPacketSocketFactory> _impl;
+    std::unique_ptr<webrtc::BasicPacketSocketFactory> _impl;
     bool _standaloneReflectorMode = false;
 };
 
-class WrappedNetworkManager: public rtc::NetworkManager, public sigslot::has_slots<> {
+class WrappedNetworkManager: public webrtc::NetworkManager {
 public:
-    WrappedNetworkManager(rtc::NetworkMonitorFactory *networkMonitorFactory, rtc::SocketFactory *socketFactory) {
+    WrappedNetworkManager(const webrtc::Environment &env, webrtc::NetworkMonitorFactory *networkMonitorFactory, webrtc::SocketFactory *socketFactory) {
         in_addr v4addr;
         inet_pton(AF_INET, "0.1.2.3", &v4addr);
-        rtc::IPAddress ipAddress(v4addr);
-        _sharedReflectorNetwork = std::make_unique<rtc::Network>(
+        webrtc::IPAddress ipAddress(v4addr);
+        _sharedReflectorNetwork = std::make_unique<webrtc::Network>(
             "shared-reflector-network",
             "shared-reflector-network",
             ipAddress,
             0,
-            rtc::AdapterType::ADAPTER_TYPE_UNKNOWN
+            webrtc::AdapterType::ADAPTER_TYPE_UNKNOWN
         );
         _sharedReflectorNetwork->AddIP(ipAddress);
         
-        _impl = std::make_unique<rtc::BasicNetworkManager>(networkMonitorFactory, socketFactory);
+        _impl = std::make_unique<webrtc::BasicNetworkManager>(env, socketFactory, networkMonitorFactory);
         
-        _impl->SignalNetworksChanged.connect(this, &WrappedNetworkManager::PassthroughSignalNetworksChanged);
-        _impl->SignalError.connect(this, &WrappedNetworkManager::PassthroughSignalError);
+        _impl->SubscribeNetworksChanged(this, [this]() {
+            NotifyNetworksChanged();
+        });
+        _impl->SubscribeError(this, [this]() {
+            NotifyError();
+        });
     }
     
 public:
-    void PassthroughSignalNetworksChanged() {
-        SignalNetworksChanged();
-    }
-    
-    void PassthroughSignalError() {
-        SignalError();
-    }
 
     virtual void Initialize() override {
         _impl->Initialize();
@@ -268,10 +140,10 @@ public:
         _impl->StopUpdating();
     }
 
-    virtual std::vector<const rtc::Network *> GetNetworks() const override {
+    virtual std::vector<const webrtc::Network *> GetNetworks() const override {
         //return _impl->GetNetworks();
         
-        std::vector<const rtc::Network *> result;
+        std::vector<const webrtc::Network *> result;
         result.push_back(_sharedReflectorNetwork.get());
         return result;
     }
@@ -280,7 +152,7 @@ public:
         return _impl->enumeration_permission();
     }
 
-    virtual std::vector<const rtc::Network *> GetAnyAddressNetworks() override {
+    virtual std::vector<const webrtc::Network *> GetAnyAddressNetworks() override {
         return _impl->GetAnyAddressNetworks();
     }
     
@@ -288,7 +160,7 @@ public:
         _impl->DumpNetworks();
     }
     
-    bool GetDefaultLocalAddress(int family, rtc::IPAddress *ipaddr) const override {
+    bool GetDefaultLocalAddress(int family, webrtc::IPAddress *ipaddr) const override {
         return _impl->GetDefaultLocalAddress(family, ipaddr);
     }
 
@@ -296,29 +168,43 @@ public:
         return _impl->GetMdnsResponder();
     }
 
-    virtual void set_vpn_list(const std::vector<rtc::NetworkMask> &vpn) override {
+    virtual void set_vpn_list(const std::vector<webrtc::NetworkMask> &vpn) override {
         _impl->set_vpn_list(vpn);
     }
     
 private:
-    std::unique_ptr<rtc::BasicNetworkManager> _impl;
-    std::unique_ptr<rtc::Network> _sharedReflectorNetwork;
+    std::unique_ptr<webrtc::BasicNetworkManager> _impl;
+    std::unique_ptr<webrtc::Network> _sharedReflectorNetwork;
 };
 
-class MtProtoPacketTransport : public rtc::PacketTransportInternal {
+class MtProtoPacketTransport : public webrtc::PacketTransportInternal {
 public:
     MtProtoPacketTransport(
-        rtc::PacketTransportInternal *rawTransport,
+        webrtc::PacketTransportInternal *rawTransport,
         EncryptionKey encryptionKey
     ) :
     _rawTransport(rawTransport) {
-        _rawTransport->SignalWritableState.connect(this, &MtProtoPacketTransport::InternalOnWritableState);
-        _rawTransport->SignalReadyToSend.connect(this, &MtProtoPacketTransport::InternalOnReadyToSend);
-        _rawTransport->SignalReceivingState.connect(this, &MtProtoPacketTransport::InternalOnReceivingState);
-        _rawTransport->SignalReadPacket.connect(this, &MtProtoPacketTransport::InternalOnReadPacket);
-        _rawTransport->SignalSentPacket.connect(this, &MtProtoPacketTransport::InternalOnSentPacket);
-        _rawTransport->SignalNetworkRouteChanged.connect(this, &MtProtoPacketTransport::InternalOnNetworkRouteChanged);
-        _rawTransport->SignalClosed.connect(this, &MtProtoPacketTransport::InternalOnClosed);
+        _rawTransport->SubscribeWritableState(this, [this](webrtc::PacketTransportInternal *transport) {
+            InternalOnWritableState(transport);
+        });
+        _rawTransport->SubscribeReadyToSend(this, [this](webrtc::PacketTransportInternal *transport) {
+            InternalOnReadyToSend(transport);
+        });
+        _rawTransport->SubscribeReceivingState(this, [this](webrtc::PacketTransportInternal *transport) {
+            InternalOnReceivingState(transport);
+        });
+        _rawTransport->RegisterReceivedPacketCallback(this, [this](webrtc::PacketTransportInternal *transport, const webrtc::ReceivedIpPacket &packet) {
+            InternalOnReadPacket(packet);
+        });
+        _rawTransport->SubscribeSentPacket(this, [this](webrtc::PacketTransportInternal *transport, const webrtc::SentPacketInfo &packet) {
+            InternalOnSentPacket(packet);
+        });
+        _rawTransport->SubscribeNetworkRouteChanged(this, [this](std::optional<webrtc::NetworkRoute> route) {
+            InternalOnNetworkRouteChanged(route);
+        });
+        _rawTransport->SetOnCloseCallback([this]() {
+            InternalOnClosed();
+        });
         
         _transportEncryption = std::make_unique<EncryptedConnection>(
             EncryptedConnection::Type::Transport,
@@ -329,13 +215,13 @@ public:
     }
     
     virtual ~MtProtoPacketTransport() {
-        _rawTransport->SignalWritableState.disconnect(this);
-        _rawTransport->SignalReadyToSend.disconnect(this);
-        _rawTransport->SignalReceivingState.disconnect(this);
-        _rawTransport->SignalReadPacket.disconnect(this);
-        _rawTransport->SignalSentPacket.disconnect(this);
-        _rawTransport->SignalNetworkRouteChanged.disconnect(this);
-        _rawTransport->SignalClosed.disconnect(this);
+        _rawTransport->UnsubscribeWritableState(this);
+        _rawTransport->UnsubscribeReadyToSend(this);
+        _rawTransport->UnsubscribeReceivingState(this);
+        _rawTransport->DeregisterReceivedPacketCallback(this);
+        _rawTransport->UnsubscribeSentPacket(this);
+        _rawTransport->UnsubscribeNetworkRouteChanged(this);
+        _rawTransport->SetOnCloseCallback(nullptr);
     }
     
     virtual const std::string& transport_name() const override {
@@ -353,16 +239,16 @@ public:
     virtual int SendPacket(
         const char *data,
         size_t len,
-        const rtc::PacketOptions &options,
+        const webrtc::AsyncSocketPacketOptions &options,
         int flags
     ) override {
         if (flags != 0) {
-            rtc::CopyOnWriteBuffer buffer;
+            webrtc::CopyOnWriteBuffer buffer;
             buffer.AppendData((const unsigned char *)data, len);
             SendPacketInternal(buffer, options);
             return 0;
         } else {
-            rtc::CopyOnWriteBuffer buffer;
+            webrtc::CopyOnWriteBuffer buffer;
             uint32_t magic = 0xdcdcdcdc; // SCTP
             buffer.AppendData((const unsigned char *)&magic, 4);
             buffer.AppendData((const unsigned char *)data, len);
@@ -371,11 +257,11 @@ public:
         }
     }
     
-    virtual int SetOption(rtc::Socket::Option opt, int value) override {
+    virtual int SetOption(webrtc::Socket::Option opt, int value) override {
         return _rawTransport->SetOption(opt, value);
     }
     
-    virtual bool GetOption(rtc::Socket::Option opt, int* value) override {
+    virtual bool GetOption(webrtc::Socket::Option opt, int* value) override {
         return _rawTransport->GetOption(opt, value);
     }
     
@@ -383,76 +269,76 @@ public:
         return _rawTransport->GetError();
     }
     
-    virtual absl::optional<rtc::NetworkRoute> network_route() const override {
+    virtual absl::optional<webrtc::NetworkRoute> network_route() const override {
         return _rawTransport->network_route();
     }
     
 private:
     void InternalOnWritableState(PacketTransportInternal *transport) {
-        SignalWritableState(this);
+        NotifyWritableState(this);
     }
     
     void InternalOnReadyToSend(PacketTransportInternal *transport) {
-        SignalReadyToSend(this);
+        NotifyReadyToSend(this);
     }
     
     void InternalOnReceivingState(PacketTransportInternal *transport) {
-        SignalReceivingState(this);
+        NotifyReceivingState(this);
     }
     
-    void InternalOnReadPacket(PacketTransportInternal *transport, const char *data, size_t size, const int64_t &timestamp, int flags) {
-        if (const auto packet = _transportEncryption->handleIncomingRawPacket(data, size)) {
-            ProcessReadPacketInternal(packet.value().main.message, timestamp);
+    void InternalOnReadPacket(const webrtc::ReceivedIpPacket &packet) {
+        if (const auto result = _transportEncryption->handleIncomingRawPacket(reinterpret_cast<const char *>(packet.payload().data()), packet.payload().size())) {
+            ProcessReadPacketInternal(result.value().main.message, packet.arrival_time().has_value() ? packet.arrival_time()->us() : 0);
 
-            for (const auto &additional : packet.value().additional) {
-                ProcessReadPacketInternal(additional.message, timestamp);
+            for (const auto &additional : result.value().additional) {
+                ProcessReadPacketInternal(additional.message, packet.arrival_time().has_value() ? packet.arrival_time()->us() : 0);
             }
         }
     }
     
-    void InternalOnSentPacket(PacketTransportInternal *transport, const rtc::SentPacket &packet) {
-        SignalSentPacket(this, packet);
+    void InternalOnSentPacket(const webrtc::SentPacketInfo &packet) {
+        NotifySentPacket(this, packet);
     }
     
-    void InternalOnNetworkRouteChanged(absl::optional<rtc::NetworkRoute> route) {
-        SignalNetworkRouteChanged(route);
+    void InternalOnNetworkRouteChanged(std::optional<webrtc::NetworkRoute> route) {
+        NotifyNetworkRouteChanged(route);
     }
     
-    void InternalOnClosed(PacketTransportInternal *transport) {
-        SignalClosed(this);
+    void InternalOnClosed() {
+        NotifyOnClose();
     }
     
 private:
-    void SendPacketInternal(rtc::CopyOnWriteBuffer &packet, const rtc::PacketOptions &options) {
+    void SendPacketInternal(webrtc::CopyOnWriteBuffer &packet, const webrtc::AsyncSocketPacketOptions &options) {
         if (const auto encryptedPacket = _transportEncryption->prepareForSendingRawMessage(packet, false)) {
             _rawTransport->SendPacket((const char *)encryptedPacket->bytes.data(), encryptedPacket->bytes.size(), options);
         }
     }
     
-    void ProcessReadPacketInternal(rtc::CopyOnWriteBuffer const &data, int64_t timestamp) {
+    void ProcessReadPacketInternal(webrtc::CopyOnWriteBuffer const &data, int64_t timestamp) {
         if (data.size() >= 4) {
             uint32_t header = 0;
             memcpy(&header, data.data(), 4);
             uint32_t magic = 0xdcdcdcdc; // SCTP
             if (header == magic) {
-                SignalReadPacket(this, (const char *)(data.data() + 4), data.size() - 4, timestamp, 0);
+                NotifyPacketReceived(webrtc::ReceivedIpPacket::CreateFromLegacy((const char *)(data.data() + 4), data.size() - 4, timestamp));
             } else {
-                SignalReadPacket(this, (const char *)data.data(), data.size(), timestamp, 1);
+                NotifyPacketReceived(webrtc::ReceivedIpPacket::CreateFromLegacy((const char *)data.data(), data.size(), timestamp));
             }
         } else {
-            SignalReadPacket(this, (const char *)data.data(), data.size(), timestamp, 1);
+            NotifyPacketReceived(webrtc::ReceivedIpPacket::CreateFromLegacy((const char *)data.data(), data.size(), timestamp));
         }
     }
     
 private:
-    rtc::PacketTransportInternal *_rawTransport = nullptr;
+    webrtc::PacketTransportInternal *_rawTransport = nullptr;
     std::unique_ptr<EncryptedConnection> _transportEncryption;
 };
 
 class MtProtoRtpTransport : public webrtc::RtpTransport {
 public:
-    explicit MtProtoRtpTransport(cricket::IceTransportInternal *iceTransport, EncryptionKey encryptionKey) :
-    webrtc::RtpTransport(true) {
+    explicit MtProtoRtpTransport(webrtc::IceTransportInternal *iceTransport, EncryptionKey encryptionKey) :
+    webrtc::RtpTransport(true, fieldTrialsBasedConfig) {
         _packetTransport = std::make_unique<MtProtoPacketTransport>(iceTransport, encryptionKey);
         SetRtpPacketTransport(_packetTransport.get());
     }
@@ -461,15 +347,15 @@ public:
         return true;
     }
     
-    virtual void OnWritableState(rtc::PacketTransportInternal *packet_transport) override {
+    virtual void OnWritableState(webrtc::PacketTransportInternal *packet_transport) override {
         webrtc::RtpTransport::OnWritableState(packet_transport);
         
         SignalWritableState(packet_transport);
     }
     
 public:
-    sigslot::signal1<rtc::PacketTransportInternal *> SignalWritableState;
-    sigslot::signal1<rtc::PacketTransportInternal *> SignalReceivingState;
+    sigslot::signal1<webrtc::PacketTransportInternal *> SignalWritableState;
+    sigslot::signal1<webrtc::PacketTransportInternal *> SignalReceivingState;
     
 private:
     std::unique_ptr<MtProtoPacketTransport> _packetTransport;
@@ -477,10 +363,10 @@ private:
 
 }
 
-InstanceNetworking::ConnectionDescription::CandidateDescription InstanceNetworking::connectionDescriptionFromCandidate(cricket::Candidate const &candidate) {
+InstanceNetworking::ConnectionDescription::CandidateDescription InstanceNetworking::connectionDescriptionFromCandidate(webrtc::Candidate const &candidate) {
     InstanceNetworking::ConnectionDescription::CandidateDescription result;
     
-    result.type = candidate.type();
+    result.type = std::string(webrtc::IceCandidateTypeToString(candidate.type()));
     result.protocol = candidate.protocol();
     result.address = candidate.address().ToString();
     
@@ -504,6 +390,7 @@ _enableP2P(configuration.enableP2P),
 _rtcServers(configuration.rtcServers),
 _proxy(configuration.proxy),
 _customParameters(configuration.customParameters),
+_env(webrtc::CreateEnvironment()),
 _stateUpdated(std::move(configuration.stateUpdated)),
 _candidateGathered(std::move(configuration.candidateGathered)),
 _transportMessageReceived(std::move(configuration.transportMessageReceived)),
@@ -512,19 +399,19 @@ _dataChannelStateUpdated(configuration.dataChannelStateUpdated),
 _dataChannelMessageReceived(configuration.dataChannelMessageReceived) {
     assert(_threads->getNetworkThread()->IsCurrent());
     
-    _localIceParameters = PeerIceParameters(rtc::CreateRandomString(cricket::ICE_UFRAG_LENGTH), rtc::CreateRandomString(cricket::ICE_PWD_LENGTH), true);
+    _localIceParameters = PeerIceParameters(webrtc::CreateRandomString(webrtc::ICE_UFRAG_LENGTH), webrtc::CreateRandomString(webrtc::ICE_PWD_LENGTH), true);
     
-    _localCertificate = rtc::RTCCertificateGenerator::GenerateCertificate(rtc::KeyParams(rtc::KT_ECDSA), absl::nullopt);
+    _localCertificate = webrtc::RTCCertificateGenerator::GenerateCertificate(webrtc::KeyParams(webrtc::KT_ECDSA), absl::nullopt);
     
     _underlyingSocketFactory = _threads->getNetworkThread()->socketserver();
     
     _networkMonitorFactory = PlatformInterface::SharedInstance()->createNetworkMonitorFactory();
     if (getCustomParameterBool(_customParameters, "network_standalone_reflectors")) {
-        _socketFactory = std::make_unique<WrappedBasicPacketSocketFactory>(std::make_unique<rtc::BasicPacketSocketFactory>(_threads->getNetworkThread()->socketserver()), true);
-        _networkManager = std::make_unique<WrappedNetworkManager>(_networkMonitorFactory.get(), _threads->getNetworkThread()->socketserver());
+        _socketFactory = std::make_unique<WrappedBasicPacketSocketFactory>(std::make_unique<webrtc::BasicPacketSocketFactory>(_threads->getNetworkThread()->socketserver()), true);
+        _networkManager = std::make_unique<WrappedNetworkManager>(_env, _networkMonitorFactory.get(), _threads->getNetworkThread()->socketserver());
     } else {
-        _socketFactory = std::make_unique<rtc::BasicPacketSocketFactory>(_threads->getNetworkThread()->socketserver());
-        _networkManager = std::make_unique<rtc::BasicNetworkManager>(_networkMonitorFactory.get(), _threads->getNetworkThread()->socketserver());
+        _socketFactory = std::make_unique<webrtc::BasicPacketSocketFactory>(_threads->getNetworkThread()->socketserver());
+        _networkManager = std::make_unique<webrtc::BasicNetworkManager>(_env, _threads->getNetworkThread()->socketserver(), _networkMonitorFactory.get());
     }
     
     _asyncResolverFactory = std::make_unique<webrtc::BasicAsyncDnsResolverFactory>();
@@ -534,12 +421,11 @@ _dataChannelMessageReceived(configuration.dataChannelMessageReceived) {
     } else {
         _dtlsSrtpTransport = std::make_unique<webrtc::DtlsSrtpTransport>(true, fieldTrialsBasedConfig);
         _dtlsSrtpTransport->SetDtlsTransports(nullptr, nullptr);
-        _dtlsSrtpTransport->SetActiveResetSrtpParams(false);
         _dtlsSrtpTransport->SubscribeReadyToSend(this, [this](bool value) {
             this->DtlsReadyToSend(value);
         });
-        _dtlsSrtpTransport->SubscribeRtcpPacketReceived(this, [this](rtc::CopyOnWriteBuffer *packet, int64_t timestamp) {
-            this->OnRtcpPacketReceived_n(packet, timestamp);
+        _dtlsSrtpTransport->SubscribeRtcpPacketReceived(this, [this](webrtc::CopyOnWriteBuffer packet, std::optional<webrtc::Timestamp> arrivalTime, webrtc::EcnMarking ecn) {
+            this->OnRtcpPacketReceived_n(&packet, arrivalTime.has_value() ? arrivalTime->us() : 0);
         });
     }
     resetDtlsSrtpTransport();
@@ -554,7 +440,7 @@ NativeNetworkingImpl::~NativeNetworkingImpl() {
     _dtlsSrtpTransport.reset();
     _dtlsTransport.reset();
     _dataChannelInterface.reset();
-    _transportChannel.reset();
+    _transportChannel = nullptr;
     _asyncResolverFactory.reset();
     _portAllocator.reset();
     _networkManager.reset();
@@ -581,93 +467,98 @@ void NativeNetworkingImpl::resetDtlsSrtpTransport() {
     
     _relayPortFactory.reset(new ReflectorRelayPortFactory(_rtcServers, standaloneReflectorMode, standaloneReflectorRoleId, _underlyingSocketFactory));
 
-    _portAllocator.reset(new cricket::BasicPortAllocator(_networkManager.get(), _socketFactory.get(), _turnCustomizer.get(), _relayPortFactory.get()));
+    _portAllocator.reset(new webrtc::BasicPortAllocator(_env, _networkManager.get(), _socketFactory.get(), _turnCustomizer.get(), _relayPortFactory.get()));
 
     uint32_t flags = _portAllocator->flags();
     
     if (getCustomParameterBool(_customParameters, "network_use_default_route")) {
-        flags |= cricket::PORTALLOCATOR_DISABLE_ADAPTER_ENUMERATION;
+        flags |= webrtc::PORTALLOCATOR_DISABLE_ADAPTER_ENUMERATION;
     }
     
     if (getCustomParameterBool(_customParameters, "network_enable_shared_socket")) {
-        flags |= cricket::PORTALLOCATOR_ENABLE_SHARED_SOCKET;
+        flags |= webrtc::PORTALLOCATOR_ENABLE_SHARED_SOCKET;
     }
     
     flags |=
-        cricket::PORTALLOCATOR_ENABLE_IPV6 |
-        cricket::PORTALLOCATOR_ENABLE_IPV6_ON_WIFI;
+        webrtc::PORTALLOCATOR_ENABLE_IPV6 |
+        webrtc::PORTALLOCATOR_ENABLE_IPV6_ON_WIFI;
 
     if (!_enableTCP) {
-        flags |= cricket::PORTALLOCATOR_DISABLE_TCP;
+        flags |= webrtc::PORTALLOCATOR_DISABLE_TCP;
     }
     
     if (_proxy || !_enableP2P) {
-        flags |= cricket::PORTALLOCATOR_DISABLE_UDP;
-        flags |= cricket::PORTALLOCATOR_DISABLE_STUN;
+        flags |= webrtc::PORTALLOCATOR_DISABLE_UDP;
+        flags |= webrtc::PORTALLOCATOR_DISABLE_STUN;
         uint32_t candidateFilter = _portAllocator->candidate_filter();
-        candidateFilter &= ~(cricket::CF_REFLEXIVE);
+        candidateFilter &= ~(webrtc::CF_REFLEXIVE);
         _portAllocator->SetCandidateFilter(candidateFilter);
     }
     
-    _portAllocator->set_step_delay(cricket::kMinimumStepDelay);
+    _portAllocator->set_step_delay(webrtc::kMinimumStepDelay);
 
     _portAllocator->set_flags(flags);
     _portAllocator->Initialize();
 
-    cricket::ServerAddresses stunServers;
-    std::vector<cricket::RelayServerConfig> turnServers;
+    webrtc::ServerAddresses stunServers;
+    std::vector<webrtc::RelayServerConfig> turnServers;
 
     for (auto &server : _rtcServers) {
         if (server.isTurn) {
-            turnServers.push_back(cricket::RelayServerConfig(
-                rtc::SocketAddress(server.host, server.port),
+            turnServers.push_back(webrtc::RelayServerConfig(
+                webrtc::SocketAddress(server.host, server.port),
                 server.login,
                 server.password,
-                server.isTcp ? cricket::PROTO_TCP : cricket::PROTO_UDP
+                server.isTcp ? webrtc::PROTO_TCP : webrtc::PROTO_UDP
             ));
         } else {
-            rtc::SocketAddress stunAddress = rtc::SocketAddress(server.host, server.port);
+            webrtc::SocketAddress stunAddress = webrtc::SocketAddress(server.host, server.port);
             stunServers.insert(stunAddress);
         }
     }
 
     _portAllocator->SetConfiguration(stunServers, turnServers, 0, webrtc::NO_PRUNE, _turnCustomizer.get());
 
-    webrtc::IceTransportInit iceTransportInit;
+    webrtc::IceTransportInit iceTransportInit(_env);
     iceTransportInit.set_port_allocator(_portAllocator.get());
     iceTransportInit.set_async_dns_resolver_factory(_asyncResolverFactory.get());
     
-    _transportChannel = cricket::P2PTransportChannel::Create("transport", 0, std::move(iceTransportInit));
+    _transportChannel = webrtc::make_ref_counted<webrtc::DefaultIceTransport>(webrtc::P2PTransportChannel::Create("transport", 0, std::move(iceTransportInit)));
 
-    cricket::IceConfig iceConfig;
-    iceConfig.continual_gathering_policy = cricket::GATHER_CONTINUALLY;
+    webrtc::IceConfig iceConfig;
+    iceConfig.continual_gathering_policy = webrtc::GATHER_CONTINUALLY;
     iceConfig.prioritize_most_likely_candidate_pairs = true;
-    iceConfig.regather_on_failed_networks_interval = cricket::REGATHER_ON_FAILED_NETWORKS_INTERVAL;
-
+    iceConfig.regather_on_failed_networks_interval = webrtc::kRegatherOnFailedNetworksInterval;
     if (getCustomParameterBool(_customParameters, "network_skip_initial_ping")) {
         iceConfig.presume_writable_when_fully_relayed = true;
     }
-    _transportChannel->SetIceConfig(iceConfig);
+    _transportChannel->internal()->SetIceConfig(iceConfig);
 
-    cricket::IceParameters localIceParameters(
+    webrtc::IceParameters localIceParameters(
         _localIceParameters.ufrag,
         _localIceParameters.pwd,
         _localIceParameters.supportsRenomination
     );
 
-    _transportChannel->SetIceParameters(localIceParameters);
-    _transportChannel->SetIceRole(_isOutgoing ? cricket::ICEROLE_CONTROLLING : cricket::ICEROLE_CONTROLLED);
-    _transportChannel->SetRemoteIceMode(cricket::ICEMODE_FULL);
+    _transportChannel->internal()->SetIceParameters(localIceParameters);
+    _transportChannel->internal()->SetIceRole(_isOutgoing ? webrtc::ICEROLE_CONTROLLING : webrtc::ICEROLE_CONTROLLED);
+    _transportChannel->internal()->SetRemoteIceMode(webrtc::ICEMODE_FULL);
 
-    _transportChannel->SignalCandidateGathered.connect(this, &NativeNetworkingImpl::candidateGathered);
-    _transportChannel->SignalIceTransportStateChanged.connect(this, &NativeNetworkingImpl::transportStateChanged);
-    _transportChannel->SetCandidatePairChangeCallback([this](cricket::CandidatePairChangeEvent const &event) {
+    _transportChannel->internal()->SubscribeCandidateGathered(this, [this](webrtc::IceTransportInternal *transport, const webrtc::Candidate &candidate) {
+        this->candidateGathered(transport, candidate);
+    });
+    _transportChannel->internal()->SubscribeIceTransportStateChanged(this, [this](webrtc::IceTransportInternal *transport) {
+        this->transportStateChanged(transport);
+    });
+    _transportChannel->internal()->SetCandidatePairChangeCallback([this](webrtc::CandidatePairChangeEvent const &event) {
         this->candidatePairChanged(event);
     });
-    _transportChannel->SignalNetworkRouteChanged.connect(this, &NativeNetworkingImpl::transportRouteChanged);
+    _transportChannel->internal()->SubscribeNetworkRouteChanged(this, [this](std::optional<webrtc::NetworkRoute> route) {
+        this->transportRouteChanged(route);
+    });
 
     if (getCustomParameterBool(_customParameters, "network_use_mtproto")) {
-        _mtProtoRtpTransport = std::make_unique<MtProtoRtpTransport>(_transportChannel.get(), _encryptionKey);
+        _mtProtoRtpTransport = std::make_unique<MtProtoRtpTransport>(_transportChannel->internal(), _encryptionKey);
         
         ((MtProtoRtpTransport *)_mtProtoRtpTransport.get())->SignalWritableState.connect(this, &NativeNetworkingImpl::OnTransportWritableState_n);
         ((MtProtoRtpTransport *)_mtProtoRtpTransport.get())->SignalReceivingState.connect(this, &NativeNetworkingImpl::OnTransportReceivingState_n);
@@ -675,15 +566,19 @@ void NativeNetworkingImpl::resetDtlsSrtpTransport() {
         _mtProtoRtpTransport->SubscribeReadyToSend(this, [this](bool value) {
             this->DtlsReadyToSend(value);
         });
-        _mtProtoRtpTransport->SubscribeRtcpPacketReceived(this, [this](rtc::CopyOnWriteBuffer *packet, int64_t timestamp) {
-            this->OnRtcpPacketReceived_n(packet, timestamp);
+        _mtProtoRtpTransport->SubscribeRtcpPacketReceived(this, [this](webrtc::CopyOnWriteBuffer packet, std::optional<webrtc::Timestamp> arrivalTime, webrtc::EcnMarking ecn) {
+            this->OnRtcpPacketReceived_n(&packet, arrivalTime.has_value() ? arrivalTime->us() : 0);
         });
     } else {
         webrtc::CryptoOptions cryptoOptions = NativeNetworkingImpl::getDefaulCryptoOptions();
-        _dtlsTransport.reset(new cricket::DtlsTransport(_transportChannel.get(), cryptoOptions, nullptr));
+        _dtlsTransport.reset(new webrtc::DtlsTransportInternalImpl(webrtc::CreateEnvironment(), _transportChannel, cryptoOptions));
         
-        _dtlsTransport->SignalWritableState.connect(this, &NativeNetworkingImpl::OnTransportWritableState_n);
-        _dtlsTransport->SignalReceivingState.connect(this, &NativeNetworkingImpl::OnTransportReceivingState_n);
+        _dtlsTransport->SubscribeWritableState(this, [this](webrtc::PacketTransportInternal *transport) {
+            this->OnTransportWritableState_n(transport);
+        });
+        _dtlsTransport->SubscribeReceivingState(this, [this](webrtc::PacketTransportInternal *transport) {
+            this->OnTransportReceivingState_n(transport);
+        });
         
         _dtlsTransport->SetLocalCertificate(_localCertificate);
         
@@ -692,9 +587,9 @@ void NativeNetworkingImpl::resetDtlsSrtpTransport() {
 }
 
 void NativeNetworkingImpl::start() {
-    _transportChannel->MaybeStartGathering();
+    _transportChannel->internal()->MaybeStartGathering();
 
-    rtc::PacketTransportInternal *sctpPacketTransport = nullptr;
+    webrtc::PacketTransportInternal *sctpPacketTransport = nullptr;
     if (_mtProtoRtpTransport) {
         sctpPacketTransport = _mtProtoRtpTransport->rtp_packet_transport();
     } else {
@@ -732,21 +627,18 @@ void NativeNetworkingImpl::start() {
         _threads
     ));
     
-    _lastDisconnectedTimestamp = rtc::TimeMillis();
+    _lastDisconnectedTimestamp = webrtc::TimeMillis();
     checkConnectionTimeout();
 }
 
 void NativeNetworkingImpl::stop() {
-    _transportChannel->SignalCandidateGathered.disconnect(this);
-    _transportChannel->SignalIceTransportStateChanged.disconnect(this);
-    _transportChannel->SignalReadPacket.disconnect(this);
-    _transportChannel->SignalNetworkRouteChanged.disconnect(this);
+    _transportChannel->internal()->UnsubscribeNetworkRouteChanged(this);
     
     _dataChannelInterface.reset();
     
     if (_dtlsTransport) {
-        _dtlsTransport->SignalWritableState.disconnect(this);
-        _dtlsTransport->SignalReceivingState.disconnect(this);
+        _dtlsTransport->UnsubscribeWritableState(this);
+        _dtlsTransport->UnsubscribeReceivingState(this);
     }
     if (_dtlsSrtpTransport) {
         _dtlsSrtpTransport->SetDtlsTransports(nullptr, nullptr);
@@ -759,44 +651,44 @@ void NativeNetworkingImpl::stop() {
     }
     
     _dtlsTransport.reset();
-    _transportChannel.reset();
+    _transportChannel = nullptr;
     _portAllocator.reset();
     
-    _localIceParameters = PeerIceParameters(rtc::CreateRandomString(cricket::ICE_UFRAG_LENGTH), rtc::CreateRandomString(cricket::ICE_PWD_LENGTH), true);
+    _localIceParameters = PeerIceParameters(webrtc::CreateRandomString(webrtc::ICE_UFRAG_LENGTH), webrtc::CreateRandomString(webrtc::ICE_PWD_LENGTH), true);
     
-    _localCertificate = rtc::RTCCertificateGenerator::GenerateCertificate(rtc::KeyParams(rtc::KT_ECDSA), absl::nullopt);
+    _localCertificate = webrtc::RTCCertificateGenerator::GenerateCertificate(webrtc::KeyParams(webrtc::KT_ECDSA), absl::nullopt);
 }
 
 PeerIceParameters NativeNetworkingImpl::getLocalIceParameters() {
     return _localIceParameters;
 }
 
-std::unique_ptr<rtc::SSLFingerprint> NativeNetworkingImpl::getLocalFingerprint() {
+std::unique_ptr<webrtc::SSLFingerprint> NativeNetworkingImpl::getLocalFingerprint() {
     auto certificate = _localCertificate;
     if (!certificate) {
         return nullptr;
     }
-    return rtc::SSLFingerprint::CreateFromCertificate(*certificate);
+    return webrtc::SSLFingerprint::CreateFromCertificate(*certificate);
 }
 
-void NativeNetworkingImpl::setRemoteParams(PeerIceParameters const &remoteIceParameters, rtc::SSLFingerprint *fingerprint, std::string const &sslSetup) {
+void NativeNetworkingImpl::setRemoteParams(PeerIceParameters const &remoteIceParameters, webrtc::SSLFingerprint *fingerprint, std::string const &sslSetup) {
     _remoteIceParameters = remoteIceParameters;
 
-    cricket::IceParameters parameters(
+    webrtc::IceParameters parameters(
         remoteIceParameters.ufrag,
         remoteIceParameters.pwd,
         remoteIceParameters.supportsRenomination
     );
 
-    _transportChannel->SetRemoteIceParameters(parameters);
+    _transportChannel->internal()->SetRemoteIceParameters(parameters);
 
-    rtc::SSLRole sslRole;
+    webrtc::SSLRole sslRole;
     if (sslSetup == "active") {
-        sslRole = rtc::SSLRole::SSL_SERVER;
+        sslRole = webrtc::SSLRole::SSL_SERVER;
     } else if (sslSetup == "passive") {
-        sslRole = rtc::SSLRole::SSL_CLIENT;
+        sslRole = webrtc::SSLRole::SSL_CLIENT;
     } else {
-        sslRole = _isOutgoing ? rtc::SSLRole::SSL_CLIENT : rtc::SSLRole::SSL_SERVER;
+        sslRole = _isOutgoing ? webrtc::SSLRole::SSL_CLIENT : webrtc::SSLRole::SSL_SERVER;
     }
 
     if (fingerprint) {
@@ -808,7 +700,7 @@ void NativeNetworkingImpl::setRemoteParams(PeerIceParameters const &remoteIcePar
     processPendingLocalStandaloneReflectorCandidates();
 }
 
-void NativeNetworkingImpl::addCandidates(std::vector<cricket::Candidate> const &candidates) {
+void NativeNetworkingImpl::addCandidates(std::vector<webrtc::Candidate> const &candidates) {
     bool standaloneReflectorMode = getCustomParameterBool(_customParameters, "network_standalone_reflectors");
     
     for (const auto &candidate : candidates) {
@@ -818,7 +710,7 @@ void NativeNetworkingImpl::addCandidates(std::vector<cricket::Candidate> const &
             }
         }
         
-        _transportChannel->AddRemoteCandidate(candidate);
+        _transportChannel->internal()->AddRemoteCandidate(candidate);
     }
 }
 
@@ -844,7 +736,7 @@ void NativeNetworkingImpl::checkConnectionTimeout() {
             return;
         }
 
-        int64_t currentTimestamp = rtc::TimeMillis();
+        int64_t currentTimestamp = webrtc::TimeMillis();
         const int64_t maxTimeout = 20000;
 
         if (!strong->_isConnected && strong->_lastDisconnectedTimestamp + maxTimeout < currentTimestamp) {
@@ -858,7 +750,7 @@ void NativeNetworkingImpl::checkConnectionTimeout() {
     }, webrtc::TimeDelta::Millis(1000));
 }
 
-void NativeNetworkingImpl::candidateGathered(cricket::IceTransportInternal *transport, const cricket::Candidate &candidate) {
+void NativeNetworkingImpl::candidateGathered(webrtc::IceTransportInternal *transport, const webrtc::Candidate &candidate) {
     assert(_threads->getNetworkThread()->IsCurrent());
 
     bool standaloneReflectorMode = getCustomParameterBool(_customParameters, "network_standalone_reflectors");
@@ -913,30 +805,30 @@ void NativeNetworkingImpl::processPendingLocalStandaloneReflectorCandidates() {
             }
             
             if (resolvedServerId != 0) {
-                cricket::Candidate remoteCandidate = candidate;
-                rtc::SocketAddress address = remoteCandidate.address();
+                webrtc::Candidate remoteCandidate = candidate;
+                webrtc::SocketAddress address = remoteCandidate.address();
                 const auto remoteHost = "reflector-" + std::to_string(resolvedServerId) + "-" + std::to_string(remoteReflectorRoleId) + ".reflector";
                 address.SetIP(remoteHost);
                 address.SetResolvedIP(remoteCandidate.address().ipaddr());
                 remoteCandidate.set_address(address);
                 remoteCandidate.set_username(_remoteIceParameters->ufrag);
                 remoteCandidate.set_password(_remoteIceParameters->pwd);
-                _transportChannel->AddRemoteCandidate(remoteCandidate);
+                _transportChannel->internal()->AddRemoteCandidate(remoteCandidate);
             }
         }
     }
 }
 
-void NativeNetworkingImpl::candidateGatheringState(cricket::IceTransportInternal *transport) {
+void NativeNetworkingImpl::candidateGatheringState(webrtc::IceTransportInternal *transport) {
     assert(_threads->getNetworkThread()->IsCurrent());
 }
 
-void NativeNetworkingImpl::OnTransportWritableState_n(rtc::PacketTransportInternal *transport) {
+void NativeNetworkingImpl::OnTransportWritableState_n(webrtc::PacketTransportInternal *transport) {
     assert(_threads->getNetworkThread()->IsCurrent());
 
     UpdateAggregateStates_n();
 }
-void NativeNetworkingImpl::OnTransportReceivingState_n(rtc::PacketTransportInternal *transport) {
+void NativeNetworkingImpl::OnTransportReceivingState_n(webrtc::PacketTransportInternal *transport) {
     assert(_threads->getNetworkThread()->IsCurrent());
 
     UpdateAggregateStates_n();
@@ -957,26 +849,26 @@ void NativeNetworkingImpl::DtlsReadyToSend(bool isReadyToSend) {
     }
 }
 
-void NativeNetworkingImpl::transportStateChanged(cricket::IceTransportInternal *transport) {
+void NativeNetworkingImpl::transportStateChanged(webrtc::IceTransportInternal *transport) {
     UpdateAggregateStates_n();
 }
 
-void NativeNetworkingImpl::transportReadyToSend(cricket::IceTransportInternal *transport) {
+void NativeNetworkingImpl::transportReadyToSend(webrtc::IceTransportInternal *transport) {
     assert(_threads->getNetworkThread()->IsCurrent());
 }
 
-void NativeNetworkingImpl::transportRouteChanged(absl::optional<rtc::NetworkRoute> route) {
+void NativeNetworkingImpl::transportRouteChanged(absl::optional<webrtc::NetworkRoute> route) {
     assert(_threads->getNetworkThread()->IsCurrent());
     
     if (route.has_value()) {
-        /*cricket::IceTransportStats iceTransportStats;
-        if (_transportChannel->GetStats(&iceTransportStats)) {
+        /*webrtc::IceTransportStats iceTransportStats;
+        if (_transportChannel->internal()->GetStats(&iceTransportStats)) {
         }*/
         
         RTC_LOG(LS_INFO) << "NativeNetworkingImpl route changed: " << route->DebugString();
         
-        bool localIsWifi = route->local.adapter_type() == rtc::AdapterType::ADAPTER_TYPE_WIFI;
-        bool remoteIsWifi = route->remote.adapter_type() == rtc::AdapterType::ADAPTER_TYPE_WIFI;
+        bool localIsWifi = route->local.adapter_type() == webrtc::AdapterType::ADAPTER_TYPE_WIFI;
+        bool remoteIsWifi = route->remote.adapter_type() == webrtc::AdapterType::ADAPTER_TYPE_WIFI;
         
         RTC_LOG(LS_INFO) << "NativeNetworkingImpl is wifi: local=" << localIsWifi << ", remote=" << remoteIsWifi;
         
@@ -992,7 +884,7 @@ void NativeNetworkingImpl::transportRouteChanged(absl::optional<rtc::NetworkRout
     }
 }
 
-void NativeNetworkingImpl::candidatePairChanged(cricket::CandidatePairChangeEvent const &event) {
+void NativeNetworkingImpl::candidatePairChanged(webrtc::CandidatePairChangeEvent const &event) {
     ConnectionDescription connectionDescription;
     
     connectionDescription.local = InstanceNetworking::connectionDescriptionFromCandidate(event.selected_candidate_pair.local);
@@ -1004,13 +896,13 @@ void NativeNetworkingImpl::candidatePairChanged(cricket::CandidatePairChangeEven
     }
 }
 
-void NativeNetworkingImpl::RtpPacketReceived_n(rtc::CopyOnWriteBuffer *packet, int64_t packet_time_us, bool isUnresolved) {
+void NativeNetworkingImpl::RtpPacketReceived_n(webrtc::CopyOnWriteBuffer *packet, int64_t packet_time_us, bool isUnresolved) {
     if (_transportMessageReceived) {
         _transportMessageReceived(*packet, isUnresolved);
     }
 }
 
-void NativeNetworkingImpl::OnRtcpPacketReceived_n(rtc::CopyOnWriteBuffer *packet, int64_t packet_time_us) {
+void NativeNetworkingImpl::OnRtcpPacketReceived_n(webrtc::CopyOnWriteBuffer *packet, int64_t packet_time_us) {
     if (_rtcpPacketReceived) {
         _rtcpPacketReceived(*packet, packet_time_us);
     }
@@ -1019,7 +911,7 @@ void NativeNetworkingImpl::OnRtcpPacketReceived_n(rtc::CopyOnWriteBuffer *packet
 void NativeNetworkingImpl::UpdateAggregateStates_n() {
     assert(_threads->getNetworkThread()->IsCurrent());
 
-    auto state = _transportChannel->GetIceTransportState();
+    auto state = _transportChannel->internal()->GetIceTransportState();
     bool isConnected = false;
     switch (state) {
         case webrtc::IceTransportState::kConnected:
@@ -1044,7 +936,7 @@ void NativeNetworkingImpl::UpdateAggregateStates_n() {
         _isConnected = isConnected;
         
         if (!isConnected) {
-            _lastDisconnectedTimestamp = rtc::TimeMillis();
+            _lastDisconnectedTimestamp = webrtc::TimeMillis();
         }
 
         notifyStateUpdated();

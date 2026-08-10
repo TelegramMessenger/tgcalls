@@ -5,7 +5,6 @@
 #include "rtc_base/thread.h"
 #include "rtc_base/copy_on_write_buffer.h"
 #include "rtc_base/third_party/sigslot/sigslot.h"
-#include "api/transport/field_trial_based_config.h"
 #include "pc/rtp_sender.h"
 #include "media/base/media_channel.h"
 #include "pc/media_factory.h"
@@ -28,11 +27,11 @@ class VideoTrackSourceInterface;
 class AudioDeviceModule;
 } // namespace webrtc
 
-namespace cricket {
+namespace webrtc {
 class MediaEngineInterface;
 class VoiceMediaChannel;
 class VideoMediaChannel;
-} // namespace cricket
+} // namespace webrtc
 
 namespace tgcalls {
 
@@ -40,10 +39,10 @@ class VideoSinkInterfaceProxyImpl;
 
 class MediaManager : public sigslot::has_slots<>, public std::enable_shared_from_this<MediaManager> {
 public:
-	static rtc::Thread *getWorkerThread();
+	static webrtc::Thread *getWorkerThread();
 
 	MediaManager(
-		rtc::Thread *thread,
+		webrtc::Thread *thread,
 		bool isOutgoing,
         ProtocolVersion protocolVersion,
 		const MediaDevicesConfig &devicesConfig,
@@ -59,12 +58,12 @@ public:
 
 	void start();
 	void setIsConnected(bool isConnected);
-	void notifyPacketSent(const rtc::SentPacket &sentPacket);
+	void notifyPacketSent(const webrtc::SentPacket &sentPacket);
 	void setSendVideo(std::shared_ptr<VideoCaptureInterface> videoCapture);
 	void sendVideoDeviceUpdated();
     void setRequestedVideoAspect(float aspect);
 	void setMuteOutgoingAudio(bool mute);
-	void setIncomingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
+	void setIncomingVideoOutput(std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
 	void receiveMessage(DecryptedMessage &&message);
     void remoteVideoStateUpdated(VideoState videoState);
     void setNetworkParameters(bool isLowCost, bool isDataSavingActive);
@@ -85,16 +84,16 @@ private:
 		uint32_t fecOutgoing = 0;
 	};
 
-	class NetworkInterfaceImpl : public cricket::MediaChannelNetworkInterface {
+	class NetworkInterfaceImpl : public webrtc::MediaChannelNetworkInterface {
 	public:
 		NetworkInterfaceImpl(MediaManager *mediaManager, bool isVideo);
         
-		bool SendPacket(rtc::CopyOnWriteBuffer *packet, const rtc::PacketOptions& options) override;
-		bool SendRtcp(rtc::CopyOnWriteBuffer *packet, const rtc::PacketOptions& options) override;
-		int SetOption(SocketType type, rtc::Socket::Option opt, int option) override;
+		bool SendPacket(webrtc::CopyOnWriteBuffer *packet, const webrtc::AsyncSocketPacketOptions& options) override;
+		bool SendRtcp(webrtc::CopyOnWriteBuffer *packet, const webrtc::AsyncSocketPacketOptions& options) override;
+		int SetOption(SocketType type, webrtc::Socket::Option opt, int option) override;
 
 	private:
-		bool sendTransportMessage(rtc::CopyOnWriteBuffer *packet, const rtc::PacketOptions& options);
+		bool sendTransportMessage(webrtc::CopyOnWriteBuffer *packet, const webrtc::AsyncSocketPacketOptions& options);
 
 		MediaManager *_mediaManager = nullptr;
 		bool _isVideo = false;
@@ -127,7 +126,7 @@ private:
     void beginLevelsTimer(int timeoutMs);
     void collectStats();
 
-	rtc::Thread *_thread = nullptr;
+	webrtc::Thread *_thread = nullptr;
 	std::unique_ptr<webrtc::RtcEventLogNull> _eventLog;
 
 	std::function<void(Message &&)> _sendSignalingMessage;
@@ -150,20 +149,20 @@ private:
 	VideoState _outgoingVideoState = VideoState::Inactive;
 
 	VideoFormatsMessage _myVideoFormats;
-	std::vector<cricket::VideoCodec> _videoCodecs;
-	absl::optional<cricket::VideoCodec> _videoCodecOut;
+	std::vector<webrtc::VideoCodec> _videoCodecs;
+	absl::optional<webrtc::VideoCodec> _videoCodecOut;
 
     webrtc::Environment _webrtcEnvironment;
     std::unique_ptr<webrtc::MediaFactory> _mediaFactory;
-    std::unique_ptr<cricket::MediaEngineInterface> _mediaEngine;
+    std::unique_ptr<webrtc::MediaEngineInterface> _mediaEngine;
 	std::unique_ptr<webrtc::Call> _call;
 	webrtc::LocalAudioSinkAdapter _audioSource;
 	webrtc::scoped_refptr<webrtc::AudioDeviceModule> _audioDeviceModule;
-	std::unique_ptr<cricket::VoiceMediaSendChannelInterface> _audioSendChannel;
-    std::unique_ptr<cricket::VoiceMediaReceiveChannelInterface> _audioReceiveChannel;
-	std::unique_ptr<cricket::VideoMediaSendChannelInterface> _videoSendChannel;
+	std::unique_ptr<webrtc::VoiceMediaSendChannelInterface> _audioSendChannel;
+    std::unique_ptr<webrtc::VoiceMediaReceiveChannelInterface> _audioReceiveChannel;
+	std::unique_ptr<webrtc::VideoMediaSendChannelInterface> _videoSendChannel;
     bool _haveVideoSendChannel = false;
-    std::unique_ptr<cricket::VideoMediaReceiveChannelInterface> _videoReceiveChannel;
+    std::unique_ptr<webrtc::VideoMediaReceiveChannelInterface> _videoReceiveChannel;
 	std::unique_ptr<webrtc::VideoBitrateAllocatorFactory> _videoBitrateAllocatorFactory;
 	std::shared_ptr<VideoCaptureInterface> _videoCapture;
 	std::shared_ptr<bool> _videoCaptureGuard;

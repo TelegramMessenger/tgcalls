@@ -17,10 +17,10 @@ namespace webrtc {
 class VideoFrame;
 } // namespace webrtc
 
-namespace rtc {
+namespace webrtc {
 template <typename T>
 class VideoSinkInterface;
-} // namespace rtc
+} // namespace webrtc
 
 namespace tgcalls {
 
@@ -37,10 +37,10 @@ public:
 
 	void setOutput(
 		std::shared_ptr<
-			rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) const;
+			webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) const;
 	void setSecondaryOutput(
 		std::shared_ptr<
-		rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) const;
+		webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) const;
 	void start() const;
 	void stop() const;
     void setOnFatalError(std::function<void ()>) const;

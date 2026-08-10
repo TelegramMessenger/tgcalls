@@ -21,19 +21,19 @@
 #include "Message.h"
 #include "ThreadLocalObject.h"
 
-namespace rtc {
+namespace webrtc {
 class BasicPacketSocketFactory;
 class BasicNetworkManager;
 class PacketTransportInternal;
 struct NetworkRoute;
-} // namespace rtc
+} // namespace webrtc
 
-namespace cricket {
+namespace webrtc {
 class BasicPortAllocator;
 class P2PTransportChannel;
 class IceTransportInternal;
 class DtlsTransport;
-} // namespace cricket
+} // namespace webrtc
 
 namespace webrtc {
 class BasicAsyncResolverFactory;
@@ -73,8 +73,8 @@ public:
     void stop();
 
     PeerIceParameters getLocalIceParameters();
-    std::unique_ptr<rtc::SSLFingerprint> getLocalFingerprint();
-    void setRemoteParams(PeerIceParameters const &remoteIceParameters, std::vector<cricket::Candidate> const &iceCandidates, rtc::SSLFingerprint *fingerprint);
+    std::unique_ptr<webrtc::SSLFingerprint> getLocalFingerprint();
+    void setRemoteParams(PeerIceParameters const &remoteIceParameters, std::vector<webrtc::Candidate> const &iceCandidates, webrtc::SSLFingerprint *fingerprint);
 
     void sendDataChannelMessage(std::string const &message);
 
@@ -86,17 +86,17 @@ private:
     void resetDtlsSrtpTransport();
     void restartDataChannel();
     void checkConnectionTimeout();
-    void candidateGathered(cricket::IceTransportInternal *transport, const cricket::Candidate &candidate);
-    void candidateGatheringState(cricket::IceTransportInternal *transport);
-    void OnTransportWritableState_n(rtc::PacketTransportInternal *transport);
-    void OnTransportReceivingState_n(rtc::PacketTransportInternal *transport);
-    void transportStateChanged(cricket::IceTransportInternal *transport);
-    void transportReadyToSend(cricket::IceTransportInternal *transport);
-    void transportPacketReceived(rtc::PacketTransportInternal *transport, const char *bytes, size_t size, const int64_t &timestamp, int unused);
+    void candidateGathered(webrtc::IceTransportInternal *transport, const webrtc::Candidate &candidate);
+    void candidateGatheringState(webrtc::IceTransportInternal *transport);
+    void OnTransportWritableState_n(webrtc::PacketTransportInternal *transport);
+    void OnTransportReceivingState_n(webrtc::PacketTransportInternal *transport);
+    void transportStateChanged(webrtc::IceTransportInternal *transport);
+    void transportReadyToSend(webrtc::IceTransportInternal *transport);
+    void transportPacketReceived(webrtc::PacketTransportInternal *transport, const char *bytes, size_t size, const int64_t &timestamp, int unused);
     void DtlsReadyToSend(bool DtlsReadyToSend);
     void UpdateAggregateStates_n();
     void RtpPacketReceived_n(webrtc::RtpPacketReceived const &packet, bool isUnresolved);
-    void OnRtcpPacketReceived_n(rtc::CopyOnWriteBuffer *packet, int64_t packet_time_us);
+    void OnRtcpPacketReceived_n(webrtc::CopyOnWriteBuffer *packet, int64_t packet_time_us);
 
     void sctpReadyToSendData();
 
@@ -109,19 +109,19 @@ private:
     bool _zeroAudioLevel = false;
     std::function<void(uint32_t)> _anyActivityUpdated;
 
-    std::unique_ptr<rtc::NetworkMonitorFactory> _networkMonitorFactory;
-    std::unique_ptr<rtc::BasicPacketSocketFactory> _socketFactory;
-    std::unique_ptr<rtc::BasicNetworkManager> _networkManager;
+    std::unique_ptr<webrtc::NetworkMonitorFactory> _networkMonitorFactory;
+    std::unique_ptr<webrtc::BasicPacketSocketFactory> _socketFactory;
+    std::unique_ptr<webrtc::BasicNetworkManager> _networkManager;
     std::unique_ptr<webrtc::TurnCustomizer> _turnCustomizer;
-    std::unique_ptr<cricket::BasicPortAllocator> _portAllocator;
+    std::unique_ptr<webrtc::BasicPortAllocator> _portAllocator;
     std::unique_ptr<webrtc::AsyncDnsResolverFactoryInterface> _asyncResolverFactory;
-    std::unique_ptr<cricket::P2PTransportChannel> _transportChannel;
-    std::unique_ptr<cricket::DtlsTransport> _dtlsTransport;
+    std::unique_ptr<webrtc::P2PTransportChannel> _transportChannel;
+    std::unique_ptr<webrtc::DtlsTransport> _dtlsTransport;
     std::unique_ptr<webrtc::DtlsSrtpTransport> _dtlsSrtpTransport;
 
     std::unique_ptr<SctpDataChannelProviderInterfaceImpl> _dataChannelInterface;
 
-    webrtc::scoped_refptr<rtc::RTCCertificate> _localCertificate;
+    webrtc::scoped_refptr<webrtc::RTCCertificate> _localCertificate;
     PeerIceParameters _localIceParameters;
     absl::optional<PeerIceParameters> _remoteIceParameters;
 

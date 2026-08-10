@@ -100,7 +100,7 @@ webrtc::VideoFrame FrameSource::next_frame() {
   return webrtc::VideoFrame::Builder().set_timestamp_us(static_cast<int64_t>(pts * 1000000)).set_video_frame_buffer(buffer).build();
 }
 
-class FakeVideoSource : public rtc::VideoSourceInterface<webrtc::VideoFrame> {
+class FakeVideoSource : public webrtc::VideoSourceInterface<webrtc::VideoFrame> {
  public:
   FakeVideoSource(std::unique_ptr<FrameSource> source) {
     data_ = std::make_shared<Data>();
@@ -111,7 +111,7 @@ class FakeVideoSource : public rtc::VideoSourceInterface<webrtc::VideoFrame> {
         std::this_thread::sleep_for(std::chrono::milliseconds(1000 / 30));
         auto frame = source->next_frame();
         frame.set_id(static_cast<std::uint16_t>(step));
-        frame.set_timestamp_us(rtc::TimeMicros());
+        frame.set_timestamp_us(webrtc::TimeMicros());
         data->broadcaster_.OnFrame(frame);
       }
     }).detach();
@@ -120,13 +120,13 @@ class FakeVideoSource : public rtc::VideoSourceInterface<webrtc::VideoFrame> {
     data_->flag_ = true;
   }
   using VideoFrameT = webrtc::VideoFrame;
-  void AddOrUpdateSink(rtc::VideoSinkInterface<VideoFrameT> *sink, const rtc::VideoSinkWants &wants) override {
+  void AddOrUpdateSink(webrtc::VideoSinkInterface<VideoFrameT> *sink, const webrtc::VideoSinkWants &wants) override {
     RTC_LOG(LS_WARNING) << "ADD";
     data_->broadcaster_.AddOrUpdateSink(sink, wants);
   }
   // RemoveSink must guarantee that at the time the method returns,
   // there is no current and no future calls to VideoSinkInterface::OnFrame.
-  void RemoveSink(rtc::VideoSinkInterface<VideoFrameT> *sink) override {
+  void RemoveSink(webrtc::VideoSinkInterface<VideoFrameT> *sink) override {
     RTC_LOG(LS_WARNING) << "REMOVE";
     data_->broadcaster_.RemoveSink(sink);
   }
@@ -134,7 +134,7 @@ class FakeVideoSource : public rtc::VideoSourceInterface<webrtc::VideoFrame> {
  private:
   struct Data {
     std::atomic<bool> flag_;
-    rtc::VideoBroadcaster broadcaster_;
+    webrtc::VideoBroadcaster broadcaster_;
   };
   std::shared_ptr<Data> data_;
 };
@@ -142,7 +142,7 @@ class FakeVideoSource : public rtc::VideoSourceInterface<webrtc::VideoFrame> {
 class FakeVideoTrackSourceImpl : public webrtc::VideoTrackSource {
  public:
   static webrtc::scoped_refptr<FakeVideoTrackSourceImpl> Create(std::unique_ptr<FrameSource> source) {
-    return webrtc::scoped_refptr<FakeVideoTrackSourceImpl>(new rtc::RefCountedObject<FakeVideoTrackSourceImpl>(std::move(source)));
+    return webrtc::scoped_refptr<FakeVideoTrackSourceImpl>(new webrtc::RefCountedObject<FakeVideoTrackSourceImpl>(std::move(source)));
   }
 
   explicit FakeVideoTrackSourceImpl(std::unique_ptr<FrameSource> source) : VideoTrackSource(false), source_(std::move(source)) {
@@ -150,7 +150,7 @@ class FakeVideoTrackSourceImpl : public webrtc::VideoTrackSource {
 
  protected:
   FakeVideoSource source_;
-  rtc::VideoSourceInterface<webrtc::VideoFrame> *source() override {
+  webrtc::VideoSourceInterface<webrtc::VideoFrame> *source() override {
     return &source_;
   }
 };

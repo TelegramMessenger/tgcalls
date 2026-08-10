@@ -50,11 +50,11 @@ std::unique_ptr<webrtc::VideoDecoderFactory> AndroidInterface::makeVideoDecoderF
     return webrtc::JavaToNativeVideoDecoderFactory(env, factory_object.obj());
 }
 
-void AndroidInterface::adaptVideoSource(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> videoSource, int width, int height, int fps) {
+void AndroidInterface::adaptVideoSource(webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> videoSource, int width, int height, int fps) {
 
 }
 
-rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> AndroidInterface::makeVideoSource(rtc::Thread *signalingThread, rtc::Thread *workerThread) {
+webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> AndroidInterface::makeVideoSource(webrtc::Thread *signalingThread, webrtc::Thread *workerThread) {
     JNIEnv *env = webrtc::AttachCurrentThreadIfNeeded();
     _source = webrtc::CreateJavaVideoSource(env, signalingThread, false, false);
     return webrtc::VideoTrackSourceProxy::Create(signalingThread, workerThread, _source);
@@ -80,10 +80,10 @@ bool AndroidInterface::supportsEncoding(const std::string &codecName) {
             return true;
         }
     }
-    return codecName == cricket::kVp8CodecName;
+    return codecName == webrtc::kVp8CodecName;
 }
 
-std::unique_ptr<VideoCapturerInterface> AndroidInterface::makeVideoCapturer(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, std::string deviceId, std::function<void(VideoState)> stateUpdated, std::shared_ptr<PlatformContext> platformContext) {
+std::unique_ptr<VideoCapturerInterface> AndroidInterface::makeVideoCapturer(webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, std::string deviceId, std::function<void(VideoState)> stateUpdated, std::shared_ptr<PlatformContext> platformContext) {
     return std::make_unique<VideoCapturerInterfaceImpl>(_source, deviceId, stateUpdated, platformContext);
 }
 

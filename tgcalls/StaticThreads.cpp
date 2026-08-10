@@ -56,7 +56,7 @@ private:
 };
 
 class ThreadsImpl : public Threads {
-  using Thread = std::unique_ptr<rtc::Thread>;
+  using Thread = std::unique_ptr<webrtc::Thread>;
 public:
   explicit ThreadsImpl(size_t i) {
     auto suffix = i == 0 ? "" : "#" + std::to_string(i);
@@ -73,13 +73,13 @@ public:
     //worker_->AllowInvokesToThread(network_.get());
   }
 
-  rtc::Thread *getNetworkThread() override {
+  webrtc::Thread *getNetworkThread() override {
     return network_.get();
   }
-  rtc::Thread *getMediaThread() override {
+  webrtc::Thread *getMediaThread() override {
     return media_.get();
   }
-  rtc::Thread *getWorkerThread() override {
+  webrtc::Thread *getWorkerThread() override {
     return worker_.get();
   }
 
@@ -89,10 +89,10 @@ private:
   Thread worker_;
 
   static Thread create(const std::string &name) {
-    return init(std::unique_ptr<rtc::Thread>(rtc::Thread::Create()), name);
+    return init(std::unique_ptr<webrtc::Thread>(webrtc::Thread::Create()), name);
   }
   static Thread create_network(const std::string &name) {
-    return init(std::unique_ptr<rtc::Thread>(rtc::Thread::CreateWithSocketServer()), name);
+    return init(std::unique_ptr<webrtc::Thread>(webrtc::Thread::CreateWithSocketServer()), name);
   }
 
   static Thread init(Thread value, const std::string &name) {
@@ -123,15 +123,15 @@ std::shared_ptr<Threads> Threads::getThreads(){
 
 namespace StaticThreads {
 
-rtc::Thread *getNetworkThread() {
+webrtc::Thread *getNetworkThread() {
   return getThreads()->getNetworkThread();
 }
 
-rtc::Thread *getMediaThread() {
+webrtc::Thread *getMediaThread() {
   return getThreads()->getMediaThread();
 }
 
-rtc::Thread *getWorkerThread() {
+webrtc::Thread *getWorkerThread() {
   return getThreads()->getWorkerThread();
 }
 
@@ -139,6 +139,6 @@ std::shared_ptr<Threads> &getThreads() {
   static std::shared_ptr<Threads> threads = std::make_shared<ThreadsImpl>(0);
   return threads;
 }
-};
+}
 
 }

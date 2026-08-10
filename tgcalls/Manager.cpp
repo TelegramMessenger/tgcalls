@@ -76,7 +76,7 @@ bool Manager::ResolvedNetworkStatus::operator!=(const ResolvedNetworkStatus &rhs
     return !(*this == rhs);
 }
 
-Manager::Manager(rtc::Thread *thread, Descriptor &&descriptor) :
+Manager::Manager(webrtc::Thread *thread, Descriptor &&descriptor) :
 _thread(thread),
 _encryptionKey(descriptor.encryptionKey),
 _signaling(
@@ -331,7 +331,7 @@ void Manager::setMuteOutgoingAudio(bool mute) {
 	});
 }
 
-void Manager::setIncomingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+void Manager::setIncomingVideoOutput(std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
 	_mediaManager->perform([sink](MediaManager *mediaManager) {
 		mediaManager->setIncomingVideoOutput(sink);
 	});

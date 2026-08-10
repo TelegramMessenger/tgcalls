@@ -99,7 +99,7 @@ struct Message {
     static absl::optional<Message> parse(const std::vector<uint8_t> &data);
 };
 
-};
+}  // namespace signaling_4_0_0
 
 } // namespace tgcalls
 

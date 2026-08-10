@@ -11,17 +11,19 @@
 #include "Stats.h"
 #include "DirectConnectionChannel.h"
 
-namespace rtc {
+namespace webrtc {
 template <typename VideoFrameT>
 class VideoSinkInterface;
-} // namespace rtc
+} // namespace webrtc
 
 namespace webrtc {
 class VideoFrame;
 class AudioDeviceModule;
 class TaskQueueFactory;
+#if !defined(TGCALL_WEBRTC_SCOPED_REFPTR_ALIAS)
 template <class T>
 class scoped_refptr;
+#endif
 } // namespace webrtc
 
 namespace tgcalls {
@@ -189,7 +191,7 @@ public:
 	virtual void setEchoCancellationStrength(int strength) = 0;
 
 	virtual bool supportsVideo() = 0;
-	virtual void setIncomingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) = 0;
+	virtual void setIncomingVideoOutput(std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) = 0;
 
 	virtual void setAudioInputDevice(std::string id) = 0;
 	virtual void setAudioOutputDevice(std::string id) = 0;

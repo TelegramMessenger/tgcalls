@@ -35,7 +35,7 @@ struct CandidatesListMessage {
 	static constexpr uint8_t kId = 1;
 	static constexpr bool kRequiresAck = true;
 
-	std::vector<cricket::Candidate> candidates;
+	std::vector<webrtc::Candidate> candidates;
     PeerIceParameters iceParameters;
 };
 
@@ -64,21 +64,21 @@ struct AudioDataMessage {
 	static constexpr uint8_t kId = 5;
 	static constexpr bool kRequiresAck = false;
 
-	rtc::CopyOnWriteBuffer data;
+	webrtc::CopyOnWriteBuffer data;
 };
 
 struct VideoDataMessage {
 	static constexpr uint8_t kId = 6;
 	static constexpr bool kRequiresAck = false;
 
-	rtc::CopyOnWriteBuffer data;
+	webrtc::CopyOnWriteBuffer data;
 };
 
 struct UnstructuredDataMessage {
     static constexpr uint8_t kId = 7;
     static constexpr bool kRequiresAck = true;
 
-    rtc::CopyOnWriteBuffer data;
+    webrtc::CopyOnWriteBuffer data;
 };
 
 struct VideoParametersMessage {
@@ -122,15 +122,15 @@ struct Message {
         RemoteNetworkStatusMessage> data;
 };
 
-rtc::CopyOnWriteBuffer SerializeMessageWithSeq(
+webrtc::CopyOnWriteBuffer SerializeMessageWithSeq(
 	const Message &message,
 	uint32_t seq,
 	bool singleMessagePacket);
 absl::optional<Message> DeserializeMessage(
-	rtc::ByteBufferReader &reader,
+	webrtc::ByteBufferReader &reader,
 	bool singleMessagePacket);
-absl::optional<rtc::CopyOnWriteBuffer> DeserializeRawMessage(
-    rtc::ByteBufferReader &reader,
+absl::optional<webrtc::CopyOnWriteBuffer> DeserializeRawMessage(
+    webrtc::ByteBufferReader &reader,
     bool singleMessagePacket);
 
 struct DecryptedMessage {
@@ -139,7 +139,7 @@ struct DecryptedMessage {
 };
 
 struct DecryptedRawMessage {
-    rtc::CopyOnWriteBuffer message;
+    webrtc::CopyOnWriteBuffer message;
     uint32_t counter = 0;
 };
 

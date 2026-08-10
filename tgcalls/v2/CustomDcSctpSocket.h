@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -83,7 +84,7 @@ class CustomDcSctpSocket : public DcSctpSocketInterface {
   CustomDcSctpSocket& operator=(const CustomDcSctpSocket&) = delete;
 
   // Implementation of `DcSctpSocketInterface`.
-  void ReceivePacket(rtc::ArrayView<const uint8_t> data) override;
+  void ReceivePacket(std::span<const uint8_t> data) override;
   void HandleTimeout(TimeoutID timeout_id) override;
   void Connect() override;
   void RestoreFromState(const DcSctpSocketHandoverState& state) override;
@@ -91,10 +92,10 @@ class CustomDcSctpSocket : public DcSctpSocketInterface {
   void Close() override;
   SendStatus Send(DcSctpMessage message,
                   const SendOptions& send_options) override;
-  std::vector<SendStatus> SendMany(rtc::ArrayView<DcSctpMessage> messages,
+  std::vector<SendStatus> SendMany(std::span<DcSctpMessage> messages,
                                    const SendOptions& send_options) override;
   ResetStreamsStatus ResetStreams(
-      rtc::ArrayView<const StreamID> outgoing_streams) override;
+      std::span<const StreamID> outgoing_streams) override;
   SocketState state() const override;
   const DcSctpOptions& options() const override { return options_; }
   void SetMaxMessageSize(size_t max_message_size) override;
@@ -158,7 +159,7 @@ class CustomDcSctpSocket : public DcSctpSocketInterface {
   webrtc::TimeDelta OnInitTimerExpiry();
   webrtc::TimeDelta OnCookieTimerExpiry();
   webrtc::TimeDelta OnShutdownTimerExpiry();
-  void OnSentPacket(rtc::ArrayView<const uint8_t> packet,
+  void OnSentPacket(std::span<const uint8_t> packet,
                     SendPacketStatus status);
   // Sends SHUTDOWN or SHUTDOWN-ACK if the socket is shutting down and if all
   // outstanding data has been acknowledged.
@@ -181,7 +182,7 @@ class CustomDcSctpSocket : public DcSctpSocketInterface {
   bool ValidatePacket(const SctpPacket& packet);
   // Parses `payload`, which is a serialized packet that is just going to be
   // sent and prints all chunks.
-  void DebugPrintOutgoing(rtc::ArrayView<const uint8_t> payload);
+  void DebugPrintOutgoing(std::span<const uint8_t> payload);
   // Called whenever data has been received, or the cumulative acknowledgment
   // TSN has moved, that may result in delivering messages.
   void MaybeDeliverMessages();

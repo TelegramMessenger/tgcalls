@@ -37,7 +37,7 @@ int NumberOfThreads(int width, int height, int number_of_cores) {
 
 }  // namespace
 
-H264EncoderX264Impl::H264EncoderX264Impl(cricket::VideoCodec const &videoCodec) :
+H264EncoderX264Impl::H264EncoderX264Impl(webrtc::VideoCodec const &videoCodec) :
     packetization_mode_(H264PacketizationMode::SingleNalUnit),
     encoded_image_callback_(nullptr),
     inited_(false),

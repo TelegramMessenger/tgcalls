@@ -11,42 +11,14 @@
 #include "v2/CustomDcSctpSocket.h"
 #include "net/dcsctp/public/dcsctp_socket_factory.h"
 #include "system_wrappers/include/clock.h"
+#include "api/environment/environment_factory.h"
 
 #include "FieldTrialsConfig.h"
 
 namespace tgcalls {
 
-// Factory that creates CustomDcSctpSocket (with the t1 timer backoff cap fix)
-// instead of the stock DcSctpSocket, with optional timer overrides for the
-// signaling channel.
-class CustomDcSctpSocketFactory : public dcsctp::DcSctpSocketFactory {
-public:
-    explicit CustomDcSctpSocketFactory(SignalingSctpConnection::Options opts = {})
-        : _opts(opts) {}
 
-    std::unique_ptr<dcsctp::DcSctpSocketInterface> Create(
-        absl::string_view log_prefix,
-        dcsctp::DcSctpSocketCallbacks& callbacks,
-        std::unique_ptr<dcsctp::PacketObserver> packet_observer,
-        const dcsctp::DcSctpOptions& options) override {
-        dcsctp::DcSctpOptions opts = options;
-        if (_opts.t1InitTimeoutMs > 0) {
-            opts.t1_init_timeout = dcsctp::DurationMs(_opts.t1InitTimeoutMs);
-        }
-        if (_opts.t1CookieTimeoutMs > 0) {
-            opts.t1_cookie_timeout = dcsctp::DurationMs(_opts.t1CookieTimeoutMs);
-        }
-        if (_opts.maxBackoffMs > 0) {
-            opts.max_timer_backoff_duration = dcsctp::DurationMs(_opts.maxBackoffMs);
-        }
-        return std::make_unique<dcsctp::CustomDcSctpSocket>(
-            log_prefix, callbacks, std::move(packet_observer), opts);
-    }
-private:
-    SignalingSctpConnection::Options _opts;
-};
-
-class SignalingPacketTransport : public rtc::PacketTransportInternal {
+class SignalingPacketTransport : public webrtc::PacketTransportInternal {
 public:
     SignalingPacketTransport(std::shared_ptr<Threads> threads, std::function<void(const std::vector<uint8_t> &)> emitData, bool writable) :
     _threads(threads),
@@ -60,13 +32,14 @@ public:
 
     void receiveData(std::vector<uint8_t> const &data) {
         RTC_LOG(LS_INFO) << "SignalingPacketTransport: adding data of " << data.size() << " bytes";
-        SignalReadPacket.emit(this, (const char *)data.data(), data.size(), -1, 0);
+        NotifyPacketReceived(webrtc::ReceivedIpPacket::CreateFromLegacy(
+            (const char *)data.data(), data.size(), 0));
     }
 
     void setWritable(bool writable) {
         if (_writable != writable) {
             _writable = writable;
-            SignalWritableState.emit(this);
+            NotifyWritableState(this);
         }
     }
 
@@ -92,22 +65,21 @@ public:
     // TODO(johan): Remove the default argument once channel code is updated.
     virtual int SendPacket(const char* data,
                            size_t len,
-                           const rtc::PacketOptions& options,
+                           const webrtc::AsyncSocketPacketOptions& options,
                            int flags = 0) override {
         _emitData(std::vector<uint8_t>(data, data + len));
 
-        rtc::SentPacket sentPacket;
-        sentPacket.packet_id = options.packet_id;
-        SignalSentPacket.emit(this, sentPacket);
+        webrtc::SentPacketInfo sentPacket(options.packet_id, -1);
+        NotifySentPacket(this, sentPacket);
 
         return (int)len;
     }
 
-    virtual int SetOption(rtc::Socket::Option opt, int value) override {
+    virtual int SetOption(webrtc::Socket::Option opt, int value) override {
         return 0;
     }
 
-    virtual bool GetOption(rtc::Socket::Option opt, int* value) override {
+    virtual bool GetOption(webrtc::Socket::Option opt, int* value) override {
         return 0;
     }
 
@@ -115,8 +87,8 @@ public:
         return 0;
     }
 
-    virtual absl::optional<rtc::NetworkRoute> network_route() const override {
-        return absl::nullopt;
+    virtual std::optional<webrtc::NetworkRoute> network_route() const override {
+        return std::nullopt;
     }
 
 private:
@@ -130,22 +102,24 @@ private:
 SignalingSctpConnection::SignalingSctpConnection(std::shared_ptr<Threads> threads, std::function<void(const std::vector<uint8_t> &)> onIncomingData, std::function<void(const std::vector<uint8_t> &)> emitData, bool isInitiator, Options options) :
 _threads(threads),
 _emitData(emitData),
-_onIncomingData(onIncomingData) {
+_onIncomingData(onIncomingData),
+_environment(webrtc::CreateEnvironment()) {
     _threads->getNetworkThread()->BlockingCall([&]() {
-        _packetTransport = std::make_unique<SignalingPacketTransport>(threads, emitData, /*writable=*/isInitiator);
 
-        // Use DcSctpTransport directly with CustomDcSctpSocketFactory so the
-        // signaling SCTP gets the t1 timer backoff cap fix (the stock
-        // DcSctpSocket doesn't wire max_timer_backoff_duration to t1 timers).
-        _sctpTransport = std::make_unique<webrtc::DcSctpTransport>(
-            _threads->getNetworkThread(),
-            _packetTransport.get(),
-            webrtc::Clock::GetRealTimeClock(),
-            std::make_unique<CustomDcSctpSocketFactory>(options));
-        _sctpTransport->OpenStream(0);
+        _packetTransport = std::make_unique<SignalingPacketTransport>(threads, emitData, false);
+
+        _sctpTransportFactory.reset(new webrtc::SctpTransportFactory(_threads->getNetworkThread()));
+        _dtlsTransportAdapter.reset(new TgcallDtlsTransportAdapter(_packetTransport.get()));
+
+        _sctpTransport = _sctpTransportFactory->CreateSctpTransport(_environment, _dtlsTransportAdapter.get());
+        _sctpTransport->OpenStream(0, webrtc::PriorityValue(webrtc::Priority::kMedium));
         _sctpTransport->SetDataChannelSink(this);
 
-        _sctpTransport->Start(5000, 5000, 262144);
+        webrtc::SctpOptions sctpOptions;
+        sctpOptions.local_port = 5000;
+        sctpOptions.remote_port = 5000;
+        sctpOptions.max_message_size = 262144;
+        _sctpTransport->Start(sctpOptions);
     });
 }
 
@@ -162,7 +136,7 @@ void SignalingSctpConnection::OnReadyToSend() {
         params.type = webrtc::DataMessageType::kBinary;
         params.ordered = true;
         
-        rtc::CopyOnWriteBuffer payload;
+        webrtc::CopyOnWriteBuffer payload;
         payload.AppendData(data.data(), data.size());
         
         webrtc::RTCError sendError = _sctpTransport->SendData(0, params, payload);
@@ -178,11 +152,15 @@ void SignalingSctpConnection::OnReadyToSend() {
     }
 }
 
+void SignalingSctpConnection::OnTransportConnected() {
+    assert(_threads->getNetworkThread()->IsCurrent());
+}
+
 void SignalingSctpConnection::OnTransportClosed(webrtc::RTCError error) {
     assert(_threads->getNetworkThread()->IsCurrent());
 }
 
-void SignalingSctpConnection::OnDataReceived(int channel_id, webrtc::DataMessageType type, const rtc::CopyOnWriteBuffer& buffer) {
+void SignalingSctpConnection::OnDataReceived(int channel_id, webrtc::DataMessageType type, const webrtc::CopyOnWriteBuffer& buffer) {
     assert(_threads->getNetworkThread()->IsCurrent());
 
     _onIncomingData(std::vector<uint8_t>(buffer.data(), buffer.data() + buffer.size()));
@@ -212,7 +190,7 @@ void SignalingSctpConnection::send(const std::vector<uint8_t> &data) {
             params.type = webrtc::DataMessageType::kBinary;
             params.ordered = true;
             
-            rtc::CopyOnWriteBuffer payload;
+            webrtc::CopyOnWriteBuffer payload;
             payload.AppendData(data.data(), data.size());
             
             webrtc::RTCError sendError = _sctpTransport->SendData(0, params, payload);

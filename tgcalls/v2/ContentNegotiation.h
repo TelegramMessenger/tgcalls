@@ -11,6 +11,10 @@
 
 #include "v2/Signaling.h"
 
+namespace webrtc {
+class CodecLookupHelper;
+}
+
 namespace tgcalls {
 
 class ContentNegotiationContext {
@@ -25,12 +29,12 @@ public:
     };
     
     struct PendingOutgoingChannel {
-        cricket::MediaDescriptionOptions description;
+        webrtc::MediaDescriptionOptions description;
         
         uint32_t ssrc = 0;
         std::vector<signaling::SsrcGroup> ssrcGroups;
         
-        PendingOutgoingChannel(cricket::MediaDescriptionOptions &&description_) :
+        PendingOutgoingChannel(webrtc::MediaDescriptionOptions &&description_) :
         description(std::move(description_)) {
         }
     };
@@ -50,10 +54,10 @@ public:
     };
     
 public:
-    ContentNegotiationContext(const webrtc::FieldTrialsView &fieldTrials, bool isOutgoing, cricket::MediaEngineInterface *mediaEngine, rtc::UniqueRandomIdGenerator *uniqueRandomIdGenerator);
+    ContentNegotiationContext(const webrtc::FieldTrialsView &fieldTrials, bool isOutgoing, webrtc::MediaEngineInterface *mediaEngine, webrtc::UniqueRandomIdGenerator *uniqueRandomIdGenerator);
     ~ContentNegotiationContext();
     
-    void copyCodecsFromChannelManager(cricket::MediaEngineInterface *mediaEngine, bool randomize);
+    void copyCodecsFromChannelManager(webrtc::MediaEngineInterface *mediaEngine, bool randomize);
     
     std::string addOutgoingChannel(signaling::MediaContent::Type mediaType);
     void removeOutgoingChannel(std::string const &id);
@@ -66,17 +70,18 @@ public:
     
 private:
     std::string takeNextOutgoingChannelId();
-    std::unique_ptr<cricket::SessionDescription> currentSessionDescriptionFromCoordinatedState();
+    std::unique_ptr<webrtc::SessionDescription> currentSessionDescriptionFromCoordinatedState();
     
     std::unique_ptr<NegotiationContents> getAnswer(std::unique_ptr<NegotiationContents> &&offer);
     void setAnswer(std::unique_ptr<NegotiationContents> &&answer);
     
 private:
     bool _isOutgoing = false;
-    rtc::UniqueRandomIdGenerator *_uniqueRandomIdGenerator = nullptr;
+    webrtc::UniqueRandomIdGenerator *_uniqueRandomIdGenerator = nullptr;
     
-    std::unique_ptr<cricket::TransportDescriptionFactory> _transportDescriptionFactory;
-    std::unique_ptr<cricket::MediaSessionDescriptionFactory> _sessionDescriptionFactory;
+    std::unique_ptr<webrtc::TransportDescriptionFactory> _transportDescriptionFactory;
+    std::unique_ptr<webrtc::CodecLookupHelper> _codecLookupHelper;
+    std::unique_ptr<webrtc::MediaSessionDescriptionFactory> _sessionDescriptionFactory;
     
     std::vector<std::string> _channelIdOrder;
     

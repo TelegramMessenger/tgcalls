@@ -31,10 +31,10 @@ namespace {
 
 }
 
-class DirectPacketTransport : public rtc::PacketTransportInternal, public std::enable_shared_from_this<DirectPacketTransport> {
+class DirectPacketTransport : public webrtc::PacketTransportInternal, public std::enable_shared_from_this<DirectPacketTransport> {
 public:
     DirectPacketTransport(
-        rtc::Thread *thread,
+        webrtc::Thread *thread,
         EncryptionKey const &encryptionKey,
         std::shared_ptr<DirectConnectionChannel> channel, std::function<void(bool)> &&isConnectedUpdated
     ) :
@@ -102,22 +102,22 @@ public:
     // TODO(johan): Remove the default argument once channel code is updated.
     virtual int SendPacket(const char *data,
                            size_t len,
-                           const rtc::PacketOptions& options,
+                           const webrtc::PacketOptions& options,
                            int flags = 0) override {
         if (!_isConnected) {
             _lastError = ENOTCONN;
             return -1;
         }
         
-        rtc::CopyOnWriteBuffer buffer;
+        webrtc::CopyOnWriteBuffer buffer;
         buffer.AppendData(data, len);
         
         Message message = flags == 0 ? Message { AudioDataMessage { buffer } } : Message { VideoDataMessage { buffer } };
         
         if (const auto prepared = _encryption.prepareForSending(message)) {
-            rtc::PacketOptions packetOptions;
+            webrtc::PacketOptions packetOptions;
             
-            rtc::ByteBufferWriter bufferWriter;
+            webrtc::ByteBufferWriter bufferWriter;
             bufferWriter.WriteUInt32((uint32_t)prepared->bytes.size());
             bufferWriter.WriteBytes(reinterpret_cast<const uint8_t *>(prepared->bytes.data()), prepared->bytes.size());
             while (bufferWriter.Length() % 4 != 0) {
@@ -128,9 +128,9 @@ public:
             _channel->sendPacket(std::move(packet));
         }
         
-        rtc::SentPacket sentPacket;
+        webrtc::SentPacket sentPacket;
         sentPacket.packet_id = options.packet_id;
-        sentPacket.send_time_ms = rtc::TimeMillis();
+        sentPacket.send_time_ms = webrtc::TimeMillis();
         SignalSentPacket(this, sentPacket);
         
         return 0;
@@ -138,13 +138,13 @@ public:
     
     // Sets a socket option. Note that not all options are
     // supported by all transport types.
-    virtual int SetOption(rtc::Socket::Option opt, int value) override {
+    virtual int SetOption(webrtc::Socket::Option opt, int value) override {
         return 0;
     }
     
     // TODO(pthatcher): Once Chrome's MockPacketTransportInterface implements
     // this, remove the default implementation.
-    virtual bool GetOption(rtc::Socket::Option opt, int *value) override {
+    virtual bool GetOption(webrtc::Socket::Option opt, int *value) override {
         return false;
     }
     
@@ -155,7 +155,7 @@ public:
     
     // Returns the current network route with transport overhead.
     // TODO(zhihuang): Make it pure virtual once the Chrome/remoting is updated.
-    virtual absl::optional<rtc::NetworkRoute> network_route() const override {
+    virtual absl::optional<webrtc::NetworkRoute> network_route() const override {
         return absl::nullopt;
     }
     
@@ -182,11 +182,11 @@ public:
         SignalReadPacket;
 
     // Signalled each time a packet is sent on this channel.
-    sigslot::signal2<PacketTransportInternal*, const rtc::SentPacket&>
+    sigslot::signal2<PacketTransportInternal*, const webrtc::SentPacket&>
         SignalSentPacket;
 
     // Signalled when the current network route has changed.
-    sigslot::signal1<absl::optional<rtc::NetworkRoute>> SignalNetworkRouteChanged;
+    sigslot::signal1<absl::optional<webrtc::NetworkRoute>> SignalNetworkRouteChanged;
 
     // Signalled when the transport is closed.
     sigslot::signal1<PacketTransportInternal*> SignalClosed;*/
@@ -206,7 +206,7 @@ private:
     }
     
     std::unique_ptr<std::vector<uint8_t>> makeServerHelloPacket() {
-        rtc::ByteBufferWriter bufferWriter;
+        webrtc::ByteBufferWriter bufferWriter;
         for (int i = 0; i < 12; i++) {
             bufferWriter.WriteUInt8(0xffu);
         }
@@ -224,14 +224,14 @@ private:
     }
     
     std::unique_ptr<std::vector<uint8_t>> makePingPacket() {
-        rtc::ByteBufferWriter bufferWriter;
+        webrtc::ByteBufferWriter bufferWriter;
         bufferWriter.WriteUInt32(_pingMarker);
         
         return std::make_unique<std::vector<uint8_t>>(bufferWriter.Data(), bufferWriter.Data() + bufferWriter.Length());
     }
     
     void updateState() {
-        auto timestamp = rtc::TimeMillis();
+        auto timestamp = webrtc::TimeMillis();
         
         if (_isConnected && _lastDataReceivedTimestamp < timestamp - _keepalivePingInterval * 2) {
             _isConnected = false;
@@ -265,14 +265,14 @@ private:
     }
     
     void processIncomingPacket(std::shared_ptr<std::vector<uint8_t>> const &packet) {
-        rtc::ByteBufferReader reader(rtc::ArrayView<const uint8_t>(reinterpret_cast<const uint8_t *>(packet->data()), packet->size()));
+        webrtc::ByteBufferReader reader(webrtc::ArrayView<const uint8_t>(reinterpret_cast<const uint8_t *>(packet->data()), packet->size()));
         
         uint32_t header = 0;
         if (!reader.ReadUInt32(&header)) {
             return;
         }
         
-        _lastDataReceivedTimestamp = rtc::TimeMillis();
+        _lastDataReceivedTimestamp = webrtc::TimeMillis();
         if (!_isConnected) {
             _isConnected = true;
             SignalWritableState(this);
@@ -300,7 +300,7 @@ private:
             }
             
             if (!isSpecialPacket) {
-                rtc::ByteBufferReader dataPacketReader(rtc::ArrayView<const uint8_t>(reinterpret_cast<const uint8_t *>(packet->data()), packet->size()));
+                webrtc::ByteBufferReader dataPacketReader(webrtc::ArrayView<const uint8_t>(reinterpret_cast<const uint8_t *>(packet->data()), packet->size()));
                 uint32_t dataSize = 0;
                 if (!dataPacketReader.ReadUInt32(&dataSize)) {
                     return;
@@ -331,7 +331,7 @@ private:
                 if (dataSize > packet->size() - 4) {
                     RTC_LOG(LS_WARNING) << "DirectPacketTransport: Received data packet with invalid size tag";
                 } else {
-                    SignalReadPacket(this, reinterpret_cast<const char *>(packet->data() + 4), dataSize, rtc::TimeMicros(), 0);
+                    SignalReadPacket(this, reinterpret_cast<const char *>(packet->data() + 4), dataSize, webrtc::TimeMicros(), 0);
                 }*/
             }
         }
@@ -340,9 +340,9 @@ private:
     void handleIncomingMessage(DecryptedMessage const &message) {
         const auto data = &message.message.data;
         if (const auto dataMessage = absl::get_if<AudioDataMessage>(data)) {
-            SignalReadPacket(this, reinterpret_cast<const char *>(dataMessage->data.data()), dataMessage->data.size(), rtc::TimeMicros(), 0);
+            SignalReadPacket(this, reinterpret_cast<const char *>(dataMessage->data.data()), dataMessage->data.size(), webrtc::TimeMicros(), 0);
         } else if (const auto dataMessage = absl::get_if<VideoDataMessage>(data)) {
-            SignalReadPacket(this, reinterpret_cast<const char *>(dataMessage->data.data()), dataMessage->data.size(), rtc::TimeMicros(), 1);
+            SignalReadPacket(this, reinterpret_cast<const char *>(dataMessage->data.data()), dataMessage->data.size(), webrtc::TimeMicros(), 1);
         } else {
             RTC_LOG(LS_INFO) << "DirectPacketTransport: unknown incoming message";
         }
@@ -353,7 +353,7 @@ private:
     
     std::function<void(bool)> _isConnectedUpdated;
     
-    rtc::Thread *_thread = nullptr;
+    webrtc::Thread *_thread = nullptr;
     EncryptedConnection _encryption;
     std::shared_ptr<DirectConnectionChannel> _channel;
     
@@ -394,16 +394,16 @@ _dataChannelStateUpdated(configuration.dataChannelStateUpdated),
 _dataChannelMessageReceived(configuration.dataChannelMessageReceived) {
     assert(_threads->getNetworkThread()->IsCurrent());
     
-    _localIceParameters = PeerIceParameters(rtc::CreateRandomString(cricket::ICE_UFRAG_LENGTH), rtc::CreateRandomString(cricket::ICE_PWD_LENGTH), true);
+    _localIceParameters = PeerIceParameters(webrtc::CreateRandomString(webrtc::ICE_UFRAG_LENGTH), webrtc::CreateRandomString(webrtc::ICE_PWD_LENGTH), true);
     
-    _localCertificate = rtc::RTCCertificateGenerator::GenerateCertificate(rtc::KeyParams(rtc::KT_ECDSA), absl::nullopt);
+    _localCertificate = webrtc::RTCCertificateGenerator::GenerateCertificate(webrtc::KeyParams(webrtc::KT_ECDSA), absl::nullopt);
     
     _rtpTransport = std::make_unique<DirectRtpTransport>();
     
     _rtpTransport->SubscribeReadyToSend(this, [this](bool value) {
         this->DtlsReadyToSend(value);
     });
-    _rtpTransport->SubscribeRtcpPacketReceived(this, [this](rtc::CopyOnWriteBuffer *packet, int64_t timestamp) {
+    _rtpTransport->SubscribeRtcpPacketReceived(this, [this](webrtc::CopyOnWriteBuffer *packet, int64_t timestamp) {
         this->OnRtcpPacketReceived_n(packet, timestamp);
     });
     
@@ -467,7 +467,7 @@ void DirectNetworkingImpl::start() {
         _threads
     ));
     
-    _lastDisconnectedTimestamp = rtc::TimeMillis();
+    _lastDisconnectedTimestamp = webrtc::TimeMillis();
     checkConnectionTimeout();
     
     _packetTransport->start();
@@ -481,27 +481,27 @@ void DirectNetworkingImpl::stop() {
     
     _packetTransport->stop();
     
-    _localIceParameters = PeerIceParameters(rtc::CreateRandomString(cricket::ICE_UFRAG_LENGTH), rtc::CreateRandomString(cricket::ICE_PWD_LENGTH), true);
+    _localIceParameters = PeerIceParameters(webrtc::CreateRandomString(webrtc::ICE_UFRAG_LENGTH), webrtc::CreateRandomString(webrtc::ICE_PWD_LENGTH), true);
     
-    _localCertificate = rtc::RTCCertificateGenerator::GenerateCertificate(rtc::KeyParams(rtc::KT_ECDSA), absl::nullopt);
+    _localCertificate = webrtc::RTCCertificateGenerator::GenerateCertificate(webrtc::KeyParams(webrtc::KT_ECDSA), absl::nullopt);
 }
 
 PeerIceParameters DirectNetworkingImpl::getLocalIceParameters() {
     return _localIceParameters;
 }
 
-std::unique_ptr<rtc::SSLFingerprint> DirectNetworkingImpl::getLocalFingerprint() {
+std::unique_ptr<webrtc::SSLFingerprint> DirectNetworkingImpl::getLocalFingerprint() {
     auto certificate = _localCertificate;
     if (!certificate) {
         return nullptr;
     }
-    return rtc::SSLFingerprint::CreateFromCertificate(*certificate);
+    return webrtc::SSLFingerprint::CreateFromCertificate(*certificate);
 }
 
-void DirectNetworkingImpl::setRemoteParams(PeerIceParameters const &remoteIceParameters, rtc::SSLFingerprint *fingerprint, std::string const &sslSetup) {
+void DirectNetworkingImpl::setRemoteParams(PeerIceParameters const &remoteIceParameters, webrtc::SSLFingerprint *fingerprint, std::string const &sslSetup) {
 }
 
-void DirectNetworkingImpl::addCandidates(std::vector<cricket::Candidate> const &candidates) {
+void DirectNetworkingImpl::addCandidates(std::vector<webrtc::Candidate> const &candidates) {
 }
 
 void DirectNetworkingImpl::sendDataChannelMessage(std::string const &message) {
@@ -522,7 +522,7 @@ void DirectNetworkingImpl::checkConnectionTimeout() {
             return;
         }
 
-        int64_t currentTimestamp = rtc::TimeMillis();
+        int64_t currentTimestamp = webrtc::TimeMillis();
         const int64_t maxTimeout = 20000;
 
         if (!strong->_isConnected && strong->_lastDisconnectedTimestamp + maxTimeout < currentTimestamp) {
@@ -536,12 +536,12 @@ void DirectNetworkingImpl::checkConnectionTimeout() {
     }, webrtc::TimeDelta::Millis(1000));
 }
 
-void DirectNetworkingImpl::OnTransportWritableState_n(rtc::PacketTransportInternal *transport) {
+void DirectNetworkingImpl::OnTransportWritableState_n(webrtc::PacketTransportInternal *transport) {
     assert(_threads->getNetworkThread()->IsCurrent());
 
     UpdateAggregateStates_n();
 }
-void DirectNetworkingImpl::OnTransportReceivingState_n(rtc::PacketTransportInternal *transport) {
+void DirectNetworkingImpl::OnTransportReceivingState_n(webrtc::PacketTransportInternal *transport) {
     assert(_threads->getNetworkThread()->IsCurrent());
 
     UpdateAggregateStates_n();
@@ -562,7 +562,7 @@ void DirectNetworkingImpl::DtlsReadyToSend(bool isReadyToSend) {
     }
 }
 
-void DirectNetworkingImpl::OnRtcpPacketReceived_n(rtc::CopyOnWriteBuffer *packet, int64_t packet_time_us) {
+void DirectNetworkingImpl::OnRtcpPacketReceived_n(webrtc::CopyOnWriteBuffer *packet, int64_t packet_time_us) {
     if (_rtcpPacketReceived) {
         _rtcpPacketReceived(*packet, packet_time_us);
     }
@@ -577,7 +577,7 @@ void DirectNetworkingImpl::UpdateAggregateStates_n() {
         _isConnected = isConnected;
         
         if (!isConnected) {
-            _lastDisconnectedTimestamp = rtc::TimeMillis();
+            _lastDisconnectedTimestamp = webrtc::TimeMillis();
         }
 
         notifyStateUpdated();

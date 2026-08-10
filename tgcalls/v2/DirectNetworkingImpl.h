@@ -25,20 +25,20 @@
 #include "Instance.h"
 #include "EncryptedConnection.h"
 
-namespace rtc {
+namespace webrtc {
 class BasicPacketSocketFactory;
 class BasicNetworkManager;
 class PacketTransportInternal;
 struct NetworkRoute;
-} // namespace rtc
+} // namespace webrtc
 
-namespace cricket {
+namespace webrtc {
 class BasicPortAllocator;
 class P2PTransportChannel;
 class IceTransportInternal;
 class DtlsTransport;
 class RelayPortFactoryInterface;
-} // namespace cricket
+} // namespace webrtc
 
 namespace webrtc {
 class TurnCustomizer;
@@ -66,9 +66,9 @@ public:
     void stop();
 
     PeerIceParameters getLocalIceParameters();
-    std::unique_ptr<rtc::SSLFingerprint> getLocalFingerprint();
-    void setRemoteParams(PeerIceParameters const &remoteIceParameters, rtc::SSLFingerprint *fingerprint, std::string const &sslSetup);
-    void addCandidates(std::vector<cricket::Candidate> const &candidates);
+    std::unique_ptr<webrtc::SSLFingerprint> getLocalFingerprint();
+    void setRemoteParams(PeerIceParameters const &remoteIceParameters, webrtc::SSLFingerprint *fingerprint, std::string const &sslSetup);
+    void addCandidates(std::vector<webrtc::Candidate> const &candidates);
 
     void sendDataChannelMessage(std::string const &message);
 
@@ -82,15 +82,15 @@ private:
     
     void DtlsReadyToSend(bool DtlsReadyToSend);
     void UpdateAggregateStates_n();
-    void OnRtcpPacketReceived_n(rtc::CopyOnWriteBuffer *packet, int64_t packet_time_us);
-    void OnTransportWritableState_n(rtc::PacketTransportInternal *transport);
-    void OnTransportReceivingState_n(rtc::PacketTransportInternal *transport);
+    void OnRtcpPacketReceived_n(webrtc::CopyOnWriteBuffer *packet, int64_t packet_time_us);
+    void OnTransportWritableState_n(webrtc::PacketTransportInternal *transport);
+    void OnTransportReceivingState_n(webrtc::PacketTransportInternal *transport);
     
 private:
     std::shared_ptr<Threads> _threads;
     bool _isOutgoing = false;
     
-    webrtc::scoped_refptr<rtc::RTCCertificate> _localCertificate;
+    webrtc::scoped_refptr<webrtc::RTCCertificate> _localCertificate;
     std::vector<RtcServer> _rtcServers;
     PeerIceParameters _localIceParameters;
     
@@ -102,8 +102,8 @@ private:
     std::unique_ptr<SctpDataChannelProviderInterfaceImpl> _dataChannelInterface;
 
     std::function<void(const DirectNetworkingImpl::State &)> _stateUpdated;
-    std::function<void(rtc::CopyOnWriteBuffer const &, bool)> _transportMessageReceived;
-    std::function<void(rtc::CopyOnWriteBuffer const &, int64_t)> _rtcpPacketReceived;
+    std::function<void(webrtc::CopyOnWriteBuffer const &, bool)> _transportMessageReceived;
+    std::function<void(webrtc::CopyOnWriteBuffer const &, int64_t)> _rtcpPacketReceived;
     std::function<void(bool)> _dataChannelStateUpdated;
     std::function<void(std::string const &)> _dataChannelMessageReceived;
 

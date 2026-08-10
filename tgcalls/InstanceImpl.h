@@ -29,7 +29,7 @@ public:
 	bool supportsVideo() override {
 		return true;
 	}
-	void setIncomingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) override;
+	void setIncomingVideoOutput(std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) override;
 	void setAudioOutputGainControlEnabled(bool enabled) override;
 	void setEchoCancellationStrength(int strength) override;
 	void setAudioInputDevice(std::string id) override;

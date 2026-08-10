@@ -7,7 +7,7 @@
 
 #include "SignalingConnection.h"
 
-namespace rtc {
+namespace webrtc {
 class AsyncPacketSocket;
 }
 

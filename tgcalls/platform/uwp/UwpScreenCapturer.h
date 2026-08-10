@@ -31,7 +31,7 @@ namespace tgcalls {
 class UwpScreenCapturer {
 public:
 	explicit UwpScreenCapturer(
-		std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink, GraphicsCaptureItem item);
+		std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink, GraphicsCaptureItem item);
 	~UwpScreenCapturer();
 
 	void setState(VideoState state);
@@ -68,7 +68,7 @@ private:
 	void OnFrameArrived(DispatcherQueueTimer const& sender, winrt::Windows::Foundation::IInspectable const& args);
 	void OnClosed(GraphicsCaptureItem const& sender, winrt::Windows::Foundation::IInspectable const& args);
 
-	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _sink;
+	std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> _sink;
 
 	VideoState _state = VideoState::Inactive;
 	std::pair<int, int> _dimensions;

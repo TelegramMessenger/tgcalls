@@ -22,11 +22,11 @@
 - (void)stopCapture;
 - (void)setIsEnabled:(bool)isEnabled;
 - (void)setPreferredCaptureAspectRatio:(float)aspectRatio;
-- (void)setUncroppedSink:(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)sink;
+- (void)setUncroppedSink:(std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>>)sink;
 - (int)getRotation;
 
 - (void)addPreviewView:(VideoCaptureView *)previewView;
-- (void)addDirectSink:(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)directSink;
+- (void)addDirectSink:(std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>>)directSink;
 
 @end
 #endif // WEBRTC_IOS

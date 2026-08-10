@@ -12,8 +12,8 @@
 namespace tgcalls {
 namespace {
 
-std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> GetSink(
-	const rtc::scoped_refptr<
+std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> GetSink(
+	const webrtc::scoped_refptr<
 		webrtc::VideoTrackSourceInterface> &nativeSource) {
 	const auto proxy = static_cast<webrtc::VideoTrackSourceProxy*>(
 		nativeSource.get());
@@ -25,7 +25,7 @@ std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> GetSink(
 } // namespace
 
 VideoCapturerInterfaceImpl::VideoCapturerInterfaceImpl(
-	rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source,
+	webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source,
 	std::string deviceId,
 	std::function<void(VideoState)> stateUpdated,
 	std::shared_ptr<PlatformContext> platformContext,
@@ -99,7 +99,7 @@ void VideoCapturerInterfaceImpl::setPreferredCaptureAspectRatio(
 }
 
 void VideoCapturerInterfaceImpl::setUncroppedOutput(
-		std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+		std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
 	if (_uncroppedSink != nullptr) {
 		_source->RemoveSink(_uncroppedSink.get());
 	}
@@ -107,7 +107,7 @@ void VideoCapturerInterfaceImpl::setUncroppedOutput(
 	if (_uncroppedSink != nullptr) {
 		_source->AddOrUpdateSink(
 			_uncroppedSink.get(),
-			rtc::VideoSinkWants());
+			webrtc::VideoSinkWants());
 	}
 }
 

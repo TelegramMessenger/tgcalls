@@ -17,7 +17,7 @@ class FakeAudioDeviceModuleImpl : public webrtc::webrtc_impl::AudioDeviceModuleD
                                                               std::shared_ptr<FakeAudioDeviceModule::Recorder> recorder,
                                                               FakeAudioDeviceModule::Options options) {
     return webrtc::scoped_refptr<webrtc::AudioDeviceModule>(
-        new rtc::RefCountedObject<FakeAudioDeviceModuleImpl>(taskQueueFactory, options, std::move(renderer), std::move(recorder)));
+        new webrtc::RefCountedObject<FakeAudioDeviceModuleImpl>(taskQueueFactory, options, std::move(renderer), std::move(recorder)));
   }
 
   FakeAudioDeviceModuleImpl(webrtc::TaskQueueFactory*, FakeAudioDeviceModule::Options options,
@@ -225,13 +225,13 @@ private:
   std::atomic<bool> need_rendering_{false};
   std::atomic<bool> rendering_{false};
   std::condition_variable render_cond_;
-  std::unique_ptr<rtc::PlatformThread> renderThread_;
+  std::unique_ptr<webrtc::PlatformThread> renderThread_;
 
   mutable std::mutex record_mutex_;
   std::atomic<bool> need_recording_{false};
   std::atomic<bool> recording_{false};
   std::condition_variable record_cond_;
-  std::unique_ptr<rtc::PlatformThread> recordThread_;
+  std::unique_ptr<webrtc::PlatformThread> recordThread_;
 
 
   webrtc::AudioTransport* audio_callback_{nullptr};

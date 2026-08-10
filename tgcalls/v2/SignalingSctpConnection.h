@@ -10,6 +10,8 @@
 #include "rtc_base/socket_address.h"
 #include "rtc_base/copy_on_write_buffer.h"
 #include "rtc_base/byte_buffer.h"
+#include "api/environment/environment.h"
+#include "api/transport/data_channel_transport_interface.h"
 #include "media/base/media_channel.h"
 
 #include <vector>
@@ -19,11 +21,13 @@
 #include "StaticThreads.h"
 #include "SignalingConnection.h"
 
-namespace rtc {
+namespace webrtc {
 class Socket;
 }
 
-namespace cricket {
+
+namespace webrtc {
+class SctpTransportFactory;
 class SctpTransportInternal;
 };
 
@@ -34,11 +38,11 @@ class SignalingPacketTransport;
 class SignalingSctpConnection : public sigslot::has_slots<>, public SignalingConnection, public webrtc::DataChannelSink {
 private:
     struct PacketReadState {
-        rtc::CopyOnWriteBuffer headerData;
+        webrtc::CopyOnWriteBuffer headerData;
         int remainingHeaderSize = 0;
         bool isHeaderCompleted = false;
 
-        rtc::CopyOnWriteBuffer data;
+        webrtc::CopyOnWriteBuffer data;
         int remainingDataSize = 0;
         bool isDataCompleted = false;
     };
@@ -60,13 +64,16 @@ public:
 
     virtual void OnDataReceived(int channel_id,
                                 webrtc::DataMessageType type,
-                                const rtc::CopyOnWriteBuffer& buffer) override;
+                                const webrtc::CopyOnWriteBuffer& buffer) override;
+    virtual void OnTransportConnected() override;
     virtual void OnReadyToSend() override;
     virtual void OnTransportClosed(webrtc::RTCError error) override;
 
     // Unused
     virtual void OnChannelClosing(int channel_id) override{}
     virtual void OnChannelClosed(int channel_id) override{}
+    virtual void OnBufferedAmountLow(int channel_id) override{}
+    virtual void OnMaxMessageSize(int max_message_size) override{}
 
 private:
     std::shared_ptr<Threads> _threads;
@@ -74,7 +81,11 @@ private:
     std::function<void(const std::vector<uint8_t> &)> _onIncomingData;
 
     std::unique_ptr<SignalingPacketTransport> _packetTransport;
-    std::unique_ptr<cricket::SctpTransportInternal> _sctpTransport;
+
+    webrtc::Environment _environment;
+    std::unique_ptr<webrtc::SctpTransportFactory> _sctpTransportFactory;
+    std::unique_ptr<TgcallDtlsTransportAdapter> _dtlsTransportAdapter;
+    std::unique_ptr<webrtc::SctpTransportInternal> _sctpTransport;
     
     bool _isReadyToSend = false;
     std::vector<std::vector<uint8_t>> _pendingData;

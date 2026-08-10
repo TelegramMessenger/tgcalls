@@ -21,9 +21,9 @@ public:
 
     // Outbound: extract V2Impl messages from PeerConnection's local description
     signaling::InitialSetupMessage extractInitialSetup(
-        const cricket::SessionDescription *desc);
+        const webrtc::SessionDescription *desc);
     signaling::NegotiateChannelsMessage extractNegotiateChannels(
-        const cricket::SessionDescription *desc, uint32_t exchangeId);
+        const webrtc::SessionDescription *desc, uint32_t exchangeId);
     signaling::CandidatesMessage extractCandidates(
         const webrtc::IceCandidateInterface *candidate);
 
@@ -35,7 +35,7 @@ public:
     // If localDescription is provided, non-audio/video m-lines (e.g. data channel)
     // are padded as rejected contents to match the local offer's m-line count.
     std::unique_ptr<webrtc::SessionDescriptionInterface> buildRemoteDescription(
-        const cricket::SessionDescription *localDescription = nullptr);
+        const webrtc::SessionDescription *localDescription = nullptr);
 
     // Parse V2Impl CandidatesMessage into PeerConnection ICE candidates
     std::vector<std::unique_ptr<webrtc::IceCandidateInterface>> parseCandidates(
@@ -59,9 +59,9 @@ private:
     std::unique_ptr<webrtc::SessionDescriptionInterface> buildDescription(
         const signaling::InitialSetupMessage &setup,
         const signaling::NegotiateChannelsMessage &channels,
-        const cricket::SessionDescription *localDescription = nullptr);
+        const webrtc::SessionDescription *localDescription = nullptr);
 
-    static cricket::TransportDescription makeTransportDescription(
+    static webrtc::TransportDescription makeTransportDescription(
         const signaling::InitialSetupMessage &setup, bool isRemoteOffer);
 };
 

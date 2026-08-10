@@ -10,16 +10,16 @@ namespace tgcalls {
 
 namespace {
 
-rtc::Thread *makeManagerThread() {
-	static std::unique_ptr<rtc::Thread> value = rtc::Thread::Create();
+webrtc::Thread *makeManagerThread() {
+	static std::unique_ptr<webrtc::Thread> value = webrtc::Thread::Create();
 	value->SetName("WebRTC-Manager", nullptr);
 	value->Start();
 	return value.get();
 }
 
 
-rtc::Thread *getManagerThread() {
-	static rtc::Thread *value = makeManagerThread();
+webrtc::Thread *getManagerThread() {
+	static webrtc::Thread *value = makeManagerThread();
 	return value;
 }
 
@@ -27,9 +27,9 @@ rtc::Thread *getManagerThread() {
 
 InstanceImpl::InstanceImpl(Descriptor &&descriptor)
 : _logSink(std::make_unique<LogSinkImpl>(descriptor.config.logPath)) {
-    rtc::LogMessage::LogToDebug(rtc::LS_INFO);
-    rtc::LogMessage::SetLogToStderr(false);
-	rtc::LogMessage::AddLogToStream(_logSink.get(), rtc::LS_INFO);
+    webrtc::LogMessage::LogToDebug(webrtc::LS_INFO);
+    webrtc::LogMessage::SetLogToStderr(false);
+	webrtc::LogMessage::AddLogToStream(_logSink.get(), webrtc::LS_INFO);
 
     auto networkType = descriptor.initialNetworkType;
 
@@ -44,7 +44,7 @@ InstanceImpl::InstanceImpl(Descriptor &&descriptor)
 }
 
 InstanceImpl::~InstanceImpl() {
-	rtc::LogMessage::RemoveLogToStream(_logSink.get());
+	webrtc::LogMessage::RemoveLogToStream(_logSink.get());
 }
 
 void InstanceImpl::receiveSignalingData(const std::vector<uint8_t> &data) {
@@ -93,7 +93,7 @@ void InstanceImpl::setMuteMicrophone(bool muteMicrophone) {
 	});
 }
 
-void InstanceImpl::setIncomingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+void InstanceImpl::setIncomingVideoOutput(std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
 	_manager->perform([sink](Manager *manager) {
 		manager->setIncomingVideoOutput(sink);
 	});

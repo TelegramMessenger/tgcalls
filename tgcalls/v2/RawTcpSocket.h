@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <span>
 
 #include "api/array_view.h"
 #include "rtc_base/async_packet_socket.h"
@@ -23,7 +24,7 @@
 #include "rtc_base/socket_address.h"
 #include "rtc_base/async_tcp_socket.h"
 
-namespace rtc {
+namespace webrtc {
 
 class RawTcpSocket : public AsyncTCPSocketBase {
  public:
@@ -41,8 +42,8 @@ class RawTcpSocket : public AsyncTCPSocketBase {
 
   int Send(const void* pv,
            size_t cb,
-           const rtc::PacketOptions& options) override;
-  size_t ProcessInput(rtc::ArrayView<const uint8_t>) override;
+           const AsyncSocketPacketOptions& options) override;
+  size_t ProcessInput(std::span<const uint8_t> data) override;
 
  private:
   bool did_send_mtproto_prologue_ = false;

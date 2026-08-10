@@ -3,3 +3,14 @@
 *.*~
 SharedHeaders/*
 .build
+
+# Standalone GN build (OHOS) — symlinks into webrtc_latest/src, build artifacts
+out/
+build/
+build_overrides/
+buildtools/
+third_party/
+tools/clang/
+*.o
+*.dwo
+*.log

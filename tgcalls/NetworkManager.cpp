@@ -27,7 +27,7 @@ extern "C" {
 
 namespace tgcalls {
 
-class TgCallsCryptStringImpl : public rtc::CryptStringImpl {
+class TgCallsCryptStringImpl : public webrtc::CryptStringImpl {
 public:
     TgCallsCryptStringImpl(std::string const &value) :
     _value(value) {
@@ -63,7 +63,7 @@ private:
 };
 
 NetworkManager::NetworkManager(
-	rtc::Thread *thread,
+	webrtc::Thread *thread,
 	EncryptionKey encryptionKey,
 	bool enableP2P,
     bool enableTCP,
@@ -88,7 +88,7 @@ _isOutgoing(encryptionKey.isOutgoing),
 _stateUpdated(std::move(stateUpdated)),
 _transportMessageReceived(std::move(transportMessageReceived)),
 _sendSignalingMessage(std::move(sendSignalingMessage)),
-_localIceParameters(rtc::CreateRandomString(cricket::ICE_UFRAG_LENGTH), rtc::CreateRandomString(cricket::ICE_PWD_LENGTH), false) {
+_localIceParameters(webrtc::CreateRandomString(webrtc::ICE_UFRAG_LENGTH), webrtc::CreateRandomString(webrtc::ICE_PWD_LENGTH), false) {
 	assert(_thread->IsCurrent());
 
     _networkMonitorFactory = PlatformInterface::SharedInstance()->createNetworkMonitorFactory();
@@ -108,9 +108,9 @@ NetworkManager::~NetworkManager() {
 }
 
 void NetworkManager::start() {
-    _socketFactory.reset(new rtc::BasicPacketSocketFactory(_thread->socketserver()));
+    _socketFactory.reset(new webrtc::BasicPacketSocketFactory(_thread->socketserver()));
 
-    _networkManager = std::make_unique<rtc::BasicNetworkManager>(_networkMonitorFactory.get(), _thread->socketserver());
+    _networkManager = std::make_unique<webrtc::BasicNetworkManager>(_networkMonitorFactory.get(), _thread->socketserver());
     
     if (_enableStunMarking) {
         _turnCustomizer.reset(new TurnCustomizerImpl());
@@ -118,42 +118,42 @@ void NetworkManager::start() {
     
     _relayPortFactory.reset(new ReflectorRelayPortFactory(_rtcServers, false, 0, _thread->socketserver()));
     
-    _portAllocator.reset(new cricket::BasicPortAllocator(_networkManager.get(), _socketFactory.get(), _turnCustomizer.get(), _relayPortFactory.get()));
+    _portAllocator.reset(new webrtc::BasicPortAllocator(_networkManager.get(), _socketFactory.get(), _turnCustomizer.get(), _relayPortFactory.get()));
 
     uint32_t flags = _portAllocator->flags();
     
     flags |=
-        //cricket::PORTALLOCATOR_ENABLE_SHARED_SOCKET |
-        cricket::PORTALLOCATOR_ENABLE_IPV6 |
-        cricket::PORTALLOCATOR_ENABLE_IPV6_ON_WIFI;
+        //webrtc::PORTALLOCATOR_ENABLE_SHARED_SOCKET |
+        webrtc::PORTALLOCATOR_ENABLE_IPV6 |
+        webrtc::PORTALLOCATOR_ENABLE_IPV6_ON_WIFI;
     
     if (!_enableTCP) {
-        flags |= cricket::PORTALLOCATOR_DISABLE_TCP;
+        flags |= webrtc::PORTALLOCATOR_DISABLE_TCP;
     }
     if (!_enableP2P) {
-        flags |= cricket::PORTALLOCATOR_DISABLE_UDP;
-        flags |= cricket::PORTALLOCATOR_DISABLE_STUN;
+        flags |= webrtc::PORTALLOCATOR_DISABLE_UDP;
+        flags |= webrtc::PORTALLOCATOR_DISABLE_STUN;
         uint32_t candidateFilter = _portAllocator->candidate_filter();
-        candidateFilter &= ~(cricket::CF_REFLEXIVE);
+        candidateFilter &= ~(webrtc::CF_REFLEXIVE);
         _portAllocator->SetCandidateFilter(candidateFilter);
     }
     
-    _portAllocator->set_step_delay(cricket::kMinimumStepDelay);
+    _portAllocator->set_step_delay(webrtc::kMinimumStepDelay);
     
     if (_proxy) {
-        rtc::ProxyInfo proxyInfo;
-        proxyInfo.type = rtc::ProxyType::PROXY_SOCKS5;
-        proxyInfo.address = rtc::SocketAddress(_proxy->host, _proxy->port);
+        webrtc::ProxyInfo proxyInfo;
+        proxyInfo.type = webrtc::ProxyType::PROXY_SOCKS5;
+        proxyInfo.address = webrtc::SocketAddress(_proxy->host, _proxy->port);
         proxyInfo.username = _proxy->login;
-        proxyInfo.password = rtc::CryptString(TgCallsCryptStringImpl(_proxy->password));
+        proxyInfo.password = webrtc::CryptString(TgCallsCryptStringImpl(_proxy->password));
         _portAllocator->set_proxy("t/1.0", proxyInfo);
     }
     
     _portAllocator->set_flags(flags);
     _portAllocator->Initialize();
 
-    cricket::ServerAddresses stunServers;
-    std::vector<cricket::RelayServerConfig> turnServers;
+    webrtc::ServerAddresses stunServers;
+    std::vector<webrtc::RelayServerConfig> turnServers;
 
     for (auto &server : _rtcServers) {
         if (server.isTcp) {
@@ -161,14 +161,14 @@ void NetworkManager::start() {
         }
         
         if (server.isTurn) {
-            turnServers.push_back(cricket::RelayServerConfig(
-                rtc::SocketAddress(server.host, server.port),
+            turnServers.push_back(webrtc::RelayServerConfig(
+                webrtc::SocketAddress(server.host, server.port),
                 server.login,
                 server.password,
-                cricket::PROTO_UDP
+                webrtc::PROTO_UDP
             ));
         } else {
-            rtc::SocketAddress stunAddress = rtc::SocketAddress(server.host, server.port);
+            webrtc::SocketAddress stunAddress = webrtc::SocketAddress(server.host, server.port);
             stunServers.insert(stunAddress);
         }
     }
@@ -181,22 +181,22 @@ void NetworkManager::start() {
     iceTransportInit.set_port_allocator(_portAllocator.get());
     iceTransportInit.set_async_dns_resolver_factory(_asyncResolverFactory.get());
 
-    _transportChannel = cricket::P2PTransportChannel::Create("transport", 0, std::move(iceTransportInit));
+    _transportChannel = webrtc::P2PTransportChannel::Create("transport", 0, std::move(iceTransportInit));
 
-    cricket::IceConfig iceConfig;
-    iceConfig.continual_gathering_policy = cricket::GATHER_CONTINUALLY;
+    webrtc::IceConfig iceConfig;
+    iceConfig.continual_gathering_policy = webrtc::GATHER_CONTINUALLY;
     iceConfig.prioritize_most_likely_candidate_pairs = true;
-    iceConfig.regather_on_failed_networks_interval = cricket::REGATHER_ON_FAILED_NETWORKS_INTERVAL;
+    iceConfig.regather_on_failed_networks_interval = webrtc::REGATHER_ON_FAILED_NETWORKS_INTERVAL;
     _transportChannel->SetIceConfig(iceConfig);
 
-    cricket::IceParameters localIceParameters(
+    webrtc::IceParameters localIceParameters(
         _localIceParameters.ufrag,
         _localIceParameters.pwd,
         false
     );
 
     _transportChannel->SetIceParameters(localIceParameters);
-    _transportChannel->SetIceRole(_isOutgoing ? cricket::ICEROLE_CONTROLLING : cricket::ICEROLE_CONTROLLED);
+    _transportChannel->SetIceRole(_isOutgoing ? webrtc::ICEROLE_CONTROLLING : webrtc::ICEROLE_CONTROLLED);
 
     _transportChannel->SignalCandidateGathered.connect(this, &NetworkManager::candidateGathered);
     _transportChannel->SignalGatheringState.connect(this, &NetworkManager::candidateGatheringState);
@@ -206,9 +206,9 @@ void NetworkManager::start() {
 
     _transportChannel->MaybeStartGathering();
 
-    _transportChannel->SetRemoteIceMode(cricket::ICEMODE_FULL);
+    _transportChannel->SetRemoteIceMode(webrtc::ICEMODE_FULL);
     
-    _lastNetworkActivityMs = rtc::TimeMillis();
+    _lastNetworkActivityMs = webrtc::TimeMillis();
     
     checkConnectionTimeout();
 }
@@ -221,7 +221,7 @@ void NetworkManager::receiveSignalingMessage(DecryptedMessage &&message) {
         PeerIceParameters parameters(list->iceParameters.ufrag, list->iceParameters.pwd, false);
         _remoteIceParameters = parameters;
 
-        cricket::IceParameters remoteIceParameters(
+        webrtc::IceParameters remoteIceParameters(
             parameters.ufrag,
             parameters.pwd,
             false
@@ -237,7 +237,7 @@ void NetworkManager::receiveSignalingMessage(DecryptedMessage &&message) {
 
 uint32_t NetworkManager::sendMessage(const Message &message) {
 	if (const auto prepared = _transport.prepareForSending(message)) {
-		rtc::PacketOptions packetOptions;
+		webrtc::PacketOptions packetOptions;
 		_transportChannel->SendPacket((const char *)prepared->bytes.data(), prepared->bytes.size(), packetOptions, 0);
         addTrafficStats(prepared->bytes.size(), false);
 		return prepared->counter;
@@ -247,7 +247,7 @@ uint32_t NetworkManager::sendMessage(const Message &message) {
 
 void NetworkManager::sendTransportService(int cause) {
 	if (const auto prepared = _transport.prepareForSendingService(cause)) {
-		rtc::PacketOptions packetOptions;
+		webrtc::PacketOptions packetOptions;
 		_transportChannel->SendPacket((const char *)prepared->bytes.data(), prepared->bytes.size(), packetOptions, 0);
         addTrafficStats(prepared->bytes.size(), false);
 	}
@@ -278,7 +278,7 @@ void NetworkManager::logCurrentNetworkState() {
     }
     
     CallStatsNetworkRecord record;
-    record.timestamp = (int32_t)(rtc::TimeMillis() / 1000);
+    record.timestamp = (int32_t)(webrtc::TimeMillis() / 1000);
     record.endpointType = *_currentEndpointType;
     record.isLowCost = _isLocalNetworkLowCost;
     _networkRecords.push_back(std::move(record));
@@ -292,7 +292,7 @@ void NetworkManager::checkConnectionTimeout() {
             return;
         }
         
-        int64_t currentTimestamp = rtc::TimeMillis();
+        int64_t currentTimestamp = webrtc::TimeMillis();
         const int64_t maxTimeout = 20000;
         
         if (strong->_lastNetworkActivityMs + maxTimeout < currentTimestamp) {
@@ -306,16 +306,16 @@ void NetworkManager::checkConnectionTimeout() {
     }, webrtc::TimeDelta::Millis(1000));
 }
 
-void NetworkManager::candidateGathered(cricket::IceTransportInternal *transport, const cricket::Candidate &candidate) {
+void NetworkManager::candidateGathered(webrtc::IceTransportInternal *transport, const webrtc::Candidate &candidate) {
 	assert(_thread->IsCurrent());
 	_sendSignalingMessage({ CandidatesListMessage{ { 1, candidate }, _localIceParameters } });
 }
 
-void NetworkManager::candidateGatheringState(cricket::IceTransportInternal *transport) {
+void NetworkManager::candidateGatheringState(webrtc::IceTransportInternal *transport) {
 	assert(_thread->IsCurrent());
 }
 
-void NetworkManager::transportStateChanged(cricket::IceTransportInternal *transport) {
+void NetworkManager::transportStateChanged(webrtc::IceTransportInternal *transport) {
 	assert(_thread->IsCurrent());
 
 	auto state = transport->GetIceTransportState();
@@ -333,14 +333,14 @@ void NetworkManager::transportStateChanged(cricket::IceTransportInternal *transp
 	_stateUpdated(emitState);
 }
 
-void NetworkManager::transportReadyToSend(cricket::IceTransportInternal *transport) {
+void NetworkManager::transportReadyToSend(webrtc::IceTransportInternal *transport) {
 	assert(_thread->IsCurrent());
 }
 
-void NetworkManager::transportPacketReceived(rtc::PacketTransportInternal *transport, const char *bytes, size_t size, const int64_t &timestamp, int unused) {
+void NetworkManager::transportPacketReceived(webrtc::PacketTransportInternal *transport, const char *bytes, size_t size, const int64_t &timestamp, int unused) {
 	assert(_thread->IsCurrent());
     
-    _lastNetworkActivityMs = rtc::TimeMillis();
+    _lastNetworkActivityMs = webrtc::TimeMillis();
     
     addTrafficStats(size, true);
 
@@ -354,14 +354,14 @@ void NetworkManager::transportPacketReceived(rtc::PacketTransportInternal *trans
 	}
 }
 
-void NetworkManager::transportRouteChanged(absl::optional<rtc::NetworkRoute> route) {
+void NetworkManager::transportRouteChanged(absl::optional<webrtc::NetworkRoute> route) {
     assert(_thread->IsCurrent());
     
     if (route.has_value()) {
         RTC_LOG(LS_INFO) << "NetworkManager route changed: " << route->DebugString();
         
-        bool localIsWifi = route->local.adapter_type() == rtc::AdapterType::ADAPTER_TYPE_WIFI;
-        bool remoteIsWifi = route->remote.adapter_type() == rtc::AdapterType::ADAPTER_TYPE_WIFI;
+        bool localIsWifi = route->local.adapter_type() == webrtc::AdapterType::ADAPTER_TYPE_WIFI;
+        bool remoteIsWifi = route->remote.adapter_type() == webrtc::AdapterType::ADAPTER_TYPE_WIFI;
         
         RTC_LOG(LS_INFO) << "NetworkManager is wifi: local=" << localIsWifi << ", remote=" << remoteIsWifi;
         

@@ -22,9 +22,9 @@ private:
     };
 
 public:
-	static rtc::Thread *getMediaThread();
+	static webrtc::Thread *getMediaThread();
 
-	Manager(rtc::Thread *thread, Descriptor &&descriptor);
+	Manager(webrtc::Thread *thread, Descriptor &&descriptor);
 	~Manager();
 
 	void start();
@@ -33,7 +33,7 @@ public:
     void sendVideoDeviceUpdated();
     void setRequestedVideoAspect(float aspect);
     void setMuteOutgoingAudio(bool mute);
-	void setIncomingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
+	void setIncomingVideoOutput(std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
     void setIsLowBatteryLevel(bool isLowBatteryLevel);
     void setIsLocalNetworkLowCost(bool isLocalNetworkLowCost);
     void getNetworkStats(std::function<void(TrafficStats, CallStats)> completion);
@@ -52,7 +52,7 @@ private:
     void updateCurrentResolvedNetworkStatus();
     void sendInitialSignalingMessages();
 
-	rtc::Thread *_thread;
+	webrtc::Thread *_thread;
 	EncryptionKey _encryptionKey;
 	EncryptedConnection _signaling;
 	bool _enableP2P = false;

@@ -3,17 +3,18 @@
 
 #include "rtc_base/logging.h"
 #include <fstream>
+#include <sstream>
 
 namespace tgcalls {
 
 struct FilePath;
 
-class LogSinkImpl final : public rtc::LogSink {
+class LogSinkImpl final : public webrtc::LogSink {
 public:
 	LogSinkImpl(const FilePath &logPath);
 
-	void OnLogMessage(const std::string &msg, rtc::LoggingSeverity severity, const char *tag) override;
-	void OnLogMessage(const std::string &message, rtc::LoggingSeverity severity) override;
+	void OnLogMessage(const std::string &msg, webrtc::LoggingSeverity severity, const char *tag) override;
+	void OnLogMessage(const std::string &message, webrtc::LoggingSeverity severity) override;
 	void OnLogMessage(const std::string &message) override;
 
 	std::string result() const {

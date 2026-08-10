@@ -186,10 +186,10 @@ struct Message {
     static absl::optional<Message> parse(const std::vector<uint8_t> &data);
 };
 
-MediaContent convertContentInfoToSignalingContent(cricket::ContentInfo const &content);
-cricket::ContentInfo convertSignalingContentToContentInfo(std::string const &contentId, MediaContent const &content, webrtc::RtpTransceiverDirection direction);
+MediaContent convertContentInfoToSignalingContent(webrtc::ContentInfo const &content);
+webrtc::ContentInfo convertSignalingContentToContentInfo(std::string const &contentId, MediaContent const &content, webrtc::RtpTransceiverDirection direction);
 
-};
+}  // namespace signaling
 
 } // namespace tgcalls
 

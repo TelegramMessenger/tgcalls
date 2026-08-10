@@ -6,7 +6,7 @@
 
 #include "Instance.h"
 
-namespace rtc {
+namespace webrtc {
 
 class SocketFactory;
 
@@ -14,23 +14,23 @@ class SocketFactory;
 
 namespace tgcalls {
 
-class ReflectorRelayPortFactory : public cricket::RelayPortFactoryInterface {
+class ReflectorRelayPortFactory : public webrtc::RelayPortFactoryInterface {
 public:
-    ReflectorRelayPortFactory(std::vector<RtcServer> servers, bool standaloneReflectorMode, uint32_t standaloneReflectorRoleId, rtc::SocketFactory *underlyingSocketFactory);
+    ReflectorRelayPortFactory(std::vector<RtcServer> servers, bool standaloneReflectorMode, uint32_t standaloneReflectorRoleId, webrtc::SocketFactory *underlyingSocketFactory);
     ~ReflectorRelayPortFactory() override;
     
     // This variant is used for UDP connection to the relay server
     // using a already existing shared socket.
-    virtual std::unique_ptr<cricket::Port> Create(const cricket::CreateRelayPortArgs& args, rtc::AsyncPacketSocket* udp_socket) override;
+    virtual std::unique_ptr<webrtc::Port> Create(const webrtc::CreateRelayPortArgs& args, webrtc::AsyncPacketSocket* udp_socket) override;
     
     // This variant is used for the other cases.
-    virtual std::unique_ptr<cricket::Port> Create(const cricket::CreateRelayPortArgs& args, int min_port, int max_port) override;
+    virtual std::unique_ptr<webrtc::Port> Create(const webrtc::CreateRelayPortArgs& args, int min_port, int max_port) override;
     
 private:
     std::vector<RtcServer> _servers;
     bool _standaloneReflectorMode = false;
     uint32_t _standaloneReflectorRoleId = 0;
-    rtc::SocketFactory *_underlyingSocketFactory = nullptr;
+    webrtc::SocketFactory *_underlyingSocketFactory = nullptr;
 };
 
 } // namespace tgcalls

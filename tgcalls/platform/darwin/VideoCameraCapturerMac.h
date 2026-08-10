@@ -13,7 +13,7 @@
 - (void)start;
 - (void)stop;
 - (void)setIsEnabled:(bool)isEnabled;
-- (void)setUncroppedSink:(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)sink;
+- (void)setUncroppedSink:(std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>>)sink;
 - (void)setPreferredCaptureAspectRatio:(float)aspectRatio;
 - (void)setOnFatalError:(std::function<void()>)error;
 - (void)setOnPause:(std::function<void(bool)>)pause;
@@ -24,10 +24,10 @@
 + (NSArray<AVCaptureDevice *> *)captureDevices;
 + (NSArray<AVCaptureDeviceFormat *> *)supportedFormatsForDevice:(AVCaptureDevice *)device;
 
-- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source isActiveUpdated:(void (^)(bool))isActiveUpdated;
+- (instancetype)initWithSource:(webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source isActiveUpdated:(void (^)(bool))isActiveUpdated;
 
 - (void)setupCaptureWithDevice:(AVCaptureDevice *)device format:(AVCaptureDeviceFormat *)format fps:(NSInteger)fps;
-- (void)setUncroppedSink:(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)sink;
+- (void)setUncroppedSink:(std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>>)sink;
 - (BOOL)deviceIsCaptureCompitable:(AVCaptureDevice *)device;
 
 @end

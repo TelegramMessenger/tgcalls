@@ -160,7 +160,7 @@ private:
 
 } // namespace
 
-class VideoSinkInterfaceProxyImpl : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
+class VideoSinkInterfaceProxyImpl : public webrtc::VideoSinkInterface<webrtc::VideoFrame> {
 public:
     VideoSinkInterfaceProxyImpl(bool rewriteRotation) :
     _rewriteRotation(rewriteRotation) {
@@ -187,13 +187,13 @@ public:
         }
     }
 
-    void setSink(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> impl) {
+    void setSink(std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> impl) {
         _impl = impl;
     }
 
 private:
     bool _rewriteRotation = false;
-    std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _impl;
+    std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> _impl;
 
 };
 
@@ -239,7 +239,7 @@ public:
 };
 
 MediaManager::MediaManager(
-	rtc::Thread *thread,
+	webrtc::Thread *thread,
 	bool isOutgoing,
     ProtocolVersion protocolVersion,
 	const MediaDevicesConfig &devicesConfig,
@@ -358,7 +358,7 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
         callConfig.audio_state = _mediaEngine->voice().GetAudioState();
         _call = peerConnectionFactoryDeps.media_factory->CreateCall(callConfig);
 
-        cricket::AudioOptions audioOptions;
+        webrtc::AudioOptions audioOptions;
         audioOptions.echo_cancellation = true;
         audioOptions.noise_suppression = true;
         audioOptions.audio_jitter_buffer_fast_accelerate = true;
@@ -366,11 +366,11 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
         std::vector<std::string> streamIds;
         streamIds.push_back("1");
         
-        _audioSendChannel = _mediaEngine->voice().CreateSendChannel(_call.get(), cricket::MediaConfig(), audioOptions, webrtc::CryptoOptions::NoGcm(), webrtc::AudioCodecPairId::Create());
-        _audioReceiveChannel = _mediaEngine->voice().CreateReceiveChannel(_call.get(), cricket::MediaConfig(), audioOptions, webrtc::CryptoOptions::NoGcm(), webrtc::AudioCodecPairId::Create());
+        _audioSendChannel = _mediaEngine->voice().CreateSendChannel(_call.get(), webrtc::MediaConfig(), audioOptions, webrtc::CryptoOptions::NoGcm(), webrtc::AudioCodecPairId::Create());
+        _audioReceiveChannel = _mediaEngine->voice().CreateReceiveChannel(_call.get(), webrtc::MediaConfig(), audioOptions, webrtc::CryptoOptions::NoGcm(), webrtc::AudioCodecPairId::Create());
 
-        _videoSendChannel = _mediaEngine->video().CreateSendChannel(_call.get(), cricket::MediaConfig(), cricket::VideoOptions(), webrtc::CryptoOptions::NoGcm(), _videoBitrateAllocatorFactory.get());
-        _videoReceiveChannel = _mediaEngine->video().CreateReceiveChannel(_call.get(), cricket::MediaConfig(), cricket::VideoOptions(), webrtc::CryptoOptions::NoGcm());
+        _videoSendChannel = _mediaEngine->video().CreateSendChannel(_call.get(), webrtc::MediaConfig(), webrtc::VideoOptions(), webrtc::CryptoOptions::NoGcm(), _videoBitrateAllocatorFactory.get());
+        _videoReceiveChannel = _mediaEngine->video().CreateReceiveChannel(_call.get(), webrtc::MediaConfig(), webrtc::VideoOptions(), webrtc::CryptoOptions::NoGcm());
 
         const uint32_t opusClockrate = 48000;
         const uint16_t opusSdpPayload = 111;
@@ -381,15 +381,15 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
         const uint8_t opusMaxBitrateKbps = 32;
         const uint8_t opusStartBitrateKbps = 8;
         const uint8_t opusPTimeMs = 120;
-        cricket::AudioCodec opusCodec = cricket::CreateAudioCodec(opusSdpPayload, opusSdpName, opusClockrate, opusSdpChannels);
-        opusCodec.AddFeedbackParam(cricket::FeedbackParam(cricket::kRtcpFbParamTransportCc));
-        opusCodec.SetParam(cricket::kCodecParamMinBitrate, opusMinBitrateKbps);
-        opusCodec.SetParam(cricket::kCodecParamStartBitrate, opusStartBitrateKbps);
-        opusCodec.SetParam(cricket::kCodecParamMaxBitrate, opusMaxBitrateKbps);
-        opusCodec.SetParam(cricket::kCodecParamUseInbandFec, 1);
-        opusCodec.SetParam(cricket::kCodecParamPTime, opusPTimeMs);
+        webrtc::AudioCodec opusCodec = webrtc::CreateAudioCodec(opusSdpPayload, opusSdpName, opusClockrate, opusSdpChannels);
+        opusCodec.AddFeedbackParam(webrtc::FeedbackParam(webrtc::kRtcpFbParamTransportCc));
+        opusCodec.SetParam(webrtc::kCodecParamMinBitrate, opusMinBitrateKbps);
+        opusCodec.SetParam(webrtc::kCodecParamStartBitrate, opusStartBitrateKbps);
+        opusCodec.SetParam(webrtc::kCodecParamMaxBitrate, opusMaxBitrateKbps);
+        opusCodec.SetParam(webrtc::kCodecParamUseInbandFec, 1);
+        opusCodec.SetParam(webrtc::kCodecParamPTime, opusPTimeMs);
 
-        cricket::AudioSenderParameter audioSendPrameters;
+        webrtc::AudioSenderParameter audioSendPrameters;
         audioSendPrameters.codecs.push_back(opusCodec);
         audioSendPrameters.extensions.emplace_back(webrtc::RtpExtension::kTransportSequenceNumberUri, 1);
     #if WEBRTC_IOS
@@ -403,17 +403,17 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
         audioSendPrameters.rtcp.reduced_size = true;
         audioSendPrameters.rtcp.remote_estimate = true;
         _audioSendChannel->SetSenderParameters(audioSendPrameters);
-        _audioSendChannel->AddSendStream(cricket::StreamParams::CreateLegacy(_ssrcAudio.outgoing));
+        _audioSendChannel->AddSendStream(webrtc::StreamParams::CreateLegacy(_ssrcAudio.outgoing));
         _audioSendChannel->SetInterface(_audioNetworkInterface.get());
 
-        cricket::AudioReceiverParameters audioRecvParameters;
+        webrtc::AudioReceiverParameters audioRecvParameters;
         audioRecvParameters.codecs.push_back(opusCodec);
         audioRecvParameters.extensions.emplace_back(webrtc::RtpExtension::kTransportSequenceNumberUri, 1);
         audioRecvParameters.rtcp.reduced_size = true;
         audioRecvParameters.rtcp.remote_estimate = true;
 
         _audioReceiveChannel->SetReceiverParameters(audioRecvParameters);
-        cricket::StreamParams audioRecvStreamParams = cricket::StreamParams::CreateLegacy(_ssrcAudio.incoming);
+        webrtc::StreamParams audioRecvStreamParams = webrtc::StreamParams::CreateLegacy(_ssrcAudio.incoming);
         audioRecvStreamParams.set_stream_ids(streamIds);
         _audioReceiveChannel->AddRecvStream(audioRecvStreamParams);
         _audioReceiveChannel->SetPlayout(true);
@@ -428,7 +428,7 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
 webrtc::scoped_refptr<webrtc::AudioDeviceModule> MediaManager::createAudioDeviceModule() {
 	const auto create = [&](webrtc::AudioDeviceModule::AudioLayer layer) {
 #ifdef WEBRTC_IOS
-        return rtc::make_ref_counted<webrtc::tgcalls_ios_adm::AudioDeviceModuleIOS>(false, false, false, 1);
+        return webrtc::make_ref_counted<webrtc::tgcalls_ios_adm::AudioDeviceModuleIOS>(false, false, false, 1);
 #else
 		return webrtc::AudioDeviceModule::Create(
 			layer,
@@ -450,7 +450,7 @@ void MediaManager::start() {
     const auto weak = std::weak_ptr<MediaManager>(shared_from_this());
 
     // Here we hope that thread outlives the sink
-    rtc::Thread *thread = _thread;
+    webrtc::Thread *thread = _thread;
     std::unique_ptr<AudioTrackSinkInterfaceImpl> incomingSink(new AudioTrackSinkInterfaceImpl([weak, thread](float level) {
         thread->PostTask([weak, level] {
             if (const auto strong = weak.lock()) {
@@ -635,12 +635,12 @@ void MediaManager::collectStats() {
 		_signalBarsUpdated((int)(adjustedQuality * signalBarsNorm));
 	}
 
-    _bitrateRecords.push_back(CallStatsBitrateRecord { (int32_t)(rtc::TimeMillis() / 1000), stats.send_bandwidth_bps / 1000 });
+    _bitrateRecords.push_back(CallStatsBitrateRecord { (int32_t)(webrtc::TimeMillis() / 1000), stats.send_bandwidth_bps / 1000 });
 
     beginStatsTimer(2000);
 }
 
-void MediaManager::notifyPacketSent(const rtc::SentPacket &sentPacket) {
+void MediaManager::notifyPacketSent(const webrtc::SentPacket &sentPacket) {
 	_call->OnSentPacket(sentPacket);
 }
 
@@ -728,14 +728,14 @@ void MediaManager::setSendVideo(std::shared_ptr<VideoCaptureInterface> videoCapt
 
         if (videoCapture) {
             if (_enableFlexfec) {
-                cricket::StreamParams videoSendStreamParams;
-                cricket::SsrcGroup videoSendSsrcGroup(cricket::kFecFrSsrcGroupSemantics, {_ssrcVideo.outgoing, _ssrcVideo.fecOutgoing});
+                webrtc::StreamParams videoSendStreamParams;
+                webrtc::SsrcGroup videoSendSsrcGroup(webrtc::kFecFrSsrcGroupSemantics, {_ssrcVideo.outgoing, _ssrcVideo.fecOutgoing});
                 videoSendStreamParams.ssrcs = {_ssrcVideo.outgoing, _ssrcVideo.fecOutgoing};
                 videoSendStreamParams.ssrc_groups.push_back(videoSendSsrcGroup);
                 videoSendStreamParams.cname = "cname";
                 _videoSendChannel->AddSendStream(videoSendStreamParams);
             } else {
-                _videoSendChannel->AddSendStream(cricket::StreamParams::CreateLegacy(_ssrcVideo.outgoing));
+                _videoSendChannel->AddSendStream(webrtc::StreamParams::CreateLegacy(_ssrcVideo.outgoing));
             }
             _haveVideoSendChannel = true;
         }
@@ -779,16 +779,16 @@ void MediaManager::configureSendingVideoIfNeeded() {
 
     auto codec = *_videoCodecOut;
 
-    codec.SetParam(cricket::kCodecParamMinBitrate, 64);
-    codec.SetParam(cricket::kCodecParamStartBitrate, 400);
-    codec.SetParam(cricket::kCodecParamMaxBitrate, _enableHighBitrateVideo ? 2000 : 800);
+    codec.SetParam(webrtc::kCodecParamMinBitrate, 64);
+    codec.SetParam(webrtc::kCodecParamStartBitrate, 400);
+    codec.SetParam(webrtc::kCodecParamMaxBitrate, _enableHighBitrateVideo ? 2000 : 800);
 
-    cricket::VideoSenderParameters videoSendParameters;
+    webrtc::VideoSenderParameters videoSendParameters;
     videoSendParameters.codecs.push_back(codec);
 
     if (_enableFlexfec) {
         for (auto &c : _videoCodecs) {
-            if (c.name == cricket::kFlexfecCodecName) {
+            if (c.name == webrtc::kFlexfecCodecName) {
                 videoSendParameters.codecs.push_back(c);
                 break;
             }
@@ -810,14 +810,14 @@ void MediaManager::configureSendingVideoIfNeeded() {
         _videoSendChannel->SetSenderParameters(videoSendParameters);
 
         if (_enableFlexfec) {
-            cricket::StreamParams videoSendStreamParams;
-            cricket::SsrcGroup videoSendSsrcGroup(cricket::kFecFrSsrcGroupSemantics, {_ssrcVideo.outgoing, _ssrcVideo.fecOutgoing});
+            webrtc::StreamParams videoSendStreamParams;
+            webrtc::SsrcGroup videoSendSsrcGroup(webrtc::kFecFrSsrcGroupSemantics, {_ssrcVideo.outgoing, _ssrcVideo.fecOutgoing});
             videoSendStreamParams.ssrcs = {_ssrcVideo.outgoing, _ssrcVideo.fecOutgoing};
             videoSendStreamParams.ssrc_groups.push_back(videoSendSsrcGroup);
             videoSendStreamParams.cname = "cname";
             _videoSendChannel->AddSendStream(videoSendStreamParams);
         } else {
-            _videoSendChannel->AddSendStream(cricket::StreamParams::CreateLegacy(_ssrcVideo.outgoing));
+            _videoSendChannel->AddSendStream(webrtc::StreamParams::CreateLegacy(_ssrcVideo.outgoing));
         }
         _haveVideoSendChannel = true;
         
@@ -909,17 +909,17 @@ void MediaManager::checkIsReceivingVideoChanged(bool wasReceiving) {
     if (receiving == wasReceiving) {
         return;
     } else {
-        cricket::VideoReceiverParameters videoRecvParameters;
+        webrtc::VideoReceiverParameters videoRecvParameters;
 
         const auto codecs = {
-            cricket::kFlexfecCodecName,
-            cricket::kH264CodecName,
+            webrtc::kFlexfecCodecName,
+            webrtc::kH264CodecName,
 #ifndef WEBRTC_DISABLE_H265
-            cricket::kH265CodecName,
+            webrtc::kH265CodecName,
 #endif
-            cricket::kVp8CodecName,
-            cricket::kVp9CodecName,
-            cricket::kAv1CodecName,
+            webrtc::kVp8CodecName,
+            webrtc::kVp9CodecName,
+            webrtc::kAv1CodecName,
         };
         for (const auto &c : _videoCodecs) {
             for (const auto known : codecs) {
@@ -943,8 +943,8 @@ void MediaManager::checkIsReceivingVideoChanged(bool wasReceiving) {
         videoRecvParameters.rtcp.reduced_size = true;
         videoRecvParameters.rtcp.remote_estimate = true;
 
-        cricket::StreamParams videoRecvStreamParams;
-        cricket::SsrcGroup videoRecvSsrcGroup(cricket::kFecFrSsrcGroupSemantics, {_ssrcVideo.incoming, _ssrcVideo.fecIncoming});
+        webrtc::StreamParams videoRecvStreamParams;
+        webrtc::SsrcGroup videoRecvSsrcGroup(webrtc::kFecFrSsrcGroupSemantics, {_ssrcVideo.incoming, _ssrcVideo.fecIncoming});
         videoRecvStreamParams.ssrcs = {_ssrcVideo.incoming, _ssrcVideo.fecIncoming};
         videoRecvStreamParams.ssrc_groups.push_back(videoRecvSsrcGroup);
         videoRecvStreamParams.cname = "cname";
@@ -986,7 +986,7 @@ void MediaManager::setOutgoingVideoState(VideoState state) {
 	sendOutgoingMediaStateMessage();
 }
 
-void MediaManager::setIncomingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+void MediaManager::setIncomingVideoOutput(std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
     _incomingVideoSinkProxy->setSink(sink);
 }
 
@@ -1002,7 +1002,7 @@ void MediaManager::receiveMessage(DecryptedMessage &&message) {
             if (webrtc::IsRtcpPacket(audio->data)) {
                 _call->Receiver()->DeliverRtcpPacket(audio->data);
             } else {
-                webrtc::RtpPacketReceived parsedPacket(&_audioRtpHeaderExtensionMap, webrtc::Timestamp::Micros(rtc::TimeUTCMicros()));
+                webrtc::RtpPacketReceived parsedPacket(&_audioRtpHeaderExtensionMap, webrtc::Timestamp::Micros(webrtc::TimeUTCMicros()));
                 if (!parsedPacket.Parse(audio->data)) {
                   RTC_LOG(LS_ERROR)
                       << "Failed to parse the incoming RTP packet before demuxing. Drop it.";
@@ -1019,7 +1019,7 @@ void MediaManager::receiveMessage(DecryptedMessage &&message) {
                     if (webrtc::IsRtcpPacket(video->data)) {
                         _call->Receiver()->DeliverRtcpPacket(video->data);
                     } else {
-                        webrtc::RtpPacketReceived parsedPacket(&_videoRtpHeaderExtensionMap, webrtc::Timestamp::Micros(rtc::TimeUTCMicros()));
+                        webrtc::RtpPacketReceived parsedPacket(&_videoRtpHeaderExtensionMap, webrtc::Timestamp::Micros(webrtc::TimeUTCMicros()));
                         if (!parsedPacket.Parse(video->data)) {
                           RTC_LOG(LS_ERROR)
                               << "Failed to parse the incoming RTP video packet before demuxing. Drop it.";
@@ -1146,27 +1146,27 @@ _mediaManager(mediaManager),
 _isVideo(isVideo) {
 }
 
-bool MediaManager::NetworkInterfaceImpl::SendPacket(rtc::CopyOnWriteBuffer *packet, const rtc::PacketOptions& options) {
+bool MediaManager::NetworkInterfaceImpl::SendPacket(webrtc::CopyOnWriteBuffer *packet, const webrtc::AsyncSocketPacketOptions& options) {
 	return sendTransportMessage(packet, options);
 }
 
-bool MediaManager::NetworkInterfaceImpl::SendRtcp(rtc::CopyOnWriteBuffer *packet, const rtc::PacketOptions& options) {
+bool MediaManager::NetworkInterfaceImpl::SendRtcp(webrtc::CopyOnWriteBuffer *packet, const webrtc::AsyncSocketPacketOptions& options) {
 	return sendTransportMessage(packet, options);
 }
 
-bool MediaManager::NetworkInterfaceImpl::sendTransportMessage(rtc::CopyOnWriteBuffer *packet, const rtc::PacketOptions& options) {
+bool MediaManager::NetworkInterfaceImpl::sendTransportMessage(webrtc::CopyOnWriteBuffer *packet, const webrtc::AsyncSocketPacketOptions& options) {
     if (_isVideo) {
         RTC_LOG(LS_VERBOSE) << "Send video packet";
     }
 	_mediaManager->_sendTransportMessage(_isVideo
 		? Message{ VideoDataMessage{ *packet } }
 		: Message{ AudioDataMessage{ *packet } });
-	rtc::SentPacket sentPacket(options.packet_id, rtc::TimeMillis(), options.info_signaled_after_sent);
+	webrtc::SentPacket sentPacket(options.packet_id, webrtc::TimeMillis(), options.info_signaled_after_sent);
 	_mediaManager->notifyPacketSent(sentPacket);
 	return true;
 }
 
-int MediaManager::NetworkInterfaceImpl::SetOption(cricket::MediaChannelNetworkInterface::SocketType, rtc::Socket::Option, int) {
+int MediaManager::NetworkInterfaceImpl::SetOption(webrtc::MediaChannelNetworkInterface::SocketType, webrtc::Socket::Option, int) {
 	return -1;
 }
 

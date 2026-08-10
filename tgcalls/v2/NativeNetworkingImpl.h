@@ -14,7 +14,6 @@
 #include "rtc_base/ssl_fingerprint.h"
 #include "pc/sctp_data_channel.h"
 #include "p2p/base/port.h"
-#include "api/transport/field_trial_based_config.h"
 
 #include <functional>
 #include <memory>
@@ -24,20 +23,20 @@
 #include "ThreadLocalObject.h"
 #include "Instance.h"
 
-namespace rtc {
+namespace webrtc {
 class BasicPacketSocketFactory;
 class BasicNetworkManager;
 class PacketTransportInternal;
 struct NetworkRoute;
-} // namespace rtc
+} // namespace webrtc
 
-namespace cricket {
+namespace webrtc {
 class BasicPortAllocator;
-class P2PTransportChannel;
 class IceTransportInternal;
-class DtlsTransport;
+class IceTransportInterface;
+class DtlsTransportInternal;
 class RelayPortFactoryInterface;
-} // namespace cricket
+} // namespace webrtc
 
 namespace webrtc {
 class TurnCustomizer;
@@ -63,9 +62,9 @@ public:
     virtual void stop() override;
 
     virtual PeerIceParameters getLocalIceParameters() override;
-    virtual std::unique_ptr<rtc::SSLFingerprint> getLocalFingerprint() override;
-    virtual void setRemoteParams(PeerIceParameters const &remoteIceParameters, rtc::SSLFingerprint *fingerprint, std::string const &sslSetup) override;
-    virtual void addCandidates(std::vector<cricket::Candidate> const &candidates) override;
+    virtual std::unique_ptr<webrtc::SSLFingerprint> getLocalFingerprint() override;
+    virtual void setRemoteParams(PeerIceParameters const &remoteIceParameters, webrtc::SSLFingerprint *fingerprint, std::string const &sslSetup) override;
+    virtual void addCandidates(std::vector<webrtc::Candidate> const &candidates) override;
 
     virtual void sendDataChannelMessage(std::string const &message) override;
 
@@ -74,18 +73,18 @@ public:
 private:
     void resetDtlsSrtpTransport();
     void checkConnectionTimeout();
-    void candidateGathered(cricket::IceTransportInternal *transport, const cricket::Candidate &candidate);
-    void candidateGatheringState(cricket::IceTransportInternal *transport);
-    void OnTransportWritableState_n(rtc::PacketTransportInternal *transport);
-    void OnTransportReceivingState_n(rtc::PacketTransportInternal *transport);
-    void transportStateChanged(cricket::IceTransportInternal *transport);
-    void transportReadyToSend(cricket::IceTransportInternal *transport);
-    void transportRouteChanged(absl::optional<rtc::NetworkRoute> route);
-    void candidatePairChanged(cricket::CandidatePairChangeEvent const &event);
+    void candidateGathered(webrtc::IceTransportInternal *transport, const webrtc::Candidate &candidate);
+    void candidateGatheringState(webrtc::IceTransportInternal *transport);
+    void OnTransportWritableState_n(webrtc::PacketTransportInternal *transport);
+    void OnTransportReceivingState_n(webrtc::PacketTransportInternal *transport);
+    void transportStateChanged(webrtc::IceTransportInternal *transport);
+    void transportReadyToSend(webrtc::IceTransportInternal *transport);
+    void transportRouteChanged(absl::optional<webrtc::NetworkRoute> route);
+    void candidatePairChanged(webrtc::CandidatePairChangeEvent const &event);
     void DtlsReadyToSend(bool DtlsReadyToSend);
     void UpdateAggregateStates_n();
-    void RtpPacketReceived_n(rtc::CopyOnWriteBuffer *packet, int64_t packet_time_us, bool isUnresolved);
-    void OnRtcpPacketReceived_n(rtc::CopyOnWriteBuffer *packet, int64_t packet_time_us);
+    void RtpPacketReceived_n(webrtc::CopyOnWriteBuffer *packet, int64_t packet_time_us, bool isUnresolved);
+    void OnRtcpPacketReceived_n(webrtc::CopyOnWriteBuffer *packet, int64_t packet_time_us);
 
     void sctpReadyToSendData();
     
@@ -104,28 +103,29 @@ private:
     std::map<std::string, json11::Json> _customParameters;
 
     std::function<void(const InstanceNetworking::State &)> _stateUpdated;
-    std::function<void(const cricket::Candidate &)> _candidateGathered;
-    std::function<void(rtc::CopyOnWriteBuffer const &, bool)> _transportMessageReceived;
-    std::function<void(rtc::CopyOnWriteBuffer const &, int64_t)> _rtcpPacketReceived;
+    std::function<void(const webrtc::Candidate &)> _candidateGathered;
+    std::function<void(webrtc::CopyOnWriteBuffer const &, bool)> _transportMessageReceived;
+    std::function<void(webrtc::CopyOnWriteBuffer const &, int64_t)> _rtcpPacketReceived;
     std::function<void(bool)> _dataChannelStateUpdated;
     std::function<void(std::string const &)> _dataChannelMessageReceived;
 
-    std::unique_ptr<rtc::NetworkMonitorFactory> _networkMonitorFactory;
-    rtc::SocketFactory *_underlyingSocketFactory = nullptr;
-    std::unique_ptr<rtc::PacketSocketFactory> _socketFactory;
-    std::unique_ptr<rtc::NetworkManager> _networkManager;
+    std::unique_ptr<webrtc::NetworkMonitorFactory> _networkMonitorFactory;
+    webrtc::Environment _env;
+    webrtc::SocketFactory *_underlyingSocketFactory = nullptr;
+    std::unique_ptr<webrtc::PacketSocketFactory> _socketFactory;
+    std::unique_ptr<webrtc::NetworkManager> _networkManager;
     std::unique_ptr<webrtc::TurnCustomizer> _turnCustomizer;
-    std::unique_ptr<cricket::RelayPortFactoryInterface> _relayPortFactory;
-    std::unique_ptr<cricket::BasicPortAllocator> _portAllocator;
+    std::unique_ptr<webrtc::RelayPortFactoryInterface> _relayPortFactory;
+    std::unique_ptr<webrtc::BasicPortAllocator> _portAllocator;
     std::unique_ptr<webrtc::AsyncDnsResolverFactoryInterface> _asyncResolverFactory;
-    std::unique_ptr<cricket::P2PTransportChannel> _transportChannel;
+    webrtc::scoped_refptr<webrtc::IceTransportInterface> _transportChannel;
     std::unique_ptr<webrtc::RtpTransport> _mtProtoRtpTransport;
-    std::unique_ptr<cricket::DtlsTransport> _dtlsTransport;
+    std::unique_ptr<webrtc::DtlsTransportInternal> _dtlsTransport;
     std::unique_ptr<webrtc::DtlsSrtpTransport> _dtlsSrtpTransport;
 
     std::unique_ptr<SctpDataChannelProviderInterfaceImpl> _dataChannelInterface;
 
-    webrtc::scoped_refptr<rtc::RTCCertificate> _localCertificate;
+    webrtc::scoped_refptr<webrtc::RTCCertificate> _localCertificate;
     PeerIceParameters _localIceParameters;
     absl::optional<PeerIceParameters> _remoteIceParameters;
 
@@ -135,7 +135,7 @@ private:
     absl::optional<RouteDescription> _currentRouteDescription;
     absl::optional<ConnectionDescription> _currentConnectionDescription;
     
-    std::vector<cricket::Candidate> _pendingLocalStandaloneReflectorCandidates;
+    std::vector<webrtc::Candidate> _pendingLocalStandaloneReflectorCandidates;
 };
 
 } // namespace tgcalls

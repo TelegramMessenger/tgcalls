@@ -110,7 +110,7 @@ public:
         std::function<void(webrtc::scoped_refptr<webrtc::DataChannelInterface>)> onDataChannel;
         std::function<void(webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>)> onTransceiverAdded;
         std::function<void(webrtc::scoped_refptr<webrtc::RtpReceiverInterface>)> onTransceiverRemoved;
-        std::function<void(const cricket::CandidatePairChangeEvent &)> onCandidatePairChangeEvent;
+        std::function<void(const webrtc::CandidatePairChangeEvent &)> onCandidatePairChangeEvent;
     };
 
 public:
@@ -173,10 +173,10 @@ public:
         }
     }
 
-    void OnIceCandidatesRemoved(const std::vector<cricket::Candidate> &candidates) override {
+    void OnIceCandidatesRemoved(const std::vector<webrtc::Candidate> &candidates) override {
     }
 
-    void OnIceSelectedCandidatePairChanged(const cricket::CandidatePairChangeEvent &event) override {
+    void OnIceSelectedCandidatePairChanged(const webrtc::CandidatePairChangeEvent &event) override {
         if (_parameters.onCandidatePairChangeEvent) {
             _parameters.onCandidatePairChangeEvent(event);
         }
@@ -519,7 +519,7 @@ public:
             std::string mid = transceiver->mid().value();
 
             switch (transceiver->media_type()) {
-                case cricket::MediaType::MEDIA_TYPE_VIDEO: {
+                case webrtc::MediaType::MEDIA_TYPE_VIDEO: {
                     if (strong->_incomingVideoTransceivers.find(mid) == strong->_incomingVideoTransceivers.end()) {
                         strong->_incomingVideoTransceivers.insert(std::make_pair(mid, transceiver));
 
@@ -550,7 +550,7 @@ public:
                 strong->_incomingVideoTransceivers.erase(transceiver);
             }
         };
-        delegateParameters.onCandidatePairChangeEvent = [weak](const cricket::CandidatePairChangeEvent &event) {
+        delegateParameters.onCandidatePairChangeEvent = [weak](const webrtc::CandidatePairChangeEvent &event) {
             const auto strong = weak.lock();
             if (!strong) {
                 return;
@@ -575,7 +575,7 @@ public:
         _networkManager = std::make_unique<rtc::BasicNetworkManager>(_networkMonitorFactory.get(), _threads->getNetworkThread()->socketserver());
         _relayPortFactory = std::make_unique<ReflectorRelayPortFactory>(_rtcServers, false, 0, _threads->getNetworkThread()->socketserver());
 
-        auto portAllocator = std::make_unique<cricket::BasicPortAllocator>(_networkManager.get(), _socketFactory.get(), nullptr, _relayPortFactory.get());
+        auto portAllocator = std::make_unique<webrtc::BasicPortAllocator>(_networkManager.get(), _socketFactory.get(), nullptr, _relayPortFactory.get());
         peerConnectionDependencies.allocator = std::move(portAllocator);
 
         webrtc::PeerConnectionInterface::RTCConfiguration peerConnectionConfiguration;
@@ -644,7 +644,7 @@ public:
             webrtc::RtpTransceiverInit transceiverInit;
             transceiverInit.stream_ids = { "0" };
 
-            cricket::AudioOptions audioSourceOptions;
+            webrtc::AudioOptions audioSourceOptions;
             webrtc::scoped_refptr<webrtc::AudioSourceInterface> audioSource = _peerConnectionFactory->CreateAudioSource(audioSourceOptions);
 
             webrtc::scoped_refptr<webrtc::AudioTrackInterface> audioTrack = _peerConnectionFactory->CreateAudioTrack("0", audioSource.get());
@@ -839,7 +839,7 @@ public:
             return;
         }
 
-        const cricket::SessionDescription *cricketDesc = localDescription->description();
+        const webrtc::SessionDescription *cricketDesc = localDescription->description();
         if (!cricketDesc) {
             return;
         }
@@ -948,7 +948,7 @@ public:
     }
 
     void applyRemoteDescription() {
-        const cricket::SessionDescription *localDesc = nullptr;
+        const webrtc::SessionDescription *localDesc = nullptr;
         if (_peerConnection->local_description()) {
             localDesc = _peerConnection->local_description()->description();
         }
@@ -1170,13 +1170,13 @@ public:
                         _outgoingVideoTrack = videoTrack;
                         _outgoingVideoTransceiver = videoTransceiverOrError.value();
 
-                        auto currentCapabilities = _peerConnectionFactory->GetRtpSenderCapabilities(cricket::MediaType::MEDIA_TYPE_VIDEO);
+                        auto currentCapabilities = _peerConnectionFactory->GetRtpSenderCapabilities(webrtc::MediaType::MEDIA_TYPE_VIDEO);
 
                         std::vector<std::string> codecPreferences = {
                             #ifndef WEBRTC_DISABLE_H265
-                            cricket::kH265CodecName,
+                            webrtc::kH265CodecName,
                             #endif
-                            cricket::kH264CodecName
+                            webrtc::kH264CodecName
                         };
 
                         for (const auto &codecCapability : currentCapabilities.codecs) {
@@ -1440,7 +1440,7 @@ private:
     std::unique_ptr<rtc::NetworkMonitorFactory> _networkMonitorFactory;
     std::unique_ptr<rtc::BasicPacketSocketFactory> _socketFactory;
     std::unique_ptr<rtc::BasicNetworkManager> _networkManager;
-    std::unique_ptr<cricket::RelayPortFactoryInterface> _relayPortFactory;
+    std::unique_ptr<webrtc::RelayPortFactoryInterface> _relayPortFactory;
 
     webrtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> _peerConnectionFactory;
     std::unique_ptr<PeerConnectionDelegateAdapter> _peerConnectionObserver;

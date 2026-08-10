@@ -38,7 +38,7 @@ constexpr auto kPreferredFps = 30;
 } // namespace
 
 VideoCameraCapturer::VideoCameraCapturer(
-	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink)
+	std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink)
 : _sink(sink) {
 }
 
@@ -222,7 +222,7 @@ void VideoCameraCapturer::OnFrame(const webrtc::VideoFrame &frame) {
 	height &= ~int(1);
 	const auto left = (originalWidth - width) / 2;
 	const auto top = (originalHeight - height) / 2;
-	rtc::scoped_refptr<webrtc::I420Buffer> croppedBuffer =
+	webrtc::scoped_refptr<webrtc::I420Buffer> croppedBuffer =
 		webrtc::I420Buffer::Create(width, height);
 	croppedBuffer->CropAndScaleFrom(
 		*frame.video_frame_buffer()->ToI420(),

@@ -270,7 +270,7 @@ public:
     }
 
     void render() {
-        int64_t absoluteTimestamp = rtc::TimeMillis();
+        int64_t absoluteTimestamp = webrtc::TimeMillis();
 
         while (true) {
             if (_waitForBufferredMillisecondsBeforeRendering) {
@@ -799,7 +799,7 @@ public:
     void checkPendingSegments() {
         const auto weak = std::weak_ptr<StreamingMediaContextPrivate>(shared_from_this());
 
-        int64_t absoluteTimestamp = rtc::TimeMillis();
+        int64_t absoluteTimestamp = webrtc::TimeMillis();
         int64_t minDelayedRequestTimeout = INT_MAX;
 
         bool shouldRequestMoreSegments = false;
@@ -864,7 +864,7 @@ public:
                                         strong->requestSegmentsIfNeeded();
                                         strong->checkPendingSegments();
                                     } else {
-                                        pendingPart->minRequestTimestamp = rtc::TimeMillis() + 100;
+                                        pendingPart->minRequestTimestamp = webrtc::TimeMillis() + 100;
                                         strong->checkPendingSegments();
                                     }
                                     break;
@@ -1029,10 +1029,10 @@ public:
         }
     }
 
-    void addVideoSink(std::string const &endpointId, std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+    void addVideoSink(std::string const &endpointId, std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
         auto it = _videoSinks.find(endpointId);
         if (it == _videoSinks.end()) {
-            _videoSinks.insert(std::make_pair(endpointId, std::vector<std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>>()));
+            _videoSinks.insert(std::make_pair(endpointId, std::vector<std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>>>()));
         }
         _videoSinks[endpointId].push_back(sink);
     }
@@ -1074,7 +1074,7 @@ private:
     std::map<uint32_t, double> _volumeBySsrc;
     std::vector<StreamingMediaContext::VideoChannel> _activeVideoChannels;
     std::map<std::string, std::shared_ptr<VideoStreamingSharedState>> _sharedVideoStateByEndpointId;
-    std::map<std::string, std::vector<std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>>> _videoSinks;
+    std::map<std::string, std::vector<std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>>>> _videoSinks;
 
     std::map<std::string, int32_t> _currentEndpointMapping;
 };
@@ -1095,7 +1095,7 @@ void StreamingMediaContext::setVolume(uint32_t ssrc, double volume) {
     _private->setVolume(ssrc, volume);
 }
 
-void StreamingMediaContext::addVideoSink(std::string const &endpointId, std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+void StreamingMediaContext::addVideoSink(std::string const &endpointId, std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
     _private->addVideoSink(endpointId, sink);
 }
 

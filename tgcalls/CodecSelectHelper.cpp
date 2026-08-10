@@ -6,7 +6,6 @@
 #include "media/base/codec.h"
 #include "absl/strings/match.h"
 #include "rtc_base/logging.h"
-#include "system_wrappers/include/field_trial.h"
 
 namespace tgcalls {
 namespace {
@@ -25,13 +24,13 @@ bool CompareFormats(const VideoFormat &a, const VideoFormat &b) {
 
 int FormatPriority(const VideoFormat &format, const std::vector<std::string> &preferredCodecs) {
 	static const auto kCodecs = {
-		std::string(cricket::kAv1CodecName),
+		std::string(webrtc::kAv1CodecName),
 #ifndef WEBRTC_DISABLE_H265
-		std::string(cricket::kH265CodecName),
+		std::string(webrtc::kH265CodecName),
 #endif
-		std::string(cricket::kH264CodecName),
-		std::string(cricket::kVp8CodecName),
-        std::string(cricket::kVp9CodecName),
+		std::string(webrtc::kH264CodecName),
+		std::string(webrtc::kVp8CodecName),
+        std::string(webrtc::kVp9CodecName),
 	};
 	static const auto kSupported = [] {
 		const auto platform = PlatformInterface::SharedInstance();
@@ -110,23 +109,19 @@ std::vector<VideoFormat>::const_iterator FindEqualFormat(
 	});
 }
 
-void AddDefaultFeedbackParams(cricket::VideoCodec *codec) {
-	// Don't add any feedback params for RED and ULPFEC.
-	if (codec->name == cricket::kRedCodecName || codec->name == cricket::kUlpfecCodecName)
-		return;
-	codec->AddFeedbackParam(cricket::FeedbackParam(cricket::kRtcpFbParamRemb, cricket::kParamValueEmpty));
-	codec->AddFeedbackParam(
-		cricket::FeedbackParam(cricket::kRtcpFbParamTransportCc, cricket::kParamValueEmpty));
-	// Don't add any more feedback params for FLEXFEC.
-	if (codec->name == cricket::kFlexfecCodecName)
-		return;
-	codec->AddFeedbackParam(cricket::FeedbackParam(cricket::kRtcpFbParamCcm, cricket::kRtcpFbCcmParamFir));
-	codec->AddFeedbackParam(cricket::FeedbackParam(cricket::kRtcpFbParamNack, cricket::kParamValueEmpty));
-	codec->AddFeedbackParam(cricket::FeedbackParam(cricket::kRtcpFbParamNack, cricket::kRtcpFbNackParamPli));
-	if (codec->name == cricket::kVp8CodecName &&
-		webrtc::field_trial::IsEnabled("WebRTC-RtcpLossNotification")) {
-		codec->AddFeedbackParam(cricket::FeedbackParam(cricket::kRtcpFbParamLntf, cricket::kParamValueEmpty));
-	}
+void AddDefaultFeedbackParams(webrtc::Codec *codec) {
+        // Don't add any feedback params for RED and ULPFEC.
+        if (codec->name == webrtc::kRedCodecName || codec->name == webrtc::kUlpfecCodecName)
+                return;
+        codec->AddFeedbackParam(webrtc::FeedbackParam(webrtc::kRtcpFbParamRemb, webrtc::kParamValueEmpty));
+        codec->AddFeedbackParam(
+                webrtc::FeedbackParam(webrtc::kRtcpFbParamTransportCc, webrtc::kParamValueEmpty));
+        // Don't add any more feedback params for FLEXFEC.
+        if (codec->name == webrtc::kFlexfecCodecName)
+                return;
+        codec->AddFeedbackParam(webrtc::FeedbackParam(webrtc::kRtcpFbParamCcm, webrtc::kRtcpFbCcmParamFir));
+        codec->AddFeedbackParam(webrtc::FeedbackParam(webrtc::kRtcpFbParamNack, webrtc::kParamValueEmpty));
+        codec->AddFeedbackParam(webrtc::FeedbackParam(webrtc::kRtcpFbParamNack, webrtc::kRtcpFbNackParamPli));
 }
 
 std::vector<VideoFormat> RemoveScalabilityModes(
@@ -251,16 +246,16 @@ CommonCodecs AssignPayloadTypesAndDefaultCodecs(CommonFormats &&formats) {
 
 	int payload_type = kFirstDynamicPayloadType;
 
-	formats.list.push_back(webrtc::SdpVideoFormat(cricket::kRedCodecName));
-	formats.list.push_back(webrtc::SdpVideoFormat(cricket::kUlpfecCodecName));
+	formats.list.push_back(webrtc::SdpVideoFormat(webrtc::kRedCodecName));
+	formats.list.push_back(webrtc::SdpVideoFormat(webrtc::kUlpfecCodecName));
 
 	if (true) {
-		webrtc::SdpVideoFormat flexfec_format(cricket::kFlexfecCodecName);
+		webrtc::SdpVideoFormat flexfec_format(webrtc::kFlexfecCodecName);
 		// This value is currently arbitrarily set to 10 seconds. (The unit
 		// is microseconds.) This parameter MUST be present in the SDP, but
 		// we never use the actual value anywhere in our code however.
 		// TODO(brandtr): Consider honouring this value in the sender and receiver.
-		flexfec_format.parameters = { {cricket::kFlexfecFmtpRepairWindow, "10000000"} };
+		flexfec_format.parameters = { {webrtc::kFlexfecFmtpRepairWindow, "10000000"} };
 		formats.list.push_back(flexfec_format);
 	}
 
@@ -268,7 +263,7 @@ CommonCodecs AssignPayloadTypesAndDefaultCodecs(CommonFormats &&formats) {
 	auto result = CommonCodecs();
 	result.list.reserve(2 * formats.list.size() - 2);
 	for (const auto &format : formats.list) {
-        cricket::VideoCodec codec = cricket::CreateVideoCodec(format);
+        webrtc::Codec codec = webrtc::CreateVideoCodec(format);
 		codec.id = payload_type;
 		AddDefaultFeedbackParams(&codec);
 
@@ -285,9 +280,9 @@ CommonCodecs AssignPayloadTypesAndDefaultCodecs(CommonFormats &&formats) {
 		}
 
 		// Add associated RTX codec for non-FEC codecs.
-		if (!absl::EqualsIgnoreCase(codec.name, cricket::kUlpfecCodecName) &&
-			!absl::EqualsIgnoreCase(codec.name, cricket::kFlexfecCodecName)) {
-			result.list.push_back(cricket::CreateVideoRtxCodec(payload_type, codec.id));
+		if (!absl::EqualsIgnoreCase(codec.name, webrtc::kUlpfecCodecName) &&
+			!absl::EqualsIgnoreCase(codec.name, webrtc::kFlexfecCodecName)) {
+			result.list.push_back(webrtc::CreateVideoRtxCodec(payload_type, codec.id));
 
 			// Increment payload type.
 			++payload_type;

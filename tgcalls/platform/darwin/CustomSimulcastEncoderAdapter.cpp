@@ -143,7 +143,7 @@ bool StreamQualityCompare(const webrtc::SimulcastStream& a,
 }
 
 void GetLowestAndHighestQualityStreamIndixes(
-    rtc::ArrayView<webrtc::SimulcastStream> streams,
+    webrtc::ArrayView<webrtc::SimulcastStream> streams,
     int* lowest_quality_stream_idx,
     int* highest_quality_stream_idx) {
   const auto lowest_highest_quality_streams =
@@ -357,7 +357,7 @@ int CustomSimulcastEncoderAdapter::InitEncode(
   int highest_quality_stream_idx = 0;
   if (!is_legacy_singlecast) {
     GetLowestAndHighestQualityStreamIndixes(
-        rtc::ArrayView<SimulcastStream>(codec_.simulcastStream,
+        webrtc::ArrayView<SimulcastStream>(codec_.simulcastStream,
                                         total_streams_count_),
         &lowest_quality_stream_idx, &highest_quality_stream_idx);
   }
@@ -510,7 +510,7 @@ int CustomSimulcastEncoderAdapter::Encode(
   }
 
   // Temporary thay may hold the result of texture to i420 buffer conversion.
-  rtc::scoped_refptr<VideoFrameBuffer> src_buffer;
+  webrtc::scoped_refptr<VideoFrameBuffer> src_buffer;
   int src_width = input_image.width();
   int src_height = input_image.height();
 
@@ -581,7 +581,7 @@ int CustomSimulcastEncoderAdapter::Encode(
       if (src_buffer == nullptr) {
         src_buffer = input_image.video_frame_buffer();
       }
-      rtc::scoped_refptr<VideoFrameBuffer> dst_buffer =
+      webrtc::scoped_refptr<VideoFrameBuffer> dst_buffer =
           src_buffer->Scale(layer.width(), layer.height());
       if (!dst_buffer) {
         RTC_LOG(LS_ERROR) << "Failed to scale video frame";
@@ -887,7 +887,7 @@ webrtc::VideoCodec CustomSimulcastEncoderAdapter::MakeStreamCodec(
 void CustomSimulcastEncoderAdapter::OverrideFromFieldTrial(
     VideoEncoder::EncoderInfo* info) const {
   if (encoder_info_override_.requested_resolution_alignment()) {
-    info->requested_resolution_alignment = cricket::LeastCommonMultiple(
+    info->requested_resolution_alignment = webrtc::LeastCommonMultiple(
         info->requested_resolution_alignment,
         *encoder_info_override_.requested_resolution_alignment());
     info->apply_alignment_to_all_simulcast_layers =
@@ -934,7 +934,7 @@ VideoEncoder::EncoderInfo CustomSimulcastEncoderAdapter::GetEncoderInfo() const 
     const VideoEncoder::EncoderInfo& fallback_info =
         encoder_context->FallbackInfo();
 
-    encoder_info.requested_resolution_alignment = cricket::LeastCommonMultiple(
+    encoder_info.requested_resolution_alignment = webrtc::LeastCommonMultiple(
         primary_info.requested_resolution_alignment,
         fallback_info.requested_resolution_alignment);
 
@@ -995,7 +995,7 @@ VideoEncoder::EncoderInfo CustomSimulcastEncoderAdapter::GetEncoderInfo() const 
           encoder_impl_info.is_qp_trusted.value_or(true);
     }
     encoder_info.fps_allocation[i] = encoder_impl_info.fps_allocation[0];
-    encoder_info.requested_resolution_alignment = cricket::LeastCommonMultiple(
+    encoder_info.requested_resolution_alignment = webrtc::LeastCommonMultiple(
         encoder_info.requested_resolution_alignment,
         encoder_impl_info.requested_resolution_alignment);
     // request alignment on all layers if any of the encoders may need it, or

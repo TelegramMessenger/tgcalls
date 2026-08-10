@@ -29,7 +29,7 @@ namespace webrtc {
 
 class H264EncoderX264Impl : public H264Encoder {
  public:
-  H264EncoderX264Impl(cricket::VideoCodec const &videoCodec);
+  H264EncoderX264Impl(webrtc::VideoCodec const &videoCodec);
   ~H264EncoderX264Impl() override;
 
   // |max_payload_size| is ignored.

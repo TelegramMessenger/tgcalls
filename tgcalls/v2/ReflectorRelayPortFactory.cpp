@@ -6,7 +6,7 @@
 
 namespace tgcalls {
 
-ReflectorRelayPortFactory::ReflectorRelayPortFactory(std::vector<RtcServer> servers, bool standaloneReflectorMode, uint32_t standaloneReflectorRoleId, rtc::SocketFactory *underlyingSocketFactory) :
+ReflectorRelayPortFactory::ReflectorRelayPortFactory(std::vector<RtcServer> servers, bool standaloneReflectorMode, uint32_t standaloneReflectorRoleId, webrtc::SocketFactory *underlyingSocketFactory) :
 _servers(servers),
 _standaloneReflectorMode(standaloneReflectorMode),
 _standaloneReflectorRoleId(standaloneReflectorRoleId),
@@ -16,11 +16,11 @@ _underlyingSocketFactory(underlyingSocketFactory) {
 ReflectorRelayPortFactory::~ReflectorRelayPortFactory() {
 }
 
-std::unique_ptr<cricket::Port> ReflectorRelayPortFactory::Create(const cricket::CreateRelayPortArgs& args, rtc::AsyncPacketSocket* udp_socket) {
+std::unique_ptr<webrtc::Port> ReflectorRelayPortFactory::Create(const webrtc::CreateRelayPortArgs& args, webrtc::AsyncPacketSocket* udp_socket) {
     if (args.config->credentials.username == "reflector") {
         uint8_t id = 0;
         for (const auto &server : _servers) {
-            rtc::SocketAddress serverAddress(server.host, server.port);
+            webrtc::SocketAddress serverAddress(server.host, server.port);
             if (args.server_address->address == serverAddress) {
                 id = server.id;
                 break;
@@ -37,7 +37,7 @@ std::unique_ptr<cricket::Port> ReflectorRelayPortFactory::Create(const cricket::
         }
         return port;
     } else {
-        auto port = cricket::TurnPort::Create(args, udp_socket);
+        auto port = webrtc::TurnPort::Create(args, udp_socket);
         if (!port) {
             return nullptr;
         }
@@ -47,11 +47,11 @@ std::unique_ptr<cricket::Port> ReflectorRelayPortFactory::Create(const cricket::
     }
 }
 
-std::unique_ptr<cricket::Port> ReflectorRelayPortFactory::Create(const cricket::CreateRelayPortArgs& args, int min_port, int max_port) {
+std::unique_ptr<webrtc::Port> ReflectorRelayPortFactory::Create(const webrtc::CreateRelayPortArgs& args, int min_port, int max_port) {
     if (args.config->credentials.username == "reflector") {
         uint8_t id = 0;
         for (const auto &server : _servers) {
-            rtc::SocketAddress serverAddress(server.host, server.port);
+            webrtc::SocketAddress serverAddress(server.host, server.port);
             if (args.server_address->address == serverAddress) {
                 id = server.id;
                 break;
@@ -68,7 +68,7 @@ std::unique_ptr<cricket::Port> ReflectorRelayPortFactory::Create(const cricket::
         }
         return port;
     } else {
-        auto port = cricket::TurnPort::Create(args, min_port, max_port);
+        auto port = webrtc::TurnPort::Create(args, min_port, max_port);
         if (!port) {
             return nullptr;
         }
