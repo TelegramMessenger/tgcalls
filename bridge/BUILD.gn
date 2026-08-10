@@ -98,7 +98,6 @@ shared_library("libtgcall") {
     # depends on newer WebRTC APIs (pc/media_factory.h, api/environment/).
     # The voice stub (same one used by Tele4Watch) implements the same
     # interface with no video source and compiles against our WebRTC.
-    "tgcalls/video_capture_interface_impl_voice_stub.cpp",
     "tgcalls/platform/fake/FakeInterface.cpp",
     "tgcalls/third-party/json11.cpp",
     "tgcalls/utils/gzip.cpp",
