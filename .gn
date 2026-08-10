@@ -1,0 +1,5 @@
+# Standalone GN build for tgcalls (HarmonyOS).
+# Reuses the prebuilt WebRTC artifacts (headers, gen, libohos_webrtc.so)
+# via the build/ symlink; does NOT modify the WebRTC source tree.
+buildconfig = "//build/config/BUILDCONFIG.gn"
+script_executable = "python3"
