@@ -65,6 +65,7 @@
 #include <random>
 #include <sstream>
 #include <map>
+#include <set>
 
 #include "third-party/json11.hpp"
 #include "utils/gzip.h"
@@ -395,6 +396,7 @@ public:
     }
 
     ~InstanceV2ReferenceImplInternal() {
+        disconnectAllIncomingVideoSinks();
         _currentStrongSink.reset();
 
         _threads->getWorkerThread()->BlockingCall([&]() {
@@ -493,6 +495,16 @@ public:
             threads->getMediaThread()->PostTask([weak]() {
                 const auto strong = weak.lock();
                 if (!strong) {
+                    return;
+                }
+
+                if (strong->_isMakingOffer) {
+                    // An offer is already in flight and it already covers whatever
+                    // triggered this event - the data channel created moments ago in
+                    // start(). Stock suppresses this via the is_negotiation_needed_
+                    // latch; we override the legacy OnRenegotiationNeeded, which
+                    // bypasses that, so we suppress it here instead.
+                    RTC_LOG(LS_INFO) << "onRenegotiationNeeded: offer already in flight, skipping";
                     return;
                 }
 
@@ -604,7 +616,7 @@ public:
 
             const auto transceiver = strong->_incomingVideoTransceivers.find(mid);
             if (transceiver != strong->_incomingVideoTransceivers.end()) {
-                strong->disconnectIncomingVideoSink();
+                strong->disconnectIncomingVideoSink(transceiver->second);
 
                 strong->_incomingVideoTransceivers.erase(transceiver);
             }
@@ -665,6 +677,13 @@ public:
             }
 
             if (server.isTurn) {
+                if (server.login.empty() || server.password.empty()) {
+                    // ParseIceServersOrError returns on the FIRST bad entry, so one
+                    // empty credential would kill the whole list. Skip just this one.
+                    RTC_LOG(LS_ERROR) << "Skipping TURN server with empty credentials: " << server.host;
+                    continue;
+                }
+
                 webrtc::PeerConnectionInterface::IceServer mappedServer;
 
                 mappedServer.urls.push_back(
@@ -686,6 +705,11 @@ public:
         auto peerConnectionOrError = _peerConnectionFactory->CreatePeerConnectionOrError(peerConnectionConfiguration, std::move(peerConnectionDependencies));
         if (peerConnectionOrError.ok()) {
             _peerConnection = peerConnectionOrError.value();
+        } else {
+            RTC_LOG(LS_ERROR) << "CreatePeerConnectionOrError failed: " << peerConnectionOrError.error().message();
+            _isFailed = true;
+            onNetworkStateUpdated();
+            return;
         }
 
         if (_peerConnection) {
@@ -968,15 +992,25 @@ public:
         _isMakingOffer = true;
 
         webrtc::scoped_refptr<webrtc::SetLocalDescriptionObserverInterface> observer(new rtc::RefCountedObject<SetSessionDescriptionObserver>([threads = _threads, weak](webrtc::RTCError error) {
-            threads->getMediaThread()->PostTask([weak]() {
+            const bool isOk = error.ok();
+            if (!isOk) {
+                RTC_LOG(LS_ERROR) << "SetLocalDescription failed: " << error.message();
+            }
+            threads->getMediaThread()->PostTask([weak, isOk]() {
                 const auto strong = weak.lock();
                 if (!strong) {
                     return;
                 }
 
-                strong->doSendLocalDescription();
-
+                // Always clear the in-flight flag, or a failure would wedge
+                // renegotiation permanently (see the guard in onRenegotiationNeeded).
                 strong->_isMakingOffer = false;
+
+                if (!isOk) {
+                    return;
+                }
+
+                strong->doSendLocalDescription();
 
                 strong->maybeCommitPendingIceCandidates();
             });
@@ -1220,13 +1254,26 @@ public:
 
         const auto weak = std::weak_ptr<InstanceV2ReferenceImplInternal>(shared_from_this());
         webrtc::scoped_refptr<webrtc::SetRemoteDescriptionObserverInterface> observer(new rtc::RefCountedObject<SetSessionDescriptionObserver>([threads = _threads, weak, type](webrtc::RTCError error) {
-            threads->getMediaThread()->PostTask([weak, type]() {
+            const bool isOk = error.ok();
+            if (!isOk) {
+                RTC_LOG(LS_ERROR) << "SetRemoteDescription failed: " << error.message();
+            }
+            threads->getMediaThread()->PostTask([weak, type, isOk]() {
                 const auto strong = weak.lock();
                 if (!strong) {
                     return;
                 }
 
                 strong->_isSettingRemoteAnswerPending = false;
+
+                if (!isOk) {
+                    // Do NOT fall through to sendLocalDescription(): a failed
+                    // SetRemoteDescription(offer) leaves signaling state at kStable,
+                    // and the implicit SetLocalDescription overload picks
+                    // offer-vs-answer from signaling_state() - so we would send an
+                    // offer where the peer awaits an answer.
+                    return;
+                }
 
                 strong->maybeCommitPendingIceCandidates();
 
@@ -1399,6 +1446,14 @@ public:
     }
 
     void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture) {
+        if (!_peerConnection) {
+            // start() bailed out because CreatePeerConnectionOrError failed. The app
+            // can still call setVideoCapture() through the public Instance interface,
+            // and _peerConnectionFactory is valid here, so CreateVideoTrack would
+            // succeed and the AddTransceiver below would dereference null.
+            return;
+        }
+
         _isPerformingConfiguration = true;
 
         if (_outgoingVideoTransceiver) {
@@ -1496,16 +1551,48 @@ public:
     }
 
     void connectIncomingVideoSink(webrtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver) {
-        if (_currentStrongSink) {
-            webrtc::VideoTrackInterface *videoTrack = (webrtc::VideoTrackInterface *)transceiver->receiver()->track().get();
-            videoTrack->AddOrUpdateSink(_currentStrongSink.get(), rtc::VideoSinkWants());
+        if (!_currentStrongSink) {
+            return;
         }
+        auto track = transceiver->receiver()->track();
+        if (!track) {
+            return;
+        }
+        webrtc::VideoTrackInterface *videoTrack = (webrtc::VideoTrackInterface *)track.get();
+        videoTrack->AddOrUpdateSink(_currentStrongSink.get(), rtc::VideoSinkWants());
+        _attachedSinkTracks.insert(videoTrack);
     }
 
-    void disconnectIncomingVideoSink() {
+    void disconnectIncomingVideoSink(webrtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver) {
+        if (!_currentStrongSink) {
+            return;
+        }
+        auto track = transceiver->receiver()->track();
+        if (!track) {
+            return;
+        }
+        webrtc::VideoTrackInterface *videoTrack = (webrtc::VideoTrackInterface *)track.get();
+        if (_attachedSinkTracks.erase(videoTrack) == 0) {
+            // Never attached to this track - RemoveSink would trip
+            // RTC_DCHECK(FindSinkPair(sink)) in a debug build.
+            return;
+        }
+        videoTrack->RemoveSink(_currentStrongSink.get());
+    }
+
+    void disconnectAllIncomingVideoSinks() {
+        if (!_currentStrongSink) {
+            return;
+        }
+        for (const auto &it : _incomingVideoTransceivers) {
+            disconnectIncomingVideoSink(it.second);
+        }
+        _attachedSinkTracks.clear();
     }
 
     void setIncomingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+        disconnectAllIncomingVideoSinks();
+
         _currentStrongSink = sink.lock();
 
         if (_currentStrongSink) {
@@ -1539,7 +1626,9 @@ public:
 
     void stop(std::function<void(FinalState)> completion) {
         _isStopped = true;
-        _peerConnection->Close();
+        if (_peerConnection) {
+            _peerConnection->Close();
+        }
 
         FinalState finalState;
 
@@ -1728,6 +1817,11 @@ private:
     std::atomic<bool> _isStopped{false};
 
     std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _currentStrongSink;
+    // Exactly the tracks we called AddOrUpdateSink on. RemoveSink DCHECKs when the
+    // sink was never added, and attachment is asymmetric (a transceiver added while
+    // no sink is set is never attached, and setIncomingVideoOutput attaches only the
+    // first entry), so removal must be driven by this set, not by the transceiver map.
+    std::set<webrtc::VideoTrackInterface*> _attachedSinkTracks;
 
     std::shared_ptr<VideoCaptureInterface> _videoCapture;
 };

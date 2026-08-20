@@ -82,6 +82,8 @@ private:
     void executeDcSend(json11::Json const &command);
     void onSignalingData(const std::vector<uint8_t> &data);
     void connectIncomingVideoSink(webrtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver);
+    void disconnectIncomingVideoSink(webrtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver);
+    void disconnectAllIncomingVideoSinks();
     webrtc::scoped_refptr<webrtc::AudioDeviceModule> createAudioDeviceModule();
 
     std::shared_ptr<Threads> _threads;
@@ -140,6 +142,11 @@ private:
     std::set<std::string> _requestedSinkMids;
     std::map<std::string, webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>> _incomingVideoTransceivers;
     std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _currentStrongSink;
+    // Exactly the tracks we called AddOrUpdateSink on. RemoveSink DCHECKs when the
+    // sink was never added, and attachment is asymmetric (a transceiver added while
+    // no sink is set is never attached), so removal must be driven by this set, not
+    // by the transceiver map.
+    std::set<webrtc::VideoTrackInterface*> _attachedSinkTracks;
     std::shared_ptr<VideoCaptureInterface> _videoCapture;
 
     struct HostDataChannel {

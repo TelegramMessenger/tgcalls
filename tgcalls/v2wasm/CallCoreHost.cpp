@@ -248,6 +248,7 @@ public:
         }
         const auto transceiver = strong->_incomingVideoTransceivers.find(mid);
         if (transceiver != strong->_incomingVideoTransceivers.end()) {
+            strong->disconnectIncomingVideoSink(transceiver->second);
             strong->_incomingVideoTransceivers.erase(transceiver);
         }
     }
@@ -509,6 +510,7 @@ _videoCapture(descriptor.videoCapture) {
 }
 
 CallCoreHost::~CallCoreHost() {
+    disconnectAllIncomingVideoSinks();
     _currentStrongSink.reset();
     _threads->getWorkerThread()->BlockingCall([&]() {
         _audioDeviceModule = nullptr;
@@ -1613,6 +1615,7 @@ void CallCoreHost::setIsLowBatteryLevel(bool low) {
 }
 
 void CallCoreHost::setIncomingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+    disconnectAllIncomingVideoSinks();
     _currentStrongSink = sink.lock();
     if (!_currentStrongSink) {
         return;
@@ -1626,10 +1629,43 @@ void CallCoreHost::setIncomingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<
 }
 
 void CallCoreHost::connectIncomingVideoSink(webrtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver) {
-    if (_currentStrongSink) {
-        webrtc::VideoTrackInterface *videoTrack = (webrtc::VideoTrackInterface *)transceiver->receiver()->track().get();
-        videoTrack->AddOrUpdateSink(_currentStrongSink.get(), rtc::VideoSinkWants());
+    if (!_currentStrongSink) {
+        return;
     }
+    auto track = transceiver->receiver()->track();
+    if (!track) {
+        return;
+    }
+    webrtc::VideoTrackInterface *videoTrack = (webrtc::VideoTrackInterface *)track.get();
+    videoTrack->AddOrUpdateSink(_currentStrongSink.get(), rtc::VideoSinkWants());
+    _attachedSinkTracks.insert(videoTrack);
+}
+
+void CallCoreHost::disconnectIncomingVideoSink(webrtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver) {
+    if (!_currentStrongSink) {
+        return;
+    }
+    auto track = transceiver->receiver()->track();
+    if (!track) {
+        return;
+    }
+    webrtc::VideoTrackInterface *videoTrack = (webrtc::VideoTrackInterface *)track.get();
+    if (_attachedSinkTracks.erase(videoTrack) == 0) {
+        // Never attached to this track - RemoveSink would trip
+        // RTC_DCHECK(FindSinkPair(sink)) in a debug build.
+        return;
+    }
+    videoTrack->RemoveSink(_currentStrongSink.get());
+}
+
+void CallCoreHost::disconnectAllIncomingVideoSinks() {
+    if (!_currentStrongSink) {
+        return;
+    }
+    for (const auto &it : _incomingVideoTransceivers) {
+        disconnectIncomingVideoSink(it.second);
+    }
+    _attachedSinkTracks.clear();
 }
 
 void CallCoreHost::setAudioInputDevice(std::string id) {

@@ -66,6 +66,7 @@
 #include <random>
 #include <sstream>
 #include <map>
+#include <set>
 
 #include "third-party/json11.hpp"
 #include "utils/gzip.h"
@@ -365,6 +366,7 @@ public:
     }
 
     ~InstanceV2CompatImplInternal() {
+        disconnectAllIncomingVideoSinks();
         _currentStrongSink.reset();
 
         _threads->getWorkerThread()->BlockingCall([&]() {
@@ -445,6 +447,16 @@ public:
             threads->getMediaThread()->PostTask([weak]() {
                 const auto strong = weak.lock();
                 if (!strong) {
+                    return;
+                }
+
+                if (strong->_isMakingOffer) {
+                    // An offer is already in flight and it already covers whatever
+                    // triggered this event - the data channel created moments ago in
+                    // start(). Stock suppresses this via the is_negotiation_needed_
+                    // latch; we override the legacy OnRenegotiationNeeded, which
+                    // bypasses that, so we suppress it here instead.
+                    RTC_LOG(LS_INFO) << "onRenegotiationNeeded: offer already in flight, skipping";
                     return;
                 }
 
@@ -554,7 +566,7 @@ public:
 
             const auto transceiver = strong->_incomingVideoTransceivers.find(mid);
             if (transceiver != strong->_incomingVideoTransceivers.end()) {
-                strong->disconnectIncomingVideoSink();
+                strong->disconnectIncomingVideoSink(transceiver->second);
 
                 strong->_incomingVideoTransceivers.erase(transceiver);
             }
@@ -1250,16 +1262,48 @@ public:
     }
 
     void connectIncomingVideoSink(webrtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver) {
-        if (_currentStrongSink) {
-            webrtc::VideoTrackInterface *videoTrack = (webrtc::VideoTrackInterface *)transceiver->receiver()->track().get();
-            videoTrack->AddOrUpdateSink(_currentStrongSink.get(), rtc::VideoSinkWants());
+        if (!_currentStrongSink) {
+            return;
         }
+        auto track = transceiver->receiver()->track();
+        if (!track) {
+            return;
+        }
+        webrtc::VideoTrackInterface *videoTrack = (webrtc::VideoTrackInterface *)track.get();
+        videoTrack->AddOrUpdateSink(_currentStrongSink.get(), rtc::VideoSinkWants());
+        _attachedSinkTracks.insert(videoTrack);
     }
 
-    void disconnectIncomingVideoSink() {
+    void disconnectIncomingVideoSink(webrtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver) {
+        if (!_currentStrongSink) {
+            return;
+        }
+        auto track = transceiver->receiver()->track();
+        if (!track) {
+            return;
+        }
+        webrtc::VideoTrackInterface *videoTrack = (webrtc::VideoTrackInterface *)track.get();
+        if (_attachedSinkTracks.erase(videoTrack) == 0) {
+            // Never attached to this track - RemoveSink would trip
+            // RTC_DCHECK(FindSinkPair(sink)) in a debug build.
+            return;
+        }
+        videoTrack->RemoveSink(_currentStrongSink.get());
+    }
+
+    void disconnectAllIncomingVideoSinks() {
+        if (!_currentStrongSink) {
+            return;
+        }
+        for (const auto &it : _incomingVideoTransceivers) {
+            disconnectIncomingVideoSink(it.second);
+        }
+        _attachedSinkTracks.clear();
     }
 
     void setIncomingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+        disconnectAllIncomingVideoSinks();
+
         _currentStrongSink = sink.lock();
 
         if (_currentStrongSink) {
@@ -1464,6 +1508,11 @@ private:
     std::atomic<bool> _isStopped{false};
 
     std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _currentStrongSink;
+    // Exactly the tracks we called AddOrUpdateSink on. RemoveSink DCHECKs when the
+    // sink was never added, and attachment is asymmetric (a transceiver added while
+    // no sink is set is never attached, and setIncomingVideoOutput attaches only the
+    // first entry), so removal must be driven by this set, not by the transceiver map.
+    std::set<webrtc::VideoTrackInterface*> _attachedSinkTracks;
 
     std::shared_ptr<VideoCaptureInterface> _videoCapture;
 };
