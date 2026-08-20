@@ -228,12 +228,16 @@ ReflectorPort::~ReflectorPort() {
         Release();
     }
 
+    // Unsubscribe BEFORE deleting: UnsubscribeCloseEvent mutates the socket's
+    // callback list, so doing it after `delete socket_` is a write-after-free.
+    // Stock TurnPort has no PROTO_TCP condition here - unsubscribing a tag that
+    // was never subscribed is a no-op - and neither should we.
+    if (socket_) {
+        socket_->UnsubscribeCloseEvent(this);
+    }
+
     if (!SharedSocket()) {
         delete socket_;
-    }
-    
-    if (server_address_.proto == cricket::PROTO_TCP) {
-        socket_->UnsubscribeCloseEvent(this);
     }
 }
 
@@ -880,10 +884,10 @@ void ReflectorPort::Close() {
     }
     // Stop the port from creating new connections.
     state_ = STATE_DISCONNECTED;
-    // Delete all existing connections; stop sending data.
-    for (auto kv : connections()) {
-        kv.second->Destroy();
-    }
+    // Delete all existing connections; stop sending data. Do NOT hand-roll this
+    // loop: Connection::Destroy() erases from the same map connections()
+    // returns, so iterating it directly invalidates the iterator mid-walk.
+    DestroyAllConnections();
 
     SignalReflectorPortClosed(this);
 }
