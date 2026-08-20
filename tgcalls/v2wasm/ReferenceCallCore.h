@@ -32,6 +32,7 @@ protected:
     virtual std::string mungeLocalDescription(std::string const &type, std::string const &sdp);
     virtual void onStats(json11::Json const &event);
     virtual void onIceState(std::string const &state);
+    void maybeRestartIce();
     // Called on every outgoing signaling message before framing; variants
     // may mutate/extend the JSON (unknown keys are ignored by stock peers).
     virtual void mungeOutgoingSignalingMessage(json11::Json::object &message);
@@ -93,6 +94,10 @@ protected:
     // network state + logs
     bool _isConnected = false;
     bool _isFailed = false;
+    bool _didEmitBaselineRecord = false;
+    int64_t _lastDisconnectedTimestampMs = 0;
+    int64_t _lastIceRestartTimestampMs = 0;
+    int _connectionTimerGeneration = 0;
     json11::Json _currentConnection; // null until first candidate pair
     std::vector<NetworkStateRecord> _networkStateRecords;
     std::vector<BitrateRecord> _bitrateRecords;

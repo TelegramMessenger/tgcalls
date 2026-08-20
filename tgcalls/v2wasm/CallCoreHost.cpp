@@ -780,14 +780,18 @@ void CallCoreHost::executeCommand(json11::Json const &command) {
         executeSignalingSendPacket(command);
     } else if (type == "set_timer") {
         const int token = (int)command["token"].number_value();
+        // Echoed back on the timer event so a core can discard a stale timer:
+        // set_timer does NOT cancel a prior timer of the same token. Absent in a
+        // command, number_value() yields 0, which the stats timer ignores.
+        const int generation = (int)command["generation"].number_value();
         const int delayMs = (int)command["delayMs"].number_value();
         const auto weak = std::weak_ptr<CallCoreHost>(shared_from_this());
-        _threads->getMediaThread()->PostDelayedTask([weak, token]() {
+        _threads->getMediaThread()->PostDelayedTask([weak, token, generation]() {
             const auto strong = weak.lock();
             if (!strong) {
                 return;
             }
-            strong->deliverEvent({ {"@type", "timer"}, {"token", token} });
+            strong->deliverEvent({ {"@type", "timer"}, {"token", token}, {"generation", generation} });
         }, webrtc::TimeDelta::Millis(delayMs));
     } else if (type == "pc_get_stats") {
         executeGetStats();

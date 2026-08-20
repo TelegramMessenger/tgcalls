@@ -12,6 +12,9 @@ namespace {
 
 constexpr int kAbiVersion = 1;
 constexpr int kStatsTimerToken = 1;
+constexpr int kConnectionTimerToken = 2;
+constexpr int kIceRestartMinIntervalMs = 5000;
+constexpr int kConnectionFailureTimeoutMs = 20000;
 constexpr int kAudioMaxBitrateBps = 32 * 1024;      // stock: 32 * 1024
 constexpr int kVideoMaxBitrateBps = 1200 * 1024;    // stock: 1200 * 1024
 
@@ -107,6 +110,9 @@ _emit(std::move(emit)) {
 
     // stock beginLogTimer(0)
     this->emit({ {"@type", "set_timer"}, {"token", kStatsTimerToken}, {"delayMs", 0} });
+
+    _connectionTimerGeneration += 1;
+    this->emit({ {"@type", "set_timer"}, {"token", kConnectionTimerToken}, {"generation", _connectionTimerGeneration}, {"delayMs", 1000} });
 }
 
 void ReferenceCallCore::emit(json11::Json::object &&command) {
@@ -121,6 +127,16 @@ void ReferenceCallCore::onEvent(json11::Json const &event) {
     if (event["nowMs"].is_number()) {
         _nowMs = (int64_t)event["nowMs"].number_value();
     }
+
+    // Emit a baseline state record as soon as we have a real clock, so a call
+    // that never transitions still uploads a non-empty timeline. _nowMs is zero
+    // until the first event carries one, which is why this cannot live in the
+    // core-init path.
+    if (!_didEmitBaselineRecord && _nowMs != 0) {
+        _didEmitBaselineRecord = true;
+        updateNetworkState(_isConnected, _isFailed);
+    }
+
     const auto type = stringField(event, "@type");
 
     if (type == "signaling_packet") {
@@ -222,6 +238,29 @@ void ReferenceCallCore::onEvent(json11::Json const &event) {
         if (token == kStatsTimerToken) {
             emit({ {"@type", "pc_get_stats"} });
             emit({ {"@type", "set_timer"}, {"token", kStatsTimerToken}, {"delayMs", 1000} });
+        } else if (token == kConnectionTimerToken) {
+            // set_timer does NOT cancel a prior timer of the same token, so every
+            // re-arm would otherwise stack another live timer. Ignore stale ones.
+            if ((int)event["generation"].number_value() != _connectionTimerGeneration) {
+                return;
+            }
+
+            if (_isConnected) {
+                _lastDisconnectedTimestampMs = _nowMs;
+            } else {
+                // Seeded from an event-supplied clock, never the constructor: _nowMs
+                // is 0 until the first event carries one, and a zero seed would make
+                // this fire on every call after ~1s.
+                if (_lastDisconnectedTimestampMs == 0) {
+                    _lastDisconnectedTimestampMs = _nowMs;
+                } else if (_nowMs - _lastDisconnectedTimestampMs > kConnectionFailureTimeoutMs) {
+                    updateNetworkState(false, true);
+                    return;
+                }
+            }
+
+            _connectionTimerGeneration += 1;
+            emit({ {"@type", "set_timer"}, {"token", kConnectionTimerToken}, {"generation", _connectionTimerGeneration}, {"delayMs", 1000} });
         }
     } else if (type == "stats") {
         onStats(event);
@@ -315,10 +354,32 @@ std::string ReferenceCallCore::mungeLocalDescription(std::string const &type, st
 
 void ReferenceCallCore::onIceState(std::string const &state) {
     bool isConnected = (state == "connected" || state == "completed");
-    bool isFailed = (state == "failed");
-    if (_isConnected != isConnected || _isFailed != isFailed) {
-        updateNetworkState(isConnected, isFailed);
+
+    // ICE 'failed' is NOT terminal. Stock InstanceV2ReferenceImpl never sets its
+    // failed flag from the ICE state - the 20s watchdog is its only writer - and
+    // instead attempts a restart. 18/19 treating it as terminal is exactly the
+    // state-semantics divergence that contaminates the substrate A/B.
+    if (state == "failed") {
+        maybeRestartIce();
     }
+
+    if (_isConnected != isConnected) {
+        updateNetworkState(isConnected, _isFailed);
+    }
+}
+
+void ReferenceCallCore::maybeRestartIce() {
+    // Only the caller restarts, matching InstanceV2ReferenceImpl - if both sides
+    // restart on the same failure they glare.
+    if (!_isOutgoing) {
+        return;
+    }
+    if (_lastIceRestartTimestampMs != 0 && _nowMs - _lastIceRestartTimestampMs < kIceRestartMinIntervalMs) {
+        return;
+    }
+    _lastIceRestartTimestampMs = _nowMs;
+    emitLog("ICE failed; requesting restart");
+    emit({ {"@type", "pc_restart_ice"} });
 }
 
 void ReferenceCallCore::onStats(json11::Json const &event) {

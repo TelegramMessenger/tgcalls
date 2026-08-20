@@ -76,7 +76,7 @@
 //   dc_channel          { label: s, id: n }   remote-announced channel
 //                       (OnDataChannel); registered under its label,
 //                       dc_send/dc_state/dc_message work on it thereafter
-//   timer               { token: n }
+//   timer               { token: n, generation: n }
 //   stats               { sendBitrateKbps: n,   curated GetStats reduction;
 //                         transport: { rttMs?, availableOutgoingKbps?,
 //                           availableIncomingKbps?, bytesSent, bytesReceived,
@@ -166,7 +166,7 @@
 //                       Framing (seq + gzip) is entirely core-owned; the
 //                       reference core reproduces stock's wire 11.0.0
 //                       framing byte-for-byte.
-//   set_timer           { token: n, delayMs: n }
+//   set_timer           { token: n, generation: n, delayMs: n }
 //   pc_get_stats        {}                      -> stats event
 //   emit_state          { state: "established"|"failed"|"reconnecting" }
 //   emit_signal_bars    { bars: 0..4 }

@@ -781,6 +781,11 @@ public:
         beginLogTimer(0);
         _lastDisconnectedTimestamp = rtc::TimeMillis();
         beginCheckConnectionTimer();
+
+        // Emit a baseline record so a call that never transitions still uploads a
+        // timeline with a call-start origin. InstanceV2Impl::start() ends the same
+        // way, which is why 13.0.0 cannot produce an empty "network" array.
+        onNetworkStateUpdated();
     }
 
     void sendPendingSignalingServiceData(int cause) {
