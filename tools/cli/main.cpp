@@ -211,6 +211,31 @@ struct CallState {
     std::vector<std::string> errors;
 };
 
+// Merges the optional --custom-params JSON object with the wasm_core_path entry the CLI
+// synthesises, so a test can set engine custom parameters without losing --wasm-core.
+static std::string buildCustomParameters(std::string const &wasmCorePath, std::string const &extraJson) {
+    json11::Json::object params;
+
+    if (!extraJson.empty()) {
+        std::string parsingError;
+        auto parsed = json11::Json::parse(extraJson, parsingError);
+        if (!parsed.is_object()) {
+            fprintf(stderr, "Error: --custom-params must be a JSON object: %s\n", parsingError.c_str());
+            exit(1);
+        }
+        params = parsed.object_items();
+    }
+
+    if (!wasmCorePath.empty()) {
+        params["wasm_core_path"] = wasmCorePath;
+    }
+
+    if (params.empty()) {
+        return std::string();
+    }
+    return json11::Json(params).dump();
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
@@ -224,6 +249,8 @@ int main(int argc, char* argv[]) {
     std::string version2;
     std::string wasmCore;
     std::string wasmCore2;
+    std::string customParams;
+    std::string customParams2;
     std::string logFile;
     double dropRate = 0.0;
     int delayMinMs = 0;
@@ -256,6 +283,10 @@ int main(int argc, char* argv[]) {
             wasmCore = argv[++i];
         } else if (std::string(argv[i]) == "--wasm-core2" && i + 1 < argc) {
             wasmCore2 = argv[++i];
+        } else if (std::string(argv[i]) == "--custom-params" && i + 1 < argc) {
+            customParams = argv[++i];
+        } else if (std::string(argv[i]) == "--custom-params2" && i + 1 < argc) {
+            customParams2 = argv[++i];
         } else if (std::string(argv[i]) == "--log-file" && i + 1 < argc) {
             logFile = argv[++i];
         } else if (std::string(argv[i]) == "--participants" && i + 1 < argc) {
@@ -432,7 +463,7 @@ int main(int argc, char* argv[]) {
             // rtc log sinks are process-global, so wiring logPath on just the caller
             // captures RTC_LOG output for both sides of the call.
             .logPath = {logFile},
-            .customParameters = wasmCore.empty() ? std::string() : json11::Json(json11::Json::object{{"wasm_core_path", wasmCore}}).dump(),
+            .customParameters = buildCustomParameters(wasmCore, customParams),
         },
         .rtcServers = (mode == "reflector")
             ? std::vector<tgcalls::RtcServer>{makeReflectorServer(reflectorHost, reflectorPort, callerPeerTag)}
@@ -468,7 +499,7 @@ int main(int argc, char* argv[]) {
             .receiveTimeout = 10.0,
             .enableP2P = (mode == "p2p"),
             .statsLogPath = {calleeStatsPath},
-            .customParameters = wasmCore2.empty() ? std::string() : json11::Json(json11::Json::object{{"wasm_core_path", wasmCore2}}).dump(),
+            .customParameters = buildCustomParameters(wasmCore2, customParams2),
         },
         .rtcServers = (mode == "reflector")
             ? std::vector<tgcalls::RtcServer>{makeReflectorServer(reflectorHost, reflectorPort, calleePeerTag)}
