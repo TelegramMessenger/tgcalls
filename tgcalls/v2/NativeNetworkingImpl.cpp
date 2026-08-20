@@ -25,19 +25,11 @@
 #include "ReflectorPort.h"
 #include "FieldTrialsConfig.h"
 #include "EncryptedConnection.h"
+#include "v2/CustomParameters.h"
 
 namespace tgcalls {
 
 namespace {
-
-bool getCustomParameterBool(std::map<std::string, json11::Json> const &parameters, std::string const &name) {
-    const auto value = parameters.find(name);
-    if (value != parameters.end() && value->second.is_bool() && value->second.bool_value()) {
-        return true;
-    } else {
-        return false;
-    }
-}
 
 class CryptStringImpl : public rtc::CryptStringImpl {
 public:

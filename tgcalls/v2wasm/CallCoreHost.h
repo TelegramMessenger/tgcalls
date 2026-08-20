@@ -92,6 +92,7 @@ private:
     bool _enableP2P = false;
     EncryptionKey _encryptionKey;
     std::string _customParameters;
+    std::map<std::string, json11::Json> _parsedCustomParameters;
     std::function<void(State)> _stateUpdated;
     std::function<void(int)> _signalBarsUpdated;
     std::function<void(bool)> _remoteBatteryLevelIsLowUpdated;

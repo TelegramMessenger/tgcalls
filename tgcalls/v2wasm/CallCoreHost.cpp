@@ -27,6 +27,7 @@
 #include "v2/SignalingConnection.h"
 #include "v2/ExternalSignalingConnection.h"
 #include "v2/SignalingSctpConnection.h"
+#include "v2/CustomParameters.h"
 #include "v2wasm/CoreBase64.h"
 #include "v2wasm/EmbeddedCoreModule.h"
 #include "v2wasm/NativeCoreBackend.h"
@@ -491,6 +492,14 @@ _createAudioDeviceModule(descriptor.createAudioDeviceModule),
 _createWrappedAudioDeviceModule(descriptor.createWrappedAudioDeviceModule),
 _statsLogPath(descriptor.config.statsLogPath),
 _videoCapture(descriptor.videoCapture) {
+    if (!_customParameters.empty()) {
+        std::string parsingError;
+        auto customParametersJson = json11::Json::parse(_customParameters, parsingError);
+        if (customParametersJson.is_object()) {
+            _parsedCustomParameters = customParametersJson.object_items();
+        }
+    }
+
     // Both shipped versions are wire 11.0.0, whose signaling runs over SCTP.
     _useSctpSignalingTransport = true;
     webrtc::field_trial::InitFieldTrialsFromString(

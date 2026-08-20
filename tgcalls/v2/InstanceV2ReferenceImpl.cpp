@@ -58,6 +58,7 @@
 #include "v2/ExternalSignalingConnection.h"
 #include "v2/SignalingSctpConnection.h"
 #include "v2/ReflectorRelayPortFactory.h"
+#include "v2/CustomParameters.h"
 #ifdef WEBRTC_IOS
 #include "platform/darwin/iOS/tgcalls_audio_device_module_ios.h"
 #endif
@@ -379,6 +380,14 @@ public:
     _eventLog(std::make_unique<webrtc::RtcEventLogNull>()),
     _taskQueueFactory(webrtc::CreateDefaultTaskQueueFactory()),
     _videoCapture(descriptor.videoCapture) {
+        if (!descriptor.config.customParameters.empty()) {
+            std::string parsingError;
+            auto customParametersJson = json11::Json::parse(descriptor.config.customParameters, parsingError);
+            if (customParametersJson.is_object()) {
+                _customParameters = customParametersJson.object_items();
+            }
+        }
+
         webrtc::field_trial::InitFieldTrialsFromString(
             "WebRTC-DataChannel-Dcsctp/Enabled/"
             "WebRTC-Audio-iOS-Holding/Enabled/"
@@ -1650,6 +1659,7 @@ private:
     SignalingProtocolVersion _signalingProtocolVersion;
     std::shared_ptr<Threads> _threads;
     std::vector<RtcServer> _rtcServers;
+    std::map<std::string, json11::Json> _customParameters;
     std::unique_ptr<Proxy> _proxy;
     bool _enableP2P = false;
     EncryptionKey _encryptionKey;

@@ -198,6 +198,33 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
 - **Language**: C++17 for tgcalls code
 - **Formatting**: Standard C++ formatting
 
+## Engine audit findings (July 2026)
+
+[`docs/engine-audit-2026-07.md`](docs/engine-audit-2026-07.md) records two investigations: why
+Cloudflare TURN-only underperformed Telegram reflectors in an `InstanceV2Impl` A/B, and an audit
+of `InstanceV2ReferenceImpl` + its custom PeerConnection networking stack. Read it before
+touching relay/ICE code or drawing a conclusion from a relay-backend A/B. The load-bearing points:
+
+- **`ReflectorPort::CreateConnection` keys signalled connections differently from inbound
+  packets on UDP** (`SetResolvedIP` is gated on `PROTO_TCP` at `ReflectorPort.cpp:541`, while
+  `HandleIncomingPacket:765` applies it unconditionally). Measured: 749 signalled relay
+  connections sent 15,985 STUN pings and received **0** responses; every response lands on a
+  peer-reflexive twin. **This affects production (13.0.0).** Do not read the prflx connections as
+  a reflector advantage — 93% of them duplicate an already-signalled address.
+- **`InstanceV2ReferenceImpl` and 18.0.0/19.0.0 are test-only**, so their defects are
+  *measurement* defects, not user-facing ones. Rank arm-asymmetric ones first.
+- **Two arms are not measurable against each other today** — `packet_overhead_bytes` reads 8 vs
+  28 and the route line's remote `turn:` reads 0 vs 1 for structural reasons unrelated to call
+  quality, and ~77% of failing 11.0.0 calls upload `"network": []`. Key A/B metrics on an
+  explicit `relay_backend` field, never on `remote_candidate().is_relay()`.
+- **The injected port allocator loses no configuration vs the default** —
+  `InitializePortAllocator_n` covers injected allocators too. That hypothesis is dead; don't
+  re-open it. The real deltas are *what the allocator points at* and the ICE-server mapping loop
+  (`:645-676`), which silently drops hostname and TCP servers.
+- A directional 1:1 transceiver design needs `AddTrack` + `SetDirectionWithError(kSendOnly)` and
+  an offerer-only pre-declared recvonly slot; pre-creating a recvonly transceiver on the
+  *answerer* is actively harmful. The doc derives why.
+
 ## Further Context
 
 When working in these areas, additional `CLAUDE.md` files load automatically:

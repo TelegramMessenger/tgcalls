@@ -64,26 +64,10 @@
 #include "ExternalSignalingConnection.h"
 #include "SignalingSctpConnection.h"
 #include "utils/gzip.h"
+#include "v2/CustomParameters.h"
 
 namespace tgcalls {
 namespace {
-
-[[maybe_unused]] bool getCustomParameterBool(std::map<std::string, json11::Json> const &parameters, std::string const &name) {
-    const auto value = parameters.find(name);
-    if (value != parameters.end() && value->second.is_bool() && value->second.bool_value()) {
-        return true;
-    } else {
-        return false;
-    }
-}
-
-[[maybe_unused]] int getCustomParameterInt(std::map<std::string, json11::Json> const &parameters, std::string const &name) {
-    const auto value = parameters.find(name);
-    if (value != parameters.end() && value->second.is_number()) {
-        return value->second.int_value();
-    }
-    return 0;
-}
 
 enum class SignalingProtocolVersion {
     V1,
