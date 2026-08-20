@@ -1,5 +1,36 @@
 # Engine audit — July 2026
 
+> **Re-analysed 2026-08-19 — read this before acting on any finding below.** An adversarial
+> re-analysis re-verified every claim in this document against the tree. **These sections are
+> REFUTED:**
+>
+> - **§3.2's headline** ("11.0.0/14.0.0/18.0.0/19.0.0 cannot use Cloudflare TURN at all").
+>   `IsComplete()` is `!IPIsAny(ip_) && port_ != 0`, and `IPIsAny` returns **false** for
+>   `AF_UNSPEC`, so a hostname with a non-zero port passes the gate. Only TCP servers are dropped.
+>   Any Part 4 reasoning resting on this must be withdrawn.
+> - **§3.3's fix** (`WebRTC-UseTurnServerAsStunServer/Disabled/`). `BasicPortAllocator` bypasses
+>   that trial when the STUN set is empty — exactly the reflector configuration — so it is a no-op
+>   where it was proposed. §3.3's "unique to the PeerConnection engines" is also wrong: production
+>   13.0.0 promotes reflectors to STUN servers too, via `CreateStunPorts`.
+> - **§1.2's coordinates AND its remedy.** `PrepareAddress` contains no `SetResolvedIP`; `:490` is
+>   inside `OnSocketConnect`, which `RTC_DCHECK`s TCP/TLS and never runs in production. And
+>   resolving the **local** relay candidate would strip the peer-addressing tag from the wire —
+>   it kills relay entirely.
+> - **§2.4's** claim that `InstanceV2CompatImpl` serialises renegotiation. Those symbols exist only
+>   in the group engine; 14.0.0 had the identical defect and has now been fixed.
+> - **§2.6's** "revive `VideoSinkImpl`" fix. `_incomingVideoTransceivers` is declared *before*
+>   `_currentStrongSink` and so destructs *after* it; an explicit `RemoveSink` is required.
+> - **§1.3's first bullet** (`SendTo` swallowing errors). Behaviourally inert — nothing in the ICE
+>   state machine reads that return value.
+>
+> Two findings were also **under-rated**: the `~ReflectorPort` destructor bug is a *write*-after-free
+> and was reachable in shipping builds via call version 12.0.0; and §1.1's "our own outbound checks
+> cannot open it" overstates — the checks are sent, it is the *response* that is dropped, making it
+> a latency/efficiency defect rather than a connectivity failure.
+>
+> The fixes that followed, the three default-off experiment flags, and the rollout gates are in
+> this repo's `CLAUDE.md` under "Engine audit findings (July 2026)".
+
 Findings from two investigations run 2026-07-30/31:
 
 1. **Why Cloudflare TURN-only underperformed Telegram reflectors** in an `InstanceV2Impl`

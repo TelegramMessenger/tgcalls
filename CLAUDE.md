@@ -162,6 +162,18 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
 - `--version2 VER` — callee tgcalls protocol version (default: same as `--version`). Enables cross-version interop testing.
 - `--wasm-core PATH` — CLI-only override: run the caller's pump core from a module file instead of the version-derived default (`NONE` forces native). Mainly for variant modules; version `19.0.0` already uses the module embedded in the binary. Exists only because the CLI target defines `TGCALLS_ALLOW_EXTERNAL_WASM_CORE` — the app has no such loader.
 - `--wasm-core2 PATH` — same for the callee (defaults to `--wasm-core`; `NONE` forces native)
+- `--custom-params JSON` — sets the caller's engine `customParameters` as a JSON object (merged
+  with the `wasm_core_path` entry the CLI synthesises from `--wasm-core`). This is how to
+  exercise the three new default-off flags without a server-side rollout: e.g.
+  `network_disable_stun_when_unconfigured`, `network_reflector_resolve_remote_candidate_ip`,
+  `network_reference_use_addtrack`.
+- `--custom-params2 JSON` — same for the callee. Independent of `--custom-params` — unlike
+  `--wasm-core2` there is no fallback to the caller's value — so `--custom-params2` **alone**
+  gives the callee different engine parameters than the caller, enabling a within-call A/B on
+  one flag. See `--log-file` below to capture evidence of what a flag actually did:
+  `SetLogToStderr(false)` is set unconditionally by the engines and no file sink exists without
+  it, and `RTC_LOG` is process-global, so one `--log-file` captures both endpoints' output
+  interleaved.
 - `--participants N` — number of CustomImpl participants in group mode (default: 3)
 - `--reference-participants N` — number of ReferenceImpl (PeerConnection-based) participants in group mode (default: 0). Total = `--participants` + `--reference-participants`.
 - `--duration N` — test duration in seconds (default: 10)
@@ -200,6 +212,11 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
 
 ## Engine audit findings (July 2026)
 
+> **Re-analysed 2026-08-19 — read this before acting on the audit doc.** An adversarial
+> re-analysis re-verified every claim in `docs/engine-audit-2026-07.md` against the tree and
+> **refuted six of them.** The refutations, and the fixes that followed, are recorded in that
+> doc's own header and in "Fixes landed 2026-08-19" below. Do not act on a refuted section.
+
 [`docs/engine-audit-2026-07.md`](docs/engine-audit-2026-07.md) records two investigations: why
 Cloudflare TURN-only underperformed Telegram reflectors in an `InstanceV2Impl` A/B, and an audit
 of `InstanceV2ReferenceImpl` + its custom PeerConnection networking stack. Read it before
@@ -215,15 +232,77 @@ touching relay/ICE code or drawing a conclusion from a relay-backend A/B. The lo
   *measurement* defects, not user-facing ones. Rank arm-asymmetric ones first.
 - **Two arms are not measurable against each other today** — `packet_overhead_bytes` reads 8 vs
   28 and the route line's remote `turn:` reads 0 vs 1 for structural reasons unrelated to call
-  quality, and ~77% of failing 11.0.0 calls upload `"network": []`. Key A/B metrics on an
-  explicit `relay_backend` field, never on `remote_candidate().is_relay()`.
+  quality. (The `"network": []` problem is FIXED — see below.) Never key an A/B metric on
+  `remote_candidate().is_relay()`. A separate `relay_backend` field is not needed: `ReflectorPort`
+  mints its local candidate as `reflector-<id>-<tag>.reflector` and that string already lands in
+  `network[].network.local.address`, so reflector routes are identifiable in data you already have.
 - **The injected port allocator loses no configuration vs the default** —
   `InitializePortAllocator_n` covers injected allocators too. That hypothesis is dead; don't
-  re-open it. The real deltas are *what the allocator points at* and the ICE-server mapping loop
-  (`:645-676`), which silently drops hostname and TCP servers.
-- A directional 1:1 transceiver design needs `AddTrack` + `SetDirectionWithError(kSendOnly)` and
-  an offerer-only pre-declared recvonly slot; pre-creating a recvonly transceiver on the
-  *answerer* is actively harmful. The doc derives why.
+  re-open it. The real delta is *what the allocator points at*. NOTE: the audit's claim that the
+  ICE-server mapping loop "silently drops hostname servers" is **refuted** — `IsComplete()` is
+  `!IPIsAny(ip_) && port_ != 0` and `IPIsAny` returns false for `AF_UNSPEC`, so a hostname with a
+  non-zero port passes. Only TCP servers are dropped there.
+- **REJECTED** (2026-08-19 re-analysis) — ~~A directional 1:1 transceiver design needs
+  `AddTrack` + `SetDirectionWithError(kSendOnly)` and an offerer-only pre-declared recvonly
+  slot; pre-creating a recvonly transceiver on the *answerer* is actively harmful.~~ The
+  2026-08-19 re-analysis rejected this directional recipe outright. Do not implement it — see
+  "Do not implement" below.
+
+### Fixes landed 2026-08-19
+
+Unflagged (always on): the `~ReflectorPort` write-after-free and `Close()` iterator invalidation;
+the incoming-video-sink use-after-free in all three PeerConnection engines; swallowed
+`CreatePeerConnectionOrError` failure and its unguarded dereferences; unread SDP-observer errors
+(which could deadlock renegotiation); the duplicate startup offer (every outgoing call offered
+twice — 15.3% of outbound signalling bytes); the missing baseline network record (~77% of failing
+11.0.0 calls uploaded `"network": []`); and the wasm cores' state semantics, which now match
+11.0.0 (ICE `failed` non-terminal, 20s watchdog, 2s disconnect debounce, throttled ICE restart).
+
+**Three experiment flags, all default-off**, read from the server-supplied `customParameters`:
+
+| flag | reaches | effect |
+|---|---|---|
+| `network_reflector_resolve_remote_candidate_ip` | `NativeNetworkingImpl` → `InstanceV2Impl` → versions 7/8/9/12/13 | signalled relay connections can receive binding responses |
+| `network_disable_stun_when_unconfigured` | 11/14/18/19 | stops sending unparseable STUN to reflectors |
+| `network_reference_use_addtrack` | 11.0.0 | removes an extra offer/answer round trip |
+
+Exercise them with the CLI's `--custom-params '<json>'` (caller) / `--custom-params2` (callee).
+
+**Before enabling `network_reflector_resolve_remote_candidate_ip`** — the connection key collapses
+per *candidate*, not per *peer*, and one peer publishes several: `OngoingCallContext.swift` emits
+the v4 and v6 entries of one reflector with the **same `reflectorId` and port**, and there is one
+relay port per network with a fresh random tag. `SocketAddress::operator<` stops comparing
+`hostname_` once `ip_` is set, so with the flag ON they collapse to one key and the collision guard
+refuses the second — dropping a dual-stack peer's relay paths from two to one. (The related packet
+misattribution is *already* today's behaviour on the peer-reflexive path, flag or not.) Only
+"stop stamping the resolved IP on the inbound address, so both sides key on hostname" actually
+removes the collapse, and it uniquely also fixes the pre-existing one — but it touches the
+always-on path and needs its own window. Also note the flag flips the TCP path's collision policy
+from destructive-replace to refuse, and that under `network_standalone_reflectors` the original bug
+does not exist while the collapse still does.
+
+**Readout for that flag is relay-remote connections receiving binding responses** — *not* "prflx
+count goes to zero", which the audit specified and which is wrong: peer-reflexive pairs are still
+minted whenever the peer pings first.
+
+**Call version 12.0.0 — release coordination.** The hardcoded 12.0.0 TCP reflector injection was
+removed app-side. Those entries carried `id: 123456` and were appended *before* `reflectorIdList`
+is built and sorted, so they shifted every real reflector's mapped id — and that id goes on the
+wire as `reflector-<serverId>-<tag>.reflector`, which the peer prefix-matches. **A 12.0.0 call
+between an updated and a not-yet-updated client gets zero signalled relay connections.** Do not
+serve 12.0.0 until the build is fully rolled out.
+
+### Do not implement
+
+Each was proposed by the audit and is wrong: the `WebRTC-UseTurnServerAsStunServer/Disabled/`
+one-liner (`BasicPortAllocator` bypasses the trial when the STUN set is empty — exactly the
+reflector case); resolving the **local** relay candidate's IP (the peer-addressing tag travels only
+inside the synthetic hostname, so this kills relay entirely); the sendonly/recvonly directional
+transceiver recipe; `AddTrack` in `InstanceV2CompatImpl` (its `SignalingTranslator` synthesises
+every callee-side remote offer section as `kSendOnly`, so the edit is inert); a Swift `return []`
+credential filter; and re-anchoring `stop()`'s `baseTimestamp` (production 13.0.0 shares the
+construct and emits no version key to key the discontinuity on).
+
 
 ## Further Context
 
