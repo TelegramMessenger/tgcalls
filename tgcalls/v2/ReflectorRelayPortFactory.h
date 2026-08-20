@@ -16,7 +16,7 @@ namespace tgcalls {
 
 class ReflectorRelayPortFactory : public cricket::RelayPortFactoryInterface {
 public:
-    ReflectorRelayPortFactory(std::vector<RtcServer> servers, bool standaloneReflectorMode, uint32_t standaloneReflectorRoleId, rtc::SocketFactory *underlyingSocketFactory);
+    ReflectorRelayPortFactory(std::vector<RtcServer> servers, bool standaloneReflectorMode, uint32_t standaloneReflectorRoleId, rtc::SocketFactory *underlyingSocketFactory, bool resolveRemoteCandidateIp);
     ~ReflectorRelayPortFactory() override;
     
     // This variant is used for UDP connection to the relay server
@@ -31,6 +31,7 @@ private:
     bool _standaloneReflectorMode = false;
     uint32_t _standaloneReflectorRoleId = 0;
     rtc::SocketFactory *_underlyingSocketFactory = nullptr;
+    bool _resolveRemoteCandidateIp = false;
 };
 
 } // namespace tgcalls

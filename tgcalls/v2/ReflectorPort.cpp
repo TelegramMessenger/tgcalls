@@ -128,7 +128,8 @@ ReflectorPort::ReflectorPort(const cricket::CreateRelayPortArgs& args,
                              uint8_t serverId,
                              int server_priority,
                              bool standaloneReflectorMode,
-                             uint32_t standaloneReflectorRoleId)
+                             uint32_t standaloneReflectorRoleId,
+                             bool resolveRemoteCandidateIp)
 : Port(args.network_thread,
     cricket::RELAY_PORT_TYPE,
     args.socket_factory,
@@ -144,7 +145,8 @@ stun_dscp_value_(rtc::DSCP_NO_CHANGE),
 state_(STATE_CONNECTING),
 server_priority_(server_priority),
 standaloneReflectorMode_(standaloneReflectorMode),
-standaloneReflectorRoleId_(standaloneReflectorRoleId) {
+standaloneReflectorRoleId_(standaloneReflectorRoleId),
+resolve_remote_candidate_ip_(resolveRemoteCandidateIp) {
     serverId_ = serverId;
     
     if (standaloneReflectorMode_) {
@@ -176,7 +178,8 @@ ReflectorPort::ReflectorPort(const cricket::CreateRelayPortArgs& args,
                              uint8_t serverId,
                              int server_priority,
                              bool standaloneReflectorMode,
-                             uint32_t standaloneReflectorRoleId)
+                             uint32_t standaloneReflectorRoleId,
+                             bool resolveRemoteCandidateIp)
 : Port(args.network_thread,
        cricket::RELAY_PORT_TYPE,
        args.socket_factory,
@@ -194,7 +197,8 @@ stun_dscp_value_(rtc::DSCP_NO_CHANGE),
 state_(STATE_CONNECTING),
 server_priority_(server_priority),
 standaloneReflectorMode_(standaloneReflectorMode),
-standaloneReflectorRoleId_(standaloneReflectorRoleId) {
+standaloneReflectorRoleId_(standaloneReflectorRoleId),
+resolve_remote_candidate_ip_(resolveRemoteCandidateIp) {
     serverId_ = serverId;
 
     if (standaloneReflectorMode_) {
@@ -542,10 +546,20 @@ cricket::Connection* ReflectorPort::CreateConnection(const cricket::Candidate& r
     }
     
     cricket::Candidate updated_remote_candidate = remote_candidate;
-    if (server_address_.proto == cricket::PROTO_TCP) {
+    if (server_address_.proto == cricket::PROTO_TCP || resolve_remote_candidate_ip_) {
         rtc::SocketAddress updated_address = updated_remote_candidate.address();
         updated_address.SetResolvedIP(server_address_.address.ipaddr());
         updated_remote_candidate.set_address(updated_address);
+    }
+
+    if (resolve_remote_candidate_ip_) {
+        // Once the IP is resolved, this key can collide with a peer-reflexive
+        // connection already created for the same path by the inbound path (which
+        // has always resolved). AddOrReplaceConnection would DESTROY that live
+        // connection - firing OnSelectedConnectionDestroyed if it was selected.
+        if (GetConnection(updated_remote_candidate.address()) != nullptr) {
+            return nullptr;
+        }
     }
 
     cricket::ProxyConnection* conn = new cricket::ProxyConnection(NewWeakPtr(), 0, updated_remote_candidate);
