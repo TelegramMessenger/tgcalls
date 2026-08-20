@@ -33,6 +33,7 @@ protected:
     virtual void onStats(json11::Json const &event);
     virtual void onIceState(std::string const &state);
     void maybeRestartIce();
+    void updateIsConnected(bool isConnected);
     // Called on every outgoing signaling message before framing; variants
     // may mutate/extend the JSON (unknown keys are ignored by stock peers).
     virtual void mungeOutgoingSignalingMessage(json11::Json::object &message);
@@ -98,6 +99,7 @@ protected:
     int64_t _lastDisconnectedTimestampMs = 0;
     int64_t _lastIceRestartTimestampMs = 0;
     int _connectionTimerGeneration = 0;
+    int _disconnectReportGeneration = 0;
     json11::Json _currentConnection; // null until first candidate pair
     std::vector<NetworkStateRecord> _networkStateRecords;
     std::vector<BitrateRecord> _bitrateRecords;

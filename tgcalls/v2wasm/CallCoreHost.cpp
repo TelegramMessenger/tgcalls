@@ -877,6 +877,36 @@ void CallCoreHost::executePcCreate(json11::Json const &command) {
     peerConnectionDependencies.observer = _peerConnectionObserver.get();
 
     auto portAllocator = std::make_unique<cricket::BasicPortAllocator>(_networkManager.get(), _socketFactory.get(), nullptr, _relayPortFactory.get());
+
+    if (getCustomParameterBool(_parsedCustomParameters, "network_disable_stun_when_unconfigured")) {
+        bool hasStunServer = false;
+        for (const auto &server : _rtcServers) {
+            // Unlike the actual ICE-server construction (ReferenceCallCore.cpp's
+            // rawHost.empty() check, standing in for stock's address.IsComplete()),
+            // this does not validate the host, so a malformed STUN entry still
+            // counts as "has STUN" here. That only suppresses
+            // PORTALLOCATOR_DISABLE_STUN, i.e. it errs on the safe side.
+            if (!server.isTurn && !server.isTcp) {
+                hasStunServer = true;
+                break;
+            }
+        }
+        if (!hasStunServer) {
+            // PeerConnection forces PORTALLOCATOR_ENABLE_SHARED_SOCKET on every
+            // allocator, which auto-promotes each UDP relay into the STUN server
+            // set and sends it real Binding Requests. A reflector cannot parse
+            // those - it expects a 16-byte peer tag first.
+            //
+            // The WebRTC-UseTurnServerAsStunServer field trial does NOT help
+            // here: BasicPortAllocator bypasses it when the STUN set is empty,
+            // which is exactly the reflector case.
+            //
+            // InitializePortAllocator_n ORs onto the existing flags, so setting
+            // this before the allocator is moved survives.
+            portAllocator->set_flags(portAllocator->flags() | cricket::PORTALLOCATOR_DISABLE_STUN);
+        }
+    }
+
     peerConnectionDependencies.allocator = std::move(portAllocator);
 
     webrtc::PeerConnectionInterface::RTCConfiguration peerConnectionConfiguration;

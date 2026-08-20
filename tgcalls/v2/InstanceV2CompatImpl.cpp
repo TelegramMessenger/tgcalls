@@ -597,6 +597,34 @@ public:
         _relayPortFactory = std::make_unique<ReflectorRelayPortFactory>(_rtcServers, false, 0, _threads->getNetworkThread()->socketserver(), false);
 
         auto portAllocator = std::make_unique<cricket::BasicPortAllocator>(_networkManager.get(), _socketFactory.get(), nullptr, _relayPortFactory.get());
+
+        if (getCustomParameterBool(_customParameters, "network_disable_stun_when_unconfigured")) {
+            bool hasStunServer = false;
+            for (const auto &server : _rtcServers) {
+                // Unlike the mapping loop below, this does not check address.IsComplete(),
+                // so a malformed STUN host still counts as "has STUN" here. That only
+                // suppresses PORTALLOCATOR_DISABLE_STUN, i.e. it errs on the safe side.
+                if (!server.isTurn && !server.isTcp) {
+                    hasStunServer = true;
+                    break;
+                }
+            }
+            if (!hasStunServer) {
+                // PeerConnection forces PORTALLOCATOR_ENABLE_SHARED_SOCKET on every
+                // allocator, which auto-promotes each UDP relay into the STUN server
+                // set and sends it real Binding Requests. A reflector cannot parse
+                // those - it expects a 16-byte peer tag first.
+                //
+                // The WebRTC-UseTurnServerAsStunServer field trial does NOT help
+                // here: BasicPortAllocator bypasses it when the STUN set is empty,
+                // which is exactly the reflector case.
+                //
+                // InitializePortAllocator_n ORs onto the existing flags, so setting
+                // this before the allocator is moved survives.
+                portAllocator->set_flags(portAllocator->flags() | cricket::PORTALLOCATOR_DISABLE_STUN);
+            }
+        }
+
         peerConnectionDependencies.allocator = std::move(portAllocator);
 
         webrtc::PeerConnectionInterface::RTCConfiguration peerConnectionConfiguration;
@@ -627,6 +655,13 @@ public:
             }
 
             if (server.isTurn) {
+                if (server.login.empty() || server.password.empty()) {
+                    // ParseIceServersOrError returns on the FIRST bad entry, so one
+                    // empty credential would kill the whole list. Skip just this one.
+                    RTC_LOG(LS_ERROR) << "Skipping TURN server with empty credentials: " << server.host;
+                    continue;
+                }
+
                 webrtc::PeerConnectionInterface::IceServer mappedServer;
 
                 mappedServer.urls.push_back(
@@ -648,6 +683,11 @@ public:
         auto peerConnectionOrError = _peerConnectionFactory->CreatePeerConnectionOrError(peerConnectionConfiguration, std::move(peerConnectionDependencies));
         if (peerConnectionOrError.ok()) {
             _peerConnection = peerConnectionOrError.value();
+        } else {
+            RTC_LOG(LS_ERROR) << "CreatePeerConnectionOrError failed: " << peerConnectionOrError.error().message();
+            _isFailed = true;
+            onNetworkStateUpdated();
+            return;
         }
 
         if (_peerConnection) {
@@ -828,15 +868,25 @@ public:
         _isMakingOffer = true;
 
         webrtc::scoped_refptr<webrtc::SetLocalDescriptionObserverInterface> observer(new rtc::RefCountedObject<SetSessionDescriptionObserver>([threads = _threads, weak](webrtc::RTCError error) {
-            threads->getMediaThread()->PostTask([weak]() {
+            const bool isOk = error.ok();
+            if (!isOk) {
+                RTC_LOG(LS_ERROR) << "SetLocalDescription failed: " << error.message();
+            }
+            threads->getMediaThread()->PostTask([weak, isOk]() {
                 const auto strong = weak.lock();
                 if (!strong) {
                     return;
                 }
 
-                strong->doSendLocalDescription();
-
+                // Always clear the in-flight flag, or a failure would wedge
+                // renegotiation permanently (see the guard in onRenegotiationNeeded).
                 strong->_isMakingOffer = false;
+
+                if (!isOk) {
+                    return;
+                }
+
+                strong->doSendLocalDescription();
 
                 strong->maybeCommitPendingIceCandidates();
             });
@@ -983,9 +1033,22 @@ public:
 
         const auto weak = std::weak_ptr<InstanceV2CompatImplInternal>(shared_from_this());
         webrtc::scoped_refptr<webrtc::SetRemoteDescriptionObserverInterface> observer(new rtc::RefCountedObject<SetSessionDescriptionObserver>([threads = _threads, weak, isOffer](webrtc::RTCError error) {
-            threads->getMediaThread()->PostTask([weak, isOffer]() {
+            const bool isOk = error.ok();
+            if (!isOk) {
+                RTC_LOG(LS_ERROR) << "SetRemoteDescription failed: " << error.message();
+            }
+            threads->getMediaThread()->PostTask([weak, isOffer, isOk]() {
                 const auto strong = weak.lock();
                 if (!strong) {
+                    return;
+                }
+
+                if (!isOk) {
+                    // Do NOT fall through to sendLocalDescription(): a failed
+                    // SetRemoteDescription(offer) leaves signaling state at kStable,
+                    // and the implicit SetLocalDescription overload picks
+                    // offer-vs-answer from signaling_state() - so we would send an
+                    // offer where the peer awaits an answer.
                     return;
                 }
 
@@ -1165,6 +1228,14 @@ public:
     }
 
     void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture) {
+        if (!_peerConnection) {
+            // start() bailed out because CreatePeerConnectionOrError failed. The app
+            // can still call setVideoCapture() through the public Instance interface,
+            // and _peerConnectionFactory is valid here, so CreateVideoTrack would
+            // succeed and the AddTransceiver below would dereference null.
+            return;
+        }
+
         _isPerformingConfiguration = true;
 
         if (_outgoingVideoTransceiver) {
@@ -1330,7 +1401,9 @@ public:
 
     void stop(std::function<void(FinalState)> completion) {
         _isStopped = true;
-        _peerConnection->Close();
+        if (_peerConnection) {
+            _peerConnection->Close();
+        }
 
         FinalState finalState;
 

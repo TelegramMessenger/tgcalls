@@ -389,6 +389,8 @@ public:
             }
         }
 
+        _useAddTrack = getCustomParameterBool(_customParameters, "network_reference_use_addtrack");
+
         webrtc::field_trial::InitFieldTrialsFromString(
             "WebRTC-DataChannel-Dcsctp/Enabled/"
             "WebRTC-Audio-iOS-Holding/Enabled/"
@@ -647,6 +649,34 @@ public:
         _relayPortFactory = std::make_unique<ReflectorRelayPortFactory>(_rtcServers, false, 0, _threads->getNetworkThread()->socketserver(), false);
         
         auto portAllocator = std::make_unique<cricket::BasicPortAllocator>(_networkManager.get(), _socketFactory.get(), nullptr, _relayPortFactory.get());
+
+        if (getCustomParameterBool(_customParameters, "network_disable_stun_when_unconfigured")) {
+            bool hasStunServer = false;
+            for (const auto &server : _rtcServers) {
+                // Unlike the mapping loop below, this does not check address.IsComplete(),
+                // so a malformed STUN host still counts as "has STUN" here. That only
+                // suppresses PORTALLOCATOR_DISABLE_STUN, i.e. it errs on the safe side.
+                if (!server.isTurn && !server.isTcp) {
+                    hasStunServer = true;
+                    break;
+                }
+            }
+            if (!hasStunServer) {
+                // PeerConnection forces PORTALLOCATOR_ENABLE_SHARED_SOCKET on every
+                // allocator, which auto-promotes each UDP relay into the STUN server
+                // set and sends it real Binding Requests. A reflector cannot parse
+                // those - it expects a 16-byte peer tag first.
+                //
+                // The WebRTC-UseTurnServerAsStunServer field trial does NOT help
+                // here: BasicPortAllocator bypasses it when the STUN set is empty,
+                // which is exactly the reflector case.
+                //
+                // InitializePortAllocator_n ORs onto the existing flags, so setting
+                // this before the allocator is moved survives.
+                portAllocator->set_flags(portAllocator->flags() | cricket::PORTALLOCATOR_DISABLE_STUN);
+            }
+        }
+
         peerConnectionDependencies.allocator = std::move(portAllocator);
 
         webrtc::PeerConnectionInterface::RTCConfiguration peerConnectionConfiguration;
@@ -730,7 +760,26 @@ public:
             webrtc::scoped_refptr<webrtc::AudioSourceInterface> audioSource = _peerConnectionFactory->CreateAudioSource(audioSourceOptions);
 
             webrtc::scoped_refptr<webrtc::AudioTrackInterface> audioTrack = _peerConnectionFactory->CreateAudioTrack("0", audioSource.get());
-            webrtc::RTCErrorOr<webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>> audioTransceiverOrError = _peerConnection->AddTransceiver(audioTrack, transceiverInit);
+            webrtc::RTCErrorOr<webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>> audioTransceiverOrError = [&]() -> webrtc::RTCErrorOr<webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>> {
+                if (!_useAddTrack) {
+                    return _peerConnection->AddTransceiver(audioTrack, transceiverInit);
+                }
+                // AddTrack sets created_by_addtrack(), which
+                // FindAvailableTransceiverToReceive requires before it will associate
+                // the callee's own transceiver with the offerer's m= section. Without
+                // it the callee mints a fresh recvonly transceiver and needs a second
+                // offer/answer before it can send.
+                auto senderOrError = _peerConnection->AddTrack(audioTrack, transceiverInit.stream_ids);
+                if (!senderOrError.ok()) {
+                    return senderOrError.MoveError();
+                }
+                for (const auto &transceiver : _peerConnection->GetTransceivers()) {
+                    if (transceiver->sender() == senderOrError.value()) {
+                        return transceiver;
+                    }
+                }
+                return webrtc::RTCError(webrtc::RTCErrorType::INTERNAL_ERROR, "AddTrack produced no matching transceiver");
+            }();
             if (audioTransceiverOrError.ok()) {
                 _outgoingAudioTrack = audioTrack;
                 _outgoingAudioTransceiver = audioTransceiverOrError.value();
@@ -1480,6 +1529,9 @@ public:
                     webrtc::RtpTransceiverInit transceiverInit;
                     transceiverInit.stream_ids = { "0" };
 
+                    // Deliberately still AddTransceiver: see network_reference_use_addtrack.
+                    // AddTrack reuse is once-only, so it would not cure m-line growth on
+                    // repeated camera toggles, and it would add a second variable to the A/B.
                     webrtc::RTCErrorOr<webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>> videoTransceiverOrError = _peerConnection->AddTransceiver(videoTrack, transceiverInit);
                     if (videoTransceiverOrError.ok()) {
                         _outgoingVideoTrack = videoTrack;
@@ -1786,6 +1838,7 @@ private:
     bool _isMakingOffer = false;
     bool _isSettingRemoteAnswerPending = false;
     bool _isPerformingConfiguration = false;
+    bool _useAddTrack = false;
 
     webrtc::scoped_refptr<webrtc::AudioTrackInterface> _outgoingAudioTrack;
     webrtc::scoped_refptr<webrtc::RtpTransceiverInterface> _outgoingAudioTransceiver;

@@ -13,6 +13,7 @@ namespace {
 constexpr int kAbiVersion = 1;
 constexpr int kStatsTimerToken = 1;
 constexpr int kConnectionTimerToken = 2;
+constexpr int kDisconnectTimerToken = 3;
 constexpr int kIceRestartMinIntervalMs = 5000;
 constexpr int kConnectionFailureTimeoutMs = 20000;
 constexpr int kAudioMaxBitrateBps = 32 * 1024;      // stock: 32 * 1024
@@ -261,6 +262,17 @@ void ReferenceCallCore::onEvent(json11::Json const &event) {
 
             _connectionTimerGeneration += 1;
             emit({ {"@type", "set_timer"}, {"token", kConnectionTimerToken}, {"generation", _connectionTimerGeneration}, {"delayMs", 1000} });
+        } else if (token == kDisconnectTimerToken) {
+            // Debounce: only report a disconnect (and re-check the failed state)
+            // once it has persisted for 2s, matching
+            // InstanceV2ReferenceImpl::updateIsConnected. Not re-armed - a fresh
+            // disconnect schedules its own timer via updateIsConnected.
+            if ((int)event["generation"].number_value() != _disconnectReportGeneration) {
+                return;
+            }
+            if (!_isConnected) {
+                updateNetworkState(_isConnected, _isFailed);
+            }
         }
     } else if (type == "stats") {
         onStats(event);
@@ -363,12 +375,13 @@ void ReferenceCallCore::onIceState(std::string const &state) {
         maybeRestartIce();
     }
 
-    if (_isConnected != isConnected) {
-        updateNetworkState(isConnected, _isFailed);
-    }
+    updateIsConnected(isConnected);
 }
 
 void ReferenceCallCore::maybeRestartIce() {
+    if (_isFailed) {
+        return;
+    }
     // Only the caller restarts, matching InstanceV2ReferenceImpl - if both sides
     // restart on the same failure they glare.
     if (!_isOutgoing) {
@@ -380,6 +393,26 @@ void ReferenceCallCore::maybeRestartIce() {
     _lastIceRestartTimestampMs = _nowMs;
     emitLog("ICE failed; requesting restart");
     emit({ {"@type", "pc_restart_ice"} });
+}
+
+void ReferenceCallCore::updateIsConnected(bool isConnected) {
+    if (_isConnected == isConnected) {
+        return;
+    }
+    _isConnected = isConnected;
+
+    if (isConnected) {
+        updateNetworkState(_isConnected, _isFailed);
+    } else {
+        _lastDisconnectedTimestampMs = _nowMs;
+
+        // The legacy ICE state reports a disconnect on a brief receiving timeout,
+        // so a blip would otherwise surface as a Reconnecting episode in the
+        // uploaded timeline. Only report (and log) the disconnect once it
+        // persists, matching InstanceV2ReferenceImpl::updateIsConnected.
+        _disconnectReportGeneration += 1;
+        emit({ {"@type", "set_timer"}, {"token", kDisconnectTimerToken}, {"generation", _disconnectReportGeneration}, {"delayMs", 2000} });
+    }
 }
 
 void ReferenceCallCore::onStats(json11::Json const &event) {
