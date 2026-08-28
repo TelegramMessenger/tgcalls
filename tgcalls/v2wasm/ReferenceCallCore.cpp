@@ -147,7 +147,14 @@ void ReferenceCallCore::onEvent(json11::Json const &event) {
         }
     } else if (type == "pc_renegotiation_needed") {
         // stock onRenegotiationNeeded delegate
-        if (_didBeginNegotiation) {
+        if (_isMakingOffer) {
+            // An offer is already in flight and already covers whatever triggered
+            // this event - the data channel created moments ago during setup. Stock
+            // suppresses this via the is_negotiation_needed_ latch; the host
+            // forwards the legacy OnRenegotiationNeeded, which bypasses that, so we
+            // suppress it here. Parity with InstanceV2ReferenceImpl.
+            emitLog("onRenegotiationNeeded: offer already in flight, skipping");
+        } else if (_didBeginNegotiation) {
             if (_isOutgoing || _haveRemoteDescription) {
                 requestSetLocalDescription();
             }
