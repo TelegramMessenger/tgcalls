@@ -23,6 +23,7 @@
 #include "VideoCaptureInterfaceImpl.h"
 #include "platform/PlatformInterface.h"
 #include "v2/InstanceNetworking.h"
+#include "v2/MtProtoIceTransport.h"
 #include "v2/ReflectorRelayPortFactory.h"
 #include "v2/SignalingConnection.h"
 #include "v2/ExternalSignalingConnection.h"
@@ -600,6 +601,15 @@ void CallCoreHost::start() {
 
     _peerConnectionFactory = webrtc::CreateModularPeerConnectionFactory(std::move(peerConnectionFactoryDependencies));
 
+    if (getCustomParameterBool(_parsedCustomParameters, "network_use_mtproto")) {
+        // As in InstanceV2ReferenceImpl: selects a plain RtpTransport, matching
+        // 13.0.0. SrtpTransport hard-fails when SRTP is inactive, so this is not
+        // optional. Must precede CreatePeerConnectionOrError.
+        webrtc::PeerConnectionFactoryInterface::Options factoryOptions;
+        factoryOptions.disable_encryption = true;
+        _peerConnectionFactory->SetOptions(factoryOptions);
+    }
+
     _signalingEncryptedConnection = std::make_unique<EncryptedConnection>(
         EncryptedConnection::Type::Signaling,
         _encryptionKey,
@@ -936,6 +946,12 @@ void CallCoreHost::executePcCreate(json11::Json const &command) {
         mappedServer.username = coreStringField(server, "username");
         mappedServer.password = coreStringField(server, "password");
         peerConnectionConfiguration.servers.push_back(mappedServer);
+    }
+
+    if (getCustomParameterBool(_parsedCustomParameters, "network_use_mtproto")) {
+        // Host-side by necessity, not preference: EncryptionKey is a secret and
+        // must not cross into the wasm module, so the core cannot own this.
+        peerConnectionDependencies.ice_transport_factory = std::make_unique<MtProtoIceTransportFactory>(_encryptionKey);
     }
 
     auto peerConnectionOrError = _peerConnectionFactory->CreatePeerConnectionOrError(peerConnectionConfiguration, std::move(peerConnectionDependencies));

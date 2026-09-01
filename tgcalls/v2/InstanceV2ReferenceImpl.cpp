@@ -58,6 +58,7 @@
 #include "v2/ExternalSignalingConnection.h"
 #include "v2/SignalingSctpConnection.h"
 #include "v2/ReflectorRelayPortFactory.h"
+#include "v2/MtProtoIceTransport.h"
 #include "v2/CustomParameters.h"
 #ifdef WEBRTC_IOS
 #include "platform/darwin/iOS/tgcalls_audio_device_module_ios.h"
@@ -490,6 +491,19 @@ public:
 
         _peerConnectionFactory = webrtc::CreateModularPeerConnectionFactory(std::move(peerConnectionFactoryDependencies));
 
+        _useMtProto = getCustomParameterBool(_customParameters, "network_use_mtproto");
+        if (_useMtProto) {
+            // Selects CreateUnencryptedRtpTransport - a plain RtpTransport, the
+            // same class 13.0.0 uses - instead of DtlsSrtpTransport. NOT optional:
+            // SrtpTransport hard-fails when SRTP is inactive (send returns false,
+            // receive drops), so without this the call is either double-encrypted
+            // or dead. Nothing ends up unencrypted: mtproto replaces DTLS-SRTP.
+            // Must precede CreatePeerConnectionOrError, where DtlsEnabled() is read.
+            webrtc::PeerConnectionFactoryInterface::Options factoryOptions;
+            factoryOptions.disable_encryption = true;
+            _peerConnectionFactory->SetOptions(factoryOptions);
+        }
+
         webrtc::PeerConnectionDependencies peerConnectionDependencies(nullptr);
 
         PeerConnectionDelegateAdapter::Parameters delegateParameters;
@@ -755,6 +769,10 @@ public:
 
                 peerConnectionConfiguration.servers.push_back(mappedServer);
             }
+        }
+
+        if (_useMtProto) {
+            peerConnectionDependencies.ice_transport_factory = std::make_unique<MtProtoIceTransportFactory>(_encryptionKey);
         }
 
         auto peerConnectionOrError = _peerConnectionFactory->CreatePeerConnectionOrError(peerConnectionConfiguration, std::move(peerConnectionDependencies));
@@ -1846,6 +1864,7 @@ private:
     bool _isSettingRemoteAnswerPending = false;
     bool _isPerformingConfiguration = false;
     bool _useAddTrack = false;
+    bool _useMtProto = false;
 
     webrtc::scoped_refptr<webrtc::AudioTrackInterface> _outgoingAudioTrack;
     webrtc::scoped_refptr<webrtc::RtpTransceiverInterface> _outgoingAudioTransceiver;
