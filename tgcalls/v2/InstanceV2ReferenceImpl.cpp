@@ -611,16 +611,19 @@ public:
                 return;
             }
 
-            std::string mid = receiver->track()->id();
-            if (mid.empty()) {
-                return;
-            }
+            // _incomingVideoTransceivers is keyed by mid (see onTransceiverAdded),
+            // but RtpReceiverInterface exposes no mid() - receiver->track()->id()
+            // is the TRACK id, so looking it up by that never matched and entries
+            // were never erased. Find the entry by its receiver instead.
+            for (auto it = strong->_incomingVideoTransceivers.begin(); it != strong->_incomingVideoTransceivers.end(); it++) {
+                if (it->second->receiver() != receiver) {
+                    continue;
+                }
 
-            const auto transceiver = strong->_incomingVideoTransceivers.find(mid);
-            if (transceiver != strong->_incomingVideoTransceivers.end()) {
-                strong->disconnectIncomingVideoSink(transceiver->second);
+                strong->disconnectIncomingVideoSink(it->second);
+                strong->_incomingVideoTransceivers.erase(it);
 
-                strong->_incomingVideoTransceivers.erase(transceiver);
+                break;
             }
         };
         delegateParameters.onCandidatePairChangeEvent = [weak](const cricket::CandidatePairChangeEvent &event) {
@@ -695,15 +698,37 @@ public:
         peerConnectionConfiguration.audio_jitter_buffer_fast_accelerate = true;
         peerConnectionConfiguration.prioritize_most_likely_ice_candidate_pairs = true;
 
+        const bool allowHostnameIceServers = getCustomParameterBoolDefaultTrue(_customParameters, "network_reference_allow_hostname_ice_servers");
+
         for (auto &server : _rtcServers) {
             if (server.isTcp) {
                 continue;
             }
 
             rtc::SocketAddress address(server.host, server.port);
+
+            // SocketAddress is only "complete" for IP literals, so this check used
+            // to discard every TURN/STUN server given as a DNS name - which is how
+            // Cloudflare TURN is configured. With enableP2P=false (kRelay) and TCP
+            // candidates disabled, a hostname-only server set gathers ZERO
+            // candidates and the call can never connect.
+            //
+            // HostAsURIString() already returns a non-literal host unchanged and
+            // brackets IPv6 literals, and ParseIceServersOrError resolves names
+            // itself, so passing the hostname through is all that is needed.
+            //
+            // Reflectors are exempt: ReflectorRelayPortFactory matches the
+            // allocator's relay address against SocketAddress(host, port) by
+            // equality, which cannot match an unresolved hostname - it would
+            // return no port at all. Reflectors are always IP literals in
+            // practice, so this only keeps the previous behaviour for them.
             if (!address.IsComplete()) {
-                RTC_LOG(LS_ERROR) << "Invalid ICE server host: " << server.host;
-                continue;
+                const bool isReflector = server.isTurn && server.login == "reflector";
+                if (!allowHostnameIceServers || isReflector || server.host.empty()) {
+                    RTC_LOG(LS_ERROR) << "Invalid ICE server host: " << server.host;
+                    continue;
+                }
+                RTC_LOG(LS_INFO) << "Passing through non-literal ICE server host: " << server.host;
             }
 
             if (server.isTurn) {
@@ -865,7 +890,13 @@ public:
                         if (const auto compressedData = gzipData(data)) {
                             packetData = std::move(compressedData.value());
                         } else {
+                            // Do NOT fall through to the send: packetData is still
+                            // empty, and encrypting and sending it produces a packet
+                            // the peer drops after decrypt/JSON-parse. If the dropped
+                            // message was the offer or answer, the call would simply
+                            // never connect, with no error on either side.
                             RTC_LOG(LS_ERROR) << "Could not gzip signaling message";
+                            break;
                         }
                     } else {
                         packetData = data;
@@ -1473,30 +1504,6 @@ public:
         }
         message.data = std::move(data);
         sendDataChannelMessage(message);
-    }
-
-    void sendCandidate(const cricket::Candidate &candidate) {
-        cricket::Candidate patchedCandidate = candidate;
-        patchedCandidate.set_component(1);
-
-        signaling::CandidatesMessage data;
-
-        signaling::IceCandidate serializedCandidate;
-
-        webrtc::JsepIceCandidate iceCandidate{ std::string(), 0 };
-        iceCandidate.SetCandidate(patchedCandidate);
-        std::string serialized;
-        const auto success = iceCandidate.ToString(&serialized);
-        assert(success);
-        (void)success;
-
-        serializedCandidate.sdpString = serialized;
-
-        data.iceCandidates.push_back(std::move(serializedCandidate));
-
-        signaling::Message message;
-        message.data = std::move(data);
-        sendSignalingMessage(message);
     }
 
     void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture) {

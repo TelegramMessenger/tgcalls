@@ -10,8 +10,13 @@ namespace tgcalls {
 
 // Custom parameters arrive from the server as a JSON object string on
 // Descriptor::config::customParameters. Each engine parses it once into a map;
-// these read individual keys out of that map, defaulting to off/zero so an
-// absent key always means "unchanged behaviour".
+// these read individual keys out of that map.
+//
+// getCustomParameterBool/Int default to off/zero, so an absent key means
+// "unchanged behaviour" - the right default for a flag that opts into a new
+// behaviour. getCustomParameterBoolDefaultTrue is for a flag guarding a fix
+// that is already the intended behaviour: an absent key means "on", and only
+// an explicit `false` from the server turns it off (a rollback switch).
 
 inline bool getCustomParameterBool(std::map<std::string, json11::Json> const &parameters, std::string const &name) {
     const auto value = parameters.find(name);
@@ -20,6 +25,14 @@ inline bool getCustomParameterBool(std::map<std::string, json11::Json> const &pa
     } else {
         return false;
     }
+}
+
+inline bool getCustomParameterBoolDefaultTrue(std::map<std::string, json11::Json> const &parameters, std::string const &name) {
+    const auto value = parameters.find(name);
+    if (value != parameters.end() && value->second.is_bool()) {
+        return value->second.bool_value();
+    }
+    return true;
 }
 
 inline int getCustomParameterInt(std::map<std::string, json11::Json> const &parameters, std::string const &name) {

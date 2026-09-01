@@ -242,14 +242,17 @@ public:
         if (!strong) {
             return;
         }
-        std::string mid = receiver->track()->id();
-        if (mid.empty()) {
-            return;
-        }
-        const auto transceiver = strong->_incomingVideoTransceivers.find(mid);
-        if (transceiver != strong->_incomingVideoTransceivers.end()) {
-            strong->disconnectIncomingVideoSink(transceiver->second);
-            strong->_incomingVideoTransceivers.erase(transceiver);
+        // _incomingVideoTransceivers is keyed by mid, but RtpReceiverInterface
+        // exposes no mid() - receiver->track()->id() is the TRACK id, so looking
+        // it up by that never matched and entries were never erased. Find the
+        // entry by its receiver instead (mirrors InstanceV2ReferenceImpl).
+        for (auto it = strong->_incomingVideoTransceivers.begin(); it != strong->_incomingVideoTransceivers.end(); it++) {
+            if (it->second->receiver() != receiver) {
+                continue;
+            }
+            strong->disconnectIncomingVideoSink(it->second);
+            strong->_incomingVideoTransceivers.erase(it);
+            break;
         }
     }
 
