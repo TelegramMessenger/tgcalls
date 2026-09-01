@@ -939,11 +939,19 @@ void CallCoreHost::executePcCreate(json11::Json const &command) {
     }
 
     auto peerConnectionOrError = _peerConnectionFactory->CreatePeerConnectionOrError(peerConnectionConfiguration, std::move(peerConnectionDependencies));
-    if (peerConnectionOrError.ok()) {
-        _peerConnection = peerConnectionOrError.value();
-    } else {
-        emitErrorEvent("CreatePeerConnectionOrError failed", "pc_create");
+    if (!peerConnectionOrError.ok()) {
+        // Mirror InstanceV2ReferenceImpl::start(), which logs the underlying
+        // message and returns immediately. The core turns a "pc_create" error
+        // into updateNetworkState(false, true), so the call fails fast rather
+        // than waiting out the 20s watchdog - but only the FIRST such event
+        // carries useful diagnostics, so do not fall through to the audio
+        // processing config: with no _audioProcessing it would emit a second,
+        // redundant "pc_create" error, and with one it would configure audio
+        // for a peer connection that does not exist.
+        emitErrorEvent(std::string("CreatePeerConnectionOrError failed: ") + peerConnectionOrError.error().message(), "pc_create");
+        return;
     }
+    _peerConnection = peerConnectionOrError.value();
 
     if (command["audioProcessing"].is_object()) {
         applyAudioProcessingConfig(command["audioProcessing"], "pc_create");
