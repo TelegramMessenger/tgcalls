@@ -36,7 +36,6 @@
 #include "modules/audio_coding/include/audio_coding_module.h"
 #include "common_audio/include/audio_util.h"
 #include "modules/audio_device/include/audio_device_data_observer.h"
-#include "common_audio/resampler/include/resampler.h"
 #include "modules/rtp_rtcp/source/rtp_util.h"
 #include "api/environment/environment_factory.h"
 #include "api/peer_connection_interface.h"
@@ -56,6 +55,7 @@
 #include "AudioDeviceHelper.h"
 #include "FakeAudioDeviceModule.h"
 #include "StreamingMediaContext.h"
+#include "StreamingAudioRenderer.h"
 #ifdef WEBRTC_IOS
 #include "platform/darwin/iOS/tgcalls_audio_device_module_ios.h"
 #endif
@@ -1943,35 +1943,15 @@ public:
         _mutex.Unlock();
 
         if (context) {
-            if (_samplesToResample.size() < 480 * num_channels) {
-                _samplesToResample.resize(480 * num_channels);
-            }
-            memset(_samplesToResample.data(), 0, _samplesToResample.size() * sizeof(int16_t));
-
-            context->getAudio(_samplesToResample.data(), 480, num_channels, 48000);
-
-            if (_resamplerFrequency != samples_per_sec || _resamplerNumChannels != num_channels) {
-                _resamplerFrequency = samples_per_sec;
-                _resamplerNumChannels = num_channels;
-                _resampler = std::make_unique<webrtc::Resampler>();
-                if (_resampler->Reset(48000, samples_per_sec, num_channels) == -1) {
-                    _resampler = nullptr;
-                }
-            }
-
-            if (_resampler) {
-                size_t outLen = 0;
-                _resampler->Push(_samplesToResample.data(), _samplesToResample.size(), (int16_t *)audio_samples, num_samples * num_channels, outLen);
-            }
+            _renderer.render([&context](int16_t *samples, size_t numSamples, size_t numChannels, uint32_t sampleRate) {
+                context->getAudio(samples, numSamples, numChannels, sampleRate);
+            }, audio_samples, num_samples, num_channels, samples_per_sec);
         }
     }
 
 private:
     webrtc::Mutex _mutex;
-    std::unique_ptr<webrtc::Resampler> _resampler;
-    uint32_t _resamplerFrequency = 0;
-    size_t _resamplerNumChannels = 0;
-    std::vector<int16_t> _samplesToResample;
+    StreamingAudioRenderer _renderer;
     std::shared_ptr<StreamingMediaContext> _streamingContext;
 };
 
