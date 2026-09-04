@@ -79,6 +79,124 @@ bool GroupNoOpRenderer::Render(const tgcalls::AudioFrame&) { return true; }
 void SimpleRequestMediaChannelDescriptionTask::cancel() {}
 
 // ---------------------------------------------------------------------------
+// churnVideoSinks
+// ---------------------------------------------------------------------------
+
+void churnVideoSinks(const std::vector<std::unique_ptr<ParticipantState>>& states) {
+    for (const auto& state : states) {
+        if (!state || !state->instance) continue;
+        std::string tag = "P" + std::to_string(state->id);
+
+        std::vector<std::string> endpointIds;
+        {
+            std::lock_guard<std::mutex> lock(state->videoSinksMutex);
+            for (const auto& [endpointId, sink] : state->videoSinks) {
+                endpointIds.push_back(endpointId);
+            }
+        }
+
+        for (const auto& endpointId : endpointIds) {
+            auto fresh = std::make_shared<FakeVideoSink>();
+            state->instance->addIncomingVideoOutput(
+                endpointId,
+                std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>(fresh));
+
+            std::shared_ptr<FakeVideoSink> old;
+            {
+                std::lock_guard<std::mutex> lock(state->videoSinksMutex);
+                old = state->videoSinks[endpointId];
+                state->videoSinks[endpointId] = fresh;
+            }
+            int oldFrames = old ? old->frameCount() : -1;
+            old.reset(); // The only strong reference: the old sink is gone now.
+
+            groupLog(tag.c_str(), "replaced video sink for endpoint %s (old sink had %d frames)",
+                     endpointId.c_str(), oldFrames);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// requestVideoFromEndpoints
+// ---------------------------------------------------------------------------
+
+void requestVideoFromEndpoints(
+    ParticipantState* state,
+    GoInt sfuHandle,
+    const std::vector<std::string>& endpointIds
+) {
+    if (!state || !state->instance) return;
+    std::string tag = "P" + std::to_string(state->id);
+
+    bool added = false;
+    for (const auto& endpointId : endpointIds) {
+        if (endpointId.empty() || endpointId == state->endpointId) continue;
+
+        {
+            std::lock_guard<std::mutex> lock(state->videoSinksMutex);
+            if (state->videoSinks.count(endpointId) > 0) continue;
+        }
+
+        int remoteId = 0;
+        if (sscanf(endpointId.c_str(), "%d", &remoteId) != 1) continue;
+
+        char* ssrcsRaw = GoSfu_QueryVideoSsrcs(sfuHandle, (GoInt)remoteId);
+        if (!ssrcsRaw) continue;
+        std::string ssrcsJson(ssrcsRaw);
+        GoSfu_Free(ssrcsRaw);
+
+        std::string err;
+        auto layers = json11::Json::parse(ssrcsJson, err);
+        if (!err.empty() || !layers.is_array() || layers.array_items().empty()) continue;
+
+        tgcalls::VideoChannelDescription desc;
+        desc.audioSsrc = 0;
+        desc.userId = remoteId;
+        desc.endpointId = endpointId;
+        desc.maxQuality = tgcalls::VideoChannelDescription::Quality::Full;
+        desc.minQuality = tgcalls::VideoChannelDescription::Quality::Full;
+
+        tgcalls::MediaSsrcGroup simGroup;
+        simGroup.semantics = "SIM";
+        for (const auto& layer : layers.array_items()) {
+            uint32_t ssrc = static_cast<uint32_t>(static_cast<int64_t>(layer["ssrc"].number_value()));
+            uint32_t fidSsrc = static_cast<uint32_t>(static_cast<int64_t>(layer["fidSsrc"].number_value()));
+            if (ssrc == 0) continue;
+            simGroup.ssrcs.push_back(ssrc);
+            if (fidSsrc != 0) {
+                tgcalls::MediaSsrcGroup fidGroup;
+                fidGroup.semantics = "FID";
+                fidGroup.ssrcs = {ssrc, fidSsrc};
+                desc.ssrcGroups.push_back(std::move(fidGroup));
+            }
+        }
+        desc.ssrcGroups.insert(desc.ssrcGroups.begin(), std::move(simGroup));
+
+        auto sink = std::make_shared<FakeVideoSink>();
+        {
+            std::lock_guard<std::mutex> lock(state->videoSinksMutex);
+            state->videoSinks[endpointId] = sink;
+            state->requestedVideoChannels.push_back(std::move(desc));
+        }
+        state->instance->addIncomingVideoOutput(
+            endpointId,
+            std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>(sink));
+
+        groupLog(tag.c_str(), "requesting video from endpoint %s", endpointId.c_str());
+        added = true;
+    }
+
+    if (!added) return;
+
+    std::vector<tgcalls::VideoChannelDescription> fullSet;
+    {
+        std::lock_guard<std::mutex> lock(state->videoSinksMutex);
+        fullSet = state->requestedVideoChannels;
+    }
+    state->instance->setRequestedVideoChannels(std::move(fullSet));
+}
+
+// ---------------------------------------------------------------------------
 // createParticipant
 // ---------------------------------------------------------------------------
 
@@ -90,7 +208,8 @@ std::unique_ptr<ParticipantState> createParticipant(
     bool quiet,
     bool video,
     std::vector<std::unique_ptr<ParticipantState>>* allStates,
-    bool muted
+    bool muted,
+    bool earlyVideoRequest
 ) {
     auto state = std::make_unique<ParticipantState>();
     state->id = id;
@@ -195,67 +314,12 @@ std::unique_ptr<ParticipantState> createParticipant(
             auto ssrcsArray = json["ssrcs"].array_items();
             if (ssrcsArray.empty()) return;
 
-            std::vector<tgcalls::VideoChannelDescription> videoChannels;
+            std::vector<std::string> endpointIds;
             for (const auto& entry : ssrcsArray) {
-                std::string endpointId = entry["endpointId"].string_value();
-                if (endpointId == statePtr->endpointId) continue;
-
-                {
-                    std::lock_guard<std::mutex> lock(statePtr->videoSinksMutex);
-                    if (statePtr->videoSinks.count(endpointId) > 0) continue;
-                }
-
-                int remoteId = 0;
-                if (sscanf(endpointId.c_str(), "%d", &remoteId) != 1) continue;
-
-                char* ssrcsRaw = GoSfu_QueryVideoSsrcs(sfuH, (GoInt)remoteId);
-                if (!ssrcsRaw) continue;
-                std::string ssrcsJson(ssrcsRaw);
-                GoSfu_Free(ssrcsRaw);
-
-                std::string err2;
-                auto layers = json11::Json::parse(ssrcsJson, err2);
-                if (!err2.empty() || !layers.is_array() || layers.array_items().empty()) continue;
-
-                tgcalls::VideoChannelDescription desc;
-                desc.audioSsrc = 0;
-                desc.userId = remoteId;
-                desc.endpointId = endpointId;
-                desc.maxQuality = tgcalls::VideoChannelDescription::Quality::Full;
-                desc.minQuality = tgcalls::VideoChannelDescription::Quality::Full;
-
-                tgcalls::MediaSsrcGroup simGroup;
-                simGroup.semantics = "SIM";
-                for (const auto& layer : layers.array_items()) {
-                    uint32_t ssrc = static_cast<uint32_t>(static_cast<int64_t>(layer["ssrc"].number_value()));
-                    uint32_t fidSsrc = static_cast<uint32_t>(static_cast<int64_t>(layer["fidSsrc"].number_value()));
-                    if (ssrc == 0) continue;
-                    simGroup.ssrcs.push_back(ssrc);
-                    if (fidSsrc != 0) {
-                        tgcalls::MediaSsrcGroup fidGroup;
-                        fidGroup.semantics = "FID";
-                        fidGroup.ssrcs = {ssrc, fidSsrc};
-                        desc.ssrcGroups.push_back(std::move(fidGroup));
-                    }
-                }
-                desc.ssrcGroups.insert(desc.ssrcGroups.begin(), std::move(simGroup));
-                videoChannels.push_back(std::move(desc));
-
-                auto sink = std::make_shared<FakeVideoSink>();
-                {
-                    std::lock_guard<std::mutex> lock(statePtr->videoSinksMutex);
-                    statePtr->videoSinks[endpointId] = sink;
-                }
-                statePtr->instance->addIncomingVideoOutput(
-                    endpointId,
-                    std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>(sink));
-
-                groupLog(tag.c_str(), "ActiveVideoSsrcs: adding video channel for endpoint %s", endpointId.c_str());
+                endpointIds.push_back(entry["endpointId"].string_value());
             }
-
-            if (!videoChannels.empty()) {
-                statePtr->instance->setRequestedVideoChannels(std::move(videoChannels));
-            }
+            groupLog(tag.c_str(), "ActiveVideoSsrcs: %zu endpoint(s) announced", endpointIds.size());
+            requestVideoFromEndpoints(statePtr, sfuH, endpointIds);
         };
     } else {
         descriptor.videoContentType = tgcalls::VideoContentType::None;
@@ -288,6 +352,27 @@ std::unique_ptr<ParticipantState> createParticipant(
         joinReady = true;
         joinCv.notify_one();
     });
+
+    // Mirror the real app's call order: PresentationGroupCall calls
+    // setRequestedVideoChannels for the participants it already knows about
+    // right after the context issues emitJoinPayload, so the request lands on
+    // the media thread behind the initial CreateOffer — before the join
+    // response is applied and before the data channel opens. Creation is
+    // sequential, so every earlier participant has already joined the SFU and
+    // its simulcast SSRCs are queryable.
+    if (video && earlyVideoRequest) {
+        std::vector<std::string> endpointIds;
+        for (const auto& other : *allStates) {
+            if (other && other->videoSource && !other->endpointId.empty()) {
+                endpointIds.push_back(other->endpointId);
+            }
+        }
+        if (!endpointIds.empty()) {
+            groupLog(tag.c_str(), "early video request for %zu endpoint(s) before the join response",
+                     endpointIds.size());
+            requestVideoFromEndpoints(statePtr, sfuHandle, endpointIds);
+        }
+    }
 
     {
         std::unique_lock<std::mutex> lock(joinMutex);

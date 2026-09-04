@@ -97,6 +97,12 @@ struct ParticipantState {
     rtc::scoped_refptr<FakeVideoTrackSource> videoSource;
     std::mutex videoSinksMutex;
     std::map<std::string, std::shared_ptr<FakeVideoSink>> videoSinks;
+    // Every endpoint this participant has requested video from, in request
+    // order. `setRequestedVideoChannels` takes the FULL set (both engines drop
+    // endpoints missing from the list), so each call resends this accumulated
+    // list rather than only the newly discovered entries. Guarded by
+    // `videoSinksMutex`.
+    std::vector<tgcalls::VideoChannelDescription> requestedVideoChannels;
 };
 
 // ---------------------------------------------------------------------------
@@ -118,6 +124,14 @@ struct GroupValidationResult {
 
 // Creates a fully initialized participant: builds descriptor, creates instance,
 // joins SFU, sets join response, unmutes (unless `muted=true`). Returns nullptr on failure.
+//
+// With `earlyVideoRequest`, video from every already-joined participant is
+// requested right after the join payload is requested — before the join
+// response is applied and before the data channel opens. That is the real
+// app's call order: `PresentationGroupCall` calls `setRequestedVideoChannels`
+// for the participants it already knows about immediately after the context
+// issues `emitJoinPayload`. Without the flag, video is requested only once the
+// SFU announces `ActiveVideoSsrcs` over the (already open) data channel.
 std::unique_ptr<ParticipantState> createParticipant(
     int id,
     bool isReference,
@@ -126,7 +140,26 @@ std::unique_ptr<ParticipantState> createParticipant(
     bool quiet,
     bool video,
     std::vector<std::unique_ptr<ParticipantState>>* allStates,
-    bool muted = false
+    bool muted = false,
+    bool earlyVideoRequest = false
+);
+
+// Replaces every participant's incoming video sinks: for each endpoint a
+// fresh FakeVideoSink is registered via addIncomingVideoOutput and the old
+// one is released. That is what the app does on a quality switch (the tile's
+// view — which owns the sink — is recreated), so an engine that keeps a raw
+// pointer to a dead sink crashes on the next decoded frame. Validation then
+// runs against the NEW sinks, which must still receive frames.
+void churnVideoSinks(const std::vector<std::unique_ptr<ParticipantState>>& states);
+
+// Requests video from `endpointIds` (endpoints already requested are skipped):
+// registers a FakeVideoSink per new endpoint, resolves the sender's simulcast
+// SSRC groups from the SFU registry, and resends the accumulated full request
+// set via `setRequestedVideoChannels`.
+void requestVideoFromEndpoints(
+    ParticipantState* state,
+    GoInt sfuHandle,
+    const std::vector<std::string>& endpointIds
 );
 
 // Clean teardown: GoSfu_Leave, stop video, stop instance, reset.
