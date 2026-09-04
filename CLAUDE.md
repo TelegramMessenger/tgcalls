@@ -137,6 +137,14 @@ Located at `submodules/TgVoipWebrtc/tgcalls/tools/cli/`. Runs tgcalls instances 
 # ReferenceImpl-only video
 ./bazel-bin/submodules/TgVoipWebrtc/tgcalls/tools/cli/tgcalls_cli --mode group --participants 0 --reference-participants 3 --video --duration 15
 
+# Video requested in the real app's order (before the join response / data channel) — the
+# regression test for ReferenceImpl's "incoming video never arrives in real group calls" bug
+./bazel-bin/submodules/TgVoipWebrtc/tgcalls/tools/cli/tgcalls_cli --mode group --participants 0 --reference-participants 2 --video --early-video-request --duration 15
+
+# Incoming video sinks replaced while frames flow (what a quality switch does in the app) — the
+# regression test for the ReferenceImpl dangling-sink crash in rtc::VideoBroadcaster::OnFrame
+./bazel-bin/submodules/TgVoipWebrtc/tgcalls/tools/cli/tgcalls_cli --mode group --participants 1 --reference-participants 1 --video --video-sink-churn --duration 8
+
 # Group churn stress test (100 join/leave cycles, then validate base group)
 ./bazel-bin/submodules/TgVoipWebrtc/tgcalls/tools/cli/tgcalls_cli --mode group-churn --participants 3 --duration 10
 
@@ -180,6 +188,9 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
 - `--drop-rate 0.0-1.0` — signaling packet drop probability
 - `--delay min-max` — signaling delay range in ms (e.g., `50-200`)
 - `--video` — enable H264 video with simulcast in group mode (both CustomImpl and ReferenceImpl participants)
+- `--video-sink-churn` — with `--video`, once frames flow each participant replaces every incoming video sink five times, one second apart (`addIncomingVideoOutput` with a fresh sink, old sink released) — what the app does on a quality switch, where the tile's view owns the sink. An engine that keeps a raw pointer to a dead sink segfaults in `rtc::VideoBroadcaster::OnFrame`; validation then counts frames on the NEW sinks only. Known limitation: in mixed groups the pairs receiving from a ReferenceImpl SENDER fail this (0 frames after the last replacement) because the host reference sender throttles to ~1–3 fps after the first seconds regardless of sinks (41–65 frames in 30 s vs ~750 from CustomImpl senders; `_minOutgoingVideoBitrateKbit` is never applied there) — use it with reference-only or CustomImpl-only groups, or with reference RECEIVERS of CustomImpl senders.
+- `--builtin-codec-order` — expose the raw builtin WebRTC video factory order to PeerConnection instead of the default iOS-shaped order (two H264 entries, VP8, VP9 profile 0) the fake platform advertises. PeerConnection numbers dynamic payload types by walking that list, so the order decides what lands on PT 104; the builtin host order happens to put an H264 profile there and masked the ReferenceImpl receive-table bug (see the ReferenceImpl notes in `submodules/TgVoipWebrtc/CLAUDE.md`). Use it only to compare against the old behaviour.
+- `--early-video-request` — with `--video`, each joining participant calls `setRequestedVideoChannels` for every already-joined participant right after `emitJoinPayload`, i.e. before the join response is applied and before the data channel opens. That is the real app's call order (`PresentationGroupCall` requests video for known participants immediately after the context issues `emitJoinPayload`); the stock harness only requests video once the SFU announces `ActiveVideoSsrcs`, which arrives ~500 ms after the data channel opens and never exercised that path. Group mode only.
 - `--churn-cycles N` — number of join/leave cycles in group-churn mode (default: 100)
 - `--network-scenario NAME` — network simulation test scenario (e.g., `step-down-up`). Group mode only.
 - `--quiet` — summary output only

@@ -11,7 +11,7 @@
 // CGo header
 #include "submodules/TgVoipWebrtc/tgcalls/tools/go_sfu/go_sfu.h"
 
-int runGroupMode(int customParticipants, int referenceParticipants, int duration, bool quiet, bool video, const std::string& networkScenario, const std::set<int>& mutedParticipants) {
+int runGroupMode(int customParticipants, int referenceParticipants, int duration, bool quiet, bool video, const std::string& networkScenario, const std::set<int>& mutedParticipants, bool earlyVideoRequest, bool videoSinkChurn) {
     gGroupQuiet = quiet;
     gGroupStartTime = std::chrono::steady_clock::now();
 
@@ -35,8 +35,8 @@ int runGroupMode(int customParticipants, int referenceParticipants, int duration
         return 1;
     }
 
-    groupLog("Group", "created SFU handle=%lld, custom=%d, reference=%d, duration=%ds",
-             (long long)sfuHandle, customParticipants, referenceParticipants, duration);
+    groupLog("Group", "created SFU handle=%lld, custom=%d, reference=%d, duration=%ds, video=%d, earlyVideoRequest=%d",
+             (long long)sfuHandle, customParticipants, referenceParticipants, duration, video ? 1 : 0, earlyVideoRequest ? 1 : 0);
 
     auto threads = tgcalls::StaticThreads::getThreads();
 
@@ -47,7 +47,7 @@ int runGroupMode(int customParticipants, int referenceParticipants, int duration
     for (int i = 0; i < participants; ++i) {
         bool isReference = (i >= customParticipants);
         bool muted = mutedParticipants.count(i) > 0;
-        auto state = createParticipant(i, isReference, sfuHandle, threads, quiet, video, &states, muted);
+        auto state = createParticipant(i, isReference, sfuHandle, threads, quiet, video, &states, muted, earlyVideoRequest);
         if (!state) {
             anyFailed = true;
             continue;
@@ -79,6 +79,19 @@ int runGroupMode(int customParticipants, int referenceParticipants, int duration
             if (s->wasConnected.load()) connectedCount++;
         }
         groupLog("Group", "connection timeout: %d/%d connected", connectedCount, (int)states.size());
+    }
+
+    // Optionally replace every incoming video sink a few times once frames
+    // are flowing (mirrors the app recreating tile views on quality changes).
+    if (video && videoSinkChurn) {
+        constexpr int kSinkChurnRounds = 5;
+        groupLog("Group", "video-sink-churn: waiting 3s for frames, then %d replacement rounds", kSinkChurnRounds);
+        std::this_thread::sleep_for(std::chrono::seconds(3));
+        for (int round = 0; round < kSinkChurnRounds; ++round) {
+            groupLog("Group", "video-sink-churn: round %d", round + 1);
+            churnVideoSinks(states);
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
     }
 
     // Run for the specified duration, optionally with network scenario.

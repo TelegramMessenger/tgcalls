@@ -20,6 +20,7 @@
 
 #include "group_mode.h"
 #include "group_churn_mode.h"
+#include "platform/fake/FakeInterface.h"
 #include "Instance.h"
 #include "FakeAudioDeviceModule.h"
 #include "VideoCaptureInterface.h"
@@ -258,6 +259,8 @@ int main(int argc, char* argv[]) {
     int participants = 3;
     int referenceParticipants = 0;
     bool enableVideo = false;
+    bool earlyVideoRequest = false;
+    bool videoSinkChurn = false;
     int churnCycles = 100;
     std::string networkScenario;
     std::set<int> mutedParticipants;
@@ -295,6 +298,12 @@ int main(int argc, char* argv[]) {
             referenceParticipants = std::atoi(argv[++i]);
         } else if (std::string(argv[i]) == "--video") {
             enableVideo = true;
+        } else if (std::string(argv[i]) == "--early-video-request") {
+            earlyVideoRequest = true;
+        } else if (std::string(argv[i]) == "--video-sink-churn") {
+            videoSinkChurn = true;
+        } else if (std::string(argv[i]) == "--builtin-codec-order") {
+            tgcalls::setFakePlatformBuiltinCodecOrder(true);
         } else if (std::string(argv[i]) == "--churn-cycles" && i + 1 < argc) {
             churnCycles = std::atoi(argv[++i]);
         } else if (std::string(argv[i]) == "--network-scenario" && i + 1 < argc) {
@@ -373,7 +382,7 @@ int main(int argc, char* argv[]) {
 
     // Group mode: dispatch to separate implementation
     if (mode == "group") {
-        return runGroupMode(participants, referenceParticipants, duration, gQuiet, enableVideo, networkScenario, mutedParticipants);
+        return runGroupMode(participants, referenceParticipants, duration, gQuiet, enableVideo, networkScenario, mutedParticipants, earlyVideoRequest, videoSinkChurn);
     }
     if (mode == "group-churn") {
         return runGroupChurnMode(participants, referenceParticipants, duration, gQuiet, enableVideo, churnCycles);
