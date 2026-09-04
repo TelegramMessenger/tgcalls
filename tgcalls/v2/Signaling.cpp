@@ -68,6 +68,11 @@ absl::optional<SsrcGroup> SsrcGroup_parse(json11::Json::object const &object) {
         }
     }
 
+    if (result.ssrcs.empty()) {
+        RTC_LOG(LS_ERROR) << "Signaling: ssrc group must contain at least one ssrc";
+        return absl::nullopt;
+    }
+
     return result;
 }
 
