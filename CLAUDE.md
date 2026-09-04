@@ -145,6 +145,9 @@ Located at `submodules/TgVoipWebrtc/tgcalls/tools/cli/`. Runs tgcalls instances 
 # regression test for the ReferenceImpl dangling-sink crash in rtc::VideoBroadcaster::OnFrame
 ./bazel-bin/submodules/TgVoipWebrtc/tgcalls/tools/cli/tgcalls_cli --mode group --participants 1 --reference-participants 1 --video --video-sink-churn --duration 8
 
+# Group mode with end-to-end encryption (mixed engines)
+./bazel-bin/submodules/TgVoipWebrtc/tgcalls/tools/cli/tgcalls_cli --mode group --participants 1 --reference-participants 1 --video --duration 25 --e2e
+
 # Group churn stress test (100 join/leave cycles, then validate base group)
 ./bazel-bin/submodules/TgVoipWebrtc/tgcalls/tools/cli/tgcalls_cli --mode group-churn --participants 3 --duration 10
 
@@ -191,6 +194,18 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
 - `--video-sink-churn` — with `--video`, once frames flow each participant replaces every incoming video sink five times, one second apart (`addIncomingVideoOutput` with a fresh sink, old sink released) — what the app does on a quality switch, where the tile's view owns the sink. An engine that keeps a raw pointer to a dead sink segfaults in `rtc::VideoBroadcaster::OnFrame`; validation then counts frames on the NEW sinks only. Known limitation: in mixed groups the pairs receiving from a ReferenceImpl SENDER fail this (0 frames after the last replacement) because the host reference sender throttles to ~1–3 fps after the first seconds regardless of sinks (41–65 frames in 30 s vs ~750 from CustomImpl senders; `_minOutgoingVideoBitrateKbit` is never applied there) — use it with reference-only or CustomImpl-only groups, or with reference RECEIVERS of CustomImpl senders.
 - `--builtin-codec-order` — expose the raw builtin WebRTC video factory order to PeerConnection instead of the default iOS-shaped order (two H264 entries, VP8, VP9 profile 0) the fake platform advertises. PeerConnection numbers dynamic payload types by walking that list, so the order decides what lands on PT 104; the builtin host order happens to put an H264 profile there and masked the ReferenceImpl receive-table bug (see the ReferenceImpl notes in `submodules/TgVoipWebrtc/CLAUDE.md`). Use it only to compare against the old behaviour.
 - `--early-video-request` — with `--video`, each joining participant calls `setRequestedVideoChannels` for every already-joined participant right after `emitJoinPayload`, i.e. before the join response is applied and before the data channel opens. That is the real app's call order (`PresentationGroupCall` requests video for known participants immediately after the context issues `emitJoinPayload`); the stock harness only requests video once the SFU announces `ActiveVideoSsrcs`, which arrives ~500 ms after the data channel opens and never exercised that path. Group mode only.
+- `--e2e` — group mode only: install a reversible per-participant keyed transform as
+  `descriptor.e2eEncryptDecrypt`, so the run exercises the real encrypted frame path (the two-byte
+  Opus trailer, the H264/VP8 plaintext prefixes, the validation retry). The key is derived from the
+  participant's user id, so an engine that resolves the wrong `userId` fails the tag check instead
+  of silently passing; the nonce is random per call so the four-attempt retry is exercised.
+  Deliberately does NOT set `descriptor.isConference` — that flag is unrelated to encryption and
+  drops CustomImpl's outgoing video to one simulcast layer, removing the `SIM` group the SFU
+  resolves senders through (video goes to 0/2).
+  **The pass counters do not prove decryption.** Ciphertext fed to Opus still produces a level, and
+  the error-resilient H264 decoder emits corrupt frames rather than refusing. Judge decryption by
+  the level *value* (a real 440 Hz sine reads a steady ~0.126–0.133; garbage swings 0.157–1.000),
+  and confirm the harness can fail by keying decrypt on the wrong id — that must give 0/2.
 - `--churn-cycles N` — number of join/leave cycles in group-churn mode (default: 100)
 - `--network-scenario NAME` — network simulation test scenario (e.g., `step-down-up`). Group mode only.
 - `--quiet` — summary output only

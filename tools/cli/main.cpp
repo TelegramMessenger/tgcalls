@@ -261,6 +261,7 @@ int main(int argc, char* argv[]) {
     bool enableVideo = false;
     bool earlyVideoRequest = false;
     bool videoSinkChurn = false;
+    bool e2e = false;
     int churnCycles = 100;
     std::string networkScenario;
     std::set<int> mutedParticipants;
@@ -300,6 +301,8 @@ int main(int argc, char* argv[]) {
             enableVideo = true;
         } else if (std::string(argv[i]) == "--early-video-request") {
             earlyVideoRequest = true;
+        } else if (std::string(argv[i]) == "--e2e") {
+            e2e = true;
         } else if (std::string(argv[i]) == "--video-sink-churn") {
             videoSinkChurn = true;
         } else if (std::string(argv[i]) == "--builtin-codec-order") {
@@ -382,7 +385,7 @@ int main(int argc, char* argv[]) {
 
     // Group mode: dispatch to separate implementation
     if (mode == "group") {
-        return runGroupMode(participants, referenceParticipants, duration, gQuiet, enableVideo, networkScenario, mutedParticipants, earlyVideoRequest, videoSinkChurn);
+        return runGroupMode(participants, referenceParticipants, duration, gQuiet, enableVideo, networkScenario, mutedParticipants, earlyVideoRequest, videoSinkChurn, e2e);
     }
     if (mode == "group-churn") {
         return runGroupChurnMode(participants, referenceParticipants, duration, gQuiet, enableVideo, churnCycles);

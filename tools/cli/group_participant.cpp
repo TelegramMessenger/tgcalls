@@ -9,6 +9,9 @@
 #include <thread>
 #include <unistd.h>
 
+#include <algorithm>
+
+#include "rtc_base/helpers.h"
 #include "third-party/json11.hpp"
 
 // ---------------------------------------------------------------------------
@@ -151,7 +154,7 @@ void requestVideoFromEndpoints(
 
         tgcalls::VideoChannelDescription desc;
         desc.audioSsrc = 0;
-        desc.userId = remoteId;
+        desc.userId = cliUserId(remoteId);
         desc.endpointId = endpointId;
         desc.maxQuality = tgcalls::VideoChannelDescription::Quality::Full;
         desc.minQuality = tgcalls::VideoChannelDescription::Quality::Full;
@@ -197,6 +200,79 @@ void requestVideoFromEndpoints(
 }
 
 // ---------------------------------------------------------------------------
+// Fake end-to-end crypto (--e2e)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+uint8_t fakeE2eKeyByte(int64_t participantId, size_t index) {
+    // Cheap deterministic key schedule; distinct per participant.
+    uint64_t h = (uint64_t)(participantId + 1) * 0x9E3779B97F4A7C15ull;
+    h ^= (uint64_t)index * 0xBF58476D1CE4E5B9ull;
+    h ^= h >> 29;
+    return (uint8_t)(h & 0xff);
+}
+
+} // namespace
+
+tgcalls::GroupEncryptDecryptFunction makeFakeE2eTransform(int64_t ownUserId) {
+    return [ownUserId](std::vector<uint8_t> const &data, int64_t userId,
+                              bool isEncrypt, int32_t plaintextPrefixLength)
+            -> std::vector<uint8_t> {
+        const size_t prefix = (size_t)std::max(0, plaintextPrefixLength);
+
+        if (isEncrypt) {
+            if (data.size() < prefix) {
+                return {};
+            }
+            const uint32_t nonce = (uint32_t)rtc::CreateRandomId();
+            std::vector<uint8_t> out;
+            out.reserve(data.size() + 6);
+            out.assign(data.begin(), data.end());
+            uint8_t tag = 0;
+            for (size_t i = prefix; i < out.size(); i++) {
+                const uint8_t k = (uint8_t)(fakeE2eKeyByte(ownUserId, i) ^
+                                            (uint8_t)(nonce >> ((i % 4) * 8)));
+                tag = (uint8_t)(tag + out[i]);
+                out[i] = (uint8_t)(out[i] ^ k);
+            }
+            for (int b = 0; b < 4; b++) {
+                out.push_back((uint8_t)(nonce >> (b * 8)));
+            }
+            out.push_back(tag);
+            out.push_back((uint8_t)prefix);
+            return out;
+        }
+
+        // Decrypt. The prefix length travels in the trailer; the caller passes 0.
+        if (data.size() < 6) {
+            return {};
+        }
+        const size_t storedPrefix = data[data.size() - 1];
+        const uint8_t expectedTag = data[data.size() - 2];
+        uint32_t nonce = 0;
+        for (int b = 0; b < 4; b++) {
+            nonce |= ((uint32_t)data[data.size() - 6 + b]) << (b * 8);
+        }
+        std::vector<uint8_t> out(data.begin(), data.end() - 6);
+        if (out.size() < storedPrefix) {
+            return {};
+        }
+        uint8_t tag = 0;
+        for (size_t i = storedPrefix; i < out.size(); i++) {
+            const uint8_t k = (uint8_t)(fakeE2eKeyByte(userId, i) ^
+                                        (uint8_t)(nonce >> ((i % 4) * 8)));
+            out[i] = (uint8_t)(out[i] ^ k);
+            tag = (uint8_t)(tag + out[i]);
+        }
+        if (tag != expectedTag) {
+            return {};   // wrong key, i.e. wrong userId
+        }
+        return out;
+    };
+}
+
+// ---------------------------------------------------------------------------
 // createParticipant
 // ---------------------------------------------------------------------------
 
@@ -209,7 +285,8 @@ std::unique_ptr<ParticipantState> createParticipant(
     bool video,
     std::vector<std::unique_ptr<ParticipantState>>* allStates,
     bool muted,
-    bool earlyVideoRequest
+    bool earlyVideoRequest,
+    bool e2e
 ) {
     auto state = std::make_unique<ParticipantState>();
     state->id = id;
@@ -275,12 +352,25 @@ std::unique_ptr<ParticipantState> createParticipant(
             desc.type = isAudio ? tgcalls::MediaChannelDescription::Type::Audio
                                 : tgcalls::MediaChannelDescription::Type::Video;
             desc.audioSsrc = ssrc;
-            desc.userId = ownerID;
+            desc.userId = cliUserId((int)ownerID);
             descriptions.push_back(std::move(desc));
         }
         callback(std::move(descriptions));
         return std::make_shared<SimpleRequestMediaChannelDescriptionTask>();
     };
+
+    if (e2e) {
+        // Conference calls always carry an encryption context in the app, and both
+        // engines gate every transformer install on this callback being set.
+        //
+        // Deliberately NOT setting descriptor.isConference: it is unrelated to
+        // encryption (nothing in either engine reads it for that) and its one
+        // effect in CustomImpl is to drop outgoing video from 3 simulcast layers
+        // to 1, which also removes the SIM ssrc-group that the testbench SFU
+        // resolves a sender's video through -- setting it here silently zeroed
+        // every video pair.
+        descriptor.e2eEncryptDecrypt = makeFakeE2eTransform(cliUserId(id));
+    }
 
     descriptor.outgoingAudioBitrateKbit = 32;
     descriptor.disableIncomingChannels = false;

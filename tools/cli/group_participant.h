@@ -15,6 +15,7 @@
 #include "group/GroupInstanceCustomImpl.h"
 #include "group/GroupInstanceImpl.h"
 #include "group/GroupInstanceReferenceImpl.h"
+#include "group/GroupFrameTransformer.h"
 #include "FakeAudioDeviceModule.h"
 #include "StaticThreads.h"
 #include "AudioFrame.h"
@@ -72,6 +73,32 @@ class SimpleRequestMediaChannelDescriptionTask : public tgcalls::RequestMediaCha
 public:
     void cancel() override;
 };
+
+// ---------------------------------------------------------------------------
+// Fake end-to-end crypto (--e2e)
+// ---------------------------------------------------------------------------
+
+// Reversible stand-in for the app's conference crypto.
+//
+// Keyed per user id: encrypt uses our own `ownUserId` key (the engines
+// always pass userId 0 on encrypt, exactly as the app does), decrypt uses the
+// key of the userId the engine resolved for that SSRC. An engine that resolves
+// the wrong userId therefore fails the tag check and the frame is dropped,
+// which is what puts the ssrc->userId plumbing genuinely under test.
+//
+// The nonce is random per call so ciphertext differs between attempts, which is
+// what makes GroupFrameTransformer's four-attempt validation retry meaningful.
+// Participant id -> the user id the engines see. Offset by one so that no real
+// participant maps to 0, which both engines use to mean "sender not yet known"
+// (CustomImpl passes int64_t() for its encryptors, and the reference engine's
+// registry returns 0 for an unresolved SSRC). Without the offset, participant 0's
+// key would decrypt frames whose owner the engine failed to resolve, and the
+// --e2e run would pass while the ssrc->userId plumbing was broken.
+//
+// Production has the same property for free: Telegram peer ids are never 0.
+inline int64_t cliUserId(int participantId) { return (int64_t)participantId + 1; }
+
+tgcalls::GroupEncryptDecryptFunction makeFakeE2eTransform(int64_t ownUserId);
 
 // ---------------------------------------------------------------------------
 // ParticipantState
@@ -141,7 +168,8 @@ std::unique_ptr<ParticipantState> createParticipant(
     bool video,
     std::vector<std::unique_ptr<ParticipantState>>* allStates,
     bool muted = false,
-    bool earlyVideoRequest = false
+    bool earlyVideoRequest = false,
+    bool e2e = false
 );
 
 // Replaces every participant's incoming video sinks: for each endpoint a
