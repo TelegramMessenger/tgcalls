@@ -62,6 +62,16 @@ ABSL_CONST_INIT thread_local bool mutex_locked = false;
 @synthesize ignoresPreferredAttributeConfigurationErrors =
     _ignoresPreferredAttributeConfigurationErrors;
 
+static std::atomic<bool> gRTCAudioSessionLegacyDeactivationEnabled{false};
+
++ (void)setLegacyDeactivationEnabled:(BOOL)enabled {
+  gRTCAudioSessionLegacyDeactivationEnabled.store(enabled ? true : false);
+}
+
++ (BOOL)legacyDeactivationEnabled {
+  return gRTCAudioSessionLegacyDeactivationEnabled.load() ? YES : NO;
+}
+
 + (instancetype)sharedInstance {
   static dispatch_once_t onceToken;
   static RTC_OBJC_TYPE(RTCAudioSession) *sharedInstance = nil;
@@ -788,6 +798,19 @@ ABSL_CONST_INIT thread_local bool mutex_locked = false;
 
 - (void)updateAudioSessionAfterEvent {
   BOOL shouldActivate = self.activationCount > 0;
+  if (!shouldActivate && ![RTC_OBJC_TYPE(RTCAudioSession) legacyDeactivationEnabled]) {
+    // Never deactivate the real session from here. In this app the AVAudioSession is owned by
+    // CallKit and ManagedAudioSession; an activation count of zero means no WebRTC device is
+    // running, so whatever is active at that moment (a media player, a call whose CallKit
+    // activation is still being torn down) is not ours to deactivate. Deactivating a CallKit
+    // session mid-call from an interruption-ended or media-services notification silenced the
+    // call; -setActive:error: was already disabled for the same reason, and this was the last
+    // real setActive: call left in this file. Re-activation is kept: it is a no-op on an active
+    // CallKit session and the only explicit re-activation a non-CallKit call gets after an
+    // interruption. The legacy switch restores the stock behaviour below.
+    self.isActive = NO;
+    return;
+  }
   AVAudioSessionSetActiveOptions options = shouldActivate ?
       0 : AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation;
   NSError *error = nil;

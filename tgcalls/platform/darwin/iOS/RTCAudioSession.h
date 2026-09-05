@@ -200,6 +200,13 @@ RTC_OBJC_EXPORT
 + (instancetype)sharedInstance;
 - (instancetype)init NS_UNAVAILABLE;
 
+/** Telegram: when YES, -updateAudioSessionAfterEvent may deactivate the AVAudioSession (the stock
+ *  WebRTC behaviour). NO by default: in this app activation is owned by CallKit and
+ *  ManagedAudioSession, and deactivating a CallKit session mid-call silenced the call. Toggled by
+ *  the app's `ios_killswitch_disable_call_audio_device_fixes`. */
++ (void)setLegacyDeactivationEnabled:(BOOL)enabled;
++ (BOOL)legacyDeactivationEnabled;
+
 /** Adds a delegate, which is held weakly. */
 - (void)addDelegate:(id<RTC_OBJC_TYPE(RTCAudioSessionDelegate)>)delegate;
 /** Removes an added delegate. */
