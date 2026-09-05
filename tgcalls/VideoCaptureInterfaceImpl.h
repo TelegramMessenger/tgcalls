@@ -3,6 +3,7 @@
 
 #include "VideoCaptureInterface.h"
 #include <memory>
+#include <functional>
 #include "ThreadLocalObject.h"
 #include "api/media_stream_interface.h"
 #include "platform/PlatformInterface.h"
@@ -70,6 +71,14 @@ private:
 	ThreadLocalObject<VideoCaptureInterfaceObject> _impl;
 
 };
+
+// Adapts the app-facing VideoCaptureInterface (what the platform wrappers hand
+// the group engines, both at construction and via setVideoCapture) to the
+// engines' internal "get me the track source" contract. The returned getter
+// must be called on the media thread, where the capture object lives. Shared
+// by GroupInstanceCustomImpl and GroupInstanceReferenceImpl so that the two
+// engines cannot drift apart on how a camera reaches the encoder.
+std::function<webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface>()> videoCaptureToGetVideoSource(std::shared_ptr<VideoCaptureInterface> videoCapture);
 
 } // namespace tgcalls
 

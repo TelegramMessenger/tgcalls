@@ -1,4 +1,5 @@
 #include "FakeInterface.h"
+#include "FakeVideoCapturer.h"
 
 #include <memory>
 #include <string>
@@ -145,7 +146,7 @@ std::unique_ptr<webrtc::VideoDecoderFactory> FakeInterface::makeVideoDecoderFact
 
 webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> FakeInterface::makeVideoSource(rtc::Thread *signalingThread,
                                                                                      rtc::Thread *workerThread) {
-  return nullptr;
+  return FakePlatformVideoSource::Create();
 }
 
 bool FakeInterface::supportsEncoding(const std::string &codecName) {
@@ -161,8 +162,13 @@ std::unique_ptr<VideoCapturerInterface> FakeInterface::makeVideoCapturer(
     webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, std::string deviceId,
     std::function<void(VideoState)> stateUpdated, std::function<void(PlatformCaptureInfo)> captureInfoUpdated,
     std::shared_ptr<PlatformContext> platformContext, std::pair<int, int> &outResolution) {
-  return nullptr;
-  //return std::make_unique<VideoCapturerInterfaceImpl>(source, deviceId, stateUpdated, outResolution);
+  if (!source) return nullptr;
+  // The only source this platform hands out is a FakePlatformVideoSource
+  // (makeVideoSource above), so the downcast is exact.
+  auto fakeSource = rtc::scoped_refptr<FakePlatformVideoSource>(
+      static_cast<FakePlatformVideoSource *>(source.get()));
+  outResolution = std::make_pair(1280, 720);
+  return std::make_unique<FakeVideoCapturer>(std::move(fakeSource), std::move(deviceId), std::move(stateUpdated));
 }
 
 std::unique_ptr<PlatformInterface> CreatePlatformInterface() {

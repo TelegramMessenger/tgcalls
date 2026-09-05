@@ -856,6 +856,21 @@ func (s *SFU) QueryVideoSSRCs(participantID int) string {
 	return string(data)
 }
 
+// QueryRequestedLayer reports the simulcast layer receiverID has asked the SFU
+// to forward from senderID (via ReceiverVideoConstraints), or -1 if none.
+// receiverID == senderID answers "did this participant ask for its own video" —
+// a request the real SFU should never see, since a client's own stream is
+// rendered from its capturer, not forwarded back to it.
+func (s *SFU) QueryRequestedLayer(receiverID, senderID int) int {
+	s.mu.RLock()
+	p, ok := s.participants[receiverID]
+	s.mu.RUnlock()
+	if !ok {
+		return -1
+	}
+	return p.GetRequestedLayer(senderID)
+}
+
 // SetNetworkParams configures network simulation for a participant.
 // direction: 0 = ingress (from client), 1 = egress (to client).
 func (s *SFU) SetNetworkParams(participantID int, direction int, delayMs, jitterMs int, dropRate float64, bandwidthBps int64) {
@@ -1161,6 +1176,18 @@ func GoSfu_QueryVideoSsrcs(handle C.int, participantID C.int) *C.char {
 		return C.CString("[]")
 	}
 	return C.CString(sfu.QueryVideoSSRCs(int(participantID)))
+}
+
+//export GoSfu_QueryRequestedLayer
+func GoSfu_QueryRequestedLayer(handle C.int, receiverID C.int, senderID C.int) C.int {
+	h := int(handle)
+	sfuRegistryMu.Lock()
+	sfu, ok := sfuRegistry[h]
+	sfuRegistryMu.Unlock()
+	if !ok {
+		return -1
+	}
+	return C.int(sfu.QueryRequestedLayer(int(receiverID), int(senderID)))
 }
 
 //export GoSfu_SetNetworkParams

@@ -11,7 +11,7 @@
 // CGo header
 #include "submodules/TgVoipWebrtc/tgcalls/tools/go_sfu/go_sfu.h"
 
-int runGroupMode(int customParticipants, int referenceParticipants, int duration, bool quiet, bool video, const std::string& networkScenario, const std::set<int>& mutedParticipants, bool earlyVideoRequest, bool videoSinkChurn, bool e2e) {
+int runGroupMode(int customParticipants, int referenceParticipants, int duration, bool quiet, bool video, const std::string& networkScenario, const std::set<int>& mutedParticipants, bool earlyVideoRequest, bool videoSinkChurn, bool e2e, VideoFeed videoFeed, bool requestOwnVideo) {
     gGroupQuiet = quiet;
     gGroupStartTime = std::chrono::steady_clock::now();
 
@@ -35,8 +35,11 @@ int runGroupMode(int customParticipants, int referenceParticipants, int duration
         return 1;
     }
 
-    groupLog("Group", "created SFU handle=%lld, custom=%d, reference=%d, duration=%ds, video=%d, earlyVideoRequest=%d",
-             (long long)sfuHandle, customParticipants, referenceParticipants, duration, video ? 1 : 0, earlyVideoRequest ? 1 : 0);
+    const char* videoFeedName = videoFeed == VideoFeed::Source ? "source"
+        : videoFeed == VideoFeed::CaptureAtJoin ? "capture-at-join" : "capture-late";
+    groupLog("Group", "created SFU handle=%lld, custom=%d, reference=%d, duration=%ds, video=%d, earlyVideoRequest=%d, videoFeed=%s, requestOwnVideo=%d",
+             (long long)sfuHandle, customParticipants, referenceParticipants, duration, video ? 1 : 0, earlyVideoRequest ? 1 : 0,
+             videoFeedName, requestOwnVideo ? 1 : 0);
 
     auto threads = tgcalls::StaticThreads::getThreads();
 
@@ -47,7 +50,7 @@ int runGroupMode(int customParticipants, int referenceParticipants, int duration
     for (int i = 0; i < participants; ++i) {
         bool isReference = (i >= customParticipants);
         bool muted = mutedParticipants.count(i) > 0;
-        auto state = createParticipant(i, isReference, sfuHandle, threads, quiet, video, &states, muted, earlyVideoRequest, e2e);
+        auto state = createParticipant(i, isReference, sfuHandle, threads, quiet, video, &states, muted, earlyVideoRequest, e2e, videoFeed, requestOwnVideo);
         if (!state) {
             anyFailed = true;
             continue;
@@ -130,6 +133,15 @@ int runGroupMode(int customParticipants, int referenceParticipants, int duration
         std::this_thread::sleep_for(std::chrono::seconds(duration));
     }
 
+    // Ask the SFU, while it is still alive, whether any participant requested
+    // its OWN video. --request-own-video puts the own endpoint in the list the
+    // way the app does; the engine has to drop it before it reaches the SFU.
+    if (video) {
+        for (const auto& s : states) {
+            s->sfuSelfRequestedLayer.store((int)GoSfu_QueryRequestedLayer(sfuHandle, (GoInt)s->id, (GoInt)s->id));
+        }
+    }
+
     // Stop all participants (using GoSfu_Destroy for bulk teardown)
     groupLog("Group", "stopping participants...");
 
@@ -137,6 +149,9 @@ int runGroupMode(int customParticipants, int referenceParticipants, int duration
     for (auto& s : states) {
         if (s->videoSource) {
             s->videoSource->Stop();
+        }
+        if (s->videoCapture) {
+            s->videoCapture->setState(tgcalls::VideoState::Inactive);
         }
     }
 
@@ -166,6 +181,7 @@ int runGroupMode(int customParticipants, int referenceParticipants, int duration
 
     for (auto& s : states) {
         s->instance.reset();
+        s->videoCapture.reset();
     }
 
     // Destroy SFU

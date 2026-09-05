@@ -5,6 +5,7 @@
 #include "StaticThreads.h"
 #include "ThreadLocalObject.h"
 #include "AudioDeviceHelper.h"
+#include "VideoCaptureInterfaceImpl.h"
 
 #include "api/audio_codecs/audio_decoder_factory_template.h"
 #include "api/audio_codecs/audio_encoder_factory_template.h"
@@ -603,6 +604,15 @@ public:
         _noiseSuppressionConfiguration =
             std::make_shared<NoiseSuppressionConfiguration>(descriptor.initialEnableNoiseSuppression);
 
+        // The platform wrappers hand the camera over as a VideoCaptureInterface
+        // (descriptor.videoCapture when the camera is already on at join,
+        // setVideoCapture later); only the CLI harness sets getVideoSource
+        // directly. Both must reach the same attach path.
+        if (!_getVideoSource && descriptor.videoCapture) {
+            _videoCapture = std::move(descriptor.videoCapture);
+            _getVideoSource = videoCaptureToGetVideoSource(_videoCapture);
+        }
+
         // Group calls never negotiate payload types per pair; mungeVideoCodecsInOffer
         // pins VP8 100 / VP9 102 / H264 104 and buildRemoteAnswer speaks 104. VP9 is
         // absent here exactly as it is in CustomImpl's table.
@@ -1043,6 +1053,15 @@ public:
 
         _remoteTransport = parsed->transport;
 
+        // The server names our own video endpoint here. The app hands the
+        // engine its full participant roster — including itself — both in
+        // setRequestedVideoChannels and in addIncomingVideoOutput (the local
+        // tile), and relies on the engine to know which entry is "me": that
+        // one is never requested from the SFU and is served from the camera
+        // preview, exactly as GroupInstanceCustomImpl does.
+        _ownVideoEndpointId = parsed->videoInformation ? parsed->videoInformation->endpointId : std::string();
+        updateOwnPreviewOutput();
+
         // Build remote answer SDP from the parsed transport.
         auto remoteAnswer = buildRemoteAnswer();
         if (!remoteAnswer) {
@@ -1395,6 +1414,9 @@ public:
     void stop(std::function<void()> completion) {
         _isPollingAudioLevels = false;
         _isLoggingStats = false;
+        if (_videoCapture) {
+            _videoCapture->setOutput(nullptr);
+        }
         detachAllVideoSinkProxies();
         if (_peerConnection) {
             _peerConnection->Close();
@@ -1411,8 +1433,21 @@ public:
             _noiseSuppressionConfiguration->isEnabled = isNoiseSuppressionEnabled;
         }
     }
-    void setVideoCapture(std::shared_ptr<VideoCaptureInterface>) {}
+    void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture) {
+        if (_videoCapture && _videoCapture != videoCapture) {
+            _videoCapture->setOutput(nullptr);
+        }
+        _videoCapture = std::move(videoCapture);
+        setVideoSource(_videoCapture ? videoCaptureToGetVideoSource(_videoCapture) : nullptr);
+        updateOwnPreviewOutput();
+    }
     void setVideoSource(std::function<webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface>()> getVideoSource) {
+        // Remember the getter even when the track cannot be attached yet, and
+        // forget it on disable: addRemoteIceCandidates re-applies _getVideoSource
+        // after the join handshake, and must not resurrect a camera the app
+        // switched off in between.
+        _getVideoSource = getVideoSource;
+
         if (!_peerConnection || !_peerConnectionFactory) return;
         if (!_outgoingVideoTransceiver) return;
 
@@ -1447,10 +1482,43 @@ public:
         }
         entry.proxy->addSink(std::move(sink));
 
+        if (!_ownVideoEndpointId.empty() && endpointId == _ownVideoEndpointId) {
+            // The local tile: fed from the camera preview, never from a track.
+            updateOwnPreviewOutput();
+            return;
+        }
+
         // The endpoint's track may not exist yet (video requested before the
         // join, or its renegotiation still in flight); wirePendingVideoSinks /
         // onTrackAdded attach the proxy once it does.
         attachVideoSinkProxy(endpointId, entry);
+    }
+
+    // Points the camera's preview output at the proxy holding the app's sinks
+    // for our own endpoint. Safe to call whenever either side changes: the
+    // capture (setVideoCapture), the endpoint id (join response) or the sinks
+    // (addIncomingVideoOutput) — it is a no-op until all three exist.
+    void updateOwnPreviewOutput() {
+        if (!_videoCapture || _ownVideoEndpointId.empty()) return;
+        auto it = _videoSinkProxies.find(_ownVideoEndpointId);
+        if (it == _videoSinkProxies.end() || !it->second.proxy) return;
+        _videoCapture->setOutput(it->second.proxy);
+    }
+
+    // The requested set minus our own endpoint: what may actually be asked of
+    // the SFU. The own entry is filtered here rather than in
+    // setRequestedVideoChannels because the app's first request usually
+    // arrives before the join response has told us which endpoint is ours.
+    std::vector<VideoChannelDescription> remoteRequestedVideoChannels() const {
+        std::vector<VideoChannelDescription> result;
+        result.reserve(_requestedVideoChannels.size());
+        for (const auto& ch : _requestedVideoChannels) {
+            if (!_ownVideoEndpointId.empty() && ch.endpointId == _ownVideoEndpointId) {
+                continue;
+            }
+            result.push_back(ch);
+        }
+        return result;
     }
     void setRequestedVideoChannels(std::vector<VideoChannelDescription>&& channels) {
         if (!_peerConnection) return;
@@ -1480,7 +1548,7 @@ public:
 
     void applyRequestedVideoChannels() {
         _hasPendingRequestedVideoChannels = false;
-        const std::vector<VideoChannelDescription>& channels = _requestedVideoChannels;
+        const std::vector<VideoChannelDescription> channels = remoteRequestedVideoChannels();
 
         bool changed = false;
 
@@ -1621,7 +1689,7 @@ private:
                 // Constraints requested while the channel was still connecting
                 // were dropped by sendReceiverVideoConstraints, and the SFU
                 // forwards no video until it receives them.
-                sendReceiverVideoConstraints(_requestedVideoChannels);
+                sendReceiverVideoConstraints(remoteRequestedVideoChannels());
             }
         } else {
             _isDataChannelOpen = false;
@@ -1998,6 +2066,7 @@ private:
     // _videoSinkProxies) until detachVideoSinkProxy removes it again.
     void attachVideoSinkProxy(const std::string& endpointId, VideoSinkProxyEntry& entry) {
         if (!entry.proxy || entry.attachedTrack) return;
+        if (!_ownVideoEndpointId.empty() && endpointId == _ownVideoEndpointId) return;
 
         auto epIt = _remoteVideoEndpoints.find(endpointId);
         if (epIt == _remoteVideoEndpoints.end() || !epIt->second.transceiver) return;
@@ -2348,6 +2417,12 @@ private:
     // Outgoing video.
     webrtc::scoped_refptr<webrtc::VideoTrackInterface> _outgoingVideoTrack;
     webrtc::scoped_refptr<webrtc::RtpTransceiverInterface> _outgoingVideoTransceiver;
+    // The app's camera, when it came in as a VideoCaptureInterface (the
+    // platform wrappers' path); _getVideoSource is derived from it. Also the
+    // preview source for the app's own-endpoint sinks.
+    std::shared_ptr<VideoCaptureInterface> _videoCapture;
+    // Our own video endpoint, from the join response. Empty until then.
+    std::string _ownVideoEndpointId;
 
     // Join flow.
     std::function<void(GroupJoinPayload const &)> _joinCompletion;
@@ -2495,8 +2570,10 @@ void GroupInstanceReferenceImpl::setIsNoiseSuppressionEnabled(bool isNoiseSuppre
         unwrapped->setIsNoiseSuppressionEnabled(isNoiseSuppressionEnabled);
     });
 }
-void GroupInstanceReferenceImpl::setVideoCapture(std::shared_ptr<VideoCaptureInterface>) {
-    // Not used directly — video source is set via setVideoSource/getVideoSource.
+void GroupInstanceReferenceImpl::setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture) {
+    _internal->perform([videoCapture = std::move(videoCapture)](GroupInstanceReferenceInternal *unwrapped) mutable {
+        unwrapped->setVideoCapture(std::move(videoCapture));
+    });
 }
 void GroupInstanceReferenceImpl::setVideoSource(std::function<webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface>()> getVideoSource) {
     _internal->perform([getVideoSource = std::move(getVideoSource)](GroupInstanceReferenceInternal *unwrapped) mutable {

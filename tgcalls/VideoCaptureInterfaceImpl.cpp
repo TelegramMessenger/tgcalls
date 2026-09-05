@@ -224,4 +224,14 @@ ThreadLocalObject<VideoCaptureInterfaceObject> *VideoCaptureInterfaceImpl::objec
 	return &_impl;
 }
 
+std::function<webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface>()> videoCaptureToGetVideoSource(std::shared_ptr<VideoCaptureInterface> videoCapture) {
+	return [videoCapture]() -> webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> {
+		if (!videoCapture) {
+			return nullptr;
+		}
+		VideoCaptureInterfaceObject *object = static_cast<VideoCaptureInterfaceImpl *>(videoCapture.get())->object()->getSyncAssumingSameThread();
+		return object ? object->source() : nullptr;
+	};
+}
+
 } // namespace tgcalls
