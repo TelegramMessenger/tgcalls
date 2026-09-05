@@ -131,12 +131,6 @@ static std::string formatTimestampMillis(int64_t timestamp) {
     return stringStream.str();
 }
 
-static VideoCaptureInterfaceObject *GetVideoCaptureAssumingSameThread(VideoCaptureInterface *videoCapture) {
-    return videoCapture
-        ? static_cast<VideoCaptureInterfaceImpl*>(videoCapture)->object()->getSyncAssumingSameThread()
-        : nullptr;
-}
-
 struct OutgoingVideoFormat {
     cricket::VideoCodec videoCodec;
     absl::optional<cricket::VideoCodec> rtxCodec;
@@ -1171,13 +1165,6 @@ struct DecodedBroadcastPart {
     int numSamples = 0;
     std::vector<DecodedBroadcastPartChannel> channels;
 };
-
-std::function<webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface>()> videoCaptureToGetVideoSource(std::shared_ptr<VideoCaptureInterface> videoCapture) {
-  return [videoCapture]() {
-    VideoCaptureInterfaceObject *videoCaptureImpl = GetVideoCaptureAssumingSameThread(videoCapture.get());
-    return videoCaptureImpl ? videoCaptureImpl->source() : nullptr;
-  };
-}
 
 class AudioDeviceDataObserverShared {
 public:

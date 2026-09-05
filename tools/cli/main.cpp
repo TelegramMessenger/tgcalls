@@ -262,6 +262,8 @@ int main(int argc, char* argv[]) {
     bool earlyVideoRequest = false;
     bool videoSinkChurn = false;
     bool e2e = false;
+    VideoFeed videoFeed = VideoFeed::Source;
+    bool requestOwnVideo = false;
     int churnCycles = 100;
     std::string networkScenario;
     std::set<int> mutedParticipants;
@@ -305,6 +307,12 @@ int main(int argc, char* argv[]) {
             e2e = true;
         } else if (std::string(argv[i]) == "--video-sink-churn") {
             videoSinkChurn = true;
+        } else if (std::string(argv[i]) == "--video-via-capture") {
+            videoFeed = VideoFeed::CaptureAtJoin;
+        } else if (std::string(argv[i]) == "--video-via-capture-late") {
+            videoFeed = VideoFeed::CaptureLate;
+        } else if (std::string(argv[i]) == "--request-own-video") {
+            requestOwnVideo = true;
         } else if (std::string(argv[i]) == "--builtin-codec-order") {
             tgcalls::setFakePlatformBuiltinCodecOrder(true);
         } else if (std::string(argv[i]) == "--churn-cycles" && i + 1 < argc) {
@@ -385,7 +393,7 @@ int main(int argc, char* argv[]) {
 
     // Group mode: dispatch to separate implementation
     if (mode == "group") {
-        return runGroupMode(participants, referenceParticipants, duration, gQuiet, enableVideo, networkScenario, mutedParticipants, earlyVideoRequest, videoSinkChurn, e2e);
+        return runGroupMode(participants, referenceParticipants, duration, gQuiet, enableVideo, networkScenario, mutedParticipants, earlyVideoRequest, videoSinkChurn, e2e, videoFeed, requestOwnVideo);
     }
     if (mode == "group-churn") {
         return runGroupChurnMode(participants, referenceParticipants, duration, gQuiet, enableVideo, churnCycles);

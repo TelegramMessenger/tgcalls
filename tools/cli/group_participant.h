@@ -18,6 +18,7 @@
 #include "group/GroupFrameTransformer.h"
 #include "FakeAudioDeviceModule.h"
 #include "StaticThreads.h"
+#include "VideoCaptureInterface.h"
 #include "AudioFrame.h"
 #include "fake_video_source.h"
 #include "fake_video_sink.h"
@@ -101,6 +102,21 @@ inline int64_t cliUserId(int participantId) { return (int64_t)participantId + 1;
 tgcalls::GroupEncryptDecryptFunction makeFakeE2eTransform(int64_t ownUserId);
 
 // ---------------------------------------------------------------------------
+// VideoFeed — how a participant hands its outgoing video to the engine
+// ---------------------------------------------------------------------------
+
+enum class VideoFeed {
+    // descriptor.getVideoSource: the CLI's original shortcut. No app uses it.
+    Source,
+    // descriptor.videoCapture: the iOS wrapper's join-time path (the camera is
+    // already on when the call context is created).
+    CaptureAtJoin,
+    // setVideoCapture() after the join response: the iOS wrapper's
+    // requestVideo: path (the camera is switched on mid-call).
+    CaptureLate,
+};
+
+// ---------------------------------------------------------------------------
 // ParticipantState
 // ---------------------------------------------------------------------------
 
@@ -120,8 +136,20 @@ struct ParticipantState {
     std::map<uint32_t, float> maxAudioLevelPerSsrc;
 
     // Video fields
+    bool sendsVideo{false};
     std::string endpointId;
+    // Exactly one of these is set for a video participant, per VideoFeed.
     rtc::scoped_refptr<FakeVideoTrackSource> videoSource;
+    std::shared_ptr<tgcalls::VideoCaptureInterface> videoCapture;
+    // True for the Capture* feeds; outlives `videoCapture`, which teardown
+    // releases before validation runs.
+    bool videoViaCapture{false};
+    // --request-own-video: include this participant's own endpoint in the
+    // requested set, as the app does (its local tile asks like any other).
+    bool requestOwnVideo{false};
+    // Read from the SFU before teardown: the layer this participant asked the
+    // SFU to forward from ITSELF, -1 if it never did. Must stay -1.
+    std::atomic<int> sfuSelfRequestedLayer{-1};
     std::mutex videoSinksMutex;
     std::map<std::string, std::shared_ptr<FakeVideoSink>> videoSinks;
     // Every endpoint this participant has requested video from, in request
@@ -142,6 +170,13 @@ struct GroupValidationResult {
     int audioReceivedCount;
     int videoReceivedPairs;
     int videoExpectedPairs;
+    // Participants the SFU saw requesting their own video (must be 0).
+    int selfVideoRequests;
+    // Participants feeding video through VideoCaptureInterface whose sink for
+    // their OWN endpoint received no frames (must be 0): the engine has to
+    // serve that sink from the camera preview, the way the app's local tile
+    // expects, not from a network channel.
+    int ownPreviewMissing;
     bool success;
 };
 
@@ -159,6 +194,11 @@ struct GroupValidationResult {
 // for the participants it already knows about immediately after the context
 // issues `emitJoinPayload`. Without the flag, video is requested only once the
 // SFU announces `ActiveVideoSsrcs` over the (already open) data channel.
+//
+// `videoFeed` picks how outgoing video reaches the engine (see VideoFeed); the
+// two Capture* feeds go through the platform's VideoCaptureInterface exactly
+// as the iOS wrapper does. `requestOwnVideo` puts the participant's own
+// endpoint in every requested-video set, as the app does.
 std::unique_ptr<ParticipantState> createParticipant(
     int id,
     bool isReference,
@@ -169,7 +209,9 @@ std::unique_ptr<ParticipantState> createParticipant(
     std::vector<std::unique_ptr<ParticipantState>>* allStates,
     bool muted = false,
     bool earlyVideoRequest = false,
-    bool e2e = false
+    bool e2e = false,
+    VideoFeed videoFeed = VideoFeed::Source,
+    bool requestOwnVideo = false
 );
 
 // Replaces every participant's incoming video sinks: for each endpoint a

@@ -131,9 +131,20 @@ void requestVideoFromEndpoints(
     if (!state || !state->instance) return;
     std::string tag = "P" + std::to_string(state->id);
 
+    // The SFU's ActiveVideoSsrcs never names the receiver itself, but the app
+    // builds its list from the participant roster, which includes the local
+    // participant, and hands it to the engine unfiltered. --request-own-video
+    // reproduces that and expects the ENGINE to drop the own endpoint (see
+    // GoSfu_QueryRequestedLayer in validation).
+    std::vector<std::string> wanted = endpointIds;
+    if (state->requestOwnVideo && !state->endpointId.empty()) {
+        wanted.push_back(state->endpointId);
+    }
+
     bool added = false;
-    for (const auto& endpointId : endpointIds) {
-        if (endpointId.empty() || endpointId == state->endpointId) continue;
+    for (const auto& endpointId : wanted) {
+        if (endpointId.empty()) continue;
+        if (endpointId == state->endpointId && !state->requestOwnVideo) continue;
 
         {
             std::lock_guard<std::mutex> lock(state->videoSinksMutex);
@@ -286,12 +297,15 @@ std::unique_ptr<ParticipantState> createParticipant(
     std::vector<std::unique_ptr<ParticipantState>>* allStates,
     bool muted,
     bool earlyVideoRequest,
-    bool e2e
+    bool e2e,
+    VideoFeed videoFeed,
+    bool requestOwnVideo
 ) {
     auto state = std::make_unique<ParticipantState>();
     state->id = id;
     state->isReference = isReference;
     state->muted = muted;
+    state->requestOwnVideo = requestOwnVideo;
     state->logPath = "/tmp/tgcalls_group_p" + std::to_string(id) + "_" + std::to_string(getpid()) + ".log";
 
     std::string tag = "P" + std::to_string(id);
@@ -378,8 +392,7 @@ std::unique_ptr<ParticipantState> createParticipant(
 
     // Video configuration
     if (video) {
-        auto videoSource = FakeVideoTrackSource::Create(id);
-        state->videoSource = videoSource;
+        state->sendsVideo = true;
         state->endpointId = std::to_string(id);
         descriptor.videoContentType = tgcalls::VideoContentType::Generic;
         descriptor.videoCodecPreferences = {tgcalls::VideoCodecName::H264};
@@ -390,9 +403,30 @@ std::unique_ptr<ParticipantState> createParticipant(
         // observed to drift down to ~80 kbps, keeping L2 disabled. Clamping
         // the min forces the encoder to keep L2 producing.
         descriptor.minOutgoingVideoBitrateKbit = 600;
-        descriptor.getVideoSource = [videoSource]() -> webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> {
-            return videoSource;
-        };
+
+        switch (videoFeed) {
+        case VideoFeed::Source: {
+            auto videoSource = FakeVideoTrackSource::Create(id);
+            state->videoSource = videoSource;
+            descriptor.getVideoSource = [videoSource]() -> webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> {
+                return videoSource;
+            };
+            break;
+        }
+        case VideoFeed::CaptureAtJoin:
+        case VideoFeed::CaptureLate: {
+            // The app's contract: a VideoCaptureInterface built by the platform
+            // (here the fake platform's FakeVideoCapturer, tinted by deviceId).
+            // Capture starts as soon as it is created, like the camera preview.
+            state->videoCapture = tgcalls::VideoCaptureInterface::Create(threads, std::to_string(id));
+            state->videoViaCapture = true;
+            if (videoFeed == VideoFeed::CaptureAtJoin) {
+                descriptor.videoCapture = state->videoCapture;
+                groupLog(tag.c_str(), "video via VideoCaptureInterface at join (descriptor.videoCapture)");
+            }
+            break;
+        }
+        }
 
         descriptor.dataChannelMessageReceived = [statePtr, sfuH, tag](std::string const &message) {
             std::string parseErr;
@@ -453,7 +487,7 @@ std::unique_ptr<ParticipantState> createParticipant(
     if (video && earlyVideoRequest) {
         std::vector<std::string> endpointIds;
         for (const auto& other : *allStates) {
-            if (other && other->videoSource && !other->endpointId.empty()) {
+            if (other && other->sendsVideo && !other->endpointId.empty()) {
                 endpointIds.push_back(other->endpointId);
             }
         }
@@ -495,6 +529,12 @@ std::unique_ptr<ParticipantState> createParticipant(
     state->instance->setJoinResponsePayload(response);
     state->instance->setIsMuted(state->muted);
 
+    if (video && videoFeed == VideoFeed::CaptureLate) {
+        // requestVideo: — the camera goes on after the call is up.
+        state->instance->setVideoCapture(state->videoCapture);
+        groupLog(tag.c_str(), "video via VideoCaptureInterface after join (setVideoCapture)");
+    }
+
     groupLog(tag.c_str(), "joined (%s)", state->muted ? "muted" : "unmuted");
     return state;
 }
@@ -518,6 +558,9 @@ void stopParticipant(ParticipantState* state, GoInt sfuHandle) {
     if (state->videoSource) {
         state->videoSource->Stop();
     }
+    if (state->videoCapture) {
+        state->videoCapture->setState(tgcalls::VideoState::Inactive);
+    }
 
     // Stop instance with timeout. Heap-allocate sync state so the stop callback
     // is safe even if it fires after the 5s timeout (avoids stack-frame UB).
@@ -540,6 +583,7 @@ void stopParticipant(ParticipantState* state, GoInt sfuHandle) {
     }
 
     state->instance.reset();
+    state->videoCapture.reset();
 
     // Clean up log file.
     unlink(state->logPath.c_str());
@@ -566,7 +610,7 @@ GroupValidationResult validateGroupState(
     if (video) {
         int videoParticipants = 0;
         for (const auto& s : states) {
-            if (s->videoSource) videoParticipants++;
+            if (s->sendsVideo) videoParticipants++;
         }
         result.videoExpectedPairs = videoParticipants * (videoParticipants - 1);
 
@@ -574,12 +618,39 @@ GroupValidationResult validateGroupState(
             std::lock_guard<std::mutex> lock(s->videoSinksMutex);
             for (const auto& [endpointId, sink] : s->videoSinks) {
                 int frames = sink->frameCount();
+                if (endpointId == s->endpointId) {
+                    // --request-own-video: the sink for the own endpoint is
+                    // never a received pair (the SFU forwards nothing to its
+                    // sender), so it must not inflate the count. With a
+                    // VideoCaptureInterface feed the engine must serve it from
+                    // the camera preview instead (the app's local tile).
+                    if (s->videoViaCapture && frames == 0) {
+                        result.ownPreviewMissing++;
+                        groupLog("Validate", "FAIL: P%d (%s) own endpoint %s: 0 preview frames on its own sink",
+                                 s->id, s->isReference ? "ref" : "custom", endpointId.c_str());
+                    } else {
+                        groupLog("Validate", "P%d <- own endpoint %s: %d preview frames (not a pair)",
+                                 s->id, endpointId.c_str(), frames);
+                    }
+                    continue;
+                }
                 if (frames > 0) {
                     result.videoReceivedPairs++;
                 }
                 groupLog("Validate", "P%d <- endpoint %s: %d video frames (%dx%d)",
                          s->id, endpointId.c_str(), frames,
                          sink->lastWidth(), sink->lastHeight());
+            }
+        }
+
+        // The engine must never ask the SFU for the participant's own video,
+        // whatever the app put in the requested list (see requestOwnVideo).
+        for (const auto& s : states) {
+            int layer = s->sfuSelfRequestedLayer.load();
+            if (layer >= 0) {
+                result.selfVideoRequests++;
+                groupLog("Validate", "FAIL: P%d (%s) asked the SFU to forward its OWN video (endpoint %s, layer %d)",
+                         s->id, s->isReference ? "ref" : "custom", s->endpointId.c_str(), layer);
             }
         }
     }
@@ -646,6 +717,9 @@ GroupValidationResult validateGroupState(
     if (video && result.videoExpectedPairs > 0) {
         result.success = result.success && (result.videoReceivedPairs >= result.videoExpectedPairs);
     }
+    if (video) {
+        result.success = result.success && (result.selfVideoRequests == 0) && (result.ownPreviewMissing == 0);
+    }
 
     return result;
 }
@@ -674,6 +748,8 @@ bool printGroupSummary(
     printf("Audio received:         %d/%d\n", result.audioReceivedCount, result.totalParticipants);
     if (video) {
         printf("Video received:         %d/%d\n", result.videoReceivedPairs, result.videoExpectedPairs);
+        printf("Self video requests:    %d (must be 0)\n", result.selfVideoRequests);
+        printf("Own preview missing:    %d (must be 0)\n", result.ownPreviewMissing);
     }
     printf("Result:                 %s\n", success ? "SUCCESS" : "FAILED");
 
