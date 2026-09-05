@@ -153,7 +153,10 @@ class AudioDeviceModuleIOS : public AudioDeviceModule {
   std::unique_ptr<AudioDeviceIOS> audio_device_;
   std::unique_ptr<AudioDeviceBuffer> audio_device_buffer_;
     
-  std::shared_ptr<tgcalls::CallAudioTone> pendingAudioTone_;
+  // The most recent tone. Re-applied by Init(): a failed start is rolled back
+  // with Terminate() and retried through Init(), which creates a fresh
+  // AudioDeviceIOS, so the tone must outlive the device instance.
+  std::shared_ptr<tgcalls::CallAudioTone> lastTone_;
 };
 }  // namespace tgcalls_ios_adm
 }  // namespace webrtc

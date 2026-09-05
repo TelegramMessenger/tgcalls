@@ -110,10 +110,12 @@ AudioDeviceModuleIOS::AudioDeviceModuleIOS(bool bypass_voice_processing, bool di
       return -1;
     }
     initialized_ = true;
+    internalIsPlaying_ = false;
+    audioBufferPlayoutStarted_ = false;
+    audioBufferRecordingStarted_ = false;
       
-    if (pendingAudioTone_) {
-      audio_device_->setTone(pendingAudioTone_);
-      pendingAudioTone_ = nullptr;
+    if (lastTone_) {
+      audio_device_->setTone(lastTone_);
     }
     return 0;
   }
@@ -122,10 +124,17 @@ AudioDeviceModuleIOS::AudioDeviceModuleIOS(bool bypass_voice_processing, bool di
     RTC_DLOG(LS_INFO) << __FUNCTION__;
     if (!initialized_)
       return 0;
+    // Stop through the module-level methods first so the audio device buffer's
+    // playout/recording state is unwound together with the device's.
+    StopPlayout();
+    StopRecording();
     if (audio_device_->Terminate() == -1) {
       return -1;
     }
     initialized_ = false;
+    internalIsPlaying_ = false;
+    audioBufferPlayoutStarted_ = false;
+    audioBufferRecordingStarted_ = false;
     return 0;
   }
 
@@ -575,6 +584,15 @@ AudioDeviceModuleIOS::AudioDeviceModuleIOS(bool bypass_voice_processing, bool di
     RTC_DLOG(LS_INFO) << "output: " << result;
     RTC_HISTOGRAM_BOOLEAN("WebRTC.Audio.StartPlayoutSuccess",
                           static_cast<int>(result == 0));
+    if (result != 0) {
+      // Unwind the buffer so Playing() stays false and a retry starts clean.
+      // Reporting Playing() == true after a failed AudioOutputUnitStart made
+      // every later start attempt skip the device.
+      audio_device_buffer_.get()->StopPlayout();
+      audio_device_->setIsBufferPlaying(false);
+      audioBufferPlayoutStarted_ = false;
+      return result;
+    }
     internalIsPlaying_ = true;
     return result;
   }
@@ -588,6 +606,7 @@ AudioDeviceModuleIOS::AudioDeviceModuleIOS(bool bypass_voice_processing, bool di
       audioBufferPlayoutStarted_ = false;
       audio_device_->setIsBufferPlaying(false);
     }
+    internalIsPlaying_ = false;
     RTC_DLOG(LS_INFO) << "output: " << result;
     RTC_HISTOGRAM_BOOLEAN("WebRTC.Audio.StopPlayoutSuccess",
                           static_cast<int>(result == 0));
@@ -631,6 +650,12 @@ AudioDeviceModuleIOS::AudioDeviceModuleIOS(bool bypass_voice_processing, bool di
     RTC_DLOG(LS_INFO) << "output: " << result;
     RTC_HISTOGRAM_BOOLEAN("WebRTC.Audio.StartRecordingSuccess",
                           static_cast<int>(result == 0));
+    if (result != 0) {
+      // Same unwinding as StartPlayout: leave no half-started buffer behind.
+      audio_device_buffer_.get()->StopRecording();
+      audio_device_->setIsBufferRecording(false);
+      audioBufferRecordingStarted_ = false;
+    }
     return result;
   }
 
@@ -728,10 +753,9 @@ AudioDeviceModuleIOS::AudioDeviceModuleIOS(bool bypass_voice_processing, bool di
   }
 
   void AudioDeviceModuleIOS::setTone(std::shared_ptr<tgcalls::CallAudioTone> tone) {
+    lastTone_ = tone;
     if (audio_device_) {
       audio_device_->setTone(tone);
-    } else {
-      pendingAudioTone_ = tone;
     }
   }
 

@@ -166,6 +166,14 @@ int32_t AudioDeviceIOS::Terminate() {
   }
   StopPlayout();
   StopRecording();
+  if (audio_is_initialized_) {
+    // Playout/recording were initialized but never started (a failed
+    // StartPlayout/StartRecording). StopPlayout/StopRecording return early in
+    // that state, so release the audio unit and the session configuration here,
+    // or the next start attempt runs next to an orphaned Voice-Processing unit.
+    ShutdownPlayOrRecord();
+    audio_is_initialized_ = false;
+  }
   initialized_ = false;
   return 0;
 }
