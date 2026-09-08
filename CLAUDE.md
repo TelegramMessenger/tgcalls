@@ -219,6 +219,20 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
   the error-resilient H264 decoder emits corrupt frames rather than refusing. Judge decryption by
   the level *value* (a real 440 Hz sine reads a steady ~0.126–0.133; garbage swings 0.157–1.000),
   and confirm the harness can fail by keying decrypt on the wrong id — that must give 0/2.
+- `--unmute-after N` — group mode, with `--mute-participants`: run for N seconds, then unmute those
+  participants mid-call. **Nothing is signalled to the peers** — they must notice the new SSRC from
+  the media alone, as in a real call. This is the regression test for "a participant who unmutes after
+  a while is never heard" on `GroupInstanceReferenceImpl`: the unmute deliberately lands *after* the
+  peers have renegotiated for the SSRCs they saw at join, which is when WebRTC stops routing unknown
+  audio SSRCs to the unsignaled catch-all (see the ReferenceImpl notes in
+  `submodules/TgVoipWebrtc/CLAUDE.md`). Validation adds a `Late unmute heard: X/Y` line requiring
+  every peer to report a real level for the late SSRC. Use ≥3 participants so a first renegotiation
+  actually happens: `--participants 2 --reference-participants 1 --mute-participants 1 --unmute-after 8
+  --duration 20` scored 1/2 before the fix and 2/2 after. Two controls make the result meaningful:
+  the all-custom group (`--participants 3 --mute-participants 1 --unmute-after 8`) passes either way,
+  and the same late unmute with NO prior renegotiation
+  (`--participants 1 --reference-participants 1 --mute-participants 0 --unmute-after 8`) also passes
+  either way — which is what pins the cause to the renegotiation rather than to the lateness.
 - `--churn-cycles N` — number of join/leave cycles in group-churn mode (default: 100)
 - `--network-scenario NAME` — network simulation test scenario (e.g., `step-down-up`). Group mode only.
 - `--quiet` — summary output only
@@ -347,6 +361,14 @@ construct and emits no version key to key the discontinuity on).
 
 `network_use_mtproto` works on `InstanceV2ReferenceImpl` (11.0.0) and
 `CallCoreHost` (18/19), producing the same wire bytes as 13.0.0. Default off.
+
+**The decorator has a second, unrelated user.** `MtProtoIceTransport` also carries an optional
+`IncomingPacketObserver`, and both of its jobs are independent: with no key it is a pure
+pass-through (packets AND `flags` untouched, so DTLS-SRTP above is unaffected) that only observes.
+`GroupInstanceReferenceImpl` injects it that way to discover audio SSRCs the BUNDLE demuxer drops —
+see the ReferenceImpl notes in `submodules/TgVoipWebrtc/CLAUDE.md`. With a key the observer sees the
+decrypted packet, so observation is a byproduct of the decryption pass either way.
+`MtProtoIceTransportTest.cpp` covers both modes.
 
 **Shape.** Two changes, both gated on the flag:
 

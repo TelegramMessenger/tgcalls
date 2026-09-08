@@ -1,10 +1,12 @@
 #ifndef TGCALLS_MTPROTO_ICE_TRANSPORT_H
 #define TGCALLS_MTPROTO_ICE_TRANSPORT_H
 
+#include <functional>
 #include <memory>
 #include <string>
 
 #include "Instance.h"
+#include "api/array_view.h"
 #include "api/ice_transport_interface.h"
 #include "p2p/base/ice_transport_internal.h"
 
@@ -16,9 +18,26 @@ class EncryptedConnection;
 // to payload traffic. Sits ABOVE ICE, so the agent's own STUN binding requests
 // bypass it - matching 13.0.0, where MtProtoPacketTransport wraps the channel
 // the same way. See docs/superpowers/specs/2026-09-01-tgcalls-mtproto-peerconnection-design.md.
+//
+// BOTH jobs are optional and independent:
+//
+//  - `encryptionKey.value == nullptr` -> no mtproto. Packets pass through in
+//    both directions untouched, including their `flags`, so DTLS-SRTP above is
+//    unaffected. This is how group calls use the class.
+//  - `incomingPacketObserver` -> sees every inbound packet, on the network
+//    thread, AFTER decryption when a key is set: observation is a byproduct of
+//    the decryption pass, and with no key it is all the decorator does.
+//    GroupInstanceReferenceImpl uses it to notice audio SSRCs that WebRTC's
+//    BUNDLE demuxer drops before any receive stream (and therefore any frame
+//    transformer) could see them. Do not do work here: it runs per packet.
 class MtProtoIceTransport : public cricket::IceTransportInternal {
 public:
-    MtProtoIceTransport(std::unique_ptr<cricket::IceTransportInternal> inner, EncryptionKey encryptionKey);
+    // The raw packet as it appears below DTLS/SRTP: an RTP header here is in the
+    // clear (SRTP encrypts the payload, not the header), which is what makes
+    // SSRC observation possible without decrypting media.
+    using IncomingPacketObserver = std::function<void(rtc::ArrayView<const uint8_t> packet)>;
+
+    MtProtoIceTransport(std::unique_ptr<cricket::IceTransportInternal> inner, EncryptionKey encryptionKey, IncomingPacketObserver incomingPacketObserver = nullptr);
     ~MtProtoIceTransport() override;
 
     cricket::IceTransportInternal *inner() { return _inner.get(); }
@@ -86,7 +105,9 @@ private:
     void processReadPacket(rtc::CopyOnWriteBuffer const &data, int64_t timestamp);
 
     std::unique_ptr<cricket::IceTransportInternal> _inner;
+    // Null when no key was supplied: the decorator is then a pass-through.
     std::unique_ptr<EncryptedConnection> _transportEncryption;
+    IncomingPacketObserver _incomingPacketObserver;
 };
 
 // Injected via PeerConnectionDependencies::ice_transport_factory. Builds the
@@ -94,7 +115,9 @@ private:
 // (api/ice_transport_factory.cc), then wraps it.
 class MtProtoIceTransportFactory : public webrtc::IceTransportFactory {
 public:
-    explicit MtProtoIceTransportFactory(EncryptionKey encryptionKey);
+    explicit MtProtoIceTransportFactory(
+        EncryptionKey encryptionKey,
+        MtProtoIceTransport::IncomingPacketObserver incomingPacketObserver = nullptr);
 
     rtc::scoped_refptr<webrtc::IceTransportInterface> CreateIceTransport(
         const std::string &transport_name,
@@ -103,6 +126,9 @@ public:
 
 private:
     EncryptionKey _encryptionKey;
+    // Shared by every transport this factory creates (one per BUNDLE group in
+    // practice), so it must be safe to call from any network thread.
+    MtProtoIceTransport::IncomingPacketObserver _incomingPacketObserver;
 };
 
 } // namespace tgcalls

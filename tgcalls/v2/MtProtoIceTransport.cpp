@@ -15,14 +15,19 @@ constexpr uint32_t kSctpMagic = 0xdcdcdcdc;
 
 namespace tgcalls {
 
-MtProtoIceTransport::MtProtoIceTransport(std::unique_ptr<cricket::IceTransportInternal> inner, EncryptionKey encryptionKey) :
-_inner(std::move(inner)) {
-    _transportEncryption = std::make_unique<EncryptedConnection>(
-        EncryptedConnection::Type::Transport,
-        encryptionKey,
-        [](int delayMs, int cause) {
-        }
-    );
+MtProtoIceTransport::MtProtoIceTransport(std::unique_ptr<cricket::IceTransportInternal> inner, EncryptionKey encryptionKey, IncomingPacketObserver incomingPacketObserver) :
+_inner(std::move(inner)),
+_incomingPacketObserver(std::move(incomingPacketObserver)) {
+    // No key means no mtproto: the decorator becomes a pass-through that only
+    // runs the observer. Group calls take this path (their media is DTLS-SRTP).
+    if (encryptionKey.value) {
+        _transportEncryption = std::make_unique<EncryptedConnection>(
+            EncryptedConnection::Type::Transport,
+            encryptionKey,
+            [](int delayMs, int cause) {
+            }
+        );
+    }
     installBridges();
 }
 
@@ -105,7 +110,18 @@ void MtProtoIceTransport::onInnerReceivingState(rtc::PacketTransportInternal *) 
     SignalReceivingState(this);
 }
 
-void MtProtoIceTransport::onInnerReadPacket(rtc::PacketTransportInternal *, const char *data, size_t size, const int64_t &timestamp, int) {
+void MtProtoIceTransport::onInnerReadPacket(rtc::PacketTransportInternal *, const char *data, size_t size, const int64_t &timestamp, int flags) {
+    if (!_transportEncryption) {
+        // Pass-through. The observer still runs: this is the only point in a
+        // PeerConnection group call where a packet whose SSRC no m-line claims
+        // is visible at all — the BUNDLE demuxer drops it further up.
+        if (_incomingPacketObserver) {
+            _incomingPacketObserver(rtc::MakeArrayView((const uint8_t *)data, size));
+        }
+        SignalReadPacket(this, data, size, timestamp, flags);
+        return;
+    }
+
     if (const auto packet = _transportEncryption->handleIncomingRawPacket(data, size)) {
         processReadPacket(packet.value().main.message, timestamp);
         for (const auto &additional : packet.value().additional) {
@@ -115,6 +131,12 @@ void MtProtoIceTransport::onInnerReadPacket(rtc::PacketTransportInternal *, cons
 }
 
 void MtProtoIceTransport::processReadPacket(rtc::CopyOnWriteBuffer const &data, int64_t timestamp) {
+    // Observation is a byproduct of the decryption pass: the plaintext packet,
+    // before any framing prefix is stripped below.
+    if (_incomingPacketObserver) {
+        _incomingPacketObserver(rtc::MakeArrayView(data.data(), data.size()));
+    }
+
     // ALWAYS emit flags == 0: DtlsTransport::OnReadPacket DCHECKs it
     // (dtls_transport.cc:599) and would abort a -c dbg build otherwise.
     //
@@ -186,6 +208,12 @@ bool MtProtoIceTransport::receiving() const {
 }
 
 int MtProtoIceTransport::SendPacket(const char *data, size_t len, const rtc::PacketOptions &options, int flags) {
+    if (!_transportEncryption) {
+        // Pass-through: forward `flags` unchanged. The framing below exists only
+        // for mtproto wire parity, and DTLS above depends on flags surviving.
+        return _inner->SendPacket(data, len, options, flags);
+    }
+
     // 13.0.0 selects the SCTP prefix from `flags`, but the inactive DtlsTransport
     // above us drops that argument (dtls_transport.cc:433), so we always observe
     // 0. Infer the type instead, to keep byte parity with 13.0.0's framing.
@@ -321,8 +349,12 @@ private:
 
 } // namespace
 
-MtProtoIceTransportFactory::MtProtoIceTransportFactory(EncryptionKey encryptionKey) :
-_encryptionKey(std::move(encryptionKey)) {
+MtProtoIceTransportFactory::MtProtoIceTransportFactory(
+    EncryptionKey encryptionKey,
+    MtProtoIceTransport::IncomingPacketObserver incomingPacketObserver
+) :
+_encryptionKey(std::move(encryptionKey)),
+_incomingPacketObserver(std::move(incomingPacketObserver)) {
 }
 
 rtc::scoped_refptr<webrtc::IceTransportInterface> MtProtoIceTransportFactory::CreateIceTransport(
@@ -331,7 +363,7 @@ rtc::scoped_refptr<webrtc::IceTransportInterface> MtProtoIceTransportFactory::Cr
     webrtc::IceTransportInit init
 ) {
     auto channel = cricket::P2PTransportChannel::Create(transport_name, component, std::move(init));
-    auto decorated = std::make_unique<MtProtoIceTransport>(std::move(channel), _encryptionKey);
+    auto decorated = std::make_unique<MtProtoIceTransport>(std::move(channel), _encryptionKey, _incomingPacketObserver);
     return rtc::make_ref_counted<MtProtoIceTransportWrapper>(std::move(decorated));
 }
 

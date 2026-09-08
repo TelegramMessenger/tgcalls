@@ -267,6 +267,7 @@ int main(int argc, char* argv[]) {
     int churnCycles = 100;
     std::string networkScenario;
     std::set<int> mutedParticipants;
+    int unmuteAfterSeconds = 0;
 
     for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--duration" && i + 1 < argc) {
@@ -319,6 +320,8 @@ int main(int argc, char* argv[]) {
             churnCycles = std::atoi(argv[++i]);
         } else if (std::string(argv[i]) == "--network-scenario" && i + 1 < argc) {
             networkScenario = argv[++i];
+        } else if (std::string(argv[i]) == "--unmute-after" && i + 1 < argc) {
+            unmuteAfterSeconds = std::atoi(argv[++i]);
         } else if (std::string(argv[i]) == "--mute-participants" && i + 1 < argc) {
             std::string list = argv[++i];
             size_t pos = 0;
@@ -393,7 +396,7 @@ int main(int argc, char* argv[]) {
 
     // Group mode: dispatch to separate implementation
     if (mode == "group") {
-        return runGroupMode(participants, referenceParticipants, duration, gQuiet, enableVideo, networkScenario, mutedParticipants, earlyVideoRequest, videoSinkChurn, e2e, videoFeed, requestOwnVideo);
+        return runGroupMode(participants, referenceParticipants, duration, gQuiet, enableVideo, networkScenario, mutedParticipants, earlyVideoRequest, videoSinkChurn, e2e, videoFeed, requestOwnVideo, unmuteAfterSeconds);
     }
     if (mode == "group-churn") {
         return runGroupChurnMode(participants, referenceParticipants, duration, gQuiet, enableVideo, churnCycles);
