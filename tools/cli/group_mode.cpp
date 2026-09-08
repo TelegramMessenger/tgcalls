@@ -11,13 +11,21 @@
 // CGo header
 #include "submodules/TgVoipWebrtc/tgcalls/tools/go_sfu/go_sfu.h"
 
-int runGroupMode(int customParticipants, int referenceParticipants, int duration, bool quiet, bool video, const std::string& networkScenario, const std::set<int>& mutedParticipants, bool earlyVideoRequest, bool videoSinkChurn, bool e2e, VideoFeed videoFeed, bool requestOwnVideo) {
+int runGroupMode(int customParticipants, int referenceParticipants, int duration, bool quiet, bool video, const std::string& networkScenario, const std::set<int>& mutedParticipants, bool earlyVideoRequest, bool videoSinkChurn, bool e2e, VideoFeed videoFeed, bool requestOwnVideo, int unmuteAfterSeconds) {
     gGroupQuiet = quiet;
     gGroupStartTime = std::chrono::steady_clock::now();
 
     int participants = customParticipants + referenceParticipants;
     if (participants < 2) {
         fprintf(stderr, "Error: need at least 2 participants total\n");
+        return 1;
+    }
+
+    // The two own the run's timeline and the unmute branch is an `else if` below, so
+    // combining them would run the scenario, never unmute anyone, find no late
+    // unmuters to validate, and report SUCCESS without having tested anything.
+    if (unmuteAfterSeconds > 0 && !networkScenario.empty()) {
+        fprintf(stderr, "Error: --unmute-after cannot be combined with --network-scenario\n");
         return 1;
     }
 
@@ -128,6 +136,32 @@ int runGroupMode(int customParticipants, int referenceParticipants, int duration
             GoSfu_SetNetworkParams(sfuHandle, s->id, 1, 0, 0, 0.0, 0);
         }
         std::this_thread::sleep_for(std::chrono::seconds(phase));
+    } else if (unmuteAfterSeconds > 0) {
+        // Mid-call unmute. The muted participants sent nothing while everyone
+        // joined, so their SSRCs are unknown to every peer until now — and by
+        // now each peer has already negotiated the audio m-lines for the SSRCs
+        // it discovered at join. This is the app's "someone turns their
+        // microphone on after a while" case.
+        int settle = std::min(unmuteAfterSeconds, duration);
+        groupLog("Group", "running for %ds, then unmuting %d participant(s)",
+                 settle, (int)mutedParticipants.size());
+        std::this_thread::sleep_for(std::chrono::seconds(settle));
+
+        // Nothing is signalled to the peers: they are told about this participant by
+        // no one and must notice the new SSRC from the media itself, exactly as they
+        // must in a real call. The unmute deliberately lands after the peers have
+        // renegotiated for the SSRCs they saw at join.
+        for (const auto& s : states) {
+            if (!s->muted || !s->instance) continue;
+            groupLog("Group", "unmuting P%d (ssrc=%u)", s->id, s->audioSsrc);
+            s->instance->setIsMuted(false);
+            s->muted = false;
+            s->unmutedLate = true;
+        }
+
+        int remaining = std::max(duration - settle, 5);
+        groupLog("Group", "running for %d more seconds after the unmute...", remaining);
+        std::this_thread::sleep_for(std::chrono::seconds(remaining));
     } else {
         groupLog("Group", "running for %d seconds...", duration);
         std::this_thread::sleep_for(std::chrono::seconds(duration));

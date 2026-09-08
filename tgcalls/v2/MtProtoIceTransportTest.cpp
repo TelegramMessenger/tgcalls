@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 #include <type_traits>
+#include <vector>
 
 namespace {
 
@@ -20,6 +21,18 @@ int g_failures = 0;
 
 tgcalls::EncryptionKey makeTestKey() {
     return tgcalls::EncryptionKey(std::make_shared<std::array<uint8_t, 256>>(), true);
+}
+
+// Non-zero material, shared by both ends. EncryptedConnection seeds its keys from
+// `key + 88 + (isOutgoing ? 0 : 8)` on one side and the mirror offset on the other,
+// so a pair built from the SAME direction only interoperates when the key is all
+// zeroes — which is exactly what an all-zero fixture would hide.
+std::shared_ptr<std::array<uint8_t, 256>> makeSharedKeyMaterial() {
+    auto key = std::make_shared<std::array<uint8_t, 256>>();
+    for (size_t i = 0; i < key->size(); i++) {
+        (*key)[i] = (uint8_t)(i * 7 + 13);
+    }
+    return key;
 }
 
 // A local stand-in for the inner P2PTransportChannel.
@@ -427,6 +440,101 @@ void TestReadPacketAlwaysUsesZeroFlags() {
 // a port allocator and network thread - standing those up is disproportionate
 // for six lines of glue. Its runtime behaviour is covered by the end-to-end CLI
 // call in Task 8, which is the check that would catch a mis-wired factory.
+// ---------------------------------------------------------------------------
+// Pass-through mode (no key) + the incoming-packet observer.
+//
+// This is how group calls use the decorator: their media is DTLS-SRTP, so the
+// class must not touch the bytes, and `flags` must survive in BOTH directions —
+// DTLS above depends on them, and the mtproto path's force-to-zero rule is
+// specific to its own framing. The observer is the only place a packet whose
+// SSRC no m-line claims is visible at all (the BUNDLE demuxer drops it later),
+// which is what GroupInstanceReferenceImpl relies on to notice a participant
+// that starts sending mid-call.
+// ---------------------------------------------------------------------------
+
+tgcalls::EncryptionKey makeNoKey() {
+    return tgcalls::EncryptionKey(nullptr, false);
+}
+
+void TestPassThroughSendLeavesPacketAndFlagsUntouched() {
+    auto inner = std::make_unique<FakeInnerIceTransport>();
+    FakeInnerIceTransport *innerRaw = inner.get();
+    tgcalls::MtProtoIceTransport transport(std::move(inner), makeNoKey());
+
+    const std::string payload = "PLAINTEXTPAYLOAD";
+    rtc::PacketOptions options;
+    transport.SendPacket(payload.data(), payload.size(), options, 0);
+
+    CHECK_TRUE(innerRaw->sentPacketCount() == 1);
+    // Byte-identical: no encryption, no SCTP magic prefix.
+    CHECK_TRUE(innerRaw->lastSentPacket() == payload);
+}
+
+void TestPassThroughReadPreservesFlags() {
+    auto inner = std::make_unique<FakeInnerIceTransport>();
+    FakeInnerIceTransport *innerRaw = inner.get();
+    tgcalls::MtProtoIceTransport transport(std::move(inner), makeNoKey());
+
+    ReadPacketProbe probe;
+    transport.SignalReadPacket.connect(&probe, &ReadPacketProbe::onReadPacket);
+
+    const std::string payload = "INBOUND";
+    innerRaw->SignalReadPacket(innerRaw, payload.data(), payload.size(), (int64_t)0, 7);
+
+    CHECK_TRUE(probe.count == 1);
+    CHECK_TRUE(probe.lastPayload == payload);
+    // NOT forced to zero: that rule belongs to the mtproto framing path only.
+    CHECK_TRUE(probe.lastFlags == 7);
+}
+
+void TestObserverSeesIncomingPacketsInPassThrough() {
+    auto inner = std::make_unique<FakeInnerIceTransport>();
+    FakeInnerIceTransport *innerRaw = inner.get();
+
+    std::vector<std::string> observed;
+    tgcalls::MtProtoIceTransport transport(std::move(inner), makeNoKey(),
+        [&observed](rtc::ArrayView<const uint8_t> packet) {
+            observed.emplace_back((const char *)packet.data(), packet.size());
+        });
+
+    const std::string payload = "OBSERVEME";
+    innerRaw->SignalReadPacket(innerRaw, payload.data(), payload.size(), (int64_t)0, 0);
+
+    CHECK_TRUE(observed.size() == 1);
+    CHECK_TRUE(observed[0] == payload);
+}
+
+// With a key the observer must see PLAINTEXT: observation is a byproduct of the
+// decryption pass, so an encrypted call still discovers SSRCs.
+void TestObserverSeesDecryptedPacketsWithKey() {
+    // One key, opposite directions — a real pairing, not two same-direction ends.
+    auto key = makeSharedKeyMaterial();
+
+    auto senderInner = std::make_unique<FakeInnerIceTransport>();
+    FakeInnerIceTransport *senderInnerRaw = senderInner.get();
+    tgcalls::MtProtoIceTransport sender(std::move(senderInner), tgcalls::EncryptionKey(key, true));
+
+    std::vector<std::string> observed;
+    auto receiverInner = std::make_unique<FakeInnerIceTransport>();
+    FakeInnerIceTransport *receiverInnerRaw = receiverInner.get();
+    tgcalls::MtProtoIceTransport receiver(std::move(receiverInner), tgcalls::EncryptionKey(key, false),
+        [&observed](rtc::ArrayView<const uint8_t> packet) {
+            observed.emplace_back((const char *)packet.data(), packet.size());
+        });
+
+    // Produce a genuine mtproto frame rather than a hand-made one.
+    const std::string payload = "SECRETPAYLOAD";
+    rtc::PacketOptions options;
+    sender.SendPacket(payload.data(), payload.size(), options, 0);
+    const std::string onTheWire = senderInnerRaw->lastSentPacket();
+    CHECK_TRUE(onTheWire.find(payload) == std::string::npos);
+
+    receiverInnerRaw->SignalReadPacket(receiverInnerRaw, onTheWire.data(), onTheWire.size(), (int64_t)0, 0);
+
+    CHECK_TRUE(observed.size() == 1);
+    CHECK_TRUE(observed[0].find(payload) != std::string::npos);
+}
+
 void TestFactorySatisfiesInjectionContract() {
     static_assert(
         std::is_base_of<webrtc::IceTransportFactory, tgcalls::MtProtoIceTransportFactory>::value,
@@ -459,6 +567,11 @@ int main() {
 
     TestSendPacketIsEncrypted();
     TestReadPacketAlwaysUsesZeroFlags();
+
+    TestPassThroughSendLeavesPacketAndFlagsUntouched();
+    TestPassThroughReadPreservesFlags();
+    TestObserverSeesIncomingPacketsInPassThrough();
+    TestObserverSeesDecryptedPacketsWithKey();
 
     TestFactorySatisfiesInjectionContract();
 

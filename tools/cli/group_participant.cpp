@@ -699,6 +699,34 @@ GroupValidationResult validateGroupState(
         }
     }
 
+    // Late unmute: a participant that was silent while everyone else joined and
+    // renegotiated, and only then started sending. Its SSRC is brand new to every
+    // peer at a point where their audio m-lines already exist, which is the case
+    // the app hits when someone turns their microphone on mid-call. Every peer
+    // must end up hearing it.
+    for (const auto& late : states) {
+        if (!late->unmutedLate || late->audioSsrc == 0) continue;
+        for (const auto& peer : states) {
+            if (peer.get() == late.get()) continue;
+            result.lateUnmuteExpectedPairs++;
+            std::lock_guard<std::mutex> lock(peer->audioLevelsMutex);
+            auto it = peer->maxAudioLevelPerSsrc.find(late->audioSsrc);
+            float maxLevel = (it != peer->maxAudioLevelPerSsrc.end()) ? it->second : 0.0f;
+            if (maxLevel >= kMutedLevelThreshold) {
+                result.lateUnmuteHeardPairs++;
+                groupLog("Validate",
+                         "OK:   P%d (%s) heard late-unmuted P%d (ssrc=%u) at max level %.3f",
+                         peer->id, peer->isReference ? "ref" : "custom",
+                         late->id, late->audioSsrc, maxLevel);
+            } else {
+                groupLog("Validate",
+                         "FAIL: P%d (%s) never heard late-unmuted P%d (ssrc=%u), max level %.3f",
+                         peer->id, peer->isReference ? "ref" : "custom",
+                         late->id, late->audioSsrc, maxLevel);
+            }
+        }
+    }
+
     bool hasMuted = false;
     for (const auto& s : states) {
         if (s->muted) { hasMuted = true; break; }
@@ -719,6 +747,10 @@ GroupValidationResult validateGroupState(
     }
     if (video) {
         result.success = result.success && (result.selfVideoRequests == 0) && (result.ownPreviewMissing == 0);
+    }
+    if (result.lateUnmuteExpectedPairs > 0) {
+        result.success = result.success &&
+                         (result.lateUnmuteHeardPairs == result.lateUnmuteExpectedPairs);
     }
 
     return result;
@@ -750,6 +782,9 @@ bool printGroupSummary(
         printf("Video received:         %d/%d\n", result.videoReceivedPairs, result.videoExpectedPairs);
         printf("Self video requests:    %d (must be 0)\n", result.selfVideoRequests);
         printf("Own preview missing:    %d (must be 0)\n", result.ownPreviewMissing);
+    }
+    if (result.lateUnmuteExpectedPairs > 0) {
+        printf("Late unmute heard:      %d/%d\n", result.lateUnmuteHeardPairs, result.lateUnmuteExpectedPairs);
     }
     printf("Result:                 %s\n", success ? "SUCCESS" : "FAILED");
 

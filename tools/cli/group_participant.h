@@ -124,6 +124,11 @@ struct ParticipantState {
     int id;
     bool isReference;
     bool muted{false};
+    // --unmute-after: this participant joined muted and was unmuted mid-call,
+    // after the other engines had already renegotiated for the SSRCs they
+    // discovered at join. `muted` is cleared at that point; this stays set so
+    // validation can require every peer to actually hear it.
+    bool unmutedLate{false};
     std::unique_ptr<tgcalls::GroupInstanceInterface> instance;
     std::atomic<bool> connected{false};
     std::atomic<bool> wasConnected{false};
@@ -177,6 +182,10 @@ struct GroupValidationResult {
     // serve that sink from the camera preview, the way the app's local tile
     // expects, not from a network channel.
     int ownPreviewMissing;
+    // --unmute-after: (peer, late unmuter) pairs where the peer reported a
+    // non-trivial level for the late unmuter's SSRC, over the pairs expected.
+    int lateUnmuteHeardPairs;
+    int lateUnmuteExpectedPairs;
     bool success;
 };
 

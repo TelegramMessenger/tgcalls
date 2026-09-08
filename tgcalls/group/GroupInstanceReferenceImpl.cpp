@@ -47,6 +47,8 @@
 #include "group/GroupJoinPayloadInternal.h"
 #include "group/GroupFrameTransformer.h"
 #include "group/GroupAudioCapturePostProcessor.h"
+#include "v2/MtProtoIceTransport.h"
+#include "media/base/rtp_utils.h"
 
 #include "third-party/json11.hpp"
 
@@ -439,6 +441,44 @@ private:
     std::set<uint32_t> _seen RTC_GUARDED_BY(_mu);
 };
 
+// Opus is fixed at 111 for every participant in a group call — payload types are
+// pinned, never negotiated per pair (see mungeVideoCodecsInOffer). That is what
+// lets the transport-level tap tell audio from video without parsing the payload.
+static constexpr uint8_t kOpusPayloadType = 111;
+
+// De-duplication for the transport-level audio SSRC tap. Touched from the network
+// thread for every inbound Opus packet, so it does exactly one set lookup under a
+// lock and nothing else; the real work is posted to the media thread.
+class AudioSsrcTap {
+public:
+    // True the first time an SSRC is seen. The set is bounded so a peer that
+    // churns SSRCs cannot grow it without limit — but hitting the cap degrades to
+    // reporting EVERYTHING, never to reporting nothing. This set is only an
+    // optimization; `handleDiscoveredAudioSsrc` de-duplicates authoritatively on
+    // the media thread. Refusing to report past the cap would instead make the
+    // call go permanently deaf to new speakers, silently, which is the exact
+    // failure mode this whole tap exists to remove.
+    bool shouldReport(uint32_t ssrc) {
+        webrtc::MutexLock lock(&_mutex);
+        if (_seen.size() >= kMaxSeen) {
+            if (!_loggedFull) {
+                _loggedFull = true;
+                RTC_LOG(LS_WARNING) << "GroupRef: audio SSRC tap reached " << kMaxSeen
+                                    << " distinct SSRCs; de-duplication disabled, still reporting";
+            }
+            return true;
+        }
+        return _seen.insert(ssrc).second;
+    }
+
+private:
+    static constexpr size_t kMaxSeen = 1024;
+
+    webrtc::Mutex _mutex;
+    std::set<uint32_t> _seen RTC_GUARDED_BY(_mutex);
+    bool _loggedFull RTC_GUARDED_BY(_mutex) = false;
+};
+
 // Pass-through frame transformer instantiated once per recvonly audio
 // receiver. Installed in renegotiate() right after AddTransceiver, BEFORE
 // the SDP cycle assigns the signaled SSRC, so the transformer is propagated
@@ -616,7 +656,7 @@ public:
         // Group calls never negotiate payload types per pair; mungeVideoCodecsInOffer
         // pins VP8 100 / VP9 102 / H264 104 and buildRemoteAnswer speaks 104. VP9 is
         // absent here exactly as it is in CustomImpl's table.
-        _payloadTypeMapping.insert(std::make_pair(111, FrameTransformerPayloadType::Opus));
+        _payloadTypeMapping.insert(std::make_pair(kOpusPayloadType, FrameTransformerPayloadType::Opus));
         _payloadTypeMapping.insert(std::make_pair(100, FrameTransformerPayloadType::VP8));
         _payloadTypeMapping.insert(std::make_pair(104, FrameTransformerPayloadType::H264));
     }
@@ -784,6 +824,79 @@ public:
 
         webrtc::PeerConnectionDependencies pcDeps(nullptr);
         pcDeps.observer = _peerConnectionObserver.get();
+
+        // Transport-level audio SSRC discovery. This is the ONLY place a packet
+        // whose SSRC no m-line claims is still visible: WebRTC's BUNDLE demuxer
+        // drops it before any receive stream — and therefore before any frame
+        // transformer — exists.
+        //
+        // The mid=0 frame-transformer tap cannot cover this. It only sees packets
+        // WebRTC was willing to route to the unsignaled catch-all, and
+        // `SdpOfferAnswerHandler::UpdatePayloadTypeDemuxingState` stops being
+        // willing as soon as two *receiving* audio m-lines in the BUNDLE group
+        // advertise the same payload type. Every audio m-line here advertises Opus
+        // 111 (sendrecv mid=0 + one recvonly per remote SSRC), so the FIRST
+        // discovery renegotiation disables payload-type demuxing permanently and
+        // resets the unsignaled streams. After that an unknown SSRC has no MID
+        // extension (buildRemoteAnswer strips it deliberately), no SSRC binding and
+        // no payload type to fall back on, so it is dropped in silence: a
+        // participant who unmutes later was inaudible for the rest of the call, and
+        // rejoining only recovered whoever happened to be sending during the ~250 ms
+        // before the first renegotiation. GroupInstanceCustomImpl never hit this — it
+        // receives all remote audio on ONE channel and never adds a second m-line,
+        // and it discovers SSRCs from raw RTP in GroupNetworkManager, which is what
+        // this restores.
+        //
+        // No mtproto key: the decorator is a pass-through that only observes.
+        _audioSsrcTap = std::make_shared<AudioSsrcTap>();
+        {
+            auto tap = _audioSsrcTap;
+            auto threads = _threads;
+            auto userIds = _userIds;
+            const bool hasE2e = (bool)_e2eEncryptDecrypt;
+            const uint8_t opusPayloadType = kOpusPayloadType;
+            pcDeps.ice_transport_factory = std::make_unique<MtProtoIceTransportFactory>(
+                EncryptionKey(nullptr, false),
+                [tap, weak, threads, userIds, hasE2e, opusPayloadType](rtc::ArrayView<const uint8_t> packet) {
+                    // Network thread, once per inbound packet: keep this cheap.
+                    if (packet.size() < 12) {
+                        return;
+                    }
+                    if (cricket::InferRtpPacketType(rtc::MakeArrayView((const char *)packet.data(), packet.size()))
+                        != cricket::RtpPacketType::kRtp) {
+                        return;
+                    }
+                    // Payload types are pinned in group calls (mungeVideoCodecsInOffer),
+                    // so the audio stream is identifiable without parsing further.
+                    if ((packet[1] & 0x7F) != opusPayloadType) {
+                        return;
+                    }
+                    const uint32_t ssrc = ((uint32_t)packet[8] << 24) | ((uint32_t)packet[9] << 16)
+                        | ((uint32_t)packet[10] << 8) | (uint32_t)packet[11];
+                    if (ssrc == 0) {
+                        return;
+                    }
+                    bool report = tap->shouldReport(ssrc);
+                    // Mirrors GRAudioFrameTransformer: while encryption is on and the
+                    // sender is still unknown, keep reporting so
+                    // handleDiscoveredAudioSsrc re-asks for the description (it de-dupes
+                    // on the in-flight request). A response that omits the SSRC would
+                    // otherwise leave that participant permanently undecryptable — and
+                    // past the first renegotiation this tap is the only thing left that
+                    // could ask again.
+                    if (!report && hasE2e && userIds && !userIds->isKnown(ssrc)) {
+                        report = true;
+                    }
+                    if (!report) {
+                        return;
+                    }
+                    threads->getMediaThread()->PostTask([weak, ssrc]() {
+                        if (auto strong = weak.lock()) {
+                            strong->handleDiscoveredAudioSsrc(ssrc);
+                        }
+                    });
+                });
+        }
 
         _networkMonitorFactory = PlatformInterface::SharedInstance()->createNetworkMonitorFactory();
         _socketFactory = std::make_unique<rtc::BasicPacketSocketFactory>(_threads->getNetworkThread()->socketserver());
@@ -2023,6 +2136,9 @@ private:
     }
 
     void onRenegotiationComplete() {
+        RTC_LOG(LS_WARNING) << "GroupRef: renegotiation complete (audioSsrcs=" << _remoteSsrcs.size()
+                            << " videoEndpoints=" << _remoteVideoEndpoints.size()
+                            << " pending=" << _pendingRenegotiation << ")";
         wirePendingVideoSinks();
         wireRemoteAudioLevelSinks();
 
@@ -2495,6 +2611,10 @@ private:
     // Discovery-renegotiation debounce.
     bool _discoveryRenegotiationScheduled = false;
 
+    // Shared with the ICE transport's packet observer, which outlives nothing in
+    // particular: the lambda holds its own reference.
+    std::shared_ptr<AudioSsrcTap> _audioSsrcTap;
+
     // State.
     bool _isConnected = false;
 };
@@ -2504,8 +2624,19 @@ private:
 // ---------------------------------------------------------------------------
 
 GroupInstanceReferenceImpl::GroupInstanceReferenceImpl(GroupInstanceDescriptor &&descriptor) {
+    // Mirrors GroupInstanceCustomImpl. Creating the sink is not enough: without
+    // AddLogToStream every reference-engine call wrote an EMPTY log file, so no
+    // call using this engine could be diagnosed from a log at all (the
+    // destructor's RemoveLogToStream was removing a stream that was never added).
     if (descriptor.config.need_log) {
         _logSink = std::make_unique<LogSinkImpl>(descriptor.config.logPath);
+        rtc::LogMessage::SetLogToStderr(true);
+    } else {
+        rtc::LogMessage::SetLogToStderr(false);
+    }
+    rtc::LogMessage::LogToDebug(rtc::LS_INFO);
+    if (_logSink) {
+        rtc::LogMessage::AddLogToStream(_logSink.get(), rtc::LS_INFO);
     }
 
     _threads = descriptor.threads;
