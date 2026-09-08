@@ -40,6 +40,7 @@ ABSL_CONST_INIT thread_local bool mutex_locked = false;
 @interface RTC_OBJC_TYPE (RTCAudioSession)
 () @property(nonatomic,
              readonly) std::vector<__weak id<RTC_OBJC_TYPE(RTCAudioSessionDelegate)> > delegates;
+- (NSString *)tgcallsSessionStateDescription;
 @end
 
 // This class needs to be thread-safe because it is accessed from many threads.
@@ -731,6 +732,10 @@ static std::atomic<bool> gRTCAudioSessionLegacyDeactivationEnabled{false};
   if (![self setConfiguration:webRTCConfig active:YES error:&error disableRecording:disableRecording]) {
     RTCLogError(@"Failed to set WebRTC audio configuration: %@",
                 error.localizedDescription);
+    // The error alone (typically OSStatus -50 from a *preferred* attribute) does not say which
+    // of the possible causes it is: no record permission, a category without an input, or an
+    // input the system is not handing out. Dump the session state so the log can tell them apart.
+    RTCLogError(@"Audio session state at failure: %@", [self tgcallsSessionStateDescription]);
     // Do not call setActive:NO if setActive:YES failed.
     if (outError) {
       *outError = error;
@@ -785,6 +790,57 @@ static std::atomic<bool> gRTCAudioSessionLegacyDeactivationEnabled{false};
   [self setActive:NO error:outError];
 
   return YES;
+}
+
+// One-line snapshot of everything that decides whether the audio unit can start.
+// Logged when a configuration attempt fails: an OSStatus on its own does not say
+// whether the input is missing because of permission, because the category has no
+// input, or because the system is not offering one right now.
+- (NSString *)tgcallsSessionStateDescription {
+  AVAudioSession *session = self.session;
+
+  NSString *recordPermission = @"unavailable";
+  if (@available(iOS 17.0, *)) {
+    switch (AVAudioApplication.sharedInstance.recordPermission) {
+      case AVAudioApplicationRecordPermissionGranted: recordPermission = @"granted"; break;
+      case AVAudioApplicationRecordPermissionDenied: recordPermission = @"denied"; break;
+      case AVAudioApplicationRecordPermissionUndetermined: recordPermission = @"undetermined"; break;
+      default: recordPermission = @"unknown"; break;
+    }
+  }
+
+  NSMutableArray<NSString *> *inputs = [[NSMutableArray alloc] init];
+  for (AVAudioSessionPortDescription *port in session.currentRoute.inputs) {
+    [inputs addObject:port.portType];
+  }
+  NSMutableArray<NSString *> *outputs = [[NSMutableArray alloc] init];
+  for (AVAudioSessionPortDescription *port in session.currentRoute.outputs) {
+    [outputs addObject:port.portType];
+  }
+
+  return [NSString stringWithFormat:
+      @"category=%@ options=%lu mode=%@ isActive=%d isInterrupted=%d canPlayOrRecord=%d "
+      @"activations=%d webRTCSessions=%d recordPermission=%@ inputAvailable=%d "
+      @"inputChannels=%ld maxInputChannels=%ld outputChannels=%ld maxOutputChannels=%ld "
+      @"sampleRate=%.0f route.inputs=[%@] route.outputs=[%@] availableInputs=%lu",
+      session.category,
+      (unsigned long)session.categoryOptions,
+      session.mode,
+      (int)self.isActive,
+      (int)self.isInterrupted,
+      (int)self.canPlayOrRecord,
+      self.activationCount,
+      self.webRTCSessionCount,
+      recordPermission,
+      (int)session.isInputAvailable,
+      (long)session.inputNumberOfChannels,
+      (long)session.maximumInputNumberOfChannels,
+      (long)session.outputNumberOfChannels,
+      (long)session.maximumOutputNumberOfChannels,
+      session.sampleRate,
+      [inputs componentsJoinedByString:@","],
+      [outputs componentsJoinedByString:@","],
+      (unsigned long)session.availableInputs.count];
 }
 
 - (NSError *)configurationErrorWithDescription:(NSString *)description {
