@@ -44,15 +44,20 @@ private:
 	void create();
 	void destroy();
 
+	// Both assume lock_ is held.
+	void stop();
 	void onFatalError();
 
-	void OnFrame(std::vector<uint8_t> bytes, int width, int height);
+	// Takes the source stride, so the mapped texture can be converted where it lies
+	// instead of being compacted into an intermediate buffer first.
+	void OnFrame(const uint8_t* bytes, size_t length, int stride, int width, int height);
 
-	bool item_closed_;
-	bool is_capture_started_;
-	SizeInt32 previous_size_;
+	bool item_closed_ = false;
+	bool is_capture_started_ = false;
+	SizeInt32 previous_size_{};
 	Direct3D11CaptureFramePool frame_pool_ = nullptr;
 	GraphicsCaptureItem item_;
+	winrt::event_token closed_token_{};
 	GraphicsCaptureSession session_ = nullptr;
 	winrt::com_ptr<ID3D11Device> d3d11_device_;
 	winrt::com_ptr<IInspectable> direct3d_device_;
@@ -61,6 +66,7 @@ private:
 	DispatcherQueue queue_= nullptr;
 	DispatcherQueueController queueController_= nullptr;
 	DispatcherQueueTimer repeatingTimer_= nullptr;
+	winrt::event_token tick_token_{};
 	HRESULT CreateMappedTexture(winrt::com_ptr<ID3D11Texture2D> src_texture, UINT width = 0, UINT height = 0);
 
 	//void OnFrameArrived(Direct3D11CaptureFramePool const& sender, winrt::Windows::Foundation::IInspectable const& args);
