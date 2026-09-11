@@ -6,11 +6,12 @@
 #include "modules/video_capture/video_capture_factory.h"
 #include "rtc_base/checks.h"
 #include "rtc_base/logging.h"
+#include "rtc_base/thread.h"
 
 #include <stdint.h>
 #include <memory>
 #include <algorithm>
-#include <libyuv.h>
+#include "third_party/libyuv/include/libyuv.h"
 #include <StaticThreads.h>
 
 namespace tgcalls {
@@ -38,7 +39,20 @@ item_(item) {
 }
 
 UwpScreenCapturer::~UwpScreenCapturer() {
-	destroy();
+	winrt::slim_lock_guard const guard(lock_);
+
+	// item_ belongs to UwpContext, which outlives the capturer and is shared with the
+	// capturers that replace it, so a handler left registered here is invoked on freed
+	// memory the next time that source closes.
+	if (closed_token_) {
+		item_.Closed(closed_token_);
+		closed_token_ = {};
+	}
+
+	_onFatalError = nullptr;
+	_onPause = nullptr;
+
+	stop();
 }
 
 void UwpScreenCapturer::create() {
@@ -69,13 +83,21 @@ void UwpScreenCapturer::create() {
 			/*device_context=*/nullptr);
 	}
 
+	if (FAILED(hr)) {
+		onFatalError();
+		return;
+	}
+
 	RTC_DCHECK(d3d11_device_);
 	RTC_DCHECK(item_);
 
 	// Listen for the Closed event, to detect if the source we are capturing is
 	// closed (e.g. application window is closed or monitor is disconnected). If
-	// it is, we should abort the capture.
-	item_.Closed({ this, &UwpScreenCapturer::OnClosed });
+	// it is, we should abort the capture. The subscription outlives a stop, so that
+	// a source closing while paused is still noticed; it is removed in the destructor.
+	if (!closed_token_) {
+		closed_token_ = item_.Closed({ this, &UwpScreenCapturer::OnClosed });
+	}
 
 	winrt::com_ptr<IDXGIDevice> dxgi_device;
 	hr = d3d11_device_->QueryInterface(IID_PPV_ARGS(&dxgi_device));
@@ -102,33 +124,44 @@ void UwpScreenCapturer::create() {
 	winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice directDevice;
 	direct3d_device_->QueryInterface(winrt::guid_of<winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice>(), winrt::put_abi(directDevice));
 
-	frame_pool_ = Direct3D11CaptureFramePool::CreateFreeThreaded(directDevice, kPixelFormat, kNumBuffers, previous_size_);
-	//frame_pool_.FrameArrived({ this, &UwpScreenCapturer::OnFrameArrived });
+	try
+	{
+		frame_pool_ = Direct3D11CaptureFramePool::CreateFreeThreaded(directDevice, kPixelFormat, kNumBuffers, previous_size_);
+		//frame_pool_.FrameArrived({ this, &UwpScreenCapturer::OnFrameArrived });
 
-	session_ = frame_pool_.CreateCaptureSession(item_);
-	session_.StartCapture();
+		session_ = frame_pool_.CreateCaptureSession(item_);
+		session_.StartCapture();
 
-	is_capture_started_ = true;
-	queueController_ = DispatcherQueueController::CreateOnDedicatedThread();
-	queue_ = queueController_.DispatcherQueue();
+		is_capture_started_ = true;
+		queueController_ = DispatcherQueueController::CreateOnDedicatedThread();
+		queue_ = queueController_.DispatcherQueue();
 
-	repeatingTimer_ = queue_.CreateTimer();
-	repeatingTimer_.Interval(std::chrono::milliseconds{ 1000 / kPreferredFps });
-	repeatingTimer_.Tick({this, &UwpScreenCapturer::OnFrameArrived});
-	repeatingTimer_.Start();
+		repeatingTimer_ = queue_.CreateTimer();
+		repeatingTimer_.Interval(std::chrono::milliseconds{ 1000 / kPreferredFps });
+		tick_token_ = repeatingTimer_.Tick({this, &UwpScreenCapturer::OnFrameArrived});
+		repeatingTimer_.Start();
+	}
+	catch (...)
+	{
+		onFatalError();
+	}
 }
 
 //void UwpScreenCapturer::OnFrameArrived(Direct3D11CaptureFramePool const& sender, winrt::Windows::Foundation::IInspectable const&) {
 void UwpScreenCapturer::OnFrameArrived(DispatcherQueueTimer const& sender, winrt::Windows::Foundation::IInspectable const& args) {
 	winrt::slim_lock_guard const guard(lock_);
 
-	if (item_closed_ || _state != VideoState::Active) {
+	if (item_closed_) {
 		RTC_LOG(LS_ERROR) << "The target source has been closed.";
 		onFatalError();
 		return;
 	}
 
-	RTC_DCHECK(is_capture_started_);
+	// A tick already dispatched when the capture was stopped is not an error, and
+	// everything it reads below has been released by then.
+	if (!is_capture_started_ || _state != VideoState::Active) {
+		return;
+	}
 
 	auto capture_frame = frame_pool_.TryGetNextFrame();
 	if (!capture_frame) {
@@ -202,23 +235,15 @@ void UwpScreenCapturer::OnFrameArrived(DispatcherQueueTimer const& sender, winrt
 	// read stale data from the last frame.
 	int image_height = std::min(previous_size_.Height, new_size.Height);
 	int image_width = std::min(previous_size_.Width, new_size.Width);
-	int row_data_length = image_width * 4;
-
-	// Make a copy of the data pointed to by |map_info.pData| so we are free to
-	// unmap our texture.
-	uint8_t* src_data = static_cast<uint8_t*>(map_info.pData);
-	std::vector<uint8_t> image_data;
-	image_data.reserve(image_height * row_data_length);
-	uint8_t* image_data_ptr = image_data.data();
-	for (int i = 0; i < image_height; i++) {
-		memcpy(image_data_ptr, src_data, row_data_length);
-		image_data_ptr += row_data_length;
-		src_data += map_info.RowPitch;
-	}
-
+	// Converted straight out of the mapped texture. The row by row copy that used to
+	// stand here existed only to compact RowPitch down to image_width * 4, and libyuv
+	// takes the stride as an argument, so it bought nothing: at screen resolution it was
+	// several megabytes memcpy'd kPreferredFps times a second. The conversion happens
+	// before Unmap below, so the mapping is still valid.
 	if (_state == VideoState::Active && !item_closed_) {
-		// Transfer ownership of |image_data| to the output_frame.
-		OnFrame(std::move(image_data), image_width, image_height);
+		OnFrame(static_cast<const uint8_t*>(map_info.pData),
+				static_cast<size_t>(map_info.RowPitch) * image_height,
+				map_info.RowPitch, image_width, image_height);
 	}
 
 	d3d_context->Unmap(mapped_texture_.get(), 0);
@@ -294,48 +319,93 @@ void UwpScreenCapturer::setPreferredCaptureAspectRatio(float aspectRatio) {
 }
 
 void UwpScreenCapturer::setOnFatalError(std::function<void ()> error) {
-	if (_fatalError) {
+	bool failed;
+	{
+		winrt::slim_lock_guard const guard(lock_);
+
+		failed = _fatalError;
+		if (!failed) {
+			_onFatalError = std::move(error);
+		}
+	}
+
+	// Reaches back into the app, which tears the capture down: never under lock_.
+	if (failed) {
 		error();
-	} else {
-		_onFatalError = std::move(error);
 	}
 }
 
 void UwpScreenCapturer::setOnPause(std::function<void(bool)> pause) {
-	if (_paused) {
-		pause(true);
+	bool paused;
+	{
+		winrt::slim_lock_guard const guard(lock_);
+
+		paused = _paused;
+		_onPause = pause;
 	}
 
-	_onPause = std::move(pause);
+	if (paused) {
+		pause(true);
+	}
 }
 
 std::pair<int, int> UwpScreenCapturer::resolution() const {
 	return _dimensions;
 }
 
-void UwpScreenCapturer::onFatalError() {
-	if (repeatingTimer_ != nullptr) {
-		repeatingTimer_.Stop();
-		repeatingTimer_ = nullptr;
-		queue_ = nullptr;
-		queueController_ = nullptr;
-	}
+void UwpScreenCapturer::stop() {
+	// Detach everything up front: this also runs from the destructor, where a throwing
+	// WinRT call would terminate, and where a half-torn-down capturer is not an option.
+	auto const timer = std::move(repeatingTimer_);
+	auto const controller = std::move(queueController_);
+	auto const queue = std::move(queue_);
+	auto const session = std::move(session_);
+	auto const framePool = std::move(frame_pool_);
+	auto const tick = tick_token_;
 
-	if (session_ != nullptr) {
-		session_.Close();
-		item_ = nullptr;
-		item_closed_ = true;
-	}
-
-	if (frame_pool_ != nullptr) {
-		frame_pool_.Close();
-	}
-
+	tick_token_ = {};
 	mapped_texture_ = nullptr;
-	frame_pool_ = nullptr;
-	session_ = nullptr;
 	direct3d_device_ = nullptr;
 	d3d11_device_ = nullptr;
+	is_capture_started_ = false;
+
+	try {
+		if (timer != nullptr) {
+			timer.Stop();
+			timer.Tick(tick);
+		}
+
+		if (session != nullptr) {
+			session.Close();
+		}
+
+		if (framePool != nullptr) {
+			framePool.Close();
+		}
+
+		if (controller != nullptr) {
+			// CreateOnDedicatedThread starts a thread that only exits once the queue is shut
+			// down, and the shutdown cannot be asked for from the queue's own thread - which
+			// is where a frame error lands us.
+			if (queue != nullptr && queue.HasThreadAccess()) {
+				StaticThreads::getWorkerThread()->PostTask([controller] {
+					controller.ShutdownQueueAsync();
+				});
+			} else {
+				controller.ShutdownQueueAsync();
+			}
+		}
+	} catch (...) {
+		// The capture is going away either way.
+	}
+}
+
+void UwpScreenCapturer::onFatalError() {
+	if (_fatalError) {
+		return;
+	}
+
+	stop();
 
 	_fatalError = true;
 	if (_onFatalError) {
@@ -346,11 +416,12 @@ void UwpScreenCapturer::onFatalError() {
 void UwpScreenCapturer::destroy() {
 	winrt::slim_lock_guard const guard(lock_);
 
-	_onFatalError = nullptr;
-	onFatalError();
+	// Reversible: setState brings the capture back with create(), so the item and its
+	// Closed subscription are left alone.
+	stop();
 }
 
-void UwpScreenCapturer::OnFrame(std::vector<uint8_t> bytes, int width, int height) {
+void UwpScreenCapturer::OnFrame(const uint8_t* bytes, size_t length, int stride, int width, int height) {
 	if (_state != VideoState::Active) {
 		return;
 	}
@@ -360,17 +431,14 @@ void UwpScreenCapturer::OnFrame(std::vector<uint8_t> bytes, int width, int heigh
 	int dst_stride_y = dst_width;
 	int dst_stride_uv = (dst_width + 1) / 2;
 
-	uint8_t* plane_y = bytes.data();
-	size_t videoFrameLength = bytes.size();
-	int32_t stride_y = width * 4;
-	uint8_t* plane_uv = plane_y + videoFrameLength;
-	int32_t stride_uv = stride_y / 2;
-
 	rtc::scoped_refptr<webrtc::I420Buffer> buffer = webrtc::I420Buffer::Create(
 		dst_width, dst_height, dst_stride_y, dst_stride_uv, dst_stride_uv);
 
+	// ARGB is packed, so the UV arguments are unused for this fourcc. They were passed as
+	// a pointer one past the end of the buffer with a made up stride, which is an out of
+	// bounds read waiting for the day the format changes.
 	const int conversionResult = libyuv::ConvertToI420(
-		plane_y, videoFrameLength, stride_y, plane_uv, stride_uv,
+		bytes, length, stride, /*src_uv=*/nullptr, /*src_stride_uv=*/0,
 		buffer.get()->MutableDataY(), buffer.get()->StrideY(),
 		buffer.get()->MutableDataU(), buffer.get()->StrideU(),
 		buffer.get()->MutableDataV(), buffer.get()->StrideV(),
