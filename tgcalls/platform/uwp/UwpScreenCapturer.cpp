@@ -1,6 +1,7 @@
 #include "UwpScreenCapturer.h"
 
 #include "api/video/i420_buffer.h"
+#include "api/video/nv12_buffer.h"
 #include "api/video/video_frame_buffer.h"
 #include "api/video/video_rotation.h"
 #include "modules/video_capture/video_capture_factory.h"
@@ -9,6 +10,7 @@
 #include "rtc_base/thread.h"
 
 #include <stdint.h>
+#include <string.h>
 #include <memory>
 #include <algorithm>
 #include "third_party/libyuv/include/libyuv.h"
@@ -19,16 +21,43 @@ namespace {
 
 constexpr auto kPreferredWidth = 640;
 constexpr auto kPreferredHeight = 480;
-constexpr auto kPreferredFps = 30;
+// The size a screen share aims at. Not a box to fit into: the source is halved while it is
+// at least twice this, which is the rule tgcalls' desktop path uses, so a 2560x1600 screen
+// goes out as 1280x800. Halving averages exactly four pixels into one; fitting a screen
+// into the box instead lands on ratios like 0.45, where a text stroke falls between
+// samples and smears across its neighbours - which is what made small text illegible here
+// while Telegram Desktop, sharing the same screen over the same 1.3 Mbps, stayed readable.
+constexpr int kTargetWidth = 1280;
+constexpr int kTargetHeight = 720;
+constexpr auto kPreferredFps = 24;
 
 // We must use a BGRA pixel format that has 4 bytes per pixel, as required by
 // the DesktopFrame interface.
 constexpr auto kPixelFormat = winrt::Windows::Graphics::DirectX::DirectXPixelFormat::B8G8R8A8UIntNormalized;
 
-// We only want 1 buffer in our frame pool to reduce latency. If we had more,
-// they would sit in the pool for longer and be stale by the time we are asked
-// for a new frame.
-constexpr int kNumBuffers = 1;
+// A screen that is not changing still reaches the encoder this often, so a receiver that
+// joins, or asks for a key frame, has something to decode.
+constexpr int64_t kStillFrameIntervalMs = 1000;
+// How long the frame pool has to stay empty before the source counts as paused.
+constexpr int64_t kPauseAfterEmptyPollsMs = 2000;
+
+// Two, as upstream's WgcCaptureSession uses: with one, TryGetNextFrame returns null
+// whenever the compositor is mid-deposit, which this capturer reports as a pause.
+constexpr int kNumBuffers = 2;
+
+// Halved while the source is at least twice the target in either direction, and even
+// because NV12 has no odd dimensions. Powers of two only, deliberately - see the comment
+// on the constants.
+std::pair<int, int> CappedSize(int width, int height) {
+	while ((width >= kTargetWidth * 2 || height >= kTargetHeight * 2)
+		&& width >= 4 && height >= 4) {
+		width /= 2;
+		height /= 2;
+	}
+
+	return { std::max(2, width & ~1), std::max(2, height & ~1) };
+}
+
 
 } // namespace
 
@@ -119,7 +148,8 @@ void UwpScreenCapturer::create() {
 	// so there's no difference.
 
 	previous_size_ = item_.Size();
-	_dimensions = std::make_pair(previous_size_.Width, previous_size_.Height);
+	// The capped size, not the panel's: this is what the pipeline is told to expect.
+	_dimensions = CappedSize(previous_size_.Width, previous_size_.Height);
 
 	winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice directDevice;
 	direct3d_device_->QueryInterface(winrt::guid_of<winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice>(), winrt::put_abi(directDevice));
@@ -130,6 +160,14 @@ void UwpScreenCapturer::create() {
 		//frame_pool_.FrameArrived({ this, &UwpScreenCapturer::OnFrameArrived });
 
 		session_ = frame_pool_.CreateCaptureSession(item_);
+
+		// Menus, tooltips and other popups of a captured window are windows of their own, and
+		// stay out of the capture unless this is set. Windows 11 24H2 and later, hence the
+		// try_as rather than a version check.
+		if (const auto session6 = session_.try_as<IGraphicsCaptureSession6>()) {
+			session6.IncludeSecondaryWindows(true);
+		}
+
 		session_.StartCapture();
 
 		is_capture_started_ = true;
@@ -165,19 +203,42 @@ void UwpScreenCapturer::OnFrameArrived(DispatcherQueueTimer const& sender, winrt
 
 	auto capture_frame = frame_pool_.TryGetNextFrame();
 	if (!capture_frame) {
-		// When resuming the capture after minimizing a window there seems to be a subsequent
-		// frame drop, as I'm lazing to deal with this from here this event is debounced in C# code.
-		if (!_paused) {
-			_paused = true;
+		// An empty pool says nothing about a pause: the compositor can be mid-deposit, and from
+		// Windows 11 24H2 the system withholds frames whose content has not changed, so a
+		// motionless screen produces nothing but empty polls - and this capturer keeps sending
+		// the last frame through them. The source itself is what to ask: a window that is gone
+		// or minimized reports no size. The run of empty polls only keeps that off the fast
+		// path.
+		const int64_t now_ms = rtc::TimeMillis();
+		if (first_empty_poll_ms_ == 0) {
+			first_empty_poll_ms_ = now_ms;
+		}
 
-			if (_onPause){
-				_onPause(true);
+		if (!_paused && now_ms - first_empty_poll_ms_ >= kPauseAfterEmptyPollsMs) {
+			bool sourceIsGone = false;
+			try {
+				const auto size = item_.Size();
+				sourceIsGone = size.Width <= 0 || size.Height <= 0;
+			} catch (...) {
+				// No answer is not an answer: leave the state alone.
+			}
+
+			if (sourceIsGone) {
+				_paused = true;
+
+				if (_onPause){
+					_onPause(true);
+				}
 			}
 		}
 
-		//RecordGetFrameResult(GetFrameResult::kFrameDropped);
+		// Windows 11 24H2 and later hand back no frame at all while the content is unchanged,
+		// so the repeats a still screen needs can only come from here.
+		MaybeRepeatLastFrame(now_ms);
 		return /*hr*/;
 	}
+
+	first_empty_poll_ms_ = 0;
 
 	if (_paused) {
 		_paused = false;
@@ -211,50 +272,20 @@ void UwpScreenCapturer::OnFrameArrived(DispatcherQueueTimer const& sender, winrt
 		}
 	}
 
-	//// We need to copy |texture_2D| into |mapped_texture_| as the latter has the
-	//// D3D11_CPU_ACCESS_READ flag set, which lets us access the image data.
-	//// Otherwise it would only be readable by the GPU.
+	// `texture_2D` can only be read by the GPU, so it is copied into `mapped_texture_`,
+	// which carries D3D11_CPU_ACCESS_READ.
 	winrt::com_ptr<ID3D11DeviceContext> d3d_context;
 	d3d11_device_->GetImmediateContext(d3d_context.put());
-	d3d_context->CopyResource(mapped_texture_.get(), texture_2D.get());
-
-	D3D11_MAPPED_SUBRESOURCE map_info;
-	hr = d3d_context->Map(mapped_texture_.get(), /*subresource_index=*/0,
-						D3D11_MAP_READ, /*D3D11_MAP_FLAG_DO_NOT_WAIT=*/0,
-						&map_info);
-	if (FAILED(hr)) {
-		//RecordGetFrameResult(GetFrameResult::kMapFrameFailed);
-		onFatalError();
-		return;
-	}
 
 	auto new_size = capture_frame.ContentSize();
 
-	// If the size has changed since the last capture, we must be sure to use
-	// the smaller dimensions. Otherwise we might overrun our buffer, or
-	// read stale data from the last frame.
-	int image_height = std::min(previous_size_.Height, new_size.Height);
-	int image_width = std::min(previous_size_.Width, new_size.Width);
-	// Converted straight out of the mapped texture. The row by row copy that used to
-	// stand here existed only to compact RowPitch down to image_width * 4, and libyuv
-	// takes the stride as an argument, so it bought nothing: at screen resolution it was
-	// several megabytes memcpy'd kPreferredFps times a second. The conversion happens
-	// before Unmap below, so the mapping is still valid.
-	if (_state == VideoState::Active && !item_closed_) {
-		OnFrame(static_cast<const uint8_t*>(map_info.pData),
-				static_cast<size_t>(map_info.RowPitch) * image_height,
-				map_info.RowPitch, image_width, image_height);
-	}
-
-	d3d_context->Unmap(mapped_texture_.get(), 0);
-
-	// If the size changed, we must resize the texture and frame pool to fit the
-	// new size.
-	if (previous_size_.Height != new_size.Height ||
-		previous_size_.Width != new_size.Width) {
+	// Resized before the copy rather than after it, as upstream's WgcCaptureSession does:
+	// the copy below takes only the region the two textures share, and a mapped texture
+	// still holding the previous size would keep a band of stale pixels down its edge.
+	if (previous_size_.Width != new_size.Width ||
+		previous_size_.Height != new_size.Height) {
 		hr = CreateMappedTexture(texture_2D, new_size.Width, new_size.Height);
 		if (FAILED(hr)) {
-			//RecordGetFrameResult(GetFrameResult::kResizeMappedTextureFailed);
 			onFatalError();
 			return;
 		}
@@ -265,9 +296,140 @@ void UwpScreenCapturer::OnFrameArrived(DispatcherQueueTimer const& sender, winrt
 		frame_pool_.Recreate(directDevice, kPixelFormat, kNumBuffers, new_size);
 	}
 
-	//RecordGetFrameResult(GetFrameResult::kSuccess);
-
+	const int image_height = std::min(previous_size_.Height, new_size.Height);
+	const int image_width = std::min(previous_size_.Width, new_size.Width);
 	previous_size_ = new_size;
+
+	if (_state != VideoState::Active || item_closed_
+		|| image_width <= 0 || image_height <= 0) {
+		return;
+	}
+
+	// Only the shared region: CopyResource would take the whole surface, which across a
+	// resize is not the size of the destination.
+	D3D11_BOX region = {};
+	region.right = static_cast<UINT>(image_width);
+	region.bottom = static_cast<UINT>(image_height);
+	region.back = 1;
+	d3d_context->CopySubresourceRegion(mapped_texture_.get(), /*DstSubresource=*/0,
+																			   /*DstX=*/0, /*DstY=*/0, /*DstZ=*/0,
+																			   texture_2D.get(), /*SrcSubresource=*/0, &region);
+
+	D3D11_MAPPED_SUBRESOURCE map_info;
+	hr = d3d_context->Map(mapped_texture_.get(), /*subresource_index=*/0,
+										D3D11_MAP_READ, /*D3D11_MAP_FLAG_DO_NOT_WAIT=*/0,
+										&map_info);
+	if (FAILED(hr)) {
+		onFatalError();
+		return;
+	}
+
+	const size_t row_length = static_cast<size_t>(image_width) * 4;
+	frame_buffer_.resize(row_length * image_height);
+
+	// Copy, unmap, and do everything else afterwards: a staging texture stays mapped for as
+	// long as the CPU reads it, and working in place holds the immediate context on the
+	// device the capture session shares with the compositor.
+	{
+		const uint8_t* src = static_cast<const uint8_t*>(map_info.pData);
+		uint8_t* dst = frame_buffer_.data();
+		for (int i = 0; i < image_height; ++i) {
+			memcpy(dst, src, row_length);
+			dst += row_length;
+			src += map_info.RowPitch;
+		}
+	}
+
+	d3d_context->Unmap(mapped_texture_.get(), 0);
+
+	const auto [out_width, out_height] = CappedSize(image_width, image_height);
+	const size_t out_stride = static_cast<size_t>(out_width) * 4;
+
+	const uint8_t* out_data = frame_buffer_.data();
+	int out_data_stride = static_cast<int>(row_length);
+	const bool scaled = out_width != image_width || out_height != image_height;
+	if (scaled) {
+		scaled_buffer_.resize(out_stride * out_height);
+		libyuv::ARGBScale(frame_buffer_.data(), static_cast<int>(row_length),
+										image_width, image_height,
+										scaled_buffer_.data(), static_cast<int>(out_stride),
+										out_width, out_height, libyuv::kFilterBox);
+		out_data = scaled_buffer_.data();
+		out_data_stride = static_cast<int>(out_stride);
+	}
+
+	// Compared row by row against the frame that went out last, which is what upstream's
+	// detect_updated_region option buys for the desktop capturers we cannot link: rows that
+	// match cost nothing to encode, and a screen that has not changed at all is not sent.
+	// The comparison runs on the delivered frame, so the cap pays for it too.
+	absl::optional<webrtc::VideoFrame::UpdateRect> update_rect;
+	bool content_changed = true;
+	if (previous_buffer_.size() == out_stride * out_height) {
+		// One pixel from the middle of each row first: at full resolution the row by row scan
+		// below reads both frames in full, which is worth paying only once something has moved.
+		// A change that hides from every middle pixel costs nothing but the rect, since the
+		// frame is sent either way.
+		const size_t middle = (static_cast<size_t>(out_width) / 2) * 4;
+		bool differs = false;
+		for (int i = 0; i < out_height && !differs; ++i) {
+			const size_t offset = out_stride * i + middle;
+			differs = memcmp(previous_buffer_.data() + offset, out_data + offset, 4) != 0;
+		}
+
+		int first = -1;
+		int last = -1;
+		if (differs) {
+			for (int i = 0; i < out_height; ++i) {
+				const size_t offset = out_stride * i;
+				if (memcmp(previous_buffer_.data() + offset, out_data + offset, out_stride) != 0) {
+					if (first < 0) {
+						first = i;
+					}
+					last = i;
+				}
+			}
+		}
+
+		content_changed = first >= 0;
+		if (content_changed) {
+			update_rect = webrtc::VideoFrame::UpdateRect{ 0, first, out_width, last - first + 1 };
+		}
+	}
+
+	// Delivered whether or not anything changed: an identical frame costs the encoder almost
+	// nothing and is how it converges on a low quantiser. What the comparison above buys is
+	// the update rect, and knowing when the picture last moved.
+	last_delivery_ms_ = rtc::TimeMillis();
+	OnFrame(out_data, out_data_stride, out_width, out_height, update_rect);
+
+	if (scaled) {
+		scaled_buffer_.swap(previous_buffer_);
+	} else {
+		frame_buffer_.swap(previous_buffer_);
+	}
+	previous_width_ = out_width;
+	previous_height_ = out_height;
+	previous_stride_ = out_data_stride;
+}
+
+void UwpScreenCapturer::MaybeRepeatLastFrame(int64_t now_ms) {
+	if (previous_buffer_.empty() || _state != VideoState::Active || item_closed_) {
+		return;
+	}
+
+	// A floor, nothing more: repeating a still screen until the encoder has converged is
+	// the frame cadence adapter's job now that zero hertz mode is on. This keeps a receiver
+	// fed if it is not, since from Windows 11 24H2 a motionless screen produces no frames
+	// here at all.
+	if (now_ms - last_delivery_ms_ < kStillFrameIntervalMs) {
+		return;
+	}
+
+	last_delivery_ms_ = now_ms;
+	// No update rect: nothing changed, and an empty one would tell the encoder to leave the
+	// picture alone, which is the opposite of what a repeat is for.
+	OnFrame(previous_buffer_.data(), previous_stride_, previous_width_, previous_height_,
+				absl::nullopt);
 }
 
 void UwpScreenCapturer::OnClosed(GraphicsCaptureItem const& sender, winrt::Windows::Foundation::IInspectable const&)
@@ -353,6 +515,10 @@ std::pair<int, int> UwpScreenCapturer::resolution() const {
 	return _dimensions;
 }
 
+int UwpScreenCapturer::maxFps() const {
+	return kPreferredFps;
+}
+
 void UwpScreenCapturer::stop() {
 	// Detach everything up front: this also runs from the destructor, where a throwing
 	// WinRT call would terminate, and where a half-torn-down capturer is not an option.
@@ -421,33 +587,28 @@ void UwpScreenCapturer::destroy() {
 	stop();
 }
 
-void UwpScreenCapturer::OnFrame(const uint8_t* bytes, size_t length, int stride, int width, int height) {
+void UwpScreenCapturer::OnFrame(const uint8_t* bytes, int stride, int width, int height,
+																const absl::optional<webrtc::VideoFrame::UpdateRect>& updateRect) {
 	if (_state != VideoState::Active) {
 		return;
 	}
 
-	int dst_width = width & ~1;
-	int dst_height = abs(height) & ~1;
-	int dst_stride_y = dst_width;
-	int dst_stride_uv = (dst_width + 1) / 2;
+	const int dst_width = width & ~1;
+	const int dst_height = abs(height) & ~1;
 
-	rtc::scoped_refptr<webrtc::I420Buffer> buffer = webrtc::I420Buffer::Create(
-		dst_width, dst_height, dst_stride_y, dst_stride_uv, dst_stride_uv);
+	// NV12, not I420: every Media Foundation H.264 encoder takes NV12, so converting to
+	// I420 here only buys the encoder a second pass over the frame to undo it. Whatever
+	// needs I420 - a software encoder, a renderer - still gets it from ToI420().
+	rtc::scoped_refptr<webrtc::NV12Buffer> buffer =
+		webrtc::NV12Buffer::Create(dst_width, dst_height);
 
-	// ARGB is packed, so the UV arguments are unused for this fourcc. They were passed as
-	// a pointer one past the end of the buffer with a made up stride, which is an out of
-	// bounds read waiting for the day the format changes.
-	const int conversionResult = libyuv::ConvertToI420(
-		bytes, length, stride, /*src_uv=*/nullptr, /*src_stride_uv=*/0,
-		buffer.get()->MutableDataY(), buffer.get()->StrideY(),
-		buffer.get()->MutableDataU(), buffer.get()->StrideU(),
-		buffer.get()->MutableDataV(), buffer.get()->StrideV(),
-		0, 0,  // No Cropping
-		width, height, dst_width, dst_height, libyuv::kRotate0,
-		libyuv::FOURCC_ARGB);
+	const int conversionResult = libyuv::ARGBToNV12(
+		bytes, stride,
+		buffer->MutableDataY(), buffer->StrideY(),
+		buffer->MutableDataUV(), buffer->StrideUV(),
+		dst_width, dst_height);
 	if (conversionResult < 0) {
-		RTC_LOG(LS_ERROR) << "Failed to convert capture frame from type "
-			<< static_cast<int>(libyuv::FOURCC_ARGB) << "to I420.";
+		RTC_LOG(LS_ERROR) << "Failed to convert capture frame from BGRA to NV12.";
 		return;
 	}
 
@@ -457,6 +618,7 @@ void UwpScreenCapturer::OnFrame(const uint8_t* bytes, size_t length, int stride,
 		.set_timestamp_rtp(0)
 		.set_timestamp_ms(rtc::TimeMillis())
 		.set_rotation(webrtc::kVideoRotation_0)
+		.set_update_rect(updateRect)
 		.build();
 
 	_sink->OnFrame(captureFrame);

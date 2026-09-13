@@ -39,6 +39,7 @@ public:
 	void setOnPause(std::function<void(bool)> pause);
 
 	std::pair<int, int> resolution() const;
+	int maxFps() const;
 
 private:
 	void create();
@@ -48,9 +49,12 @@ private:
 	void stop();
 	void onFatalError();
 
-	// Takes the source stride, so the mapped texture can be converted where it lies
-	// instead of being compacted into an intermediate buffer first.
-	void OnFrame(const uint8_t* bytes, size_t length, int stride, int width, int height);
+	// Takes the source stride: the caller hands over its own compacted copy, and the
+	// stride is an argument rather than an assumption about the width.
+	// Takes the source stride and, when only part of the screen changed, the area that
+	// did: the software encoders use it to leave the rest alone.
+	void OnFrame(const uint8_t* bytes, int stride, int width, int height,
+		const absl::optional<webrtc::VideoFrame::UpdateRect>& updateRect);
 
 	bool item_closed_ = false;
 	bool is_capture_started_ = false;
@@ -62,6 +66,21 @@ private:
 	winrt::com_ptr<ID3D11Device> d3d11_device_;
 	winrt::com_ptr<IInspectable> direct3d_device_;
 	winrt::com_ptr<ID3D11Texture2D> mapped_texture_ = nullptr;
+	// The staging texture is copied here before it is converted. A member, because at
+	// screen resolution this is several megabytes and the tick runs 30 times a second.
+	std::vector<uint8_t> frame_buffer_;
+	// The capture scaled down to the cap, when the screen is bigger than it.
+	std::vector<uint8_t> scaled_buffer_;
+	// The frame that went out last, at delivered size: it is both what the next capture is
+	// compared against and what gets sent again while the screen sits still.
+	std::vector<uint8_t> previous_buffer_;
+	int previous_width_ = 0;
+	int previous_height_ = 0;
+	int previous_stride_ = 0;
+	int64_t last_delivery_ms_ = 0;
+	int64_t first_empty_poll_ms_ = 0;
+
+	void MaybeRepeatLastFrame(int64_t now_ms);
 	winrt::slim_mutex lock_;
 	DispatcherQueue queue_= nullptr;
 	DispatcherQueueController queueController_= nullptr;
