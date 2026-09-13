@@ -18,6 +18,8 @@ public:
 
 	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink();
 
+	void SetSourceConstraints(double maxFps);
+
 private:
 	rtc::VideoSourceInterface<webrtc::VideoFrame> *source() override;
 
