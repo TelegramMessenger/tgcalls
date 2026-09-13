@@ -12,14 +12,18 @@
 namespace tgcalls {
 namespace {
 
-std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> GetSink(
+VideoCapturerTrackSource *GetInternalSource(
 	const rtc::scoped_refptr<
 		webrtc::VideoTrackSourceInterface> &nativeSource) {
 	const auto proxy = static_cast<webrtc::VideoTrackSourceProxy*>(
 		nativeSource.get());
-	const auto internal = static_cast<VideoCapturerTrackSource*>(
-		proxy->internal());
-	return internal->sink();
+	return static_cast<VideoCapturerTrackSource*>(proxy->internal());
+}
+
+std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> GetSink(
+	const rtc::scoped_refptr<
+		webrtc::VideoTrackSourceInterface> &nativeSource) {
+	return GetInternalSource(nativeSource)->sink();
 }
 
 } // namespace
@@ -41,6 +45,8 @@ VideoCapturerInterfaceImpl::VideoCapturerInterfaceImpl(
 		_screenCapturer = std::make_unique<UwpScreenCapturer>(_sink, uwpContext->item);
 		_screenCapturer->setState(VideoState::Active);
 		outResolution = _screenCapturer->resolution();
+
+		GetInternalSource(source)->SetSourceConstraints(_screenCapturer->maxFps());
 	}
 	else
 #else
