@@ -13,10 +13,12 @@ mkdir -p build-input/configuration-repository/provisioning
 # (see build-input/configuration-repository/ for existing stubs)
 
 # Build the CLI test tool
-./build-input/bazel-8.4.2 build //submodules/TgVoipWebrtc/tgcalls/tools/cli:tgcalls_cli
+./build-input/bazel-9.2.0-darwin-arm64 build //submodules/TgVoipWebrtc/tgcalls/tools/cli:tgcalls_cli
 ```
 
-The system-installed Bazel (v9) is NOT compatible with this codebase.
+Use the pinned Bazel from `build-input/`, never a system-installed one: the version is pinned in the
+superproject's `versions.json` (`9.2.0` since 2026-09-14, `8.4.2` before that) and `Make.py` downloads it
+and verifies its SHA256. The binary name carries both version and arch.
 
 ## Linux Build
 
@@ -25,18 +27,18 @@ Prerequisites (Ubuntu/Debian):
 apt install gcc g++ cmake meson ninja-build nasm make autoconf automake libtool pkg-config zlib1g-dev libbz2-dev
 ```
 
-Download the Linux Bazel 8.4.2 binary to `build-input/`:
+Download the matching Linux Bazel binary to `build-input/` (use the version `versions.json` pins):
 ```bash
-curl -fL "https://github.com/bazelbuild/bazel/releases/download/8.4.2/bazel-8.4.2-linux-arm64" -o build-input/bazel-8.4.2-linux
-chmod +x build-input/bazel-8.4.2-linux
+curl -fL "https://github.com/bazelbuild/bazel/releases/download/9.2.0/bazel-9.2.0-linux-arm64" -o build-input/bazel-9.2.0-linux
+chmod +x build-input/bazel-9.2.0-linux
 ```
 
 Build the CLI test tool:
 ```bash
-./build-input/bazel-8.4.2-linux build //submodules/TgVoipWebrtc/tgcalls/tools/cli:tgcalls_cli
+./build-input/bazel-9.2.0-linux build //submodules/TgVoipWebrtc/tgcalls/tools/cli:tgcalls_cli
 ```
 
-The same Bazel 8.4.2 version is required. The build uses the system GCC toolchain and system-installed cmake/meson/ninja for third-party library compilation.
+The same Bazel version as `versions.json` is required. The build uses the system GCC toolchain and system-installed cmake/meson/ninja for third-party library compilation.
 
 ## Docker Build
 
