@@ -988,7 +988,9 @@ public:
 
             startStatsLogging();
 
-            _outgoingAudioTrack->set_enabled(false); // Muted by default.
+            // Muted by default (`_isMuted` starts true): this leaves the send
+            // stream stopped from the first negotiation on, not merely silent.
+            applyOutgoingAudioMuteState();
         }
 
         // 6. Add outgoing video transceiver (no track yet — track attached later
@@ -1515,8 +1517,50 @@ public:
 
     void setIsMuted(bool isMuted) {
         _isMuted = isMuted;
+        applyOutgoingAudioMuteState();
+    }
+
+    // Mute has to stop the outgoing RTP stream, not just silence it. A disabled
+    // track only reaches ChannelSend::SetInputMute, which zeroes the samples but
+    // keeps encoding and sending, so a muted participant still cost the SFU and
+    // every peer a full Opus stream (~50 packets/s at level 0 — the CLI's
+    // "Muted audio leaks" check counts them at the SFU). What actually starts
+    // and stops the AudioSendStream is the sender's `encodings[0].active`
+    // (WebRtcAudioSendStream::UpdateSendState), toggled here without a
+    // renegotiation — the PeerConnection counterpart of CustomImpl's
+    // `_outgoingAudioChannel->Enable(!_isMuted)`. The track is disabled as well
+    // so the AGC/level path still sees the mute, and the ADM microphone mute
+    // (on iOS the system mute, which is also what drives the muted-speech hint)
+    // is applied exactly as CustomImpl's onUpdatedIsMuted does. Before the
+    // first negotiation the parameters land in the sender's init parameters and
+    // are applied from RtpSenderBase::SetSsrc, so calling this from start() is
+    // fine. Runs on the media thread, which is the PeerConnection's signaling
+    // thread, as GetParameters/SetParameters require.
+    void applyOutgoingAudioMuteState() {
+        const bool sending = !_isMuted;
         if (_outgoingAudioTrack) {
-            _outgoingAudioTrack->set_enabled(!isMuted);
+            _outgoingAudioTrack->set_enabled(sending);
+        }
+        if (_outgoingAudioTransceiver) {
+            auto sender = _outgoingAudioTransceiver->sender();
+            webrtc::RtpParameters params = sender->GetParameters();
+            if (params.encodings.empty()) {
+                RTC_LOG(LS_WARNING) << "GroupRef: outgoing audio sender has no encodings, cannot apply mute state";
+            } else if (params.encodings[0].active != sending) {
+                params.encodings[0].active = sending;
+                webrtc::RTCError error = sender->SetParameters(params);
+                if (!error.ok()) {
+                    RTC_LOG(LS_WARNING) << "GroupRef: failed to set outgoing audio active=" << sending << ": " << error.message();
+                }
+            }
+        }
+        if (_audioDeviceModule) {
+            _threads->getWorkerThread()->BlockingCall([adm = _audioDeviceModule, isMuted = _isMuted]() {
+                bool isDeviceMuteAvailable = false;
+                if (adm->MicrophoneMuteIsAvailable(&isDeviceMuteAvailable) == 0 && isDeviceMuteAvailable) {
+                    adm->SetMicrophoneMute(isMuted);
+                }
+            });
         }
     }
 

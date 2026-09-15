@@ -221,6 +221,17 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
   the error-resilient H264 decoder emits corrupt frames rather than refusing. Judge decryption by
   the level *value* (a real 440 Hz sine reads a steady ~0.126–0.133; garbage swings 0.157–1.000),
   and confirm the harness can fail by keying decrypt on the wrong id — that must give 0/2.
+- `--mute-participants I,J,...` — group mode: the participants with these indexes (0-based over
+  custom then reference) join muted and stay muted unless `--unmute-after` fires. Validation then
+  relaxes "everyone receives audio" to the unmuted participants, requires no peer to report a muted
+  SSRC above level 0.05, and adds a `Muted audio leaks: X/Y (must be 0)` line: the SFU counts the
+  audio RTP packets it receives per SSRC (`GoSfu_QuerySsrcPackets`, read just before teardown) and
+  every participant that stayed muted must have sent **none**. The level check alone cannot see the
+  difference between silence and no stream — `GroupInstanceReferenceImpl` used to mute by disabling
+  the track only, which zeroes samples but keeps encoding, and a muted reference participant sent
+  456 packets in a 10 s run at level 0.000 (fixed 2026-09-15; see the ReferenceImpl notes in
+  `submodules/TgVoipWebrtc/CLAUDE.md`). Use ≥3 participants: with only one unmuted participant the
+  "unmuted participants receive audio" rule fails because it has nobody to hear.
 - `--unmute-after N` — group mode, with `--mute-participants`: run for N seconds, then unmute those
   participants mid-call. **Nothing is signalled to the peers** — they must notice the new SSRC from
   the media alone, as in a real call. This is the regression test for "a participant who unmutes after

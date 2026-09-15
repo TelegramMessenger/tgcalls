@@ -119,6 +119,10 @@ type SFU struct {
 	layerSelectors map[[2]int]*LayerSelector // [receiverID, senderID] -> selector
 	maxActiveLayer map[int]int              // senderID -> highest layer with traffic
 	twccGenerators map[int]*TransportCCGenerator // senderID -> transport-cc generator
+	// Audio RTP packets received per SSRC, for the harness's "a muted
+	// participant sends nothing" check. Own lock: incremented under s.mu.RLock.
+	audioRTPCountMu sync.Mutex
+	audioRTPCount   map[uint32]int64
 	loggerFactory  logging.LoggerFactory
 	log           logging.LeveledLogger
 	ctx           context.Context
@@ -137,6 +141,7 @@ func NewSFU() *SFU {
 		layerSelectors: make(map[[2]int]*LayerSelector),
 		maxActiveLayer: make(map[int]int),
 		twccGenerators: make(map[int]*TransportCCGenerator),
+		audioRTPCount:  make(map[uint32]int64),
 		loggerFactory:  lf,
 		log:           lf.NewLogger("sfu"),
 		ctx:           ctx,
@@ -412,6 +417,10 @@ func (s *SFU) forwardRTP(from *Participant) {
 // processIncomingRTP handles a single RTP packet from a participant after ingress simulation.
 func (s *SFU) processIncomingRTP(from *Participant, pkt []byte, ssrc uint32, streamInfo ssrcInfo) {
 	if streamInfo.kind == "audio" {
+		s.audioRTPCountMu.Lock()
+		s.audioRTPCount[ssrc]++
+		s.audioRTPCountMu.Unlock()
+
 		// Audio: forward to all other participants unconditionally.
 		s.mu.RLock()
 		for id, p := range s.participants {
@@ -832,6 +841,14 @@ func (s *SFU) QuerySSRC(ssrc uint32) int {
 	return -1
 }
 
+// QuerySSRCPackets returns how many audio RTP packets the SFU has received on
+// the given SSRC (after ingress simulation), 0 if none.
+func (s *SFU) QuerySSRCPackets(ssrc uint32) int64 {
+	s.audioRTPCountMu.Lock()
+	defer s.audioRTPCountMu.Unlock()
+	return s.audioRTPCount[ssrc]
+}
+
 // QueryVideoSSRCs returns a JSON array of simulcast layers for a given participant.
 // Format: [{"ssrc":N,"fidSsrc":M},...]
 // Returns "[]" if the participant has no video SSRCs.
@@ -1164,6 +1181,18 @@ func GoSfu_QuerySsrc(handle C.int, ssrc C.uint) C.int {
 		return -1
 	}
 	return C.int(sfu.QuerySSRC(uint32(ssrc)))
+}
+
+//export GoSfu_QuerySsrcPackets
+func GoSfu_QuerySsrcPackets(handle C.int, ssrc C.uint) C.longlong {
+	h := int(handle)
+	sfuRegistryMu.Lock()
+	sfu, ok := sfuRegistry[h]
+	sfuRegistryMu.Unlock()
+	if !ok {
+		return -1
+	}
+	return C.longlong(sfu.QuerySSRCPackets(uint32(ssrc)))
 }
 
 //export GoSfu_QueryVideoSsrcs

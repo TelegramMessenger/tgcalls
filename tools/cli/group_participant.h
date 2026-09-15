@@ -134,6 +134,11 @@ struct ParticipantState {
     std::atomic<bool> wasConnected{false};
     std::atomic<bool> receivedAudio{false};
     uint32_t audioSsrc{0};
+    // Read from the SFU before teardown: audio RTP packets it received on
+    // `audioSsrc`, -1 if never queried (group-churn). A participant that
+    // stayed muted for the whole run must have sent none — mute has to stop
+    // the stream, not merely silence it.
+    std::atomic<int64_t> sfuAudioPacketsReceived{-1};
     std::string logPath;
 
     // Per-source-SSRC max audio level observed via audioLevelsUpdated.
@@ -186,6 +191,10 @@ struct GroupValidationResult {
     // non-trivial level for the late unmuter's SSRC, over the pairs expected.
     int lateUnmuteHeardPairs;
     int lateUnmuteExpectedPairs;
+    // Participants that stayed muted for the whole run.
+    int mutedParticipants;
+    // Of those, the ones the SFU still received audio RTP from (must be 0).
+    int mutedAudioLeaks;
     bool success;
 };
 
