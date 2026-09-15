@@ -1330,6 +1330,23 @@ public:
                 cricket::AudioCodec opus = cricket::CreateAudioCodec(111, "opus", 48000, 2);
                 opus.params["minptime"] = "10";
                 opus.params["useinbandfec"] = "1";
+                // Frame duration of OUR outgoing audio: WebRTC derives the send
+                // codec from the remote answer (VoiceChannel::SetRemoteContent_w),
+                // and this answer is built here, so this is where it is decided.
+                // Without `ptime` the encoder uses WebRTC's 20 ms default, i.e.
+                // ~50 packets/s — three times the iOS CustomImpl (requests 120,
+                // clamped to 60 because this build lacks
+                // WEBRTC_OPUS_SUPPORT_120MS_PTIME) and six times Android/desktop
+                // (real 120 ms). In an SFU call every uplink packet is fanned out
+                // to all participants, so per-packet overhead (~60 B of
+                // IP/UDP/RTP/SRTP) dominates: ~24 kbit/s at 20 ms vs ~8 kbit/s at
+                // 60 ms. 60 ms is what iOS has shipped since the 2024 Opus upgrade,
+                // needs no build flag, and keeps small conference calls responsive;
+                // 120 would save a further ~4 kbit/s for another 60 ms of delay and
+                // a 120 ms hole per lost packet. maxptime leaves 120 negotiable if
+                // a server-produced answer ever asks for it.
+                opus.params["ptime"] = "60";
+                opus.params["maxptime"] = "120";
                 audioContent->AddCodec(opus);
                 audioContent->set_rtcp_mux(true);
 
