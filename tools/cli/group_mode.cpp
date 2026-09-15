@@ -176,6 +176,14 @@ int runGroupMode(int customParticipants, int referenceParticipants, int duration
         }
     }
 
+    // Ask the SFU how many audio RTP packets each participant actually sent it.
+    // Validation requires zero for anyone who stayed muted for the whole run.
+    for (const auto& s : states) {
+        if (s->audioSsrc != 0) {
+            s->sfuAudioPacketsReceived.store((int64_t)GoSfu_QuerySsrcPackets(sfuHandle, s->audioSsrc));
+        }
+    }
+
     // Stop all participants (using GoSfu_Destroy for bulk teardown)
     groupLog("Group", "stopping participants...");
 

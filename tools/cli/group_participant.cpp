@@ -658,7 +658,8 @@ GroupValidationResult validateGroupState(
     // Audio-level invariant: no peer may report a muted participant's SSRC at
     // a non-trivial level. The synthetic 0.1 level reported by a buggy
     // ReferenceImpl will trip this check; a real PCM-derived level reads ~0
-    // for an audio track that is producing silence (set_enabled(false)).
+    // for an audio track that is producing silence. Note this check alone
+    // cannot tell silence from no stream at all — the wire check below can.
     constexpr float kMutedLevelThreshold = 0.05f;
     bool mutedInvariantHeld = true;
 
@@ -696,6 +697,34 @@ GroupValidationResult validateGroupState(
                          peer->id, peer->isReference ? "ref" : "custom",
                          muted->id, muted->audioSsrc, maxLevel);
             }
+        }
+    }
+
+    // Wire invariant: a participant that stayed muted for the whole run must
+    // not have sent a single audio RTP packet to the SFU. A merely disabled
+    // track still encodes and sends silence, which decodes to level ~0 and so
+    // passes the level check above while costing the SFU and every peer a full
+    // Opus stream. Counts come from the SFU before teardown; -1 means the run
+    // never queried them (group-churn).
+    for (const auto& s : states) {
+        int64_t packets = s->sfuAudioPacketsReceived.load();
+        if (packets < 0 || s->audioSsrc == 0) continue;
+        if (s->muted) {
+            result.mutedParticipants++;
+            if (packets > 0) {
+                result.mutedAudioLeaks++;
+                groupLog("Validate",
+                         "FAIL: muted P%d (%s) sent %lld audio RTP packets to the SFU (ssrc=%u)",
+                         s->id, s->isReference ? "ref" : "custom", (long long)packets, s->audioSsrc);
+            } else {
+                groupLog("Validate",
+                         "OK:   muted P%d (%s) sent no audio RTP to the SFU (ssrc=%u)",
+                         s->id, s->isReference ? "ref" : "custom", s->audioSsrc);
+            }
+        } else {
+            groupLog("Validate",
+                     "P%d (%s) sent %lld audio RTP packets to the SFU (ssrc=%u)",
+                     s->id, s->isReference ? "ref" : "custom", (long long)packets, s->audioSsrc);
         }
     }
 
@@ -752,6 +781,7 @@ GroupValidationResult validateGroupState(
         result.success = result.success &&
                          (result.lateUnmuteHeardPairs == result.lateUnmuteExpectedPairs);
     }
+    result.success = result.success && (result.mutedAudioLeaks == 0);
 
     return result;
 }
@@ -785,6 +815,9 @@ bool printGroupSummary(
     }
     if (result.lateUnmuteExpectedPairs > 0) {
         printf("Late unmute heard:      %d/%d\n", result.lateUnmuteHeardPairs, result.lateUnmuteExpectedPairs);
+    }
+    if (result.mutedParticipants > 0) {
+        printf("Muted audio leaks:      %d/%d (must be 0)\n", result.mutedAudioLeaks, result.mutedParticipants);
     }
     printf("Result:                 %s\n", success ? "SUCCESS" : "FAILED");
 
