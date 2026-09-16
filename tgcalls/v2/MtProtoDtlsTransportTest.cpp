@@ -13,7 +13,9 @@
 
 #include <array>
 #include <cerrno>
+#include <chrono>
 #include <cstdio>
+#include <thread>
 #include <memory>
 #include <string>
 #include <vector>
@@ -76,10 +78,17 @@ public:
     const std::string &transport_name() const override { return _transportName; }
     bool writable() const override { return _writable; }
     bool receiving() const override { return _receiving; }
-    int SendPacket(const char *data, size_t len, const rtc::PacketOptions &, int) override {
+    // Return value override: kFakeSendReturnsLength (default) reports the byte
+    // count as a UDP socket would; any other value is returned verbatim.
+    static constexpr int kFakeSendReturnsLength = 0x7fffffff;
+    void setSendResult(int result) { _sendResult = result; }
+    int lastSentFlags() const { return _lastSentFlags; }
+
+    int SendPacket(const char *data, size_t len, const rtc::PacketOptions &, int flags) override {
         _lastSentPacket.assign(data, len);
+        _lastSentFlags = flags;
         _sentPacketCount++;
-        return (int)len;
+        return _sendResult == kFakeSendReturnsLength ? (int)len : _sendResult;
     }
     int SetOption(rtc::Socket::Option, int) override { return 0; }
     bool GetOption(rtc::Socket::Option, int *) override { return false; }
@@ -113,6 +122,8 @@ private:
     bool _receiving = false;
     int _sentPacketCount = 0;
     std::string _lastSentPacket;
+    int _lastSentFlags = -1;
+    int _sendResult = kFakeSendReturnsLength;
     int _error = 0;
 };
 
@@ -304,6 +315,112 @@ void TestWireFramingMatches13() {
     }
 }
 
+
+// P2PTransportChannel::SendPacket rejects any non-zero flags with EINVAL, so
+// whatever the caller passed must be consumed by the framing and never forwarded.
+void TestFlagsNeverReachIce() {
+    FakeIceTransport ice;
+    tgcalls::MtProtoDtlsTransport transport(&ice, outgoingKey(makeSharedKeyMaterial()));
+    rtc::PacketOptions options;
+    const std::string payload = "PAYLOAD";
+    transport.SendPacket(payload.data(), payload.size(), options, cricket::PF_SRTP_BYPASS);
+    CHECK_TRUE(ice.lastSentFlags() == 0);
+    transport.SendPacket(payload.data(), payload.size(), options, 0);
+    CHECK_TRUE(ice.lastSentFlags() == 0);
+}
+
+// A failed ICE send is reported as the ICE channel reports it, so RtpTransport's
+// ENOTCONN handling and dcsctp's blocking-error handling both keep working.
+void TestIceSendFailurePropagates() {
+    FakeIceTransport ice;
+    tgcalls::MtProtoDtlsTransport transport(&ice, outgoingKey(makeSharedKeyMaterial()));
+    rtc::PacketOptions options;
+    const std::string payload = "PAYLOAD";
+
+    ice.setSendResult(-1);
+    ice.setError(ENOTCONN);
+    CHECK_TRUE(transport.SendPacket(payload.data(), payload.size(), options, cricket::PF_SRTP_BYPASS) == -1);
+    CHECK_TRUE(transport.GetError() == ENOTCONN);
+
+    ice.setSendResult(FakeIceTransport::kFakeSendReturnsLength);
+    ice.setError(0);
+    CHECK_TRUE(transport.SendPacket(payload.data(), payload.size(), options, cricket::PF_SRTP_BYPASS) == (int)payload.size());
+    CHECK_TRUE(transport.GetError() == 0);
+}
+
+// A framing/encryption failure is OURS and must not surface the ICE channel's
+// stale error: RtpTransport reads ENOTCONN there as a lost connection.
+void TestEncryptionFailureReportsOwnError() {
+    FakeIceTransport ice;
+    tgcalls::MtProtoDtlsTransport transport(&ice, outgoingKey(makeSharedKeyMaterial()));
+    rtc::PacketOptions options;
+
+    ice.setError(ENOTCONN); // stale, from some earlier failed send
+    const std::string huge(200 * 1024, 'x'); // over EncryptedConnection's outer packet limit
+    CHECK_TRUE(transport.SendPacket(huge.data(), huge.size(), options, cricket::PF_SRTP_BYPASS) == -1);
+    CHECK_TRUE(ice.sentPacketCount() == 0);
+    CHECK_TRUE(transport.GetError() == EMSGSIZE);
+
+    // A later successful send clears it and ICE's error becomes visible again.
+    const std::string payload = "PAYLOAD";
+    CHECK_TRUE(transport.SendPacket(payload.data(), payload.size(), options, cricket::PF_SRTP_BYPASS) == (int)payload.size());
+    CHECK_TRUE(transport.GetError() == ENOTCONN);
+}
+
+// EncryptedConnection may pack a resend behind a fresh message ("additional"
+// messages). Each surfaces separately, each with the flags its own framing says.
+void TestAdditionalMessagesSurfaceWithTheirOwnFraming() {
+    auto key = makeSharedKeyMaterial();
+    FakeIceTransport receiverIce;
+    tgcalls::MtProtoDtlsTransport receiver(&receiverIce, incomingKey(key));
+    ReadPacketProbe probe;
+    std::vector<std::pair<int, std::string>> seen;
+    struct Collector : public sigslot::has_slots<> {
+        std::vector<std::pair<int, std::string>> *out;
+        void onReadPacket(rtc::PacketTransportInternal *, const char *data, size_t size, const int64_t &, int flags) {
+            out->emplace_back(flags, std::string(data, size));
+        }
+    } collector;
+    collector.out = &seen;
+    receiver.SignalReadPacket.connect(&collector, &Collector::onReadPacket);
+
+    // A bare sender connection standing in for a peer whose first message needed
+    // an ack that never came: after the resend delay it rides along with the next.
+    tgcalls::EncryptedConnection sender(tgcalls::EncryptedConnection::Type::Transport, outgoingKey(key), [](int, int) {});
+    const std::string sctpFrame = std::string("\xdc\xdc\xdc\xdc", 4) + "SCTPA";
+    rtc::CopyOnWriteBuffer a((const uint8_t *)sctpFrame.data(), sctpFrame.size());
+    const auto first = sender.prepareForSendingRawMessage(a, /*messageRequiresAck=*/true);
+    CHECK_TRUE(first.has_value()); // dropped on purpose: never delivered
+    std::this_thread::sleep_for(std::chrono::milliseconds(350)); // > minDelayBeforeMessageResend (300 ms, Transport)
+    const std::string rtpFrame = "RTPB";
+    rtc::CopyOnWriteBuffer b((const uint8_t *)rtpFrame.data(), rtpFrame.size());
+    const auto second = sender.prepareForSendingRawMessage(b, /*messageRequiresAck=*/false);
+    CHECK_TRUE(second.has_value());
+    if (second) {
+        receiverIce.deliverPacket((const char *)second->bytes.data(), second->bytes.size());
+    }
+
+    CHECK_TRUE(seen.size() == 2);
+    if (seen.size() == 2) {
+        CHECK_TRUE(seen[0].first == cricket::PF_SRTP_BYPASS);
+        CHECK_TRUE(seen[0].second == rtpFrame);
+        CHECK_TRUE(seen[1].first == 0);
+        CHECK_TRUE(seen[1].second == "SCTPA");
+    }
+}
+
+// A decrypted frame too short to carry the prefix surfaces as RTP-class; the
+// RtpTransport above then drops it on its own size check.
+void TestShortFrameSurfacesWithoutPrefixCheck() {
+    Pair pair;
+    ReadPacketProbe probe;
+    pair.receiver.SignalReadPacket.connect(&probe, &ReadPacketProbe::onReadPacket);
+    pair.send("abc", cricket::PF_SRTP_BYPASS);
+    CHECK_TRUE(probe.count == 1);
+    CHECK_TRUE(probe.lastPayload == "abc");
+    CHECK_TRUE(probe.lastFlags == cricket::PF_SRTP_BYPASS);
+}
+
 // ---------------------------------------------------------------------------
 // The production stack above the transport: webrtc::RtpTransport and
 // webrtc::DcSctpTransport, exactly as JsepTransportController wires them.
@@ -400,6 +517,11 @@ int main() {
     TestSendPacketReturnsPlaintextLength();
     TestReadPacketFlagsFollowFraming();
     TestWireFramingMatches13();
+    TestFlagsNeverReachIce();
+    TestIceSendFailurePropagates();
+    TestEncryptionFailureReportsOwnError();
+    TestAdditionalMessagesSurfaceWithTheirOwnFraming();
+    TestShortFrameSurfacesWithoutPrefixCheck();
 
     TestStaleEnotconnMustNotDropReadyToSendAfterSuccessfulSend();
     TestReceivedRtpMustNotReachSctp();
