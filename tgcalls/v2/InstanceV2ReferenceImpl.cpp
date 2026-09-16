@@ -58,7 +58,7 @@
 #include "v2/ExternalSignalingConnection.h"
 #include "v2/SignalingSctpConnection.h"
 #include "v2/ReflectorRelayPortFactory.h"
-#include "v2/MtProtoIceTransport.h"
+#include "v2/MtProtoDtlsTransport.h"
 #include "v2/CustomParameters.h"
 #ifdef WEBRTC_IOS
 #include "platform/darwin/iOS/tgcalls_audio_device_module_ios.h"
@@ -493,14 +493,14 @@ public:
 
         _useMtProto = getCustomParameterBool(_customParameters, "network_use_mtproto");
         if (_useMtProto) {
-            // Selects CreateUnencryptedRtpTransport - a plain RtpTransport, the
-            // same class 13.0.0 uses - instead of DtlsSrtpTransport. NOT optional:
-            // SrtpTransport hard-fails when SRTP is inactive (send returns false,
-            // receive drops), so without this the call is either double-encrypted
-            // or dead. Nothing ends up unencrypted: mtproto replaces DTLS-SRTP.
-            // Must precede CreatePeerConnectionOrError, where DtlsEnabled() is read.
+            // Half one of two that MUST travel together (the other is the
+            // MtProtoDtlsTransportFactory on the dependencies below). Selects the
+            // plain RtpTransport (no SRTP) while DTLS stays enabled for SDP, so
+            // certificates, fingerprints, the SCTP factory and data-channel
+            // negotiation are stock; the factory then puts mtproto in the DTLS
+            // slot with no handshake. Must precede CreatePeerConnectionOrError.
             webrtc::PeerConnectionFactoryInterface::Options factoryOptions;
-            factoryOptions.disable_encryption = true;
+            factoryOptions.external_transport_security = true;
             _peerConnectionFactory->SetOptions(factoryOptions);
         }
 
@@ -772,7 +772,8 @@ public:
         }
 
         if (_useMtProto) {
-            peerConnectionDependencies.ice_transport_factory = std::make_unique<MtProtoIceTransportFactory>(_encryptionKey);
+            // Half two: see the factory option above.
+            peerConnectionDependencies.dtls_transport_factory = std::make_unique<MtProtoDtlsTransportFactory>(_encryptionKey);
         }
 
         auto peerConnectionOrError = _peerConnectionFactory->CreatePeerConnectionOrError(peerConnectionConfiguration, std::move(peerConnectionDependencies));
