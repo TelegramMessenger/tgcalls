@@ -373,86 +373,58 @@ construct and emits no version key to key the discontinuity on).
 ## mtproto transport on the PeerConnection engines (11.0.0, 18/19)
 
 `network_use_mtproto` works on `InstanceV2ReferenceImpl` (11.0.0) and
-`CallCoreHost` (18/19), producing the same wire bytes as 13.0.0. Default off.
+`CallCoreHost` (18/19): full mtproto, zero DTLS, wire bytes identical to 13.0.0
+(`mtproto(RTP)`, `mtproto(0xdcdcdcdc || SCTP)`). Default off. Design record:
+telegram-ios `docs/superpowers/specs/2026-09-16-tgcalls-mtproto-dtls-slot-design.md`.
 
-**The decorator has a second, unrelated user.** `MtProtoIceTransport` also carries an optional
-`IncomingPacketObserver`, and both of its jobs are independent: with no key it is a pure
-pass-through (packets AND `flags` untouched, so DTLS-SRTP above is unaffected) that only observes.
-`GroupInstanceReferenceImpl` injects it that way to discover audio SSRCs the BUNDLE demuxer drops —
-see the ReferenceImpl notes in `submodules/TgVoipWebrtc/CLAUDE.md`. With a key the observer sees the
-decrypted packet, so observation is a byproduct of the decryption pass either way.
-`MtProtoIceTransportTest.cpp` covers both modes.
+**Shape.** Two settings that MUST travel together, both from one boolean:
 
-**Shape.** Two changes, both gated on the flag:
+1. `PeerConnectionFactoryInterface::Options::external_transport_security = true`
+   before `CreatePeerConnectionOrError`. A tgcalls seam in the vendored webrtc:
+   plain `RtpTransport` (no SRTP) and no SRTP requirement in `BaseChannel`,
+   while DTLS stays *enabled* so certificates, fingerprints, `a=setup`, the
+   SCTP factory and the data-channel answer are stock.
+2. `PeerConnectionDependencies::dtls_transport_factory =
+   MtProtoDtlsTransportFactory(key)`. Another seam; it puts
+   `v2/MtProtoDtlsTransport` in the DTLS slot.
 
-1. `PeerConnectionFactoryInterface::Options::disable_encryption = true`, set on
-   the factory *before* `CreatePeerConnectionOrError` (that is where
-   `DtlsEnabled()` is read). This makes `JsepTransportController` build a plain
-   `RtpTransport` instead of a `DtlsSrtpTransport`, and stops DTLS entirely.
-2. `PeerConnectionDependencies::ice_transport_factory =
-   MtProtoIceTransportFactory`, which wraps a real `P2PTransportChannel` in
-   `MtProtoIceTransport` and applies `EncryptedConnection` above ICE.
+`MtProtoDtlsTransport` never handshakes (the shared key exists before the call
+starts), reports `kConnected` the first time ICE is writable, stores the
+certificate and remote fingerprint it is handed and verifies neither, and
+answers "no SRTP suite" to anyone who asks. `flags` is ground truth in both
+directions, as in 13.0.0's `MtProtoPacketTransport`: `PF_SRTP_BYPASS` (RTP and
+RTCP from `BaseChannel`) is framed bare, `0` (SCTP from `DcSctpTransport`) gets
+the prefix; on receive the prefix becomes `flags 0` and its absence
+`PF_SRTP_BYPASS`, so `DcSctpTransport` (skips `flags != 0`) never parses media.
+`SendPacket` returns the CALLER's byte count.
 
-Result: `MtProtoIceTransport -> DtlsTransport (inactive passthrough) ->
-RtpTransport (no SRTP)`. Media is `mtproto(RTP)` and the data channel is
-`mtproto(SCTP)`, with **no DTLS handshake at all** - the same code in the same
-position as 13.0.0's `MtProtoPacketTransport`. Verified on p2p calls: DTLS
-handshake log lines go 45 -> 0, and `Creating UnencryptedRtpTransport` replaces
-`Creating DtlsSrtpTransport`.
+**Why not the obvious routes** (each was shipped or tried and cost a regression):
 
-This requires the "Allow SCTP without DTLS" patch in the vendored webrtc fork -
-see `submodules/TgVoipWebrtc/CLAUDE.md`. Without it `disable_encryption` also
-kills the data channel and no call can connect.
+- `Options::disable_encryption` (2026-09-01 to 2026-09-16). It also turns off
+  certificates, fingerprints and the SCTP factory, so three behaviour patches
+  in the fork had to put them back, and the SDP one was missing at first: the
+  answer rejected the data section on every negotiation and both peers
+  renegotiated in a loop for the whole call (6 s loopback: 4,765
+  `SetLocalDescription` on 11.0.0 versus 4). That storm was the dominant cause
+  of the 2026-09 A/B regression.
+- An ICE-level decorator below the inactive `DtlsTransport`. Stock DTLS drops
+  `flags` on send and forces 0 on receive, so the decorator had to guess the
+  packet type and every media packet was also fed to dcsctp (copy, CRC32c,
+  an `LS_ERROR` line each). Its `SendPacket` also returned the ciphertext
+  length; `RtpTransport` reads that as a failed send and, with the ICE
+  channel's never-cleared ENOTCONN, dropped ready-to-send and paused the
+  pacer while packets were going out.
+- Subclassing `DtlsSrtpTransport`, subclassing `P2PTransportChannel`,
+  socket-level mtproto: see the design record.
 
-**Non-obvious invariants**, each of which cost a failed run:
-
-- **`disable_encryption` is not cosmetic, and it is not optional.** It selects
-  the transport class. Without it you get a `DtlsSrtpTransport`, and there is no
-  pass-through mode: `SrtpTransport` refuses to send (`srtp_transport.cc:43-47`)
-  and drops on receive (`:124-128`) when SRTP is inactive. So the only two
-  outcomes are double encryption or a dead call. Nothing ends up unencrypted -
-  mtproto replaces DTLS-SRTP, and the shared key makes DTLS redundant.
-- **Both ends must have the flag.** `disable_encryption` removes the SDP
-  fingerprint, and the mtproto framing is itself asymmetric, so a one-sided flag
-  fails to connect. Safe in production because `phoneCall.custom_parameters` is
-  delivered identically to both participants.
-- **`flags` cannot carry the SCTP/RTP distinction.** 13.0.0 selects its
-  `0xdcdcdcdc` prefix from `flags`, but the inactive `DtlsTransport` drops that
-  argument on send (`dtls_transport.cc:433`) and `RTC_DCHECK(flags == 0)` on
-  receive (`:599`). `MtProtoIceTransport` therefore infers the type with
-  `InferRtpPacketType` and **always re-emits with `flags == 0`**; a non-zero
-  value aborts a `-c dbg` build. The prefix buys wire parity only, not demux -
-  upstream demux is mutual filtering (`RtpTransport` drops non-RTP,
-  `rtp_transport.cc:266-270`; SCTP validates its own).
-- **The 11 signal/callback bridges in `installBridges()` are not
-  compiler-enforced.** Omit one and it fails silently at runtime - miss
-  `SignalCandidateGathered` and candidates never trickle, so the call simply
-  never connects. All of them live in that one method deliberately. The four
-  callback setters are non-virtual, so each is bridged by a lambda on the inner
-  transport reading our own inherited protected member. Every bridge re-emits
-  with `this`, because the controller keys transports by pointer.
-  `MtProtoIceTransportTest.cpp` covers all 11; it is the reason this approach is
-  safe, so do not weaken it.
-- **Do NOT override `SetIceCredentials` / `SetRemoteIceCredentials`.** They are
-  virtual but not pure, and their base implementations already delegate to
-  `SetIceParameters` / `SetRemoteIceParameters`, which the decorator forwards.
-
-**A route that looks right and is not:** subclassing `DtlsSrtpTransport` to skip
-SRTP while leaving DTLS enabled. It works and keeps SCTP, but it defeats the
-purpose - mtproto already carries a shared key, so the DTLS handshake and record
-framing are exactly the overhead worth removing, and it leaves the data channel
-as `mtproto(DTLS(SCTP))` rather than `mtproto(SCTP)`. If you try it anyway, two
-traps: `IsSrtpActive()` must not be forced to `true` (`GetSrtpOverhead` and
-`GetRtpAuthParams` are non-virtual and `RTC_CHECK(send_session_)`, which fires
-in release too), and `SrtpTransport` stores `field_trials` **by reference**
-(`srtp_transport.h:169`), so a temporary `FieldTrialBasedConfig` dangles and
-segfaults mid-handshake.
-
-**Also dead, for the record:** subclassing `P2PTransportChannel` (its
-`OnReadPacket` is private and non-virtual, so inbound cannot be intercepted);
-socket- or PortAllocator-level mtproto (would encrypt STUN, which reflectors
-must parse); and injecting a fake DTLS transport via `dtls_transport_factory`
-(hits the same SCTP gate, so the injection choice was never the blocker).
+**Verification is not "the call connects".** Run
+`tgcalls_cli --mode p2p --duration 6 --version {11.0.0,18.0.0,19.0.0}
+--custom-params '{"network_use_mtproto":true}' --custom-params2
+'{"network_use_mtproto":true}' --log-file …` and require: `Rejected data channel
+transport` 0, `SetLocalDescription` 4, `OPEN_ACK` 1, `PARSE_FAILED` 0,
+`Creating DtlsSrtpTransport` 0, zero DTLS handshake lines, a log the size of a
+plain call (~750 lines / 6 s). `//submodules/TgVoipWebrtc:mtproto_dtls_transport_test`
+pins the transport contract over a real `RtpTransport` and `DcSctpTransport`.
 
 ## Further Context
 
