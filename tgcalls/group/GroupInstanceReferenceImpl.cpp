@@ -47,8 +47,7 @@
 #include "group/GroupJoinPayloadInternal.h"
 #include "group/GroupFrameTransformer.h"
 #include "group/GroupAudioCapturePostProcessor.h"
-#include "v2/MtProtoIceTransport.h"
-#include "media/base/rtp_utils.h"
+#include "modules/rtp_rtcp/source/rtp_packet_received.h"
 
 #include "third-party/json11.hpp"
 
@@ -85,6 +84,8 @@ public:
     std::function<void(webrtc::PeerConnectionInterface::IceConnectionState)> onConnectionChange;
     std::function<void(webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>)> onTrack;
     std::function<void(webrtc::scoped_refptr<webrtc::DataChannelInterface>)> onDataChannel;
+    // Network thread, once per RTP packet the demuxer dropped. Keep it cheap.
+    std::function<void(const webrtc::RtpPacketReceived &)> onUnDemuxableRtpPacket;
 
     void OnSignalingChange(webrtc::PeerConnectionInterface::SignalingState) override {}
     void OnAddStream(webrtc::scoped_refptr<webrtc::MediaStreamInterface>) override {}
@@ -118,6 +119,10 @@ public:
     void OnIceSelectedCandidatePairChanged(const cricket::CandidatePairChangeEvent&) override {}
     void OnAddTrack(webrtc::scoped_refptr<webrtc::RtpReceiverInterface>, const std::vector<webrtc::scoped_refptr<webrtc::MediaStreamInterface>>&) override {}
     void OnRemoveTrack(webrtc::scoped_refptr<webrtc::RtpReceiverInterface>) override {}
+
+    void OnUnDemuxableRtpPacket(const webrtc::RtpPacketReceived &packet) override {
+        if (onUnDemuxableRtpPacket) onUnDemuxableRtpPacket(packet);
+    }
 };
 
 // --- DataChannel observer adapter ---
@@ -446,7 +451,7 @@ private:
 // lets the transport-level tap tell audio from video without parsing the payload.
 static constexpr uint8_t kOpusPayloadType = 111;
 
-// De-duplication for the transport-level audio SSRC tap. Touched from the network
+// De-duplication for the un-demuxable-packet audio SSRC tap. Touched from the network
 // thread for every inbound Opus packet, so it does exactly one set lookup under a
 // lock and nothing else; the real work is posted to the media thread.
 class AudioSsrcTap {
@@ -825,29 +830,18 @@ public:
         webrtc::PeerConnectionDependencies pcDeps(nullptr);
         pcDeps.observer = _peerConnectionObserver.get();
 
-        // Transport-level audio SSRC discovery. This is the ONLY place a packet
-        // whose SSRC no m-line claims is still visible: WebRTC's BUNDLE demuxer
-        // drops it before any receive stream — and therefore before any frame
-        // transformer — exists.
-        //
-        // The mid=0 frame-transformer tap cannot cover this. It only sees packets
-        // WebRTC was willing to route to the unsignaled catch-all, and
-        // `SdpOfferAnswerHandler::UpdatePayloadTypeDemuxingState` stops being
-        // willing as soon as two *receiving* audio m-lines in the BUNDLE group
-        // advertise the same payload type. Every audio m-line here advertises Opus
-        // 111 (sendrecv mid=0 + one recvonly per remote SSRC), so the FIRST
-        // discovery renegotiation disables payload-type demuxing permanently and
-        // resets the unsignaled streams. After that an unknown SSRC has no MID
-        // extension (buildRemoteAnswer strips it deliberately), no SSRC binding and
-        // no payload type to fall back on, so it is dropped in silence: a
-        // participant who unmutes later was inaudible for the rest of the call, and
-        // rejoining only recovered whoever happened to be sending during the ~250 ms
-        // before the first renegotiation. GroupInstanceCustomImpl never hit this — it
-        // receives all remote audio on ONE channel and never adds a second m-line,
-        // and it discovers SSRCs from raw RTP in GroupNetworkManager, which is what
-        // this restores.
-        //
-        // No mtproto key: the decorator is a pass-through that only observes.
+        // Audio SSRC discovery for a participant who starts sending after the
+        // call settled. Once two receiving audio m-lines in the BUNDLE group
+        // advertise Opus 111 (sendrecv mid=0 plus one recvonly per remote SSRC),
+        // SdpOfferAnswerHandler::UpdatePayloadTypeDemuxingState disables
+        // payload-type demuxing and resets the unsignaled catch-all, so an
+        // unknown SSRC - no MID extension (buildRemoteAnswer strips it), no SSRC
+        // binding - is dropped by RtpDemuxer before any receive stream or frame
+        // transformer exists. RtpTransport reports exactly those drops through
+        // PeerConnectionObserver::OnUnDemuxableRtpPacket (a tgcalls seam in the
+        // vendored webrtc), parsed and SRTP-unprotected, on the network thread.
+        // Packets that still reach the mid=0 catch-all are demuxed, never arrive
+        // here, and are covered by the GRAudioFrameTransformer as before.
         _audioSsrcTap = std::make_shared<AudioSsrcTap>();
         {
             auto tap = _audioSsrcTap;
@@ -855,47 +849,34 @@ public:
             auto userIds = _userIds;
             const bool hasE2e = (bool)_e2eEncryptDecrypt;
             const uint8_t opusPayloadType = kOpusPayloadType;
-            pcDeps.ice_transport_factory = std::make_unique<MtProtoIceTransportFactory>(
-                EncryptionKey(nullptr, false),
-                [tap, weak, threads, userIds, hasE2e, opusPayloadType](rtc::ArrayView<const uint8_t> packet) {
-                    // Network thread, once per inbound packet: keep this cheap.
-                    if (packet.size() < 12) {
-                        return;
+            _peerConnectionObserver->onUnDemuxableRtpPacket = [tap, weak, threads, userIds, hasE2e, opusPayloadType](const webrtc::RtpPacketReceived &packet) {
+                // Payload types are pinned in group calls (mungeVideoCodecsInOffer),
+                // so the audio stream is identifiable without parsing further.
+                if (packet.PayloadType() != opusPayloadType) {
+                    return;
+                }
+                const uint32_t ssrc = packet.Ssrc();
+                if (ssrc == 0) {
+                    return;
+                }
+                bool report = tap->shouldReport(ssrc);
+                // Mirrors GRAudioFrameTransformer: while encryption is on and the
+                // sender is still unknown, keep reporting so
+                // handleDiscoveredAudioSsrc re-asks for the description (it de-dupes
+                // on the in-flight request). A response that omits the SSRC would
+                // otherwise leave that participant permanently undecryptable.
+                if (!report && hasE2e && userIds && !userIds->isKnown(ssrc)) {
+                    report = true;
+                }
+                if (!report) {
+                    return;
+                }
+                threads->getMediaThread()->PostTask([weak, ssrc]() {
+                    if (auto strong = weak.lock()) {
+                        strong->handleDiscoveredAudioSsrc(ssrc);
                     }
-                    if (cricket::InferRtpPacketType(rtc::MakeArrayView((const char *)packet.data(), packet.size()))
-                        != cricket::RtpPacketType::kRtp) {
-                        return;
-                    }
-                    // Payload types are pinned in group calls (mungeVideoCodecsInOffer),
-                    // so the audio stream is identifiable without parsing further.
-                    if ((packet[1] & 0x7F) != opusPayloadType) {
-                        return;
-                    }
-                    const uint32_t ssrc = ((uint32_t)packet[8] << 24) | ((uint32_t)packet[9] << 16)
-                        | ((uint32_t)packet[10] << 8) | (uint32_t)packet[11];
-                    if (ssrc == 0) {
-                        return;
-                    }
-                    bool report = tap->shouldReport(ssrc);
-                    // Mirrors GRAudioFrameTransformer: while encryption is on and the
-                    // sender is still unknown, keep reporting so
-                    // handleDiscoveredAudioSsrc re-asks for the description (it de-dupes
-                    // on the in-flight request). A response that omits the SSRC would
-                    // otherwise leave that participant permanently undecryptable — and
-                    // past the first renegotiation this tap is the only thing left that
-                    // could ask again.
-                    if (!report && hasE2e && userIds && !userIds->isKnown(ssrc)) {
-                        report = true;
-                    }
-                    if (!report) {
-                        return;
-                    }
-                    threads->getMediaThread()->PostTask([weak, ssrc]() {
-                        if (auto strong = weak.lock()) {
-                            strong->handleDiscoveredAudioSsrc(ssrc);
-                        }
-                    });
                 });
+            };
         }
 
         _networkMonitorFactory = PlatformInterface::SharedInstance()->createNetworkMonitorFactory();
