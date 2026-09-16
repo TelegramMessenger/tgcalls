@@ -452,7 +452,7 @@ private:
 static constexpr uint8_t kOpusPayloadType = 111;
 
 // De-duplication for the un-demuxable-packet audio SSRC tap. Touched from the network
-// thread for every inbound Opus packet, so it does exactly one set lookup under a
+// thread once per Opus packet the demuxer dropped, so it does exactly one set lookup under a
 // lock and nothing else; the real work is posted to the media thread.
 class AudioSsrcTap {
 public:
@@ -1919,9 +1919,26 @@ private:
                     // overwrite valid registrations (verified empirically).
                     if (_e2eEncryptDecrypt) {
                         auto userIds = _userIds;
+                        auto threads = _threads;
+                        const auto weakSelf = std::weak_ptr<GroupInstanceReferenceInternal>(shared_from_this());
                         info.perReceiverTransformer = rtc::make_ref_counted<FrameTransformer>(
                             false, _e2eEncryptDecrypt,
-                            [userIds](uint32_t frameSsrc) -> int64_t {
+                            [userIds, threads, weakSelf](uint32_t frameSsrc) -> int64_t {
+                                if (!userIds->isKnown(frameSsrc)) {
+                                    // Once this m-line exists the SSRC's packets demux here and
+                                    // nowhere else (OnUnDemuxableRtpPacket no longer fires for
+                                    // them), so this is the only place left that can ask for the
+                                    // sender's identity again. handleDiscoveredAudioSsrc de-dupes
+                                    // on the in-flight request; a description response that
+                                    // omitted the SSRC would otherwise leave this participant
+                                    // permanently undecryptable. Decoder thread, per frame, but
+                                    // only while the sender is unknown.
+                                    threads->getMediaThread()->PostTask([weakSelf, frameSsrc]() {
+                                        if (auto strong = weakSelf.lock()) {
+                                            strong->handleDiscoveredAudioSsrc(frameSsrc);
+                                        }
+                                    });
+                                }
                                 return userIds->userIdForSsrc(frameSsrc);
                             },
                             _payloadTypeMapping, nullptr, nullptr);
@@ -2464,10 +2481,10 @@ private:
         }
 
         // Ask again while the sender is unknown, de-duped on the in-flight
-        // request exactly as CustomImpl's maybeRequestUnknownSsrc does: an SSRC
-        // never enters its _channelBySsrc until a description arrives, so the
-        // next unknown packet re-requests it. Transceiver creation below stays
-        // one-shot.
+        // request exactly as CustomImpl's maybeRequestUnknownSsrc does. Two
+        // callers re-ask: OnUnDemuxableRtpPacket while the SSRC has no m-line
+        // yet, and the per-receiver FrameTransformer's userIdForSsrc lookup once
+        // it has one. Transceiver creation below stays one-shot.
         const bool needsUserId = _e2eEncryptDecrypt && !_userIds->isKnown(ssrc);
         if ((isNew || needsUserId) &&
             _requestMediaChannelDescriptions &&

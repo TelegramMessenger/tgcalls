@@ -398,6 +398,20 @@ the prefix; on receive the prefix becomes `flags 0` and its absence
 `PF_SRTP_BYPASS`, so `DcSctpTransport` (skips `flags != 0`) never parses media.
 `SendPacket` returns the CALLER's byte count.
 
+**Both ends must have the flag.** Safe in production because
+`phoneCall.custom_parameters` is delivered identically to both participants,
+but know the failure shape: with DTLS enabled for SDP on both sides a one-sided
+flag no longer fails fast at SDP. The mtproto side reports connected as soon as
+ICE is writable and sends frames the stock side drops; the stock side's DTLS
+ClientHellos fail our hash check, one `ERROR! Bad incoming data hash.` line
+each, until the 20 s watchdog gives up.
+
+**Expected log lines in a healthy mtproto call**, so nobody chases them:
+`Creating UnencryptedRtpTransport` twice (upstream spells it "becayse"); exactly
+one `DtlsTransport in connected state has incomplete TLS information` per
+transport (the stats wrapper asking for cipher suites we do not have; fields
+come back absent, which is correct); and zero `Bad incoming data hash`.
+
 **Why not the obvious routes** (each was shipped or tried and cost a regression):
 
 - `Options::disable_encryption` (2026-09-01 to 2026-09-16). It also turns off

@@ -6,10 +6,10 @@
 
 #include "Instance.h"
 #include "api/dtls_transport_interface.h"
+#include "api/sequence_checker.h"
 #include "p2p/base/dtls_transport_factory.h"
 #include "p2p/base/dtls_transport_internal.h"
 #include "p2p/base/ice_transport_internal.h"
-#include "rtc_base/buffer.h"
 #include "rtc_base/copy_on_write_buffer.h"
 #include "rtc_base/rtc_certificate.h"
 
@@ -81,13 +81,19 @@ private:
     void emitDecryptedMessage(rtc::CopyOnWriteBuffer const &message, int64_t timestamp);
     void setDtlsState(webrtc::DtlsTransportState state);
 
+    // Everything runs on the network thread, like stock cricket::DtlsTransport:
+    // the controller constructs us there and every DtlsTransportInternal call
+    // webrtc makes hops there first. The checker attaches on construction.
+    webrtc::SequenceChecker _sequenceChecker;
+
     cricket::IceTransportInternal *_ice = nullptr;
     std::unique_ptr<EncryptedConnection> _transportEncryption;
     webrtc::DtlsTransportState _dtlsState = webrtc::DtlsTransportState::kNew;
     absl::optional<rtc::SSLRole> _dtlsRole;
     rtc::scoped_refptr<rtc::RTCCertificate> _localCertificate;
-    std::string _remoteFingerprintAlgorithm;
-    rtc::Buffer _remoteFingerprintValue;
+    // Set when OUR framing/encryption fails, so GetError() does not surface the
+    // ICE channel's stale error (which RtpTransport reads as a lost connection).
+    int _lastError = 0;
 };
 
 // Installed on PeerConnectionDependencies::dtls_transport_factory by

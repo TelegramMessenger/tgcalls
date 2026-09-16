@@ -2,6 +2,7 @@
 
 #include "EncryptedConnection.h"
 
+#include <cerrno>
 #include <cstring>
 
 namespace {
@@ -15,6 +16,7 @@ namespace tgcalls {
 
 MtProtoDtlsTransport::MtProtoDtlsTransport(cricket::IceTransportInternal *ice, EncryptionKey encryptionKey) :
 _ice(ice) {
+    RTC_DCHECK_RUN_ON(&_sequenceChecker);
     _transportEncryption = std::make_unique<EncryptedConnection>(
         EncryptedConnection::Type::Transport,
         encryptionKey,
@@ -56,6 +58,7 @@ bool MtProtoDtlsTransport::receiving() const {
 }
 
 int MtProtoDtlsTransport::SendPacket(const char *data, size_t len, const rtc::PacketOptions &options, int flags) {
+    RTC_DCHECK_RUN_ON(&_sequenceChecker);
     // `flags` is ground truth (13.0.0 semantics): BaseChannel sends RTP and RTCP
     // with PF_SRTP_BYPASS, DcSctpTransport sends SCTP with 0.
     rtc::CopyOnWriteBuffer buffer;
@@ -67,12 +70,18 @@ int MtProtoDtlsTransport::SendPacket(const char *data, size_t len, const rtc::Pa
 
     const auto encryptedPacket = _transportEncryption->prepareForSendingRawMessage(buffer, false);
     if (!encryptedPacket) {
+        // Our failure (oversized packet or exhausted counter), not the network's.
+        // Report it as such: with _lastError clear, GetError() would forward the
+        // ICE channel's never-cleared last error, and a stale ENOTCONN there is
+        // exactly what makes RtpTransport drop ready-to-send.
+        _lastError = EMSGSIZE;
         return -1;
     }
 
     // Flags never reach the ICE channel: P2PTransportChannel::SendPacket rejects
     // any non-zero value with EINVAL.
     const int sent = _ice->SendPacket((const char *)encryptedPacket->bytes.data(), encryptedPacket->bytes.size(), options, 0);
+    _lastError = 0;
     if (sent < 0) {
         return sent;
     }
@@ -94,7 +103,7 @@ bool MtProtoDtlsTransport::GetOption(rtc::Socket::Option opt, int *value) {
 }
 
 int MtProtoDtlsTransport::GetError() {
-    return _ice->GetError();
+    return _lastError != 0 ? _lastError : _ice->GetError();
 }
 
 absl::optional<rtc::NetworkRoute> MtProtoDtlsTransport::network_route() const {
@@ -124,6 +133,7 @@ bool MtProtoDtlsTransport::GetDtlsRole(rtc::SSLRole *role) const {
 }
 
 bool MtProtoDtlsTransport::SetDtlsRole(rtc::SSLRole role) {
+    RTC_DCHECK_RUN_ON(&_sequenceChecker);
     _dtlsRole = role;
     return true;
 }
@@ -151,6 +161,7 @@ rtc::scoped_refptr<rtc::RTCCertificate> MtProtoDtlsTransport::GetLocalCertificat
 }
 
 bool MtProtoDtlsTransport::SetLocalCertificate(const rtc::scoped_refptr<rtc::RTCCertificate> &certificate) {
+    RTC_DCHECK_RUN_ON(&_sequenceChecker);
     // Stored only so the controller's fingerprint lands in the SDP; it is never
     // used for a handshake.
     _localCertificate = certificate;
@@ -170,10 +181,10 @@ bool MtProtoDtlsTransport::SetRemoteFingerprint(absl::string_view digest_alg, co
 }
 
 webrtc::RTCError MtProtoDtlsTransport::SetRemoteParameters(absl::string_view digest_alg, const uint8_t *digest, size_t digest_len, absl::optional<rtc::SSLRole> role) {
-    // Accepted and stored, never verified: mtproto's shared key is the
-    // authentication. The role is what JsepTransport negotiated from a=setup.
-    _remoteFingerprintAlgorithm = std::string(digest_alg);
-    _remoteFingerprintValue.SetData(digest, digest_len);
+    RTC_DCHECK_RUN_ON(&_sequenceChecker);
+    // The fingerprint is accepted and discarded, never verified: mtproto's
+    // shared key is the authentication. The role is what JsepTransport
+    // negotiated from a=setup, and the only part anyone reads back.
     if (role) {
         _dtlsRole = role;
     }
@@ -187,6 +198,7 @@ cricket::IceTransportInternal *MtProtoDtlsTransport::ice_transport() {
 // ---- ICE signal bridges ----
 
 void MtProtoDtlsTransport::onIceWritableState(rtc::PacketTransportInternal *) {
+    RTC_DCHECK_RUN_ON(&_sequenceChecker);
     if (_ice->writable() && _dtlsState == webrtc::DtlsTransportState::kNew) {
         // No handshake: the shared key existed before the call started.
         setDtlsState(webrtc::DtlsTransportState::kConnected);
@@ -195,23 +207,28 @@ void MtProtoDtlsTransport::onIceWritableState(rtc::PacketTransportInternal *) {
 }
 
 void MtProtoDtlsTransport::onIceReceivingState(rtc::PacketTransportInternal *) {
+    RTC_DCHECK_RUN_ON(&_sequenceChecker);
     SignalReceivingState(this);
 }
 
 void MtProtoDtlsTransport::onIceReadyToSend(rtc::PacketTransportInternal *) {
+    RTC_DCHECK_RUN_ON(&_sequenceChecker);
     if (writable()) {
         SignalReadyToSend(this);
     }
 }
 
 void MtProtoDtlsTransport::onIceReadPacket(rtc::PacketTransportInternal *, const char *data, size_t size, const int64_t &timestamp, int flags) {
+    RTC_DCHECK_RUN_ON(&_sequenceChecker);
     if (const auto packet = _transportEncryption->handleIncomingRawPacket(data, size)) {
         emitDecryptedMessage(packet.value().main.message, timestamp);
         for (const auto &additional : packet.value().additional) {
             emitDecryptedMessage(additional.message, timestamp);
         }
     }
-    // Undecryptable: dropped silently, as EncryptedConnection always has.
+    // Undecryptable: nothing is emitted. EncryptedConnection logs one
+    // "ERROR! Bad incoming data hash." per such packet, as it does in 13.0.0;
+    // a flood of those in a call log means the peer is not speaking mtproto.
 }
 
 void MtProtoDtlsTransport::emitDecryptedMessage(rtc::CopyOnWriteBuffer const &message, int64_t timestamp) {
@@ -230,14 +247,17 @@ void MtProtoDtlsTransport::emitDecryptedMessage(rtc::CopyOnWriteBuffer const &me
 }
 
 void MtProtoDtlsTransport::onIceSentPacket(rtc::PacketTransportInternal *, const rtc::SentPacket &packet) {
+    RTC_DCHECK_RUN_ON(&_sequenceChecker);
     SignalSentPacket(this, packet);
 }
 
 void MtProtoDtlsTransport::onIceNetworkRouteChanged(absl::optional<rtc::NetworkRoute> route) {
+    RTC_DCHECK_RUN_ON(&_sequenceChecker);
     SignalNetworkRouteChanged(route);
 }
 
 void MtProtoDtlsTransport::onIceClosed(rtc::PacketTransportInternal *) {
+    RTC_DCHECK_RUN_ON(&_sequenceChecker);
     SignalClosed(this);
 }
 
