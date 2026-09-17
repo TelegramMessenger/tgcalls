@@ -99,6 +99,28 @@ the `exp0` ping/pong demo).
 
 ## Invariants & gotchas
 
+- **The initial camera must be part of the first offer, never a second one.**
+  Stock `start()` applies `descriptor.videoCapture` (InstanceV2ReferenceImpl.cpp:843)
+  *before* `beginSignaling()` (:872), so a video call's first offer already
+  carries video. The host cannot reproduce that ordering — the core sets
+  `_didBeginNegotiation` inside its own start — so it passes
+  `config.hasInitialVideoCapture` and the core adds `video0` in start, ahead of
+  the initial `requestSetLocalDescription()`; the host then re-applies the
+  capture after create only if the core did NOT add `video0` (an external
+  module ignoring the key). Until 2026-09-17 the host re-applied it
+  unconditionally and the core's `video_capture` handler offered
+  unconditionally: the caller issued a second `CreateOffer` while the first was
+  in flight (`SetLocalDescription failed`), the callee sent an unsolicited offer
+  (glare), the caller rolled its first offer back, and WebRTC's orphaned
+  `sctp_mid` wedged the call in an endless offer/answer loop — every 18/19
+  video call in production. The handler now goes through
+  `requestRenegotiation()`: a capture change offers only from a quiet stable
+  state (no offer in flight, no answer pending, callee only after the first
+  remote offer) and is otherwise deferred to `flushPendingRenegotiation()`,
+  which runs after each `pc_set_local_done` / `pc_set_remote_done`. Native got
+  the same deferral. Verify: `tgcalls_cli --mode p2p --version 19.0.0
+  --version2 19.0.0 --video` → 4 `SetLocalDescription` per call, none failed.
+
 - **Wire parity is frozen.** Signaling JSON keys/values are copied verbatim
   from stock (`InstanceV2ReferenceImpl.cpp` / `Signaling.cpp`); both sides use
   json11 (std::map-backed → key-sorted dump), so identical keys ⇒ identical

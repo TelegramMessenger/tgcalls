@@ -1124,30 +1124,6 @@ public:
         return webrtc::RTCError(webrtc::RTCErrorType::INTERNAL_ERROR, "AddTrack produced no matching transceiver");
     }
 
-    void requestRenegotiation() {
-        if (!_didBeginNegotiation) {
-            return;
-        }
-        _pendingRenegotiation = true;
-        flushPendingRenegotiation();
-    }
-
-    void flushPendingRenegotiation() {
-        if (!_pendingRenegotiation || _isMakingOffer || _isSettingRemoteAnswerPending) {
-            return;
-        }
-        if (_peerConnection->signaling_state() != webrtc::PeerConnectionInterface::SignalingState::kStable) {
-            return;
-        }
-        // A callee must not offer before receiving the caller's first offer:
-        // rolling that offer back can orphan its unnegotiated data-channel MID.
-        if (!_encryptionKey.isOutgoing && !_peerConnection->remote_description()) {
-            return;
-        }
-        _pendingRenegotiation = false;
-        sendLocalDescription();
-    }
-
     void sendLocalDescription() {
         const auto weak = std::weak_ptr<InstanceV2ReferenceImplInternal>(shared_from_this());
 
@@ -1175,6 +1151,9 @@ public:
                 strong->doSendLocalDescription();
 
                 strong->maybeCommitPendingIceCandidates();
+
+                // An answer just took us back to stable; after an offer this is
+                // a no-op until its answer lands.
                 strong->flushPendingRenegotiation();
             });
         }));
@@ -1215,6 +1194,40 @@ public:
         }
 
         _peerConnection->SetLocalDescription(observer);
+    }
+
+    void requestRenegotiation() {
+        // A capture change wants a new offer, but only from a quiet stable
+        // state: never while our own offer is in flight, never while we owe or
+        // await an answer, and on the callee never before the caller's first
+        // offer has arrived - an unsolicited callee offer collides with it and
+        // rolls it back, and a rollback of the very first offer orphans the
+        // data-channel mid in WebRTC (an endless offer/answer loop; this is
+        // what wedged every 18/19 video call). Otherwise remember it and send
+        // once the exchange settles, rather than trusting WebRTC to re-raise
+        // OnRenegotiationNeeded past its negotiation-needed latch.
+        if (!_didBeginNegotiation) {
+            return;
+        }
+        _pendingRenegotiation = true;
+        flushPendingRenegotiation();
+    }
+
+    void flushPendingRenegotiation() {
+        if (!_pendingRenegotiation) {
+            return;
+        }
+        if (_isMakingOffer || _isSettingRemoteAnswerPending) {
+            return;
+        }
+        if (_peerConnection->signaling_state() != webrtc::PeerConnectionInterface::SignalingState::kStable) {
+            return;
+        }
+        if (!_encryptionKey.isOutgoing && !_peerConnection->remote_description()) {
+            return;
+        }
+        _pendingRenegotiation = false;
+        sendLocalDescription();
     }
 
     void sendIceCandidate(const webrtc::IceCandidateInterface *iceCandidate) {
@@ -1481,6 +1494,8 @@ public:
                 if (type == "offer") {
                     strong->sendLocalDescription();
                 }
+                // After an offer we are now making the answer (no-op); after an
+                // answer we are stable and a deferred capture change may go out.
                 strong->flushPendingRenegotiation();
             });
         }));
@@ -1968,6 +1983,8 @@ private:
     bool _didBeginNegotiation = false;
     bool _isMakingOffer = false;
     bool _isSettingRemoteAnswerPending = false;
+    // setVideoCapture() asked for a new offer while one was in flight, an
+    // answer was pending, or (callee) the first remote offer had not arrived.
     bool _pendingRenegotiation = false;
     bool _isPerformingConfiguration = false;
     bool _useAddTrack = false;

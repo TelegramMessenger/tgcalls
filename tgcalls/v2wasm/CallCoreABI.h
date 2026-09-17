@@ -35,7 +35,7 @@
 //   ≲10 Hz / KB-scale envelope (enforcement: Phase-4 metering).
 //
 // Config (tgcalls_core_create):
-//   { "abiVersion": 1, "isOutgoing": bool,
+//   { "abiVersion": 1, "isOutgoing": bool, "hasInitialVideoCapture": bool,
 //     "enableP2P": bool, "customParameters": string,
 //     "rtcServers": [ { "host": s, "port": n, "login": s, "password": s,
 //                       "isTurn": bool, "isTcp": bool } ] }

@@ -103,6 +103,20 @@ _emit(std::move(emit)) {
         {"sendEncodings", json11::Json::array{ json11::Json::object{ {"maxBitrateBps", kAudioMaxBitrateBps} } }},
     });
 
+    // Parity with stock start(): setVideoCapture(_videoCapture) runs at
+    // InstanceV2ReferenceImpl.cpp:843, BEFORE beginSignaling() at :872, so an
+    // initial camera folds into the first offer. The host reports it here
+    // instead of re-applying the capture after create; re-applying would land
+    // after _didBeginNegotiation and cost a second offer on the caller plus an
+    // unsolicited one on the callee - the start glare whose rollback orphaned
+    // the data-channel mid and wedged 18/19 video calls in an endless
+    // offer/answer loop (analysis/FINDINGS-v19-video-loop.md in getlogstgcalls).
+    if (config["hasInitialVideoCapture"].bool_value()) {
+        emitAddVideoTransceiver();
+        _hasVideoCapture = true;
+        _hasVideoTrack = true;
+    }
+
     // stock beginSignaling()
     _didBeginNegotiation = true;
     if (_isOutgoing) {
@@ -211,6 +225,11 @@ void ReferenceCallCore::onEvent(json11::Json const &event) {
             emitLog("SetLocalDescription failed");
         }
         flushPendingRemoteCandidates();
+        if (event["ok"].bool_value()) {
+            // An answer just took us back to stable; an offer leaves us in
+            // have-local-offer and the flush is a no-op until its answer lands.
+            flushPendingRenegotiation();
+        }
     } else if (type == "pc_set_remote_done") {
         _isSettingRemoteAnswerPending = false;
         if (event["ok"].bool_value()) {
@@ -219,6 +238,9 @@ void ReferenceCallCore::onEvent(json11::Json const &event) {
             if (stringField(event, "sdpType") == "offer") {
                 requestSetLocalDescription();
             }
+            // After an offer we are now making the answer (no-op here); after
+            // an answer we are stable and a deferred capture change may go out.
+            flushPendingRenegotiation();
         } else {
             emitLog("SetRemoteDescription failed");
         }
@@ -304,20 +326,12 @@ void ReferenceCallCore::onEvent(json11::Json const &event) {
         }
         _hasVideoCapture = event["active"].bool_value() && !event["screencast"].bool_value();
         if (_hasVideoCapture) {
-            emit({
-                {"@type", "pc_add_transceiver"},
-                {"id", "video0"},
-                {"kind", "video"},
-                {"direction", "sendrecv"},
-                {"trackSource", "camera"},
-                {"codecPreferences", json11::Json::array{ "H265", "H264" }},
-                {"sendEncodings", json11::Json::array{ json11::Json::object{ {"maxBitrateBps", kVideoMaxBitrateBps} } }},
-            });
+            emitAddVideoTransceiver();
             _hasVideoTrack = true;
         }
         if (_didBeginNegotiation) {
             sendMediaState();
-            requestSetLocalDescription();
+            requestRenegotiation();
         }
     } else if (type == "pc_track") {
         if (stringField(event, "kind") == "video") {
@@ -347,6 +361,51 @@ void ReferenceCallCore::requestSetLocalDescription() {
     // pc_set_remote_done (FIFO).
     const bool asAnswer = (_signalingState == "have-remote-offer" || _signalingState == "have-remote-pranswer");
     emit({ {"@type", asAnswer ? "pc_create_answer" : "pc_create_offer"} });
+}
+
+void ReferenceCallCore::emitAddVideoTransceiver() {
+    emit({
+        {"@type", "pc_add_transceiver"},
+        {"id", "video0"},
+        {"kind", "video"},
+        {"direction", "sendrecv"},
+        {"trackSource", "camera"},
+        {"codecPreferences", json11::Json::array{ "H265", "H264" }},
+        {"sendEncodings", json11::Json::array{ json11::Json::object{ {"maxBitrateBps", kVideoMaxBitrateBps} } }},
+    });
+}
+
+void ReferenceCallCore::requestRenegotiation() {
+    // A capture change wants a new offer, but only from a quiet stable state:
+    // never while our own offer is in flight (that was the caller's second
+    // CreateOffer in the 18/19 start-glare loop), never while we owe or await
+    // an answer, and on the callee never before the caller's first offer has
+    // arrived (an unsolicited callee offer collides with it and rolls it
+    // back). Otherwise remember it and send once the exchange settles. Stock
+    // sends unconditionally and leans on WebRTC re-raising
+    // OnRenegotiationNeeded, which its negotiation-needed latch can swallow.
+    if (!_didBeginNegotiation) {
+        return;
+    }
+    _pendingRenegotiation = true;
+    flushPendingRenegotiation();
+}
+
+void ReferenceCallCore::flushPendingRenegotiation() {
+    if (!_pendingRenegotiation) {
+        return;
+    }
+    if (_isMakingOffer || _isSettingRemoteAnswerPending) {
+        return;
+    }
+    if (_signalingState != "stable") {
+        return;
+    }
+    if (!_isOutgoing && !_haveRemoteDescription) {
+        return;
+    }
+    _pendingRenegotiation = false;
+    requestSetLocalDescription();
 }
 
 void ReferenceCallCore::sendSignalingMessage(json11::Json::object &&message) {

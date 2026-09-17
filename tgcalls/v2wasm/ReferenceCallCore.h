@@ -55,6 +55,9 @@ protected:
     void emit(json11::Json::object &&command);
     void emitLog(std::string const &message);
     void requestSetLocalDescription();
+    void emitAddVideoTransceiver();
+    void requestRenegotiation();
+    void flushPendingRenegotiation();
     void handleSignalingData(std::string const &data);
     void handleRemoteSdp(std::string const &type, std::string const &sdp);
     void handleMediaStateMessage(json11::Json const &message);
@@ -80,6 +83,9 @@ protected:
     bool _didBeginNegotiation = false;
     bool _isMakingOffer = false;
     bool _isSettingRemoteAnswerPending = false;
+    // A capture change asked for a new offer while one was in flight, an
+    // answer was pending, or (callee) the first remote offer had not arrived.
+    bool _pendingRenegotiation = false;
     bool _haveLocalDescription = false;
     bool _haveRemoteDescription = false;
     std::string _signalingState = "stable";
