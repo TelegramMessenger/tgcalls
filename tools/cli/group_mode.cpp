@@ -1,4 +1,6 @@
 #include "group_mode.h"
+
+#include <cstdlib>
 #include "group_participant.h"
 
 #include <algorithm>
@@ -236,7 +238,11 @@ int runGroupMode(int customParticipants, int referenceParticipants, int duration
 
     // Clean up log files
     for (const auto& s : states) {
-        unlink(s->logPath.c_str());
+        // TGCALLS_CLI_KEEP_LOGS=1 keeps the engine logs of a passing run
+        // (see stopParticipant in group_participant.cpp).
+        if (const char* keep = std::getenv("TGCALLS_CLI_KEEP_LOGS"); !(keep && keep[0] == '1')) {
+            unlink(s->logPath.c_str());
+        }
     }
 
     fflush(stdout);

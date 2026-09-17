@@ -14,6 +14,8 @@ In-process test harness for tgcalls. See the root `CLAUDE.md` for build instruct
 ## Architecture (P2P/Reflector)
 - Two `tgcalls::Instance` objects (caller + callee) created via `Meta::Create(version, ...)`
 - Signaling bridged via `SignalingBridge` with configurable drop rate and delay
+- Group participant logs (`/tmp/tgcalls_group_p<id>_<pid>.log`) are written at stop and unlinked after validation; set `TGCALLS_CLI_KEEP_LOGS=1` to keep them (added 2026-09-17).
+- `--video` in p2p/reflector mode attaches a `tgcalls::VideoCaptureInterface::Create(threads, ...)` to BOTH descriptors (`descriptor.videoCapture`, the iOS join-time path: camera already on when the call is created). Added 2026-09-17 to reproduce the 18/19 start-glare renegotiation loop; a healthy video call shows 4 `SetLocalDescription` in the `--log-file`, no `SetLocalDescription failed`, one `Creating data channel`. Combine with `--delay 100-300` for field-like signaling latency.
 - `FakeAudioDeviceModule` with `SineRecorder` (440Hz tone) and `NoOpRenderer` (audio discarded; validation via BWE)
 - `FakeInterface` platform implementation (pure C++, no iOS/ObjC deps)
 - Stats log validation: both caller and callee write `config.statsLogPath` with bitrate records; non-empty log with at least one non-zero BWE value is a success condition

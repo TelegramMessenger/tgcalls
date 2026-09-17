@@ -1967,8 +1967,16 @@ private:
                     }
                 });
             },
-            [](webrtc::RTCError error) {
+            [weak = std::weak_ptr<GroupInstanceReferenceInternal>(shared_from_this())](webrtc::RTCError error) {
                 RTC_LOG(LS_ERROR) << "GroupRef: Renegotiation CreateOffer failed: " << error.message();
+                // Release _isRenegotiating like the SLD/SRD failure paths do,
+                // or every later renegotiation is deferred forever and new
+                // participants never get a receive transceiver.
+                if (auto strong = weak.lock()) {
+                    strong->_threads->getMediaThread()->PostTask([weak]() {
+                        if (auto s = weak.lock()) { s->onRenegotiationComplete(); }
+                    });
+                }
             }
         );
 
@@ -2149,7 +2157,11 @@ private:
         // Now build a matching remote answer with the updated m-lines.
         // Need to update mids to match what PeerConnection generated in the offer.
         auto localDesc = _peerConnection->local_description();
-        if (!localDesc) return;
+        if (!localDesc) {
+            RTC_LOG(LS_ERROR) << "GroupRef: local_description is null after renegotiation SetLocalDescription";
+            onRenegotiationComplete();
+            return;
+        }
 
         // Update _remoteSsrcs mids to match the actual mids from the local offer transceivers.
         for (auto& [ssrc, info] : _remoteSsrcs) {
@@ -2168,6 +2180,9 @@ private:
         auto remoteAnswer = buildRemoteAnswer();
         if (!remoteAnswer) {
             RTC_LOG(LS_ERROR) << "GroupRef: Failed to build renegotiation answer";
+            // Same release as above: a stuck _isRenegotiating is a silent stall
+            // (the mirror image of the 18/19 offer/answer loop).
+            onRenegotiationComplete();
             return;
         }
 
