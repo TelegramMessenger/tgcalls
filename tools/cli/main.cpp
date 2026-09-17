@@ -24,6 +24,7 @@
 #include "Instance.h"
 #include "FakeAudioDeviceModule.h"
 #include "VideoCaptureInterface.h"
+#include "StaticThreads.h"
 #include "v2/InstanceV2Impl.h"
 #include "v2/InstanceV2CompatImpl.h"
 #include "v2/InstanceV2ReferenceImpl.h"
@@ -475,6 +476,18 @@ int main(int argc, char* argv[]) {
     std::string callerStatsPath = "/tmp/tgcalls_cli_caller_" + std::to_string(getpid()) + ".json";
     std::string calleeStatsPath = "/tmp/tgcalls_cli_callee_" + std::to_string(getpid()) + ".json";
 
+    // --video in p2p/reflector mode: both sides start with the camera already on,
+    // the app's descriptor.videoCapture path (the join-time capture in group mode).
+    // This is the shape that exposed the 18/19 start-glare renegotiation loop.
+    std::shared_ptr<tgcalls::VideoCaptureInterface> callerVideoCapture;
+    std::shared_ptr<tgcalls::VideoCaptureInterface> calleeVideoCapture;
+    if (enableVideo) {
+        auto threads = tgcalls::StaticThreads::getThreads();
+        callerVideoCapture = tgcalls::VideoCaptureInterface::Create(threads, "caller");
+        calleeVideoCapture = tgcalls::VideoCaptureInterface::Create(threads, "callee");
+        logMsg("Main", "video capture attached to both descriptors");
+    }
+
     // --- Caller descriptor ---
     auto callerDesc = (tgcalls::Descriptor){
         .version = version,
@@ -492,6 +505,7 @@ int main(int argc, char* argv[]) {
             ? std::vector<tgcalls::RtcServer>{makeReflectorServer(reflectorHost, reflectorPort, callerPeerTag)}
             : std::vector<tgcalls::RtcServer>{},
         .encryptionKey = tgcalls::EncryptionKey(keyData, true),
+        .videoCapture = callerVideoCapture,
         .stateUpdated = [callState](tgcalls::State state) {
             logMsg("Caller", "state -> %s", stateName(state));
             std::lock_guard<std::mutex> lock(callState->mutex);
@@ -528,6 +542,7 @@ int main(int argc, char* argv[]) {
             ? std::vector<tgcalls::RtcServer>{makeReflectorServer(reflectorHost, reflectorPort, calleePeerTag)}
             : std::vector<tgcalls::RtcServer>{},
         .encryptionKey = tgcalls::EncryptionKey(keyData, false),
+        .videoCapture = calleeVideoCapture,
         .stateUpdated = [callState](tgcalls::State state) {
             logMsg("Callee", "state -> %s", stateName(state));
             std::lock_guard<std::mutex> lock(callState->mutex);
@@ -593,6 +608,12 @@ int main(int argc, char* argv[]) {
         };
     };
 
+    if (callerVideoCapture) {
+        callerVideoCapture->setState(tgcalls::VideoState::Inactive);
+    }
+    if (calleeVideoCapture) {
+        calleeVideoCapture->setState(tgcalls::VideoState::Inactive);
+    }
     callerInstance->stop(onStopped("Caller"));
     calleeInstance->stop(onStopped("Callee"));
 

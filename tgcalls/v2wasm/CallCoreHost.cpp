@@ -633,9 +633,17 @@ void CallCoreHost::start() {
             {"isTcp", server.isTcp},
         });
     }
+    // Stock start() applies descriptor.videoCapture before beginSignaling(), so
+    // the camera is part of the first offer; the core reproduces that from this
+    // flag (see the post-create check below).
+    bool hasInitialVideoCapture = false;
+    if (const auto captureImpl = GetVideoCaptureAssumingSameThread(_videoCapture.get())) {
+        hasInitialVideoCapture = !captureImpl->isScreenCapture();
+    }
     const std::string configJson = json11::Json(json11::Json::object{
         {"abiVersion", 1},
         {"isOutgoing", _encryptionKey.isOutgoing},
+        {"hasInitialVideoCapture", hasInitialVideoCapture},
         {"enableP2P", _enableP2P},
         {"customParameters", _customParameters},
         {"rtcServers", std::move(rtcServers)},
@@ -686,10 +694,15 @@ void CallCoreHost::start() {
     }
     processPendingCommands();
 
-    if (_videoCapture) {
-        // Stock start() re-applies descriptor.videoCapture (InstanceV2ReferenceImpl.cpp:726-728).
-        // The core has already set _didBeginNegotiation, so this also triggers the
-        // MediaState + renegotiation it would have folded into initial negotiation.
+    if (_videoCapture && _coreTransceivers.find("video0") == _coreTransceivers.end()) {
+        // A core that honours config.hasInitialVideoCapture has already added
+        // video0 inside its start, before _didBeginNegotiation - where stock
+        // start() applies descriptor.videoCapture (InstanceV2ReferenceImpl.cpp:843,
+        // ahead of beginSignaling() at :872). Re-applying it here landed after
+        // the flag and cost a second offer on the caller plus an unsolicited
+        // one on the callee: the start glare that wedged every 18/19 video
+        // call in an offer/answer loop. Only a core that ignored the key (an
+        // external module) still needs the stock re-apply.
         setVideoCapture(_videoCapture);
     }
 }
