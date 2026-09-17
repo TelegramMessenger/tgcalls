@@ -5,6 +5,7 @@
 #include <condition_variable>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <set>
 #include <thread>
 #include <unistd.h>
@@ -585,8 +586,14 @@ void stopParticipant(ParticipantState* state, GoInt sfuHandle) {
     state->instance.reset();
     state->videoCapture.reset();
 
-    // Clean up log file.
-    unlink(state->logPath.c_str());
+    // Clean up log file. TGCALLS_CLI_KEEP_LOGS=1 keeps it: the engine writes
+    // the log only at stop, so this is the only way to read a passing run's
+    // internal log (renegotiation counts, SDP churn).
+    if (const char* keep = std::getenv("TGCALLS_CLI_KEEP_LOGS"); !(keep && keep[0] == '1')) {
+        unlink(state->logPath.c_str());
+    } else {
+        groupLog(tag.c_str(), "log kept at %s", state->logPath.c_str());
+    }
 
     groupLog(tag.c_str(), "stopped and cleaned up");
 }
