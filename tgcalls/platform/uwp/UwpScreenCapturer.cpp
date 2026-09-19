@@ -189,6 +189,17 @@ void UwpScreenCapturer::create() {
 void UwpScreenCapturer::OnFrameArrived(DispatcherQueueTimer const& sender, winrt::Windows::Foundation::IInspectable const& args) {
 	winrt::slim_lock_guard const guard(lock_);
 
+	// The WinRT calls in here throw where the D3D calls beside them return an HRESULT, and
+	// the tick is reached through a WRL delegate: a throw crossing it is a fail-fast, and the
+	// unwind returns the frame in flight to a pool whose device has usually gone with it.
+	try {
+		ProcessFrame();
+	} catch (...) {
+		onFatalError();
+	}
+}
+
+void UwpScreenCapturer::ProcessFrame() {
 	if (item_closed_) {
 		RTC_LOG(LS_ERROR) << "The target source has been closed.";
 		onFatalError();
@@ -279,9 +290,9 @@ void UwpScreenCapturer::OnFrameArrived(DispatcherQueueTimer const& sender, winrt
 
 	auto new_size = capture_frame.ContentSize();
 
-	// Resized before the copy rather than after it, as upstream's WgcCaptureSession does:
-	// the copy below takes only the region the two textures share, and a mapped texture
-	// still holding the previous size would keep a band of stale pixels down its edge.
+	// Before the copy, as upstream's WgcCaptureSession does: the copy below takes only the
+	// region the two textures share, so a mapped texture still holding the previous size
+	// would keep a band of stale pixels down its edge.
 	if (previous_size_.Width != new_size.Width ||
 		previous_size_.Height != new_size.Height) {
 		hr = CreateMappedTexture(texture_2D, new_size.Width, new_size.Height);

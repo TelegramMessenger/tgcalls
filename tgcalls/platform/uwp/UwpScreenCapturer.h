@@ -90,6 +90,7 @@ private:
 
 	//void OnFrameArrived(Direct3D11CaptureFramePool const& sender, winrt::Windows::Foundation::IInspectable const& args);
 	void OnFrameArrived(DispatcherQueueTimer const& sender, winrt::Windows::Foundation::IInspectable const& args);
+	void ProcessFrame();
 	void OnClosed(GraphicsCaptureItem const& sender, winrt::Windows::Foundation::IInspectable const& args);
 
 	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _sink;
