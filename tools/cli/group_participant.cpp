@@ -6,6 +6,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <set>
 #include <thread>
 #include <unistd.h>
@@ -117,6 +118,49 @@ void churnVideoSinks(const std::vector<std::unique_ptr<ParticipantState>>& state
             groupLog(tag.c_str(), "replaced video sink for endpoint %s (old sink had %d frames)",
                      endpointId.c_str(), oldFrames);
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// dropAllVideoRequests / rerequestAllVideo (--video-rerequest)
+// ---------------------------------------------------------------------------
+
+void dropAllVideoRequests(const std::vector<std::unique_ptr<ParticipantState>>& states) {
+    for (const auto& state : states) {
+        if (!state || !state->instance) continue;
+        std::string tag = "P" + std::to_string(state->id);
+        size_t sinks = 0;
+        {
+            std::lock_guard<std::mutex> lock(state->videoSinksMutex);
+            sinks = state->videoSinks.size();
+        }
+        state->instance->setRequestedVideoChannels({});
+        groupLog(tag.c_str(), "video-rerequest: dropped all video requests (%zu sink(s) kept)", sinks);
+    }
+}
+
+void rerequestAllVideo(const std::vector<std::unique_ptr<ParticipantState>>& states) {
+    for (const auto& state : states) {
+        if (!state || !state->instance) continue;
+        std::string tag = "P" + std::to_string(state->id);
+        std::vector<tgcalls::VideoChannelDescription> fullSet;
+        {
+            std::lock_guard<std::mutex> lock(state->videoSinksMutex);
+            fullSet = state->requestedVideoChannels;
+            state->videoRerequested = !fullSet.empty();
+            // Baseline taken here, not at the drop: the drop is applied on the
+            // engine's media thread some time after setRequestedVideoChannels
+            // returns, and every frame that lands in between would count as
+            // "after the re-request" and let a frozen tile pass. By now the
+            // proxy has been detached for a second and the sinks are quiet.
+            state->videoFramesAtRerequest.clear();
+            for (const auto& [endpointId, sink] : state->videoSinks) {
+                state->videoFramesAtRerequest[endpointId] = sink->frameCount();
+            }
+        }
+        if (fullSet.empty()) continue;
+        groupLog(tag.c_str(), "video-rerequest: requesting %zu endpoint(s) again", fullSet.size());
+        state->instance->setRequestedVideoChannels(std::move(fullSet));
     }
 }
 
@@ -647,6 +691,23 @@ GroupValidationResult validateGroupState(
                 groupLog("Validate", "P%d <- endpoint %s: %d video frames (%dx%d)",
                          s->id, endpointId.c_str(), frames,
                          sink->lastWidth(), sink->lastHeight());
+                if (s->videoRerequested) {
+                    // The sink kept counting across the drop, so frames that
+                    // arrived before the drop must not satisfy the check: only
+                    // growth past the recorded count proves the re-requested
+                    // transceiver is delivering.
+                    auto before = s->videoFramesAtRerequest.find(endpointId);
+                    int framesBefore = before != s->videoFramesAtRerequest.end() ? before->second : 0;
+                    result.videoRerequestExpectedPairs++;
+                    if (frames <= framesBefore) {
+                        result.videoRerequestStalledPairs++;
+                        groupLog("Validate", "FAIL: P%d (%s) <- endpoint %s: no video frame after the re-request (%d before, %d now)",
+                                 s->id, s->isReference ? "ref" : "custom", endpointId.c_str(), framesBefore, frames);
+                    } else {
+                        groupLog("Validate", "OK:   P%d (%s) <- endpoint %s: %d frame(s) after the re-request",
+                                 s->id, s->isReference ? "ref" : "custom", endpointId.c_str(), frames - framesBefore);
+                    }
+                }
             }
         }
 
@@ -763,6 +824,49 @@ GroupValidationResult validateGroupState(
         }
     }
 
+    // Every unmuted sender must reach every peer's level reports, not only be
+    // audible. Levels come from the sink on the sender's dedicated receiver
+    // track; a receiver whose packets are stolen by a stray catch-all stream
+    // still plays audio (the catch-all decodes it) but never reports a level,
+    // so the app would never show that participant as speaking.
+    for (const auto& sender : states) {
+        if (sender->muted || sender->audioSsrc == 0) continue;
+        for (const auto& peer : states) {
+            if (peer.get() == sender.get()) continue;
+            result.audioLevelExpectedPairs++;
+            std::lock_guard<std::mutex> lock(peer->audioLevelsMutex);
+            auto it = peer->maxAudioLevelPerSsrc.find(sender->audioSsrc);
+            float maxLevel = (it != peer->maxAudioLevelPerSsrc.end()) ? it->second : 0.0f;
+            if (maxLevel >= kMutedLevelThreshold) {
+                result.audioLevelHeardPairs++;
+            } else {
+                groupLog("Validate",
+                         "FAIL: P%d (%s) never reported a level for P%d (ssrc=%u), max %.3f",
+                         peer->id, peer->isReference ? "ref" : "custom",
+                         sender->id, sender->audioSsrc, maxLevel);
+            }
+        }
+    }
+
+    // Every participant's log sink receives the whole process's RTC log while
+    // that participant is alive, so the first participant's file holds every
+    // engine's lines from the start of the run until that participant was
+    // stopped, which is after the whole call ran. Scan it once.
+    for (const auto& s : states) {
+        FILE* f = fopen(s->logPath.c_str(), "r");
+        if (!f) continue;
+        static const char kNeedle[] = "Creating unsignaled receive stream for SSRC=";
+        char line[4096];
+        while (fgets(line, sizeof(line), f)) {
+            if (strstr(line, kNeedle)) {
+                result.unsignaledAudioStreams++;
+                groupLog("Validate", "FAIL: %s", line);
+            }
+        }
+        fclose(f);
+        break;
+    }
+
     bool hasMuted = false;
     for (const auto& s : states) {
         if (s->muted) { hasMuted = true; break; }
@@ -784,11 +888,16 @@ GroupValidationResult validateGroupState(
     if (video) {
         result.success = result.success && (result.selfVideoRequests == 0) && (result.ownPreviewMissing == 0);
     }
+    if (result.videoRerequestExpectedPairs > 0) {
+        result.success = result.success && (result.videoRerequestStalledPairs == 0);
+    }
     if (result.lateUnmuteExpectedPairs > 0) {
         result.success = result.success &&
                          (result.lateUnmuteHeardPairs == result.lateUnmuteExpectedPairs);
     }
     result.success = result.success && (result.mutedAudioLeaks == 0);
+    result.success = result.success && (result.audioLevelHeardPairs == result.audioLevelExpectedPairs);
+    result.success = result.success && (result.unsignaledAudioStreams == 0);
 
     return result;
 }
@@ -815,10 +924,15 @@ bool printGroupSummary(
     printf("SFU:                    Go/Pion (in-process)\n");
     printf("Connected:              %d/%d\n", result.connectedCount, result.totalParticipants);
     printf("Audio received:         %d/%d\n", result.audioReceivedCount, result.totalParticipants);
+    printf("Audio levels heard:     %d/%d pairs\n", result.audioLevelHeardPairs, result.audioLevelExpectedPairs);
+    printf("Unsignaled audio:       %d stream(s) (must be 0)\n", result.unsignaledAudioStreams);
     if (video) {
         printf("Video received:         %d/%d\n", result.videoReceivedPairs, result.videoExpectedPairs);
         printf("Self video requests:    %d (must be 0)\n", result.selfVideoRequests);
         printf("Own preview missing:    %d (must be 0)\n", result.ownPreviewMissing);
+    }
+    if (result.videoRerequestExpectedPairs > 0) {
+        printf("Video after re-request: %d/%d stalled (must be 0)\n", result.videoRerequestStalledPairs, result.videoRerequestExpectedPairs);
     }
     if (result.lateUnmuteExpectedPairs > 0) {
         printf("Late unmute heard:      %d/%d\n", result.lateUnmuteHeardPairs, result.lateUnmuteExpectedPairs);

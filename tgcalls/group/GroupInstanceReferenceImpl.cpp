@@ -48,6 +48,8 @@
 #include "group/GroupFrameTransformer.h"
 #include "group/GroupAudioCapturePostProcessor.h"
 #include "modules/rtp_rtcp/source/rtp_packet_received.h"
+#include "api/field_trials_view.h"
+#include "FieldTrialsConfig.h"
 
 #include "third-party/json11.hpp"
 
@@ -74,6 +76,38 @@ absl::string_view mapIceCandidateTypeToInternal(const std::string &type) {
     if (type == "relay") return cricket::RELAY_PORT_TYPE;
     return type;
 }
+
+// Field trials for this engine's PeerConnectionFactory.
+//
+// Video packets whose SSRC no m-section signals must be dropped, never turned
+// into a default (unsignaled) receive stream. A packet the network thread has
+// already handed to the worker when the worker removes an endpoint's receive
+// stream (the app requested fewer endpoints) is otherwise received as unknown
+// and creates such a stream on the old, still-open transceiver's channel.
+// That channel's remote content never changes again, so the stream is never
+// reset, and it keeps the SSRC's binding in the Call's demuxer: when the same
+// endpoint is requested again, the new transceiver's receive stream cannot
+// register for the SSRC, the old stream decodes every frame into a sink that
+// was detached with the endpoint ("VideoReceiveStreamInterface not connected
+// to a VideoSink"), and the participant's tile stays frozen for the rest of
+// the call. Signaled SSRCs are always available here: buildRemoteAnswer puts
+// every requested endpoint's SSRC groups into its m-section.
+//
+// CustomImpl enables the same trial process-wide from its start(), which used
+// to make this engine's behaviour depend on whether a CustomImpl call had run
+// earlier in the process. Everything else still resolves through tgcalls'
+// shared FieldTrialBasedConfig (the global trial string), exactly as before.
+class GRFieldTrials final : public webrtc::FieldTrialsView {
+public:
+    static constexpr absl::string_view kDiscardUnknownSsrcVideo = "WebRTC-Video-DiscardPacketsWithUnknownSsrc";
+
+    std::string Lookup(absl::string_view key) const override {
+        if (key == kDiscardUnknownSsrcVideo) {
+            return "Enabled";
+        }
+        return fieldTrialsBasedConfig.Lookup(key);
+    }
+};
 
 // --- PeerConnection observer adapter ---
 
@@ -319,131 +353,6 @@ public:
 private:
     webrtc::Mutex _mutex;
     GroupLevelValue _value;
-};
-
-// --- Audio SSRC-discovery tap ---
-//
-// Single instance installed on mid=0's receiver (the catch-all for
-// unsignaled audio SSRCs). The first packet for an unknown SSRC arrives
-// at mid=0; the voice channel constructs an unsignaled WebRtcAudioReceiveStream
-// and attaches this transformer (because it is the channel's
-// `unsignaled_frame_transformer_`). Transform() then notifies discovery on
-// first-sight per SSRC and passes the frame straight through to the stream's
-// depacketizer/decoder so the discovery-window audio plays normally.
-//
-// No buffering. After renegotiation propagates the SSRC to a recvonly
-// transceiver, the BUNDLE demuxer routes packets to the per-receiver
-// transformer (`GRPerReceiverAudioTransformer`); this tap stops seeing them.
-//
-// E2E note: this tap intentionally does NOT decrypt. SSRC lives in the
-// unencrypted RTP header, so discovery works on encrypted frames as-is.
-// Decryption belongs on the per-receiver transformer (per-user keys).
-class GRAudioFrameTransformer : public webrtc::FrameTransformerInterface {
-public:
-    using SsrcCallback = std::function<void(uint32_t ssrc)>;
-
-    GRAudioFrameTransformer(SsrcCallback onNewSsrc,
-                            GroupEncryptDecryptFunction e2eEncryptDecrypt,
-                            std::shared_ptr<GRUserIdRegistry> userIds,
-                            std::map<int32_t, FrameTransformerPayloadType> payloadTypeMapping)
-        : _onNewSsrc(std::move(onNewSsrc))
-        , _e2eEncryptDecrypt(std::move(e2eEncryptDecrypt))
-        , _userIds(std::move(userIds))
-        , _payloadTypeMapping(std::move(payloadTypeMapping)) {}
-
-    void Transform(std::unique_ptr<webrtc::TransformableFrameInterface> frame) override {
-        if (!frame) return;
-        const uint32_t ssrc = frame->GetSsrc();
-
-        bool notifyDiscovery = false;
-        rtc::scoped_refptr<webrtc::TransformedFrameCallback> sink;
-        {
-            webrtc::MutexLock lock(&_mu);
-            if (_seen.size() < kMaxSeen && _seen.insert(ssrc).second) {
-                notifyDiscovery = true;
-            }
-            sink = _sink;
-        }
-
-        // Notify on every frame while encryption is on and the sender is still
-        // unknown: handleDiscoveredAudioSsrc de-dupes on an in-flight request the
-        // way CustomImpl's maybeRequestUnknownSsrc does. Without this the engine
-        // asks exactly once ever, and a description response that omits the SSRC
-        // leaves that participant permanently undecryptable.
-        if (!notifyDiscovery && _e2eEncryptDecrypt && _userIds && !_userIds->isKnown(ssrc)) {
-            notifyDiscovery = true;
-        }
-
-        if (notifyDiscovery && _onNewSsrc) {
-            _onNewSsrc(ssrc);
-        }
-        if (!sink) {
-            return;
-        }
-
-        if (!_e2eEncryptDecrypt) {
-            sink->OnTransformedFrame(std::move(frame));
-            return;
-        }
-
-        // Encrypted: forwarding ciphertext would render a burst of noise, so a
-        // frame whose sender is not yet known is dropped. Decrypting here rather
-        // than dropping unconditionally keeps the discovery window audible and is
-        // correct whether or not this tap keeps seeing an SSRC after the recvonly
-        // transceiver is negotiated.
-        //
-        // Membership, not value, decides: an unresolved SSRC and a genuine
-        // userId of 0 are indistinguishable by value.
-        if (!_userIds || !_userIds->isKnown(ssrc)) {
-            return;
-        }
-        const int64_t userId = _userIds->userIdForSsrc(ssrc);
-
-        FrameTransformerPayloadType payloadType = FrameTransformerPayloadType::Unknown;
-        const auto found = _payloadTypeMapping.find(frame->GetPayloadType());
-        if (found != _payloadTypeMapping.end()) {
-            payloadType = found->second;
-        }
-        if (payloadType != FrameTransformerPayloadType::Opus) {
-            return;
-        }
-
-        // The trailer's level is discarded: remote levels come from
-        // GRAudioLevelSink's real decoded PCM.
-        auto result = decryptGroupAudioFrame(_e2eEncryptDecrypt, userId, frame->GetData(),
-                                             nullptr, nullptr, nullptr);
-        if (result.empty()) {
-            return;
-        }
-        frame->SetData(result);
-        sink->OnTransformedFrame(std::move(frame));
-    }
-
-    void RegisterTransformedFrameCallback(
-            rtc::scoped_refptr<webrtc::TransformedFrameCallback> cb) override {
-        webrtc::MutexLock lock(&_mu);
-        _sink = std::move(cb);
-    }
-    void RegisterTransformedFrameSinkCallback(
-            rtc::scoped_refptr<webrtc::TransformedFrameCallback>,
-            uint32_t) override {}
-    void UnregisterTransformedFrameCallback() override {
-        webrtc::MutexLock lock(&_mu);
-        _sink = nullptr;
-    }
-    void UnregisterTransformedFrameSinkCallback(uint32_t) override {}
-
-private:
-    static constexpr size_t kMaxSeen = 256;
-
-    SsrcCallback _onNewSsrc;
-    GroupEncryptDecryptFunction _e2eEncryptDecrypt;
-    std::shared_ptr<GRUserIdRegistry> _userIds;
-    std::map<int32_t, FrameTransformerPayloadType> _payloadTypeMapping;
-
-    webrtc::Mutex _mu;
-    rtc::scoped_refptr<webrtc::TransformedFrameCallback> _sink RTC_GUARDED_BY(_mu);
-    std::set<uint32_t> _seen RTC_GUARDED_BY(_mu);
 };
 
 // Opus is fixed at 111 for every participant in a group call — payload types are
@@ -734,10 +643,6 @@ public:
     void start() {
         const auto weak = std::weak_ptr<GroupInstanceReferenceInternal>(shared_from_this());
 
-        // Note: we do NOT set DiscardPacketsWithUnknownSsrc because the outgoing
-        // video transceiver is sendonly (no receive side). Unsignaled video packets
-        // will be routed to the recvonly incoming video transceiver.
-
         // 1. Create AudioDeviceModule on the worker thread — platform ADMs (notably
         //    iOS) assert on the worker thread during Init/Terminate and touch
         //    AVAudioSession; mirrors GroupInstanceCustomImpl's worker-thread ADM
@@ -751,6 +656,7 @@ public:
 
         // 2. Create PeerConnectionFactory.
         webrtc::PeerConnectionFactoryDependencies deps;
+        deps.trials = std::make_unique<GRFieldTrials>();
         deps.network_thread = _threads->getNetworkThread();
         deps.signaling_thread = _threads->getMediaThread();
         deps.worker_thread = _threads->getWorkerThread();
@@ -826,22 +732,33 @@ public:
         config.rtcp_mux_policy = webrtc::PeerConnectionInterface::RtcpMuxPolicy::kRtcpMuxPolicyRequire;
         config.continual_gathering_policy = webrtc::PeerConnectionInterface::ContinualGatheringPolicy::GATHER_CONTINUALLY;
         config.audio_jitter_buffer_fast_accelerate = true;
+        // Every audio SSRC is received through an m-line that signals it, and
+        // unknown SSRCs are learned from the packets the demuxer drops (the tap
+        // below). Payload-type routing would defeat both: WebRTC turns it on
+        // for the lone receiving audio m-line of the BUNDLE (the answer carries
+        // no MID extension), so while exactly one remote SSRC is negotiated a
+        // new speaker's packets are routed to that channel by payload type,
+        // create an "unsignaled" receive stream there, never reach the tap,
+        // and keep the SSRC's demuxer binding away from the m-line added for
+        // it later. A tgcalls seam in the vendored webrtc turns the mechanism
+        // off for this PeerConnection.
+        config.disable_payload_type_demuxing = true;
 
         webrtc::PeerConnectionDependencies pcDeps(nullptr);
         pcDeps.observer = _peerConnectionObserver.get();
 
-        // Audio SSRC discovery for a participant who starts sending after the
-        // call settled. Once two receiving audio m-lines in the BUNDLE group
-        // advertise Opus 111 (sendrecv mid=0 plus one recvonly per remote SSRC),
-        // SdpOfferAnswerHandler::UpdatePayloadTypeDemuxingState disables
-        // payload-type demuxing and resets the unsignaled catch-all, so an
-        // unknown SSRC - no MID extension (buildRemoteAnswer strips it), no SSRC
-        // binding - is dropped by RtpDemuxer before any receive stream or frame
-        // transformer exists. RtpTransport reports exactly those drops through
-        // PeerConnectionObserver::OnUnDemuxableRtpPacket (a tgcalls seam in the
-        // vendored webrtc), parsed and SRTP-unprotected, on the network thread.
-        // Packets that still reach the mid=0 catch-all are demuxed, never arrive
-        // here, and are covered by the GRAudioFrameTransformer as before.
+        // Audio SSRC discovery, the only path. No audio m-line receives
+        // without a signaled SSRC (mid 0 is sendonly, see below; each remote
+        // SSRC gets its own recvonly m-line carrying that SSRC), so a packet
+        // for an SSRC without an m-line yet - no MID extension (buildRemoteAnswer
+        // strips it), no SSRC binding, no payload-type routing - is dropped by
+        // RtpDemuxer before any receive stream exists. RtpTransport reports
+        // exactly those drops through PeerConnectionObserver::OnUnDemuxableRtpPacket
+        // (a tgcalls seam in the vendored webrtc), parsed and SRTP-unprotected,
+        // on the network thread. A new speaker is therefore heard once the
+        // discovery renegotiation has added their m-line
+        // (kDiscoveryRenegotiationDelayMs plus one offer/answer), which is also
+        // when CustomImpl starts playing an unknown SSRC.
         _audioSsrcTap = std::make_shared<AudioSsrcTap>();
         {
             auto tap = _audioSsrcTap;
@@ -860,8 +777,8 @@ public:
                     return;
                 }
                 bool report = tap->shouldReport(ssrc);
-                // Mirrors GRAudioFrameTransformer: while encryption is on and the
-                // sender is still unknown, keep reporting so
+                // While encryption is on and the sender is still unknown, keep
+                // reporting so
                 // handleDiscoveredAudioSsrc re-asks for the description (it de-dupes
                 // on the in-flight request). A response that omits the SSRC would
                 // otherwise leave that participant permanently undecryptable.
@@ -916,6 +833,22 @@ public:
 
         webrtc::RtpTransceiverInit transceiverInit;
         transceiverInit.stream_ids = {"0"};
+        // Send-only: this m-line never receives. Every remote audio SSRC gets
+        // its own recvonly m-line that signals the SSRC (renegotiate), and is
+        // found through the un-demuxable-packet tap below. Were mid 0 sendrecv,
+        // it would be the only receiving audio channel until the first
+        // renegotiation, so WebRTC would route unknown SSRCs to it by payload
+        // type and create "unsignaled" receive streams there. Those streams
+        // are reset exactly once, when the first dedicated m-line disables
+        // payload-type demuxing, and a packet already handed to the worker
+        // thread at that moment recreates one; nothing ever resets mid 0
+        // again, so the SSRC's dedicated m-line can never register in the
+        // Call's demuxer ("Sink could not be added for SSRC"): the participant
+        // is heard through the stray stream but their level sink, which sits
+        // on the dedicated receiver, never fires, and they are never shown as
+        // speaking. With no receiving role there is nothing for WebRTC to
+        // create such a stream on.
+        transceiverInit.direction = webrtc::RtpTransceiverDirection::kSendOnly;
 
         auto result = _peerConnection->AddTransceiver(audioTrack, transceiverInit);
         if (result.ok()) {
@@ -944,28 +877,6 @@ public:
                         },
                         nullptr));
             }
-
-            // Install the SSRC-discovery tap on mid=0's receiver. mid=0 is the
-            // catch-all for unsignaled audio: the first packet for an unknown
-            // SSRC arrives at mid=0's voice channel, which constructs an
-            // unsignaled WebRtcAudioReceiveStream and attaches this transformer
-            // (it lives in `unsignaled_frame_transformer_`). The tap notifies
-            // discovery once per SSRC and passes the frame straight through —
-            // discovery-window audio plays normally via mid=0's stream until
-            // renegotiation hands the SSRC off to a recvonly transceiver
-            // (`GRPerReceiverAudioTransformer`), at which point the BUNDLE
-            // demuxer routes packets there and this tap stops seeing them.
-            _audioFrameTransformer = rtc::make_ref_counted<GRAudioFrameTransformer>(
-                [weak, threads = _threads](uint32_t ssrc) {
-                    threads->getMediaThread()->PostTask([weak, ssrc]() {
-                        if (auto strong = weak.lock()) {
-                            strong->handleDiscoveredAudioSsrc(ssrc);
-                        }
-                    });
-                },
-                _e2eEncryptDecrypt, _userIds, _payloadTypeMapping);
-            _outgoingAudioTransceiver->receiver()
-                ->SetDepacketizerToDecoderFrameTransformer(_audioFrameTransformer);
 
             startStatsLogging();
 
@@ -1332,14 +1243,17 @@ public:
                 audioContent->set_rtcp_mux(true);
 
                 if (isFirstAudio) {
-                    // --- First audio m-line: sendrecv (our outgoing audio) ---
+                    // --- First audio m-line: our outgoing audio only ---
+                    // The local transceiver is sendonly, so the SFU's side is
+                    // recvonly: no stream ever demuxes here (see start()).
                     isFirstAudio = false;
 
                     // Copy RTP header extensions from local offer, excluding MID.
                     // The SFU forwards raw RTP with the sender's MID value, which
                     // would cause BUNDLE demux to route packets to the wrong channel.
-                    // Without MID in the extension map, PeerConnection uses SSRC/PT
-                    // routing for all incoming media.
+                    // Without MID in the extension map, incoming media demuxes by
+                    // signaled SSRC only (payload-type routing is off for this
+                    // PeerConnection, see start()).
                     for (const auto& ext : localMedia->rtp_header_extensions()) {
                         if (ext.uri == webrtc::RtpExtension::kMidUri) {
                             continue;
@@ -1347,7 +1261,7 @@ public:
                         audioContent->AddRtpHeaderExtension(ext);
                     }
 
-                    audioContent->set_direction(webrtc::RtpTransceiverDirection::kSendRecv);
+                    audioContent->set_direction(webrtc::RtpTransceiverDirection::kRecvOnly);
                 } else {
                     // --- Recvonly audio transceiver: answer with sendonly ---
                     // Include the remote SSRC so PeerConnection's AudioRtpReceiver
@@ -1427,9 +1341,10 @@ public:
                 } else {
                     videoContent->set_direction(webrtc::RtpTransceiverDirection::kSendOnly);
 
-                    // Include remote SSRCs for SSRC-based demux. Required because
-                    // CustomImpl sets DiscardPacketsWithUnknownSsrc process-wide,
-                    // which prevents unsignaled stream creation in mixed groups.
+                    // Include remote SSRCs for SSRC-based demux. Required: the
+                    // factory discards video packets with unsignaled SSRCs (see
+                    // GRFieldTrials), so an endpoint is only received through
+                    // the SSRC groups signaled here.
                     for (const auto& [epId, ep] : _remoteVideoEndpoints) {
                         if (ep.transceiver && ep.transceiver->mid().has_value() &&
                             ep.transceiver->mid().value() == mid) {
@@ -1911,9 +1826,8 @@ private:
                     // processing of the answer's m-line), media_channel propagates it to the
                     // newly-created ChannelReceive's frame_transformer_delegate_, which calls
                     // RegisterTransformedFrameCallback on our instance. Without this, the
-                    // signaled stream constructs with frame_transformer=nullptr (because mid=N's
-                    // channel has unsignaled_frame_transformer_=nullptr — only mid=0's channel
-                    // has it set), and the e2e PR's decrypt hook would have no attachment point.
+                    // signaled stream constructs with frame_transformer=nullptr, and the e2e
+                    // decrypt hook would have no attachment point.
                     // Each receiver gets its OWN instance: sharing one across
                     // receivers makes Register{Sink,}TransformedFrameCallback
                     // overwrite valid registrations (verified empirically).
@@ -2633,8 +2547,6 @@ private:
     // Audio.
     webrtc::scoped_refptr<webrtc::AudioTrackInterface> _outgoingAudioTrack;
     webrtc::scoped_refptr<webrtc::RtpTransceiverInterface> _outgoingAudioTransceiver;
-    // Per-receiver audio frame transformer (catch-all + every recvonly).
-    rtc::scoped_refptr<GRAudioFrameTransformer> _audioFrameTransformer;
 
     // Data channel.
     webrtc::scoped_refptr<webrtc::DataChannelInterface> _dataChannel;

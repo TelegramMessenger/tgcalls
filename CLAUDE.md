@@ -147,6 +147,13 @@ Located at `submodules/TgVoipWebrtc/tgcalls/tools/cli/`. Runs tgcalls instances 
 # regression test for the ReferenceImpl dangling-sink crash in rtc::VideoBroadcaster::OnFrame
 ./bazel-bin/submodules/TgVoipWebrtc/tgcalls/tools/cli/tgcalls_cli --mode group --participants 1 --reference-participants 1 --video --video-sink-churn --duration 8
 
+# Every video request dropped and issued again on the same PeerConnection, five times, under a
+# 150 ms downlink delay (what leaving and re-entering the video grid does in the app) — the
+# regression test for ReferenceImpl's "one tile stays frozen after the grid comes back" bug (a
+# default receive stream created from an in-flight packet kept the SSRC's demuxer binding). Needs
+# six participants to hit the window reliably on a host; must give "0/30 stalled".
+./bazel-bin/submodules/TgVoipWebrtc/tgcalls/tools/cli/tgcalls_cli --mode group --participants 0 --reference-participants 6 --video --video-rerequest --duration 6
+
 # Outgoing video handed over the way the iOS wrapper does it — as a VideoCaptureInterface, at join
 # (descriptor.videoCapture) or after it (setVideoCapture) — the regression test for ReferenceImpl's
 # "camera on, server says video, nothing ever sent" bug. Both must give 2/2.
@@ -205,6 +212,12 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
 - `--delay min-max` — signaling delay range in ms (e.g., `50-200`)
 - `--video` — enable H264 video with simulcast in group mode (both CustomImpl and ReferenceImpl participants)
 - `--video-sink-churn` — with `--video`, once frames flow each participant replaces every incoming video sink five times, one second apart (`addIncomingVideoOutput` with a fresh sink, old sink released) — what the app does on a quality switch, where the tile's view owns the sink. An engine that keeps a raw pointer to a dead sink segfaults in `rtc::VideoBroadcaster::OnFrame`; validation then counts frames on the NEW sinks only. Known limitation: in mixed groups the pairs receiving from a ReferenceImpl SENDER fail this (0 frames after the last replacement) because the host reference sender throttles to ~1–3 fps after the first seconds regardless of sinks (41–65 frames in 30 s vs ~750 from CustomImpl senders; `_minOutgoingVideoBitrateKbit` is never applied there) — use it with reference-only or CustomImpl-only groups, or with reference RECEIVERS of CustomImpl senders.
+- `--video-rerequest` — with `--video`, once frames flow each participant's SFU downlink gets a
+  150 ms delay, then five rounds of `setRequestedVideoChannels({})` followed a second later by the
+  full accumulated set again, on the same PeerConnection, sinks kept throughout. Validation adds
+  `Video after re-request: X/Y stalled (must be 0)`: every sink must receive frames past the count
+  recorded just before the re-request. The regression test for ReferenceImpl's frozen tile after
+  the video grid comes back; needs `--reference-participants 6` to hit the window on a host.
 - `--builtin-codec-order` — expose the raw builtin WebRTC video factory order to PeerConnection instead of the default iOS-shaped order (two H264 entries, VP8, VP9 profile 0) the fake platform advertises. PeerConnection numbers dynamic payload types by walking that list, so the order decides what lands on PT 104; the builtin host order happens to put an H264 profile there and masked the ReferenceImpl receive-table bug (see the ReferenceImpl notes in `submodules/TgVoipWebrtc/CLAUDE.md`). Use it only to compare against the old behaviour.
 - `--early-video-request` — with `--video`, each joining participant calls `setRequestedVideoChannels` for every already-joined participant right after `emitJoinPayload`, i.e. before the join response is applied and before the data channel opens. That is the real app's call order (`PresentationGroupCall` requests video for known participants immediately after the context issues `emitJoinPayload`); the stock harness only requests video once the SFU announces `ActiveVideoSsrcs`, which arrives ~500 ms after the data channel opens and never exercised that path. Group mode only.
 - `--video-via-capture` / `--video-via-capture-late` — with `--video`, participants hand their outgoing video to the engine as a `VideoCaptureInterface` (built by the fake platform's `FakeVideoCapturer`, tinted by participant id) instead of the CLI-only `descriptor.getVideoSource` shortcut: `--video-via-capture` sets `descriptor.videoCapture` at construction (the iOS wrapper's join-time path, camera already on), `--video-via-capture-late` calls `setVideoCapture()` right after the join response (the wrapper's `requestVideo:` path, camera switched on mid-call). This is the only way the harness exercises the contract the app actually uses; `GroupInstanceReferenceImpl::setVideoCapture` was an empty stub until 2026-09-06 and every `getVideoSource` run passed regardless. Group mode only.
@@ -236,9 +249,10 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
   participants mid-call. **Nothing is signalled to the peers** — they must notice the new SSRC from
   the media alone, as in a real call. This is the regression test for "a participant who unmutes after
   a while is never heard" on `GroupInstanceReferenceImpl`: the unmute deliberately lands *after* the
-  peers have renegotiated for the SSRCs they saw at join, which is when WebRTC stops routing unknown
-  audio SSRCs to the unsignaled catch-all (see the ReferenceImpl notes in
-  `submodules/TgVoipWebrtc/CLAUDE.md`). Validation adds a `Late unmute heard: X/Y` line requiring
+  peers have renegotiated for the SSRCs they saw at join, which is when the original design's
+  unsignaled catch-all on mid=0 stopped receiving (see the ReferenceImpl notes in
+  `submodules/TgVoipWebrtc/CLAUDE.md`; since 2026-09-19 mid=0 is sendonly and every SSRC is found
+  from the packets the demuxer drops). Validation adds a `Late unmute heard: X/Y` line requiring
   every peer to report a real level for the late SSRC. Use ≥3 participants so a first renegotiation
   actually happens: `--participants 2 --reference-participants 1 --mute-participants 1 --unmute-after 8
   --duration 20` scored 1/2 before the fix and 2/2 after. Two controls make the result meaningful:
@@ -246,6 +260,12 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
   and the same late unmute with NO prior renegotiation
   (`--participants 1 --reference-participants 1 --mute-participants 0 --unmute-after 8`) also passes
   either way — which is what pins the cause to the renegotiation rather than to the lateness.
+- Every group run also prints `Audio levels heard: X/Y pairs` (every peer must report a real level
+  for every unmuted sender — a participant who is audible but never reaches the level reports is
+  the "never shown as speaking" defect) and `Unsignaled audio: N stream(s) (must be 0)` (the engine
+  log is scanned for `Creating unsignaled receive stream`; the reference engine must receive audio
+  only through m-lines that signal the SSRC). Both added 2026-09-19; the unfixed engine scored 6
+  unsignaled streams for 3 reference participants.
 - `--churn-cycles N` — number of join/leave cycles in group-churn mode (default: 100)
 - `--network-scenario NAME` — network simulation test scenario (e.g., `step-down-up`). Group mode only.
 - `--quiet` — summary output only

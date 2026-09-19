@@ -262,6 +262,7 @@ int main(int argc, char* argv[]) {
     bool enableVideo = false;
     bool earlyVideoRequest = false;
     bool videoSinkChurn = false;
+    bool videoRerequest = false;
     bool e2e = false;
     VideoFeed videoFeed = VideoFeed::Source;
     bool requestOwnVideo = false;
@@ -309,6 +310,8 @@ int main(int argc, char* argv[]) {
             e2e = true;
         } else if (std::string(argv[i]) == "--video-sink-churn") {
             videoSinkChurn = true;
+        } else if (std::string(argv[i]) == "--video-rerequest") {
+            videoRerequest = true;
         } else if (std::string(argv[i]) == "--video-via-capture") {
             videoFeed = VideoFeed::CaptureAtJoin;
         } else if (std::string(argv[i]) == "--video-via-capture-late") {
@@ -397,7 +400,7 @@ int main(int argc, char* argv[]) {
 
     // Group mode: dispatch to separate implementation
     if (mode == "group") {
-        return runGroupMode(participants, referenceParticipants, duration, gQuiet, enableVideo, networkScenario, mutedParticipants, earlyVideoRequest, videoSinkChurn, e2e, videoFeed, requestOwnVideo, unmuteAfterSeconds);
+        return runGroupMode(participants, referenceParticipants, duration, gQuiet, enableVideo, networkScenario, mutedParticipants, earlyVideoRequest, videoSinkChurn, e2e, videoFeed, requestOwnVideo, unmuteAfterSeconds, videoRerequest);
     }
     if (mode == "group-churn") {
         return runGroupChurnMode(participants, referenceParticipants, duration, gQuiet, enableVideo, churnCycles);
