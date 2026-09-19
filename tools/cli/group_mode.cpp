@@ -13,7 +13,7 @@
 // CGo header
 #include "submodules/TgVoipWebrtc/tgcalls/tools/go_sfu/go_sfu.h"
 
-int runGroupMode(int customParticipants, int referenceParticipants, int duration, bool quiet, bool video, const std::string& networkScenario, const std::set<int>& mutedParticipants, bool earlyVideoRequest, bool videoSinkChurn, bool e2e, VideoFeed videoFeed, bool requestOwnVideo, int unmuteAfterSeconds) {
+int runGroupMode(int customParticipants, int referenceParticipants, int duration, bool quiet, bool video, const std::string& networkScenario, const std::set<int>& mutedParticipants, bool earlyVideoRequest, bool videoSinkChurn, bool e2e, VideoFeed videoFeed, bool requestOwnVideo, int unmuteAfterSeconds, bool videoRerequest) {
     gGroupQuiet = quiet;
     gGroupStartTime = std::chrono::steady_clock::now();
 
@@ -103,6 +103,38 @@ int runGroupMode(int customParticipants, int referenceParticipants, int duration
         for (int round = 0; round < kSinkChurnRounds; ++round) {
             groupLog("Group", "video-sink-churn: round %d", round + 1);
             churnVideoSinks(states);
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+    }
+
+    // Optionally drop every video request and issue it again on the same
+    // PeerConnection (the app does this whenever the UI leaves and re-enters
+    // the video grid, e.g. on backgrounding). Video keeps flowing under a
+    // downlink delay while the engines renegotiate, because on a real network
+    // the packets the SFU forwarded before it read the empty
+    // ReceiverVideoConstraints are still in flight when the receive streams
+    // are torn down; without the delay the in-process SFU stops the streams
+    // before the renegotiation lands and the case is never exercised.
+    //
+    // The cycle repeats: the hazard is a packet that the network thread has
+    // already handed to the worker when the worker tears the stream down, and
+    // at the harness's packet rates a single cycle rarely lands in that
+    // window. Validation compares against the counts recorded at the last
+    // drop, so every round must come back for the run to pass.
+    if (video && videoRerequest) {
+        constexpr int kEgressDelayMs = 150;
+        constexpr int kRerequestRounds = 5;
+        groupLog("Group", "video-rerequest: waiting 3s for frames, then %dms downlink delay and %d drop/re-request rounds", kEgressDelayMs, kRerequestRounds);
+        std::this_thread::sleep_for(std::chrono::seconds(3));
+        for (const auto& s : states) {
+            GoSfu_SetNetworkParams(sfuHandle, s->id, 1, kEgressDelayMs, 0, 0.0, 0);
+        }
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        for (int round = 0; round < kRerequestRounds; ++round) {
+            groupLog("Group", "video-rerequest: round %d", round + 1);
+            dropAllVideoRequests(states);
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            rerequestAllVideo(states);
             std::this_thread::sleep_for(std::chrono::seconds(1));
         }
     }

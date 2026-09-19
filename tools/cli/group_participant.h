@@ -168,6 +168,12 @@ struct ParticipantState {
     // list rather than only the newly discovered entries. Guarded by
     // `videoSinksMutex`.
     std::vector<tgcalls::VideoChannelDescription> requestedVideoChannels;
+    // --video-rerequest: frame count of every incoming sink just before the
+    // dropped endpoints were requested again (a second after the drop, sinks
+    // quiet). Validation requires each sink to have grown past this on the
+    // same PeerConnection. Guarded by `videoSinksMutex`.
+    std::map<std::string, int> videoFramesAtRerequest;
+    bool videoRerequested{false};
 };
 
 // ---------------------------------------------------------------------------
@@ -191,6 +197,20 @@ struct GroupValidationResult {
     // non-trivial level for the late unmuter's SSRC, over the pairs expected.
     int lateUnmuteHeardPairs;
     int lateUnmuteExpectedPairs;
+    // --video-rerequest: (receiver, endpoint) pairs that were dropped and
+    // requested again, and how many of them received no frame afterwards
+    // (must be 0).
+    int videoRerequestExpectedPairs;
+    int videoRerequestStalledPairs;
+    // Every (peer, unmuted sender) pair, and how many of them the peer reported
+    // at a non-trivial level. A sender that is heard but never reaches its
+    // peers' level reports is the "audible but never shown speaking" defect.
+    int audioLevelHeardPairs;
+    int audioLevelExpectedPairs;
+    // "Creating unsignaled receive stream" lines in the engine log (must be 0):
+    // the reference engine must receive audio only through m-lines that signal
+    // the SSRC, never through a catch-all stream that WebRTC created on its own.
+    int unsignaledAudioStreams;
     // Participants that stayed muted for the whole run.
     int mutedParticipants;
     // Of those, the ones the SFU still received audio RTP from (must be 0).
@@ -239,6 +259,17 @@ std::unique_ptr<ParticipantState> createParticipant(
 // pointer to a dead sink crashes on the next decoded frame. Validation then
 // runs against the NEW sinks, which must still receive frames.
 void churnVideoSinks(const std::vector<std::unique_ptr<ParticipantState>>& states);
+
+// --video-rerequest, step 1: every participant asks the engine for NO video
+// (`setRequestedVideoChannels({})`) while keeping its sinks, the way the app
+// does when the call UI leaves the video grid.
+void dropAllVideoRequests(const std::vector<std::unique_ptr<ParticipantState>>& states);
+
+// --video-rerequest, step 2: every participant records each sink's frame
+// count and requests the full accumulated set again, on the same
+// PeerConnection. Validation then requires every re-requested sink to receive
+// frames past that count.
+void rerequestAllVideo(const std::vector<std::unique_ptr<ParticipantState>>& states);
 
 // Requests video from `endpointIds` (endpoints already requested are skipped):
 // registers a FakeVideoSink per new endpoint, resolves the sender's simulcast
