@@ -49,6 +49,10 @@ class FakeAudioDeviceModuleImpl : public webrtc::webrtc_impl::AudioDeviceModuleD
 
   ~FakeAudioDeviceModuleImpl() override {
     StopPlayout();
+    // The record loop runs on a detached thread that calls Record() on `this`; make
+    // destruction wait for it the same way playout does, instead of relying on the
+    // owner having called StopRecording() first.
+    StopRecording();
   }
 
   int32_t PlayoutIsAvailable(bool* available) override {
