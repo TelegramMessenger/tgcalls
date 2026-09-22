@@ -271,6 +271,14 @@ void dropAllVideoRequests(const std::vector<std::unique_ptr<ParticipantState>>& 
 // frames past that count.
 void rerequestAllVideo(const std::vector<std::unique_ptr<ParticipantState>>& states);
 
+// --video-quality: the maxQuality every participant requests, with minQuality
+// Thumbnail, which is the shape the app always sends
+// (VideoChatParticipantsComponent: `minQuality: .thumbnail`, a grid tile's
+// max usually `.thumbnail` too). Not calling it keeps the historical Full/Full
+// request, which never exercised the lower qualities: ReferenceImpl mapped a
+// thumbnail to a height below the SFU's lowest layer and no run caught it.
+void setRequestedVideoMaxQuality(tgcalls::VideoChannelDescription::Quality quality);
+
 // Requests video from `endpointIds` (endpoints already requested are skipped):
 // registers a FakeVideoSink per new endpoint, resolves the sender's simulcast
 // SSRC groups from the SFU registry, and resends the accumulated full request

@@ -40,6 +40,11 @@ The SFU implements REMB-based bandwidth-adaptive simulcast layer selection for v
 | 1 | 110 kbps | BW > 132 kbps | BW < 77 kbps |
 | 2 | 900 kbps | BW > 1,080 kbps | BW < 630 kbps |
 
+### Requested heights → layers (the protocol's scale)
+`heightToLayer` reads a receiver's `maxHeight` on the protocol's layer scale, `layerHeights = {180, 360, 720}`: the thresholds at which a CustomImpl sender enables its layers and the heights CustomImpl receivers ask for (thumbnail 180, medium 360, full 720). `SenderVideoConstraints.idealHeight` is emitted on the same scale. A positive `maxHeight` below 180 maps to **no layer** and is logged as a warning: the SFU forwards nothing for it. That is deliberately strict. It models the production failure where `GroupInstanceReferenceImpl` asked for `maxHeight 90` on thumbnail tiles and those endpoints received no RTP (device log 2026-09-22), so a client sending an off-scale height fails the run rather than being rounded up. Until 2026-09-22 the scale here was ReferenceImpl's own (90/180/360), which is why no CLI run could catch that.
+
+A request that maps to no layer (off-scale, a `maxHeight` of 0, or an endpoint dropped from the constraints and covered by `defaultConstraints: {maxHeight: 0}`) also **stops and removes the pair's `LayerSelector`** and clears `selectedLayer`. Before, forwarding kept running on the surviving selector, because `forwardRTP` prefers `selectedLayer` over `requestedLayer`, so dropping an endpoint never stopped its video at the SFU.
+
 ### Layer Selection and SSRC Rewriting
 The SFU forwards exactly one simulcast layer per (receiver, sender) pair. Before `ReceiverVideoConstraints` arrives, the SFU uses `requestedLayer` as the cap and forwards at `maxActiveLayer` (the highest layer the encoder actually produces). After constraints arrive, `ensureLayerSelector` sets `selectedLayer` clamped to `maxActiveLayer`.
 

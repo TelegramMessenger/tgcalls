@@ -168,6 +168,17 @@ void rerequestAllVideo(const std::vector<std::unique_ptr<ParticipantState>>& sta
 // requestVideoFromEndpoints
 // ---------------------------------------------------------------------------
 
+namespace {
+// Set once from main() before any participant exists, read afterwards only.
+bool gHasRequestedVideoMaxQuality = false;
+tgcalls::VideoChannelDescription::Quality gRequestedVideoMaxQuality = tgcalls::VideoChannelDescription::Quality::Full;
+}
+
+void setRequestedVideoMaxQuality(tgcalls::VideoChannelDescription::Quality quality) {
+    gHasRequestedVideoMaxQuality = true;
+    gRequestedVideoMaxQuality = quality;
+}
+
 void requestVideoFromEndpoints(
     ParticipantState* state,
     GoInt sfuHandle,
@@ -212,8 +223,13 @@ void requestVideoFromEndpoints(
         desc.audioSsrc = 0;
         desc.userId = cliUserId(remoteId);
         desc.endpointId = endpointId;
-        desc.maxQuality = tgcalls::VideoChannelDescription::Quality::Full;
-        desc.minQuality = tgcalls::VideoChannelDescription::Quality::Full;
+        if (gHasRequestedVideoMaxQuality) {
+            desc.maxQuality = gRequestedVideoMaxQuality;
+            desc.minQuality = tgcalls::VideoChannelDescription::Quality::Thumbnail;
+        } else {
+            desc.maxQuality = tgcalls::VideoChannelDescription::Quality::Full;
+            desc.minQuality = tgcalls::VideoChannelDescription::Quality::Full;
+        }
 
         tgcalls::MediaSsrcGroup simGroup;
         simGroup.semantics = "SIM";

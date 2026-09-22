@@ -20,6 +20,7 @@
 
 #include "group_mode.h"
 #include "group_churn_mode.h"
+#include "group_participant.h"
 #include "platform/fake/FakeInterface.h"
 #include "Instance.h"
 #include "FakeAudioDeviceModule.h"
@@ -312,6 +313,18 @@ int main(int argc, char* argv[]) {
             videoSinkChurn = true;
         } else if (std::string(argv[i]) == "--video-rerequest") {
             videoRerequest = true;
+        } else if (std::string(argv[i]) == "--video-quality" && i + 1 < argc) {
+            std::string quality = argv[++i];
+            if (quality == "thumbnail") {
+                setRequestedVideoMaxQuality(tgcalls::VideoChannelDescription::Quality::Thumbnail);
+            } else if (quality == "medium") {
+                setRequestedVideoMaxQuality(tgcalls::VideoChannelDescription::Quality::Medium);
+            } else if (quality == "full") {
+                setRequestedVideoMaxQuality(tgcalls::VideoChannelDescription::Quality::Full);
+            } else {
+                fprintf(stderr, "--video-quality must be thumbnail, medium or full\n");
+                return 1;
+            }
         } else if (std::string(argv[i]) == "--video-via-capture") {
             videoFeed = VideoFeed::CaptureAtJoin;
         } else if (std::string(argv[i]) == "--video-via-capture-late") {

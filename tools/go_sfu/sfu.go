@@ -530,18 +530,30 @@ func (s *SFU) processIncomingRTP(from *Participant, pkt []byte, ssrc uint32, str
 	}
 }
 
-// heightToLayer maps a requested video height to a simulcast layer index.
+// Simulcast layer heights of the group-call protocol: the thresholds at which
+// a GroupInstanceCustomImpl sender enables its layers (adjustVideoSendParams)
+// and the heights its ReceiverVideoConstraints ask for
+// (maybeUpdateRemoteVideoConstraints: thumbnail 180, medium 360, full 720).
+var layerHeights = [3]int{180, 360, 720}
+
+// heightToLayer maps a requested maxHeight to the highest simulcast layer that
+// fits under it, or -1 when none does.
+//
+// A positive height below the lowest layer deliberately yields -1 (nothing is
+// forwarded) rather than being rounded up to layer 0. Such a request is
+// outside the protocol, and the production SFU is suspected of forwarding
+// nothing for it: GroupInstanceReferenceImpl used to ask for maxHeight 90 on
+// thumbnail tiles, and on real calls those endpoints received no RTP at all
+// (device log 2026-09-22). Refusing it here makes the testbench fail a client
+// that sends one instead of hiding it.
 func heightToLayer(height int) int {
-	if height <= 0 {
-		return -1
+	layer := -1
+	for i, h := range layerHeights {
+		if height >= h {
+			layer = i
+		}
 	}
-	if height <= 90 {
-		return 0
-	}
-	if height <= 180 {
-		return 1
-	}
-	return 2
+	return layer
 }
 
 // handleColibriMessage processes an incoming Colibri message from a participant.
@@ -645,6 +657,10 @@ func (s *SFU) handleReceiverVideoConstraints(receiverID int, msg string) {
 			continue
 		}
 		layer := heightToLayer(constraint.MaxHeight)
+		if layer < 0 && constraint.MaxHeight > 0 {
+			s.log.Warnf("Participant %d: maxHeight %d for endpoint %s is below the lowest layer (%d); forwarding nothing",
+				receiverID, constraint.MaxHeight, endpointStr, layerHeights[0])
+		}
 		receiver.SetRequestedLayer(senderID, layer)
 		s.ensureLayerSelector(receiverID, senderID, layer)
 		affectedSenders[senderID] = true
@@ -696,11 +712,27 @@ func (s *SFU) handleReceiverVideoConstraints(receiverID int, msg string) {
 
 // ensureLayerSelector creates or updates a LayerSelector for a (receiver, sender) pair.
 func (s *SFU) ensureLayerSelector(receiverID, senderID, maxLayer int) {
-	if maxLayer < 0 {
-		return // no video requested from this sender
-	}
-
 	key := [2]int{receiverID, senderID}
+
+	if maxLayer < 0 {
+		// No video wanted from this sender any more. The selector must go:
+		// forwardRTP prefers selectedLayer over requestedLayer, so a surviving
+		// selector would keep forwarding what the receiver just dropped.
+		s.mu.Lock()
+		existing, exists := s.layerSelectors[key]
+		if exists {
+			delete(s.layerSelectors, key)
+		}
+		receiver, recvOk := s.participants[receiverID]
+		s.mu.Unlock()
+		if exists {
+			existing.Stop() // outside the lock: its tick loop takes s.mu
+		}
+		if recvOk {
+			receiver.SetSelectedLayer(senderID, -1)
+		}
+		return
+	}
 
 	s.mu.Lock()
 	existing, exists := s.layerSelectors[key]
@@ -801,16 +833,10 @@ func (s *SFU) sendSenderVideoConstraints(senderID int) {
 		}
 		layer := p.GetRequestedLayer(senderID)
 		var h int
-		switch layer {
-		case 0:
-			h = 90
-		case 1:
-			h = 180
-		case 2:
-			h = 720
-		default:
+		if layer < 0 || layer >= len(layerHeights) {
 			continue
 		}
+		h = layerHeights[layer]
 		if h > maxHeight {
 			maxHeight = h
 		}

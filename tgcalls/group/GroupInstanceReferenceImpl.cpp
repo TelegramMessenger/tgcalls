@@ -2213,30 +2213,49 @@ private:
     void sendReceiverVideoConstraints(const std::vector<VideoChannelDescription>& channels) {
         if (!_dataChannel || !_isDataChannelOpen) return;
 
+        // The same message GroupInstanceCustomImpl::maybeUpdateRemoteVideoConstraints
+        // sends, which is the one the production SFU is known to honour: the
+        // heights are the SFU's simulcast layer scale (180/360/720, the
+        // thresholds a CustomImpl sender enables its layers at), minHeight
+        // comes from minQuality, maxHeight from maxQuality, and a Full
+        // endpoint goes on stage. This engine used to send min = max =
+        // 90/180/360 from maxQuality alone, so a thumbnail tile asked for a
+        // height below the lowest layer; on real calls such endpoints
+        // received no RTP at all (device log 2026-09-22).
+        const auto heightForQuality = [](VideoChannelDescription::Quality quality) {
+            switch (quality) {
+                case VideoChannelDescription::Quality::Thumbnail: return 180;
+                case VideoChannelDescription::Quality::Medium: return 360;
+                case VideoChannelDescription::Quality::Full: return 720;
+            }
+            return 180;
+        };
+
+        json11::Json::array onStageEndpoints;
         json11::Json::object constraints;
         for (const auto& ch : channels) {
-            int height = 0;
-            switch (ch.maxQuality) {
-                case VideoChannelDescription::Quality::Thumbnail: height = 90; break;
-                case VideoChannelDescription::Quality::Medium: height = 180; break;
-                case VideoChannelDescription::Quality::Full: height = 360; break;
+            if (ch.maxQuality == VideoChannelDescription::Quality::Full) {
+                onStageEndpoints.push_back(ch.endpointId);
             }
             constraints[ch.endpointId] = json11::Json::object{
-                {"minHeight", height},
-                {"maxHeight", height}
+                {"minHeight", heightForQuality(ch.minQuality)},
+                {"maxHeight", heightForQuality(ch.maxQuality)}
             };
         }
 
         json11::Json msg = json11::Json::object{
             {"colibriClass", "ReceiverVideoConstraints"},
             {"defaultConstraints", json11::Json::object{{"maxHeight", 0}}},
+            {"onStageEndpoints", onStageEndpoints},
             {"constraints", constraints}
         };
 
         std::string msgStr = msg.dump();
         webrtc::DataBuffer buffer(rtc::CopyOnWriteBuffer(msgStr.data(), msgStr.size()), false);
         _dataChannel->Send(buffer);
-        RTC_LOG(LS_INFO) << "GroupRef: Sent ReceiverVideoConstraints for " << channels.size() << " endpoints";
+        // The whole message, not a count: when an endpoint receives no video,
+        // the log must show exactly what the SFU was asked for.
+        RTC_LOG(LS_INFO) << "GroupRef: Sent ReceiverVideoConstraints " << msgStr;
     }
 
     void onIceConnectionChange(webrtc::PeerConnectionInterface::IceConnectionState state) {
