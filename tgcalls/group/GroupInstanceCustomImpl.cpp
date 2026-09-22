@@ -1498,10 +1498,6 @@ public:
                 }
             }, _noiseSuppressionConfiguration, nullptr, nullptr);
     #endif
-        } else {
-            #ifdef WEBRTC_IOS
-            audioProcessor = std::make_unique<AudioInjectionPostProcessor>(&_externalAudioSamples, &_externalAudioSamplesMutex);
-            #endif
         }
 
         _audioDeviceDataObserverShared = std::make_shared<AudioDeviceDataObserverShared>();
@@ -1519,6 +1515,23 @@ public:
                 }
             }
         });
+
+#if USE_RNNOISE
+#ifdef WEBRTC_IOS
+        if (_videoContentType == VideoContentType::Screencast && !_usesExternalAudioRecorder) {
+            // External (screencast) audio has two possible consumers, and they must stay
+            // mutually exclusive. When createAudioDeviceModule() produced the
+            // FakeAudioDeviceModule, its ExternalAudioRecorder pumps the buffer straight
+            // into the encoder and nothing else may touch it. Only when the host supplied
+            // a real audio device module does capture run through APM, and then the samples
+            // are injected there instead. Attaching both would drain the buffer twice and
+            // sum consecutive 10 ms chunks into one frame. Decided from the module that was
+            // actually created, not from which hooks are set, because a hook that returns
+            // nothing also falls back to the fake module.
+            audioProcessor = std::make_unique<AudioInjectionPostProcessor>(&_externalAudioSamples, &_externalAudioSamplesMutex);
+        }
+#endif
+#endif
 
         webrtc::PeerConnectionFactoryDependencies peerConnectionFactoryDeps;
         peerConnectionFactoryDeps.signaling_thread = _threads->getMediaThread();
@@ -3623,7 +3636,9 @@ private:
         } else if (_videoContentType == VideoContentType::Screencast) {
             FakeAudioDeviceModule::Options options;
             options.num_channels = 1;
-            return check(FakeAudioDeviceModule::Creator(nullptr, _externalAudioRecorder, options)(&_webrtcEnvironment.task_queue_factory()));
+            auto result = check(FakeAudioDeviceModule::Creator(nullptr, _externalAudioRecorder, options)(&_webrtcEnvironment.task_queue_factory()));
+            _usesExternalAudioRecorder = result != nullptr;
+            return result;
         }
         return check(create(webrtc::AudioDeviceModule::kPlatformDefaultAudio));
     }
@@ -3726,6 +3741,10 @@ private:
     std::vector<float> _externalAudioSamples;
     webrtc::Mutex _externalAudioSamplesMutex;
     std::shared_ptr<ExternalAudioRecorder> _externalAudioRecorder;
+    // Set by createAudioDeviceModule() when the FakeAudioDeviceModule driven by
+    // _externalAudioRecorder is the audio device, i.e. it is the sole consumer of
+    // _externalAudioSamples.
+    bool _usesExternalAudioRecorder = false;
 
     bool _isRtcConnected = false;
     bool _isBroadcastConnected = false;
