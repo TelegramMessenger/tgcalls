@@ -128,11 +128,11 @@ struct Config {
 struct EncryptionKey {
 	static constexpr int kSize = 256;
 
-	std::shared_ptr<const std::array<uint8_t, kSize>> value;
+	std::shared_ptr<std::array<uint8_t, kSize>> value;
 	bool isOutgoing = false;
 
     EncryptionKey(
-		std::shared_ptr<const std::array<uint8_t, kSize>> const value,
+		std::shared_ptr<std::array<uint8_t, kSize>> value,
 		bool isOutgoing)
 	: value(value), isOutgoing(isOutgoing) {
     }
@@ -232,7 +232,7 @@ struct Descriptor {
 	std::shared_ptr<VideoCaptureInterface> videoCapture;
 	std::function<void(State)> stateUpdated;
 	std::function<void(int)> signalBarsUpdated;
-    std::function<void(float)> audioLevelUpdated;
+    std::function<void(float, float)> audioLevelsUpdated;
     std::function<void(bool)> remoteBatteryLevelIsLowUpdated;
 	std::function<void(AudioState, VideoState)> remoteMediaStateUpdated;
     std::function<void(float)> remotePrefferedAspectRatioUpdated;

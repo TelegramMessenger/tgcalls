@@ -98,7 +98,7 @@ _remoteBatteryLevelIsLowUpdated(std::move(descriptor.remoteBatteryLevelIsLowUpda
 _remotePrefferedAspectRatioUpdated(std::move(descriptor.remotePrefferedAspectRatioUpdated)),
 _signalingDataEmitted(std::move(descriptor.signalingDataEmitted)),
 _signalBarsUpdated(std::move(descriptor.signalBarsUpdated)),
-_audioLevelUpdated(std::move(descriptor.audioLevelUpdated)),
+_audioLevelsUpdated(std::move(descriptor.audioLevelsUpdated)),
 _createAudioDeviceModule(std::move(descriptor.createAudioDeviceModule)),
 _enableHighBitrateVideo(descriptor.config.enableHighBitrateVideo),
 _dataSaving(descriptor.config.dataSaving) {
@@ -221,7 +221,7 @@ void Manager::start() {
 			});
 	}));
 	bool isOutgoing = _encryptionKey.isOutgoing;
-	_mediaManager.reset(new ThreadLocalObject<MediaManager>(StaticThreads::getMediaThread(), [weak, isOutgoing, protocolVersion = _protocolVersion, thread, sendSignalingMessage, videoCapture = _videoCapture, mediaDevicesConfig = _mediaDevicesConfig, enableHighBitrateVideo = _enableHighBitrateVideo, signalBarsUpdated = _signalBarsUpdated, audioLevelUpdated = _audioLevelUpdated, preferredCodecs = _preferredCodecs, createAudioDeviceModule = _createAudioDeviceModule]() {
+	_mediaManager.reset(new ThreadLocalObject<MediaManager>(StaticThreads::getMediaThread(), [weak, isOutgoing, protocolVersion = _protocolVersion, thread, sendSignalingMessage, videoCapture = _videoCapture, mediaDevicesConfig = _mediaDevicesConfig, enableHighBitrateVideo = _enableHighBitrateVideo, signalBarsUpdated = _signalBarsUpdated, audioLevelsUpdated = _audioLevelsUpdated, preferredCodecs = _preferredCodecs, createAudioDeviceModule = _createAudioDeviceModule]() {
 		return std::make_shared<MediaManager>(
             StaticThreads::getMediaThread(),
 			isOutgoing,
@@ -239,7 +239,7 @@ void Manager::start() {
 				});
 			},
             signalBarsUpdated,
-            audioLevelUpdated,
+            audioLevelsUpdated,
 			createAudioDeviceModule,
 			enableHighBitrateVideo,
             preferredCodecs);

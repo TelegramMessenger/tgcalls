@@ -9,7 +9,7 @@
 namespace tgcalls {
 
 VideoCaptureInterfaceObject::VideoCaptureInterfaceObject(std::string deviceId, bool isScreenCapture, std::shared_ptr<PlatformContext> platformContext, Threads &threads)
-: _videoSource(PlatformInterface::SharedInstance()->makeVideoSource(threads.getMediaThread(), threads.getWorkerThread())) {
+: _videoSource(PlatformInterface::SharedInstance()->makeVideoSource(threads.getMediaThread(), threads.getWorkerThread(), isScreenCapture)) {
 	_platformContext = platformContext;
 
 	switchToDevice(deviceId, isScreenCapture);
@@ -75,9 +75,9 @@ void VideoCaptureInterfaceObject::switchToDevice(std::string deviceId, bool isSc
 		if (_preferredAspectRatio > 0) {
 			_videoCapturer->setPreferredCaptureAspectRatio(_preferredAspectRatio);
 		}
-		if (const auto currentUncroppedSink = _currentUncroppedSink.lock()) {
-			_videoCapturer->setUncroppedOutput(currentUncroppedSink);
-		}
+//		if (const auto currentUncroppedSink = _currentUncroppedSink.lock()) {
+			_videoCapturer->setUncroppedOutput(_currentUncroppedSink);
+//		}
         if (_onFatalError) {
             _videoCapturer->setOnFatalError(_onFatalError);
         }

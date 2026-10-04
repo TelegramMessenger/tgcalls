@@ -263,7 +263,7 @@ private:
 namespace {
 class AudioSinkImpl: public webrtc::AudioSinkInterface {
 public:
-    AudioSinkImpl(std::function<void(float)> update) :
+    AudioSinkImpl(std::function<void(float, float)> update) :
     _update(update) {
     }
 
@@ -294,13 +294,13 @@ public:
                 float level = ((float)(_peak)) / 8000.0f;
                 _peak = 0;
                 _peakCount = 0;
-                _update(level);
+                _update(0, level);
             }
         }
     }
 
 private:
-    std::function<void(float)> _update;
+    std::function<void(float, float)> _update;
 
     int _peakCount = 0;
     uint16_t _peak = 0;
@@ -316,7 +316,7 @@ public:
         webrtc::RtpTransport *rtpTransport,
         rtc::UniqueRandomIdGenerator *randomIdGenerator,
         signaling::MediaContent const &mediaContent,
-        std::function<void(float)> onAudioLevelUpdated,
+        std::function<void(float, float)> onAudioLevelsUpdated,
         std::shared_ptr<Threads> threads) :
     _threads(threads),
     _ssrc(mediaContent.ssrc),
@@ -371,13 +371,13 @@ public:
         streamParams.set_stream_ids({ streamId });
         incomingAudioDescription->AddStream(streamParams);
 
-        threads->getWorkerThread()->BlockingCall([this, &outgoingAudioDescription, &incomingAudioDescription, onAudioLevelUpdated = std::move(onAudioLevelUpdated), ssrc = mediaContent.ssrc]() {
+        threads->getWorkerThread()->BlockingCall([this, &outgoingAudioDescription, &incomingAudioDescription, onAudioLevelsUpdated = std::move(onAudioLevelsUpdated), ssrc = mediaContent.ssrc]() {
             _audioChannel->SetPayloadTypeDemuxingEnabled(false);
             std::string errorDesc;
             _audioChannel->SetLocalContent(outgoingAudioDescription.get(), webrtc::SdpType::kOffer, errorDesc);
             _audioChannel->SetRemoteContent(incomingAudioDescription.get(), webrtc::SdpType::kAnswer, errorDesc);
 
-            std::unique_ptr<AudioSinkImpl> audioLevelSink(new AudioSinkImpl(std::move(onAudioLevelUpdated)));
+            std::unique_ptr<AudioSinkImpl> audioLevelSink(new AudioSinkImpl(std::move(onAudioLevelsUpdated)));
             _audioChannel->receive_channel()->SetRawAudioSink(ssrc, std::move(audioLevelSink));
         });
 
@@ -914,7 +914,7 @@ public:
     _encryptionKey(std::move(descriptor.encryptionKey)),
     _stateUpdated(descriptor.stateUpdated),
     _signalBarsUpdated(descriptor.signalBarsUpdated),
-    _audioLevelUpdated(descriptor.audioLevelUpdated),
+    _audioLevelsUpdated(descriptor.audioLevelsUpdated),
     _remoteBatteryLevelIsLowUpdated(descriptor.remoteBatteryLevelIsLowUpdated),
     _remoteMediaStateUpdated(descriptor.remoteMediaStateUpdated),
     _remotePrefferedAspectRatioUpdated(descriptor.remotePrefferedAspectRatioUpdated),
@@ -1493,7 +1493,7 @@ public:
                             _rtpTransport,
                             _uniqueRandomIdGenerator.get(),
                             content,
-                            _audioLevelUpdated,
+                            _audioLevelsUpdated,
                             _threads
                         ));
                     }
@@ -1954,12 +1954,13 @@ public:
                 _videoCapture = nullptr;
                 _screencastCapture = videoCapture;
 
-                if (_outgoingVideoChannel) {
-                    _outgoingVideoChannel->setVideoCapture(nullptr);
-                }
                 if (_outgoingVideoChannelId) {
                     _contentNegotiationContext->removeOutgoingChannel(_outgoingVideoChannelId.value());
                     _outgoingVideoChannelId.reset();
+                }
+                if (_outgoingVideoChannel) {
+                    _outgoingVideoChannel->setVideoCapture(nullptr);
+                    _outgoingVideoChannel.reset();
                 }
 
                 if (_outgoingScreencastChannel) {
@@ -1972,41 +1973,42 @@ public:
                 _videoCapture = videoCapture;
                 _screencastCapture = nullptr;
 
+                if (_outgoingScreencastChannelId) {
+                    _contentNegotiationContext->removeOutgoingChannel(_outgoingScreencastChannelId.value());
+                    _outgoingScreencastChannelId.reset();
+                }
+                if (_outgoingScreencastChannel) {
+                    _outgoingScreencastChannel->setVideoCapture(nullptr);
+                    _outgoingScreencastChannel.reset();
+                }
+
                 if (_outgoingVideoChannel) {
                     _outgoingVideoChannel->setVideoCapture(videoCapture);
                 }
                 if (!_outgoingVideoChannelId) {
                     _outgoingVideoChannelId = _contentNegotiationContext->addOutgoingChannel(signaling::MediaContent::Type::Video);
                 }
-
-                if (_outgoingScreencastChannel) {
-                    _outgoingScreencastChannel->setVideoCapture(nullptr);
-                }
-                if (_outgoingScreencastChannelId) {
-                    _contentNegotiationContext->removeOutgoingChannel(_outgoingScreencastChannelId.value());
-                    _outgoingScreencastChannelId.reset();
-                }
             }
         } else {
             _videoCapture = nullptr;
             _screencastCapture = nullptr;
 
-            if (_outgoingVideoChannel) {
-                _outgoingVideoChannel->setVideoCapture(nullptr);
-            }
-
-            if (_outgoingScreencastChannel) {
-                _outgoingScreencastChannel->setVideoCapture(nullptr);
-            }
-
             if (_outgoingVideoChannelId) {
                 _contentNegotiationContext->removeOutgoingChannel(_outgoingVideoChannelId.value());
                 _outgoingVideoChannelId.reset();
+            }
+            if (_outgoingVideoChannel) {
+                _outgoingVideoChannel->setVideoCapture(nullptr);
+                _outgoingVideoChannel.reset();
             }
 
             if (_outgoingScreencastChannelId) {
                 _contentNegotiationContext->removeOutgoingChannel(_outgoingScreencastChannelId.value());
                 _outgoingScreencastChannelId.reset();
+            }
+            if (_outgoingScreencastChannel) {
+                _outgoingScreencastChannel->setVideoCapture(nullptr);
+                _outgoingScreencastChannel.reset();
             }
         }
 
@@ -2191,7 +2193,7 @@ private:
     EncryptionKey _encryptionKey;
     std::function<void(State)> _stateUpdated;
     std::function<void(int)> _signalBarsUpdated;
-    std::function<void(float)> _audioLevelUpdated;
+    std::function<void(float, float)> _audioLevelsUpdated;
     std::function<void(bool)> _remoteBatteryLevelIsLowUpdated;
     std::function<void(AudioState, VideoState)> _remoteMediaStateUpdated;
     std::function<void(float)> _remotePrefferedAspectRatioUpdated;

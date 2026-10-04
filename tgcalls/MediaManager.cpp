@@ -247,7 +247,7 @@ MediaManager::MediaManager(
 	std::function<void(Message &&)> sendSignalingMessage,
 	std::function<void(Message &&)> sendTransportMessage,
     std::function<void(int)> signalBarsUpdated,
-    std::function<void(float)> audioLevelUpdated,
+    std::function<void(float, float)> audioLevelsUpdated,
     std::function<webrtc::scoped_refptr<webrtc::AudioDeviceModule>(webrtc::TaskQueueFactory*)> createAudioDeviceModule,
     bool enableHighBitrateVideo,
     std::vector<std::string> preferredCodecs) :
@@ -256,7 +256,7 @@ _eventLog(std::make_unique<webrtc::RtcEventLogNull>()),
 _sendSignalingMessage(std::move(sendSignalingMessage)),
 _sendTransportMessage(std::move(sendTransportMessage)),
 _signalBarsUpdated(std::move(signalBarsUpdated)),
-_audioLevelUpdated(std::move(audioLevelUpdated)),
+_audioLevelsUpdated(std::move(audioLevelsUpdated)),
 _createAudioDeviceModule(std::move(createAudioDeviceModule)),
 _protocolVersion(protocolVersion),
 _outgoingVideoState(videoCapture ? VideoState::Active : VideoState::Inactive),
@@ -469,7 +469,7 @@ void MediaManager::start() {
     }
 
     beginStatsTimer(3000);
-    if (_audioLevelUpdated != nullptr) {
+    if (_audioLevelsUpdated != nullptr) {
         beginLevelsTimer(100);
     }
 }
@@ -603,7 +603,7 @@ void MediaManager::beginLevelsTimer(int timeoutMs) {
         }
 
         float effectiveLevel = fmaxf(strong->_currentAudioLevel, strong->_currentMyAudioLevel);
-        strong->_audioLevelUpdated(effectiveLevel);
+        strong->_audioLevelsUpdated(strong->_currentMyAudioLevel, effectiveLevel);
 
         strong->beginLevelsTimer(100);
     }, webrtc::TimeDelta::Millis(timeoutMs));
@@ -697,7 +697,7 @@ void MediaManager::setSendVideo(std::shared_ptr<VideoCaptureInterface> videoCapt
         const auto object = GetVideoCaptureAssumingSameThread(_videoCapture.get());
         _isScreenCapture = object->isScreenCapture();
         _videoCaptureGuard = std::make_shared<bool>(true);
-        const auto guard = std::weak_ptr{ _videoCaptureGuard };
+        const auto guard = std::weak_ptr<bool>{ _videoCaptureGuard };
 		object->setStateUpdated([=](VideoState state) {
 			thread->PostTask([=] {
 				// Checking this special guard instead of weak_ptr(this)

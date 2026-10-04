@@ -11,6 +11,8 @@
 #include "platform/PlatformInterface.h"
 #include "StaticThreads.h"
 #include "GroupNetworkManager.h"
+#include "group/GroupFrameTransformer.h"
+#include "group/GroupAudioCapturePostProcessor.h"
 
 #include "api/audio_codecs/audio_decoder_factory_template.h"
 #include "api/audio_codecs/audio_encoder_factory_template.h"
@@ -65,13 +67,6 @@
 #include <iostream>
 
 
-#ifndef USE_RNNOISE
-#define USE_RNNOISE 1
-#endif
-
-#if USE_RNNOISE
-#include "rnnoise.h"
-#endif
 
 #include "GroupJoinPayloadInternal.h"
 #include "FieldTrialsConfig.h"
@@ -449,42 +444,6 @@ struct RequestedMediaChannelDescriptions {
     }
 };
 
-static const int kVadResultHistoryLength = 8;
-
-class VadHistory {
-private:
-    float _vadResultHistory[kVadResultHistoryLength];
-
-public:
-    VadHistory() {
-        for (int i = 0; i < kVadResultHistoryLength; i++) {
-            _vadResultHistory[i] = 0.0f;
-        }
-    }
-
-    ~VadHistory() {
-    }
-
-    bool update(float vadProbability) {
-        for (int i = 1; i < kVadResultHistoryLength; i++) {
-            _vadResultHistory[i - 1] = _vadResultHistory[i];
-        }
-        _vadResultHistory[kVadResultHistoryLength - 1] = vadProbability;
-
-        float movingAverage = 0.0f;
-        for (int i = 0; i < kVadResultHistoryLength; i++) {
-            movingAverage += _vadResultHistory[i];
-        }
-        movingAverage /= (float)kVadResultHistoryLength;
-
-        bool vadResult = false;
-        if (movingAverage > 0.8f) {
-            vadResult = true;
-        }
-
-        return vadResult;
-    }
-};
 
 class CombinedVad {
 private:
@@ -644,21 +603,25 @@ public:
     virtual void OnFrame(const webrtc::VideoFrame& frame) override {
         std::unique_lock<std::mutex> lock{ _mutex };
         int64_t timestamp = rtc::TimeMillis();
-        if (_lastFrame) {
-            if (_lastFrame->video_frame_buffer()->width() != frame.video_frame_buffer()->width()) {
+        const int width = frame.video_frame_buffer()->width();
+        const int height = frame.video_frame_buffer()->height();
+        if (_hasLastFrameSize) {
+            if (_lastFrameWidth != width) {
                 int64_t deltaTime = std::abs(_lastFrameSizeChangeTimestamp - timestamp);
                 if (deltaTime < 200) {
-                    RTC_LOG(LS_WARNING) << "VideoSinkImpl: frequent frame size change detected for " << _endpointId << ": " << _lastFrameSizeChangeHeight << " -> " << _lastFrame->video_frame_buffer()->height() << " -> " << frame.video_frame_buffer()->height() << " in " << deltaTime << " ms";
+                    RTC_LOG(LS_WARNING) << "VideoSinkImpl: frequent frame size change detected for " << _endpointId << ": " << _lastFrameSizeChangeHeight << " -> " << _lastFrameHeight << " -> " << height << " in " << deltaTime << " ms";
                 }
 
-                _lastFrameSizeChangeHeight = _lastFrame->video_frame_buffer()->height();
+                _lastFrameSizeChangeHeight = _lastFrameHeight;
                 _lastFrameSizeChangeTimestamp = timestamp;
             }
         } else {
             _lastFrameSizeChangeHeight = 0;
             _lastFrameSizeChangeTimestamp = timestamp;
         }
-        _lastFrame = frame;
+        _lastFrameWidth = width;
+        _lastFrameHeight = height;
+        _hasLastFrameSize = true;
         for (int i = (int)(_sinks.size()) - 1; i >= 0; i--) {
             auto strong = _sinks[i].lock();
             if (!strong) {
@@ -685,9 +648,6 @@ public:
         if (const auto strong = impl.lock()) {
             std::unique_lock<std::mutex> lock{ _mutex };
             _sinks.push_back(impl);
-            if (_lastFrame) {
-                strong->OnFrame(_lastFrame.value());
-            }
         }
     }
 
@@ -697,7 +657,9 @@ public:
 
 private:
     std::vector<std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>> _sinks;
-    absl::optional<webrtc::VideoFrame> _lastFrame;
+    bool _hasLastFrameSize = false;
+    int _lastFrameWidth = 0;
+    int _lastFrameHeight = 0;
     std::mutex _mutex;
     int64_t _lastFrameSizeChangeTimestamp = 0;
     int _lastFrameSizeChangeHeight = 0;
@@ -705,189 +667,7 @@ private:
 
 };
 
-struct NoiseSuppressionConfiguration {
-    NoiseSuppressionConfiguration(bool isEnabled_) :
-    isEnabled(isEnabled_) {
 
-    }
-
-    bool isEnabled = false;
-};
-
-#if USE_RNNOISE
-class AudioCapturePostProcessor : public webrtc::CustomProcessing {
-public:
-    AudioCapturePostProcessor(std::function<void(GroupLevelValue const &)> updated, std::shared_ptr<NoiseSuppressionConfiguration> noiseSuppressionConfiguration, std::vector<float> *externalAudioSamples, webrtc::Mutex *externalAudioSamplesMutex) :
-    _updated(updated),
-    _noiseSuppressionConfiguration(noiseSuppressionConfiguration),
-    _externalAudioSamples(externalAudioSamples),
-    _externalAudioSamplesMutex(externalAudioSamplesMutex) {
-        int frameSize = rnnoise_get_frame_size();
-        _frameSamples.resize(frameSize);
-
-        _denoiseState = rnnoise_create(nullptr);
-    }
-
-    virtual ~AudioCapturePostProcessor() {
-        if (_denoiseState) {
-            rnnoise_destroy(_denoiseState);
-        }
-    }
-
-private:
-    virtual void Initialize(int sample_rate_hz, int num_channels) override {
-        _currentSampleRate = sample_rate_hz;
-    }
-
-    virtual void Process(webrtc::AudioBuffer *originalBuffer) override {
-        if (!originalBuffer) {
-            return;
-        }
-        if (originalBuffer->num_channels() != 1) {
-            return;
-        }
-        if (!_denoiseState) {
-            return;
-        }
-        
-        webrtc::AudioBuffer *buffer = originalBuffer;
-        bool freeBuffer = false;
-        
-        if (buffer->num_frames() != _frameSamples.size()) {
-            //TODO:optimize by running processing in another thread
-            freeBuffer = true;
-            size_t sourceSampleRate = _currentSampleRate;
-            webrtc::AudioBuffer *newBuffer = new webrtc::AudioBuffer(sourceSampleRate, 1, 48000, 1, 48000, 1);
-            webrtc::StreamConfig config((int)sourceSampleRate, 1);
-            newBuffer->CopyFrom(buffer->channels(), config);
-            buffer = newBuffer;
-        }
-
-        float sourcePeak = 0.0f;
-        float *sourceSamples = buffer->channels()[0];
-        for (int i = 0; i < _frameSamples.size(); i++) {
-            sourcePeak = std::max(std::fabs(sourceSamples[i]), sourcePeak);
-        }
-
-        if (_noiseSuppressionConfiguration) {
-            float vadProbability = 0.0f;
-            if (sourcePeak >= 0.01f) {
-                vadProbability = rnnoise_process_frame(_denoiseState, _frameSamples.data(), buffer->channels()[0]);
-                if (_noiseSuppressionConfiguration->isEnabled) {
-                    memcpy(buffer->channels()[0], _frameSamples.data(), _frameSamples.size() * sizeof(float));
-                }
-            }
-
-            float peak = 0;
-            int peakCount = 0;
-            const float *samples = buffer->channels_const()[0];
-            for (int i = 0; i < buffer->num_frames(); i++) {
-                float sample = samples[i];
-                if (sample < 0) {
-                    sample = -sample;
-                }
-                if (peak < sample) {
-                    peak = sample;
-                }
-                peakCount += 1;
-            }
-
-            bool vadStatus = _history.update(vadProbability);
-
-            _peakCount += peakCount;
-            if (_peak < peak) {
-                _peak = peak;
-            }
-            if (_peakCount >= 4400) {
-                float level = _peak / 4000.0f;
-                _peak = 0;
-                _peakCount = 0;
-
-                _updated(GroupLevelValue{
-                    level,
-                    vadStatus,
-                });
-            }
-        } else {
-            float peak = 0;
-            int peakCount = 0;
-            const float *samples = buffer->channels_const()[0];
-            for (int i = 0; i < buffer->num_frames(); i++) {
-                float sample = samples[i];
-                if (sample < 0) {
-                    sample = -sample;
-                }
-                if (peak < sample) {
-                    peak = sample;
-                }
-                peakCount += 1;
-            }
-
-            _peakCount += peakCount;
-            if (_peak < peak) {
-                _peak = peak;
-            }
-            if (_peakCount >= 1200) {
-                float level = _peak / 8000.0f;
-                _peak = 0;
-                _peakCount = 0;
-
-                _updated(GroupLevelValue{
-                    level,
-                    level >= 1.0f,
-                });
-            }
-        }
-
-        if (_externalAudioSamplesMutex && _externalAudioSamples) {
-            _externalAudioSamplesMutex->Lock();
-            if (!_externalAudioSamples->empty()) {
-                float *bufferData = buffer->channels()[0];
-                int takenSamples = 0;
-                for (int i = 0; i < _externalAudioSamples->size() && i < _frameSamples.size(); i++) {
-                    float sample = (*_externalAudioSamples)[i];
-                    sample += bufferData[i];
-                    sample = std::min(sample, 32768.f);
-                    sample = std::max(sample, -32768.f);
-                    bufferData[i] = sample;
-                    takenSamples++;
-                }
-                if (takenSamples != 0) {
-                    _externalAudioSamples->erase(_externalAudioSamples->begin(), _externalAudioSamples->begin() + takenSamples);
-                }
-            }
-            _externalAudioSamplesMutex->Unlock();
-        }
-        
-        if (freeBuffer) {
-            delete buffer;
-        }
-    }
-
-    virtual std::string ToString() const override {
-        return "CustomPostProcessing";
-    }
-
-    virtual void SetRuntimeSetting(webrtc::AudioProcessing::RuntimeSetting setting) override {
-    }
-
-private:
-    std::function<void(GroupLevelValue const &)> _updated;
-    std::shared_ptr<NoiseSuppressionConfiguration> _noiseSuppressionConfiguration;
-
-    int _currentSampleRate = 0;
-    
-    DenoiseState *_denoiseState = nullptr;
-    std::vector<float> _frameSamples;
-    int32_t _peakCount = 0;
-    float _peak = 0;
-    VadHistory _history;
-    SparseVad _vad;
-
-    std::vector<float> *_externalAudioSamples = nullptr;
-    webrtc::Mutex *_externalAudioSamplesMutex = nullptr;
-};
-#endif
 
 class AudioInjectionPostProcessor : public webrtc::CustomProcessing {
 public:
@@ -1016,527 +796,6 @@ private:
     GroupLevelValue _value;
 };
 
-class AudioLevelAndSpeechHolder {
-public:
-    AudioLevelAndSpeechHolder() {
-    }
-
-    void set(uint8_t audioLevel, bool hasSpeech) {
-        webrtc::MutexLock lock(&_mutex);
-        _audioLevel = audioLevel;
-        _hasSpeech = hasSpeech;
-    }
-
-    std::pair<uint8_t, bool> get() {
-        webrtc::MutexLock lock(&_mutex);
-        return std::make_pair(_audioLevel, _hasSpeech);
-    }
-
-private:
-    webrtc::Mutex _mutex;
-    uint8_t _audioLevel = 0;
-    bool _hasSpeech = false;
-};
-
-// Constants for H264 NAL unit types and headers
-static constexpr uint8_t kTypeMask = 0x1F;
-static constexpr uint8_t kFuA = 28;
-static constexpr uint8_t kIdr = 5;
-static constexpr uint8_t kSps = 7;
-static constexpr uint8_t kPps = 8;
-static constexpr uint8_t kSei = 6;
-static constexpr uint8_t kStapA = 24;
-static constexpr size_t kNalShortStartCode = 3;
-static constexpr size_t kNalHeaderSize = 1;
-static constexpr size_t kFuAHeaderSize = 2;
-constexpr size_t kLengthFieldSize = 2;
-constexpr size_t kStapAHeaderSize = kNalHeaderSize + kLengthFieldSize;
-
-// Calculate bytes needed to include PPS ID in a slice header
-size_t calculateSliceHeaderBytesForPpsId(const uint8_t* data, size_t size) {
-    if (size < 2)
-        return 0;
-
-    // Convert to RBSP format (remove emulation prevention bytes)
-    std::vector<uint8_t> rbsp = webrtc::H264::ParseRbsp(data, size);
-    if (rbsp.size() < 2)
-        return 0;
-
-    // Create a bitstream reader for the RBSP data (skipping NAL header)
-    // We need to skip the NAL header (1 byte) but still read from the start of the slice header
-    rtc::ArrayView<const uint8_t> rbspView(rbsp.data() + 1, rbsp.size() - 1);
-    webrtc::BitstreamReader reader(rbspView);
-
-    // first_mb_in_slice: ue(v)
-    reader.ReadExponentialGolomb();
-    if (!reader.Ok()) {
-        return 4; // Default if parsing fails
-    }
-
-    // slice_type: ue(v)
-    reader.ReadExponentialGolomb();
-    if (!reader.Ok()) {
-        return 4; // Default if parsing fails
-    }
-
-    // pic_parameter_set_id: ue(v) - THIS IS WHAT WE NEED
-    reader.ReadExponentialGolomb();
-    if (!reader.Ok()) {
-        return 4; // Default if parsing fails
-    }
-
-    // Calculate how many bytes we've read so far, plus 1 for NAL header
-    // The consumed bits divided by 8 (rounded up) gives us the bytes read
-    size_t bitsConsumed = rbspView.size() * 8 - reader.RemainingBitCount();
-    size_t bytesRead = 1 + (bitsConsumed + 7) / 8; // +1 for NAL header, +7 for ceiling division
-
-    // Add a margin to ensure we get all the PPS ID data
-    return bytesRead + 1;
-}
-
-/**
- * Calculates the size of the H264 header that needs to remain
- * unencrypted for Jitsi Videobridge to properly process the packet.
- *
- * This function works with WebRTC's Annex B format H.264 frames and ensures
- * the PPS ID is included in the unencrypted portion.
- * 
- * The method also ensures that all NAL units start codes are four bytes in length,
- * as WebRTC will always do this on the receiver side.
- *
- * @param frame The H264 RTP payload in Annex B format
- * @return The size of the header that must remain unencrypted
- */
-std::vector<uint8_t> calculateH264FramePlaintextHeaderSize(rtc::ArrayView<const uint8_t> frame, uint32_t& headerSize) {
-    if (frame.empty()) {
-        headerSize = 0;
-        return std::vector<uint8_t>();
-    }
-
-    // Find all NAL units in the frame
-    std::vector<webrtc::H264::NaluIndex> naluIndices =
-        webrtc::H264::FindNaluIndices(frame.data(), frame.size());
-
-    if (naluIndices.empty()) {
-        // No valid NAL units found
-        headerSize = 0;
-
-        std::vector<uint8_t> frameData;
-        frameData.resize(frame.size());
-        std::copy(frame.begin(), frame.end(), frameData.begin());
-        return frameData;
-    }
-
-    // Track the maximum offset we need to keep unencrypted
-    size_t maxOffset = 0;
-    std::vector<size_t> naluToUpdate; 
-
-    for (const auto& naluIndex : naluIndices) {
-        size_t startCodeLength = naluIndex.payload_start_offset - naluIndex.start_offset;
-
-        // If nalu start code is less than 4 bytes we need to rewrite it because
-        // otherwise receiving WebRTC will do this and decryption won't work anymore
-        if (startCodeLength == kNalShortStartCode) {
-            naluToUpdate.push_back(naluIndex.start_offset);
-        }
-
-        // Start by including the start code and NAL header
-        size_t headerEndOffset = naluIndex.payload_start_offset + kNalHeaderSize;
-
-        // Check if we have enough data to read the NAL unit type
-        if (naluIndex.payload_size >= kNalHeaderSize) {
-            // Get NAL unit type from the first byte after start code
-            uint8_t nalType = frame[naluIndex.payload_start_offset] & kTypeMask;
-
-            // Extend header size based on NAL unit type
-            if (nalType == kFuA) {
-                // For fragmented units, we need the FU header as well
-                if (naluIndex.payload_size >= kFuAHeaderSize) {
-                    headerEndOffset = naluIndex.payload_start_offset + kFuAHeaderSize;
-
-                    // For the first fragment, we also need to include PPS ID
-                    bool isStartBit = (frame[naluIndex.payload_start_offset + 1] & 0x80) != 0;
-                    if (isStartBit) {
-                        // Get original NAL type from the FU header
-                        uint8_t originalNalType = frame[naluIndex.payload_start_offset + 1] & kTypeMask;
-
-                        // If this is an IDR or non-IDR slice, include enough for PPS ID
-                        if (originalNalType == kIdr || originalNalType == 1) {
-                            // Add extra bytes to include PPS ID (typical size: 1-3 bytes after FU header)
-                            headerEndOffset += 4; // Conservative estimate
-                        }
-                    }
-                }
-            } else if (nalType == kStapA) {
-                // For aggregation packets, we need the STAP-A header and first NAL's length field
-                if (naluIndex.payload_size >= kStapAHeaderSize) {
-                    headerEndOffset = naluIndex.payload_start_offset + kStapAHeaderSize;
-
-                    // Try to get the type of the first aggregated NAL
-                    if (naluIndex.payload_size > kStapAHeaderSize) {
-                        uint8_t firstNalType = frame[naluIndex.payload_start_offset + kStapAHeaderSize] & kTypeMask;
-
-                        // If this is an IDR or non-IDR slice, include enough for PPS ID
-                        if (firstNalType == kIdr || firstNalType == 1) {
-                            // Add extra bytes to include PPS ID
-                            headerEndOffset += 4; // Conservative estimate
-                        }
-                    }
-                }
-            }
-            // For slice NAL units (IDR=5 or non-IDR=1), include PPS ID
-            else if (nalType == kIdr || nalType == 1) {
-                // Calculate bytes needed to include PPS ID
-                size_t ppsIdBytes = calculateSliceHeaderBytesForPpsId(
-                    frame.data() + naluIndex.payload_start_offset,
-                    naluIndex.payload_size);
-
-                headerEndOffset = naluIndex.payload_start_offset + ppsIdBytes;
-                maxOffset = std::max(maxOffset, headerEndOffset);
-                break;
-            }
-            // For keyframe related NAL units, ensure we keep their header
-            else if (nalType == kSps || nalType == kPps || nalType == kSei) {
-                // SPS and PPS need to be kept entirely in plaintext
-                headerEndOffset = naluIndex.payload_start_offset + naluIndex.payload_size;
-            }
-        }
-
-        // Update the maximum offset
-        maxOffset = std::max(maxOffset, headerEndOffset);
-    }
-
-    std::vector<uint8_t> frameData;
-    frameData.resize(frame.size() + naluToUpdate.size());
-
-    size_t offset = 0;
-
-    for (size_t i = 0; i < naluToUpdate.size(); ++i) {
-        const auto& naluIndex = naluToUpdate[i];
-        if (naluIndex - offset > 0) {
-            std::copy(frame.begin() + offset, frame.begin() + naluIndex, frameData.begin() + offset + i);
-        }
-
-        frameData[naluIndex + i] = 0;
-        offset = naluIndex;
-    }
-
-    if (offset < frame.size()) {
-        std::copy(frame.begin() + offset, frame.end(), frameData.begin() + offset + naluToUpdate.size());
-    }
-        
-    headerSize = static_cast<uint32_t>(maxOffset + naluToUpdate.size());
-    return frameData;
-}
-
-// VP8 Payload Header constants
-constexpr uint8_t P_BIT = 0x01;  // Inverse key frame flag (0=key frame, 1=delta frame)
-                                // In bit position 0
-
-/**
- * Calculates the size of the VP8 header that needs to remain
- * unencrypted for proper frame handling.
- *
- * For VP8:
- * - If it's a key frame (P=0), leave 10 bytes unencrypted to cover the full uncompressed VP8 header
- * - If it's a delta frame (P=1), leave 1 byte unencrypted (just the payload header)
- *
- * Based on VP8 payload header format in RFC 7741 section 4.3:
- *     0 1 2 3 4 5 6 7
- *    +-+-+-+-+-+-+-+-+
- *    |Size0|H| VER |P|
- *    +-+-+-+-+-+-+-+-+
- * The diagram shows bit positions where P is at position 7 (leftmost bit).
- *
- * @param frame The VP8 payload data (after RTP header and VP8 payload descriptor)
- * @return The size of the header that must remain unencrypted
- */
-std::vector<uint8_t> calculateVp8FramePlaintextHeaderSize(rtc::ArrayView<const uint8_t> frame, uint32_t& headerSize) {
-    // Ensure we have at least 1 byte
-    if (frame.empty()) {
-        headerSize = 0;
-        return std::vector<uint8_t>();
-    }
-    
-    // First byte of VP8 payload header
-    uint8_t first_byte = frame[0];
-    
-    // Check P bit (inverse key frame flag) - bit 7 (0x80)
-    bool is_key_frame = (first_byte & P_BIT) == 0;
-    
-    if (is_key_frame) {
-        // For key frames, leave 10 bytes unencrypted to cover the full uncompressed VP8 header
-        // This includes the frame dimensions
-        headerSize = frame.size() >= 10 ? 10 : ((uint32_t)frame.size());
-    } else {
-        // For delta frames, just leave 1 byte unencrypted (payload header)
-        headerSize = 1;
-    }
-
-    std::vector<uint8_t> frameData;
-    frameData.resize(frame.size());
-    std::copy(frame.begin(), frame.end(), frameData.begin());
-    return frameData;
-}
-
-enum class FrameTransformerPayloadType {
-    Unknown,
-    Opus,
-    H264,
-    VP8
-};
-
-constexpr uint8_t kH26XNaluShortStartSequenceSize = 3;
-
-using IndexStartCodeSizePair = std::pair<size_t, size_t>;
-
-std::optional<IndexStartCodeSizePair> FindNextH26XNaluIndex(const uint8_t* buffer,
-                                                            const size_t bufferSize,
-                                                            const size_t searchStartIndex = 0)
-{
-    constexpr uint8_t kH26XStartCodeHighestPossibleValue = 1;
-    constexpr uint8_t kH26XStartCodeEndByteValue = 1;
-    constexpr uint8_t kH26XStartCodeLeadingBytesValue = 0;
-
-    if (bufferSize < kH26XNaluShortStartSequenceSize) {
-        return std::nullopt;
-    }
-
-    // look for NAL unit 3 or 4 byte start code
-    for (size_t i = searchStartIndex; i < bufferSize - kH26XNaluShortStartSequenceSize;) {
-        if (buffer[i + 2] > kH26XStartCodeHighestPossibleValue) {
-            // third byte is not 0 or 1, can't be a start code
-            i += kH26XNaluShortStartSequenceSize;
-        }
-        else if (buffer[i + 2] == kH26XStartCodeEndByteValue) {
-            // third byte matches the start code end byte, might be a start code sequence
-            if (buffer[i + 1] == kH26XStartCodeLeadingBytesValue &&
-                buffer[i] == kH26XStartCodeLeadingBytesValue) {
-                // confirmed start sequence {0, 0, 1}
-                auto nalUnitStartIndex = i + kH26XNaluShortStartSequenceSize;
-
-                if (i >= 1 && buffer[i - 1] == kH26XStartCodeLeadingBytesValue) {
-                    // 4 byte start code
-                    return std::optional<IndexStartCodeSizePair>({nalUnitStartIndex, 4});
-                }
-                else {
-                    // 3 byte start code
-                    return std::optional<IndexStartCodeSizePair>({nalUnitStartIndex, 3});
-                }
-            }
-
-            i += kH26XNaluShortStartSequenceSize;
-        }
-        else {
-            // third byte is 0, might be a four byte start code
-            ++i;
-        }
-    }
-
-    return std::nullopt;
-}
-
-struct UnencryptedRange {
-    size_t offset = 0;
-    size_t size = 0;
-    
-    UnencryptedRange(size_t offset_, size_t size_) :
-    offset(offset_), size(size_) {
-    }
-};
-
-bool ValidateEncryptedFrame(FrameTransformerPayloadType payloadType, rtc::ArrayView<uint8_t> frame, int plaintextPrefix) {
-    if (payloadType != FrameTransformerPayloadType::H264) {
-        return true;
-    }
-
-    static_assert(kH26XNaluShortStartSequenceSize - 1 >= 0, "Padding will overflow!");
-    constexpr size_t Padding = kH26XNaluShortStartSequenceSize - 1;
-
-    std::vector<UnencryptedRange> unencryptedRanges;
-    if (plaintextPrefix != 0) {
-        unencryptedRanges.emplace_back(0, plaintextPrefix);
-    }
-
-    // H264 and H265 ciphertexts cannot contain a 3 or 4 byte start code {0, 0, 1}
-    // otherwise the packetizer gets confused
-    // and the frame we get on the decryption side will be shifted and fail to decrypt
-    size_t encryptedSectionStart = 0;
-    for (auto& range : unencryptedRanges) {
-        if (encryptedSectionStart == range.offset) {
-            encryptedSectionStart += range.size;
-            continue;
-        }
-
-        auto start = encryptedSectionStart - std::min(encryptedSectionStart, size_t{Padding});
-        auto end = std::min(range.offset + Padding, frame.size());
-        if (FindNextH26XNaluIndex(frame.data() + start, end - start)) {
-            return false;
-        }
-
-        encryptedSectionStart = range.offset + range.size;
-    }
-
-    if (encryptedSectionStart == frame.size()) {
-        return true;
-    }
-
-    auto start = encryptedSectionStart - std::min(encryptedSectionStart, size_t{Padding});
-    auto end = frame.size();
-    if (FindNextH26XNaluIndex(frame.data() + start, end - start)) {
-        return false;
-    }
-
-    return true;
-}
-
-class FrameTransformer : public webrtc::FrameTransformerInterface {
-public:
-    FrameTransformer(bool isEncryptor, std::function<std::vector<uint8_t>(std::vector<uint8_t> const &, int64_t, bool, int32_t)> transform, int64_t userId, std::map<int32_t, FrameTransformerPayloadType> const &payloadTypeMapping, std::function<std::pair<uint8_t, bool>()> getAudioLevelAndSpeech, std::function<void(uint8_t, bool)> setAudioLevelAndSpeech) :
-    _isEncryptor(isEncryptor),
-    _transform(transform),
-    _userId(userId),
-    _payloadTypeMapping(payloadTypeMapping),
-    _getAudioLevelAndSpeech(getAudioLevelAndSpeech),
-    _setAudioLevelAndSpeech(setAudioLevelAndSpeech) {
-    }
-
-    virtual void RegisterTransformedFrameCallback(rtc::scoped_refptr<webrtc::TransformedFrameCallback> callback) override {
-        webrtc::MutexLock lock(&_mutex);
-        assert(_sinkCallback == nullptr);
-        _sinkCallback = callback;
-    }
-
-    virtual void RegisterTransformedFrameSinkCallback(rtc::scoped_refptr<webrtc::TransformedFrameCallback> callback, uint32_t ssrc) override {
-        webrtc::MutexLock lock(&_mutex);
-        _sinkCallbackBySsrc[ssrc] = callback;
-    }
-
-    virtual void UnregisterTransformedFrameSinkCallback(uint32_t ssrc) override {
-        webrtc::MutexLock lock(&_mutex);
-        _sinkCallbackBySsrc.erase(ssrc);
-    }
-
-    virtual void Transform(std::unique_ptr<webrtc::TransformableFrameInterface> frame) override {
-        webrtc::MutexLock lock(&_mutex);
-
-        const auto ssrc = frame->GetSsrc();
-        const auto i = _sinkCallbackBySsrc.find(ssrc);
-        const auto sink = (i != _sinkCallbackBySsrc.end() && i->second)
-            ? i->second.get()
-            : _sinkCallback.get();
-        if (!sink) {
-            return;
-        }
-
-        FrameTransformerPayloadType payloadType = FrameTransformerPayloadType::Unknown;
-        const auto foundPayloadType = _payloadTypeMapping.find(frame->GetPayloadType());
-        if (foundPayloadType != _payloadTypeMapping.end()) {
-            payloadType = foundPayloadType->second;
-        }
-
-        if (_isEncryptor) {
-            if (payloadType == FrameTransformerPayloadType::H264 || payloadType == FrameTransformerPayloadType::VP8) {
-                uint32_t plaintextHeaderSize = 0;
-                std::vector<uint8_t> frameData;
-                if (payloadType == FrameTransformerPayloadType::H264) {
-                    frameData = calculateH264FramePlaintextHeaderSize(frame->GetData(), plaintextHeaderSize);
-                } else if (payloadType == FrameTransformerPayloadType::VP8) {
-                    frameData = calculateVp8FramePlaintextHeaderSize(frame->GetData(), plaintextHeaderSize);
-                }
-
-                if (plaintextHeaderSize > (uint32_t)frameData.size()) {
-                    plaintextHeaderSize = (uint32_t)frameData.size();
-                }
-
-                for (int attempt = 0; attempt < 4; attempt++) {
-                    auto result = _transform(frameData, _userId, _isEncryptor, plaintextHeaderSize);
-                    
-                    if (!result.empty()) {
-                        if (ValidateEncryptedFrame(payloadType, result, plaintextHeaderSize)) {
-                            frame->SetData(result);
-                            sink->OnTransformedFrame(std::move(frame));
-                            break;
-                        }
-                    } else {
-                        break;
-                    }
-                }
-            } else {
-                std::vector<uint8_t> buffer;
-                buffer.resize(frame->GetData().size() + 1 + 1);
-                std::copy(frame->GetData().begin(), frame->GetData().end(), buffer.begin());
-                
-                buffer[buffer.size() - 1 - 1] = 0x01;
-                std::pair<uint8_t, bool> audioLevelAndSpeech = std::make_pair(0, false);
-                if (_getAudioLevelAndSpeech) {
-                    audioLevelAndSpeech = _getAudioLevelAndSpeech();
-                }
-                uint8_t encodedAudioLevelAndSpeech = 0;
-                if (audioLevelAndSpeech.second) {
-                    encodedAudioLevelAndSpeech = encodedAudioLevelAndSpeech | 0x80;
-                }
-                encodedAudioLevelAndSpeech |= audioLevelAndSpeech.first & 0x7f;
-                buffer[buffer.size() - 1] = encodedAudioLevelAndSpeech;
-                
-                auto result = _transform(buffer, _userId, _isEncryptor, 0);
-                if (!result.empty()) {
-                    frame->SetData(result);
-                    sink->OnTransformedFrame(std::move(frame));
-                }
-            }
-        } else {
-            if (payloadType != FrameTransformerPayloadType::Opus) {
-                std::vector<uint8_t> encryptedFrame;
-                encryptedFrame.resize(frame->GetData().size());
-                std::copy(frame->GetData().begin(), frame->GetData().end(), encryptedFrame.begin());
-                
-                auto decryptedFrame = _transform(encryptedFrame, _userId, false, 0);
-                if (!decryptedFrame.empty()) {
-                    frame->SetData(decryptedFrame);
-                    sink->OnTransformedFrame(std::move(frame));
-                }
-            } else {
-                std::vector<uint8_t> buffer;
-                buffer.resize(frame->GetData().size());
-                std::copy(frame->GetData().begin(), frame->GetData().end(), buffer.begin());
-                
-                auto result = _transform(buffer, _userId, false, 0);
-                if (!result.empty()) {
-                    if (result.size() >= 2) {
-                        uint8_t extensionFlags = result[result.size() - 2];
-                        if (extensionFlags & 0x01) {
-                            uint8_t audioLevelAndSpeech = result[result.size() - 1];
-                            if (_setAudioLevelAndSpeech) {
-                                bool hasSpeech = (audioLevelAndSpeech & 0x80) != 0;
-                                uint8_t audioLevel = audioLevelAndSpeech & 0x7f;
-                                _setAudioLevelAndSpeech(audioLevel, hasSpeech);
-                            }
-
-                            result.resize(result.size() - 2);
-                        } else {
-                            result.resize(result.size() - 1);
-                        }
-                    }
-                    
-                    frame->SetData(result);
-                    sink->OnTransformedFrame(std::move(frame));
-                }
-            }
-        }
-    }
-
-private:
-    bool _isEncryptor = false;
-    std::function<std::vector<uint8_t>(std::vector<uint8_t> const &, int64_t, bool, int32_t)> _transform;
-    int64_t _userId = 0;
-    std::map<int32_t, FrameTransformerPayloadType> _payloadTypeMapping;
-    std::function<std::pair<uint8_t, bool>()> _getAudioLevelAndSpeech;
-    std::function<void(uint8_t, bool)> _setAudioLevelAndSpeech;
-    webrtc::Mutex _mutex;
-    rtc::scoped_refptr<webrtc::TransformedFrameCallback> _sinkCallback;
-    std::map<uint32_t, rtc::scoped_refptr<webrtc::TransformedFrameCallback>> _sinkCallbackBySsrc;
-};
 
 class IncomingAudioChannel : public sigslot::has_slots<> {
 public:
@@ -4149,6 +3408,14 @@ public:
     void addIncomingVideoChannel(uint32_t audioSsrc, int64_t userId, GroupParticipantVideoInformation const &videoInformation, VideoChannelDescription::Quality minQuality, VideoChannelDescription::Quality maxQuality) {
         if (!_sharedVideoInformation) {
             return;
+        }
+        if (videoInformation.ssrcGroups.empty()) {
+            return;
+        }
+        for (const auto &group : videoInformation.ssrcGroups) {
+            if (group.ssrcs.empty()) {
+                return;
+            }
         }
         if (_incomingVideoChannels.find(VideoChannelId(videoInformation.endpointId)) != _incomingVideoChannels.end()) {
             return;
