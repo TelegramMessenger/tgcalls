@@ -4,7 +4,7 @@
 #include "PlatformContext.h"
 
 #include <jni.h>
-#include <voip/tgcalls/group/GroupInstanceImpl.h>
+#include <group/GroupInstanceImpl.h>
 
 namespace tgcalls {
 
