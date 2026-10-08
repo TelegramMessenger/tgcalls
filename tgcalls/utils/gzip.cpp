@@ -74,6 +74,7 @@ absl::optional<std::vector<uint8_t>> gunzipData(std::vector<uint8_t> const &data
         output.resize(data.size() * 2);
         while (status == Z_OK) {
             if (sizeLimit > 0 && stream.total_out > sizeLimit) {
+                inflateEnd(&stream);
                 return absl::nullopt;
             }
 
@@ -87,10 +88,12 @@ absl::optional<std::vector<uint8_t>> gunzipData(std::vector<uint8_t> const &data
         if (inflateEnd(&stream) == Z_OK) {
             if (status == Z_STREAM_END) {
                 output.resize(stream.total_out);
-            } else if (sizeLimit > 0 && output.size() > sizeLimit) {
-                return absl::nullopt;
             }
         }
+    }
+
+    if (sizeLimit > 0 && output.size() > sizeLimit) {
+        return absl::nullopt;
     }
 
     return output;
