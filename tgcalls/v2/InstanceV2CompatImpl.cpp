@@ -59,12 +59,14 @@
 #include "v2/ExternalSignalingConnection.h"
 #include "v2/SignalingSctpConnection.h"
 #include "v2/ReflectorRelayPortFactory.h"
+#include "v2/MtProtoDtlsTransport.h"
 #include "v2/CustomParameters.h"
 #ifdef WEBRTC_IOS
 #include "platform/darwin/iOS/tgcalls_audio_device_module_ios.h"
 #endif
 #include <random>
 #include <sstream>
+#include <deque>
 #include <map>
 #include <set>
 
@@ -440,6 +442,23 @@ public:
 
         _peerConnectionFactory = webrtc::CreateModularPeerConnectionFactory(std::move(peerConnectionFactoryDependencies));
 
+        _useMtProto = getCustomParameterBool(_customParameters, "network_use_mtproto");
+        if (_useMtProto) {
+            // Half one of two that MUST travel together (the other is the
+            // MtProtoDtlsTransportFactory on the dependencies below). Selects the
+            // plain RtpTransport (no SRTP) while DTLS stays enabled for SDP, so
+            // certificates, fingerprints, the SCTP factory and data-channel
+            // negotiation are stock; the factory then puts mtproto in the DTLS
+            // slot with no handshake. Must precede CreatePeerConnectionOrError.
+            //
+            // The wire bytes are 13.0.0's, which is what a V2Impl peer with the
+            // same flag speaks: without this, a 14.0.0 <-> 13.0.0 call under the
+            // flag would pair DTLS with mtproto and never connect.
+            webrtc::PeerConnectionFactoryInterface::Options factoryOptions;
+            factoryOptions.external_transport_security = true;
+            _peerConnectionFactory->SetOptions(factoryOptions);
+        }
+
         webrtc::PeerConnectionDependencies peerConnectionDependencies(nullptr);
 
         PeerConnectionDelegateAdapter::Parameters delegateParameters;
@@ -460,13 +479,9 @@ public:
                     return;
                 }
 
-                if (strong->_didBeginNegotiation && strong->_encryptionKey.isOutgoing) {
-                    // Only the caller (outgoing) initiates renegotiation.
-                    // The callee responds to offers via applyRemoteDescription.
-                    strong->sendLocalDescription();
-                } else {
-                    RTC_LOG(LS_INFO) << "onRenegotiationNeeded: not sending local description (callee or not started)";
-                }
+                // Either side offers its own channels; requestRenegotiation waits
+                // for a stable state, and the callee for the caller's first offer.
+                strong->requestRenegotiation();
             });
         };
         delegateParameters.onIceCandidate = [weak](const webrtc::IceCandidateInterface *iceCandidate) {
@@ -489,19 +504,10 @@ public:
             }
 
             bool isConnected = false;
-            bool isFailed = false;
-
             switch (state) {
-                case webrtc::PeerConnectionInterface::IceConnectionState::kIceConnectionConnected: {
-                    isConnected = true;
-                    break;
-                }
+                case webrtc::PeerConnectionInterface::IceConnectionState::kIceConnectionConnected:
                 case webrtc::PeerConnectionInterface::IceConnectionState::kIceConnectionCompleted: {
                     isConnected = true;
-                    break;
-                }
-                case webrtc::PeerConnectionInterface::IceConnectionState::kIceConnectionFailed: {
-                    isFailed = true;
                     break;
                 }
                 default: {
@@ -509,12 +515,15 @@ public:
                 }
             }
 
-            if (strong->_isConnected != isConnected || strong->_isFailed != isFailed) {
-                strong->_isConnected = isConnected;
-                strong->_isFailed = isFailed;
-
-                strong->onNetworkStateUpdated();
+            // kIceConnectionFailed is not terminal: WebRTC raises it ~15s after the
+            // pairs created so far time out, while a late-trickled candidate or an
+            // ICE restart can still rescue the call. Failed comes only from the 20s
+            // watchdog (beginCheckConnectionTimer), as in InstanceV2Impl.
+            if (state == webrtc::PeerConnectionInterface::IceConnectionState::kIceConnectionFailed) {
+                strong->maybeRestartIce();
             }
+
+            strong->updateIsConnected(isConnected);
         };
         delegateParameters.onDataChannel = [weak](webrtc::scoped_refptr<webrtc::DataChannelInterface> dataChannel) {
             const auto strong = weak.lock();
@@ -559,16 +568,19 @@ public:
                 return;
             }
 
-            std::string mid = receiver->track()->id();
-            if (mid.empty()) {
-                return;
-            }
+            // _incomingVideoTransceivers is keyed by mid (see onTransceiverAdded),
+            // but RtpReceiverInterface exposes no mid() - receiver->track()->id()
+            // is the TRACK id, so looking it up by that never matched and entries
+            // were never erased. Find the entry by its receiver instead.
+            for (auto it = strong->_incomingVideoTransceivers.begin(); it != strong->_incomingVideoTransceivers.end(); it++) {
+                if (it->second->receiver() != receiver) {
+                    continue;
+                }
 
-            const auto transceiver = strong->_incomingVideoTransceivers.find(mid);
-            if (transceiver != strong->_incomingVideoTransceivers.end()) {
-                strong->disconnectIncomingVideoSink(transceiver->second);
+                strong->disconnectIncomingVideoSink(it->second);
+                strong->_incomingVideoTransceivers.erase(it);
 
-                strong->_incomingVideoTransceivers.erase(transceiver);
+                break;
             }
         };
         delegateParameters.onCandidatePairChangeEvent = [weak](const cricket::CandidatePairChangeEvent &event) {
@@ -594,7 +606,7 @@ public:
         _networkMonitorFactory = PlatformInterface::SharedInstance()->createNetworkMonitorFactory();
         _socketFactory = std::make_unique<rtc::BasicPacketSocketFactory>(_threads->getNetworkThread()->socketserver());
         _networkManager = std::make_unique<rtc::BasicNetworkManager>(_networkMonitorFactory.get(), _threads->getNetworkThread()->socketserver());
-        _relayPortFactory = std::make_unique<ReflectorRelayPortFactory>(_rtcServers, false, 0, _threads->getNetworkThread()->socketserver(), false);
+        _relayPortFactory = std::make_unique<ReflectorRelayPortFactory>(_rtcServers, false, 0, _threads->getNetworkThread()->socketserver(), getCustomParameterBool(_customParameters, "network_reflector_resolve_remote_candidate_ip"));
 
         auto portAllocator = std::make_unique<cricket::BasicPortAllocator>(_networkManager.get(), _socketFactory.get(), nullptr, _relayPortFactory.get());
 
@@ -680,6 +692,11 @@ public:
             }
         }
 
+        if (_useMtProto) {
+            // Half two: see the factory option above.
+            peerConnectionDependencies.dtls_transport_factory = std::make_unique<MtProtoDtlsTransportFactory>(_encryptionKey);
+        }
+
         auto peerConnectionOrError = _peerConnectionFactory->CreatePeerConnectionOrError(peerConnectionConfiguration, std::move(peerConnectionDependencies));
         if (peerConnectionOrError.ok()) {
             _peerConnection = peerConnectionOrError.value();
@@ -702,8 +719,11 @@ public:
                 }
             }
 
+            // A one-way channel, as in InstanceV2Impl: the peer's audio arrives on
+            // a transceiver of its own, created when its offer is applied.
             webrtc::RtpTransceiverInit transceiverInit;
             transceiverInit.stream_ids = { "0" };
+            transceiverInit.direction = webrtc::RtpTransceiverDirection::kSendOnly;
 
             cricket::AudioOptions audioSourceOptions;
             webrtc::scoped_refptr<webrtc::AudioSourceInterface> audioSource = _peerConnectionFactory->CreateAudioSource(audioSourceOptions);
@@ -758,6 +778,13 @@ public:
         beginSignaling();
 
         beginLogTimer(0);
+        _lastDisconnectedTimestamp = rtc::TimeMillis();
+        beginCheckConnectionTimer();
+
+        // Emit a baseline record so a call that never transitions still uploads a
+        // timeline with a call-start origin. InstanceV2Impl::start() ends the same
+        // way, which is why 13.0.0 cannot produce an empty "network" array.
+        onNetworkStateUpdated();
     }
 
     void sendPendingSignalingServiceData(int cause) {
@@ -816,6 +843,91 @@ public:
         }, webrtc::TimeDelta::Millis(delayMs));
     }
 
+    void beginCheckConnectionTimer() {
+        const auto weak = std::weak_ptr<InstanceV2CompatImplInternal>(shared_from_this());
+        _threads->getMediaThread()->PostDelayedTask([weak]() {
+            auto strong = weak.lock();
+            if (!strong) {
+                return;
+            }
+            if (strong->_isStopped.load()) {
+                return;
+            }
+
+            int64_t currentTimestamp = rtc::TimeMillis();
+            const int64_t maxTimeout = 20000;
+
+            if (!strong->_isConnected && !strong->_isFailed && strong->_lastDisconnectedTimestamp + maxTimeout < currentTimestamp) {
+                RTC_LOG(LS_INFO) << "InstanceV2CompatImpl: connection timeout " << (currentTimestamp - strong->_lastDisconnectedTimestamp) << " ms";
+
+                strong->_isFailed = true;
+                strong->onNetworkStateUpdated();
+            }
+
+            strong->beginCheckConnectionTimer();
+        }, webrtc::TimeDelta::Millis(1000));
+    }
+
+    void updateIsConnected(bool isConnected) {
+        if (_isConnected == isConnected) {
+            return;
+        }
+        _isConnected = isConnected;
+
+        if (isConnected) {
+            onNetworkStateUpdated();
+        } else {
+            _lastDisconnectedTimestamp = rtc::TimeMillis();
+
+            // The legacy ICE state reports kIceConnectionDisconnected on a ~2.5s
+            // receiving timeout, so brief loss blips would surface as Reconnecting
+            // episodes. Only report (and log) the disconnect if it persists.
+            int32_t generation = ++_disconnectReportGeneration;
+            const auto weak = std::weak_ptr<InstanceV2CompatImplInternal>(shared_from_this());
+            _threads->getMediaThread()->PostDelayedTask([weak, generation]() {
+                const auto strong = weak.lock();
+                if (!strong) {
+                    return;
+                }
+                if (strong->_isStopped.load()) {
+                    return;
+                }
+                if (generation != strong->_disconnectReportGeneration) {
+                    return;
+                }
+                if (!strong->_isConnected) {
+                    strong->onNetworkStateUpdated();
+                }
+            }, webrtc::TimeDelta::Millis(2000));
+        }
+    }
+
+    void maybeRestartIce() {
+        if (_isFailed) {
+            return;
+        }
+        // Restart only from the caller: ICE failure is symmetric, so the caller
+        // observes it too, and one restarting side avoids offer glare. The restart
+        // offer is preceded by an InitialSetupMessage with the new ufrag/pwd,
+        // which a V2Impl peer applies through setRemoteParams.
+        if (!_encryptionKey.isOutgoing) {
+            return;
+        }
+
+        int64_t timestamp = rtc::TimeMillis();
+        const int64_t minRestartIntervalMs = 5000;
+        if (_lastIceRestartTimestamp != 0 && _lastIceRestartTimestamp + minRestartIntervalMs > timestamp) {
+            return;
+        }
+        _lastIceRestartTimestamp = timestamp;
+
+        RTC_LOG(LS_INFO) << "InstanceV2CompatImpl: requesting ICE restart";
+        _peerConnection->RestartIce();
+        // RestartIce raises OnRenegotiationNeeded only from kStable; ask directly
+        // so a restart requested mid-exchange goes out when the exchange settles.
+        requestRenegotiation();
+    }
+
     void writeStateLogRecords() {
         const auto weak = std::weak_ptr<InstanceV2CompatImplInternal>(shared_from_this());
         auto call = ((webrtc::PeerConnectionProxyWithInternal<webrtc::PeerConnection> *)_peerConnection.get())->internal()->call_ptr();
@@ -842,7 +954,7 @@ public:
                 }
 
                 float bitrateNorm = 16.0f;
-                if (strong->_outgoingVideoTransceiver) {
+                if (strong->_outgoingVideoTrack) {
                     bitrateNorm = 600.0f;
                 }
 
@@ -862,10 +974,29 @@ public:
         });
     }
 
+    // Signaling follows InstanceV2Impl's channel protocol (see SignalingTranslator):
+    // each side offers its own outgoing channels, an answer echoes the offer's
+    // exchangeId, and offer-vs-answer is decided by that id, never by role.
+
+    // An operation on the PeerConnection is in flight, or we owe an answer.
+    // Remote messages wait behind it: a 13.0.0 callee sends its answer and its
+    // own offer back to back, and the offer must be built on the description the
+    // answer produced.
+    bool isNegotiationBusy() const {
+        if (_isSettingLocalDescription || _isSettingRemoteDescription) {
+            return true;
+        }
+        return _peerConnection->signaling_state() == webrtc::PeerConnectionInterface::SignalingState::kHaveRemoteOffer;
+    }
+
     void sendLocalDescription() {
         const auto weak = std::weak_ptr<InstanceV2CompatImplInternal>(shared_from_this());
 
-        _isMakingOffer = true;
+        // The implicit SetLocalDescription makes an offer from kStable and an
+        // answer from kHaveRemoteOffer.
+        const bool isOffer = _peerConnection->signaling_state() == webrtc::PeerConnectionInterface::SignalingState::kStable;
+        _isSettingLocalDescription = true;
+        _isMakingOffer = isOffer;
 
         webrtc::scoped_refptr<webrtc::SetLocalDescriptionObserverInterface> observer(new rtc::RefCountedObject<SetSessionDescriptionObserver>([threads = _threads, weak](webrtc::RTCError error) {
             const bool isOk = error.ok();
@@ -878,25 +1009,158 @@ public:
                     return;
                 }
 
-                // Always clear the in-flight flag, or a failure would wedge
-                // renegotiation permanently (see the guard in onRenegotiationNeeded).
+                // Always clear the in-flight flags, or a failure would wedge
+                // negotiation permanently.
+                strong->_isSettingLocalDescription = false;
                 strong->_isMakingOffer = false;
 
                 if (!isOk) {
-                    return;
+                    strong->_consecutiveNegotiationFailures++;
+                    if (strong->_peerConnection->signaling_state() == webrtc::PeerConnectionInterface::SignalingState::kHaveRemoteOffer) {
+                        // The answer could not be made; until the offer is rolled
+                        // back every later remote message would wait behind it.
+                        strong->rollback(false);
+                        return;
+                    }
+                } else {
+                    strong->doSendLocalDescription();
+                    strong->maybeCommitPendingIceCandidates();
                 }
 
-                strong->doSendLocalDescription();
-
-                strong->maybeCommitPendingIceCandidates();
+                strong->onNegotiationStepCompleted();
             });
         }));
-        RTC_LOG(LS_INFO) << "Calling SetLocalDescription";
+        RTC_LOG(LS_INFO) << "Calling SetLocalDescription (" << (isOffer ? "offer" : "answer") << ")";
         _peerConnection->SetLocalDescription(observer);
     }
 
+    void rollback(bool isLocal) {
+        const auto weak = std::weak_ptr<InstanceV2CompatImplInternal>(shared_from_this());
+
+        auto rollbackDescription = webrtc::CreateSessionDescription(webrtc::SdpType::kRollback, "");
+        if (isLocal) {
+            _isSettingLocalDescription = true;
+        } else {
+            _isSettingRemoteDescription = true;
+        }
+
+        auto completion = [threads = _threads, weak, isLocal](webrtc::RTCError error) {
+            const bool isOk = error.ok();
+            if (!isOk) {
+                RTC_LOG(LS_ERROR) << "Rollback failed: " << error.message();
+            }
+            threads->getMediaThread()->PostTask([weak, isLocal]() {
+                const auto strong = weak.lock();
+                if (!strong) {
+                    return;
+                }
+                if (isLocal) {
+                    strong->_isSettingLocalDescription = false;
+                    strong->_signalingTranslator.abandonPendingOffer();
+                } else {
+                    strong->_isSettingRemoteDescription = false;
+                }
+                strong->onNegotiationStepCompleted();
+            });
+        };
+
+        RTC_LOG(LS_INFO) << "Rolling back the " << (isLocal ? "local offer" : "remote offer");
+        if (isLocal) {
+            webrtc::scoped_refptr<webrtc::SetLocalDescriptionObserverInterface> observer(new rtc::RefCountedObject<SetSessionDescriptionObserver>(std::move(completion)));
+            _peerConnection->SetLocalDescription(std::move(rollbackDescription), observer);
+        } else {
+            webrtc::scoped_refptr<webrtc::SetRemoteDescriptionObserverInterface> observer(new rtc::RefCountedObject<SetSessionDescriptionObserver>(std::move(completion)));
+            _peerConnection->SetRemoteDescription(std::move(rollbackDescription), observer);
+        }
+    }
+
+    // After every SetLocalDescription/SetRemoteDescription: remote messages first,
+    // then any offer of our own.
+    void onNegotiationStepCompleted() {
+        processPendingRemoteNegotiation();
+        flushPendingRenegotiation();
+    }
+
+    void scheduleCallerOfferHoldRelease() {
+        const auto weak = std::weak_ptr<InstanceV2CompatImplInternal>(shared_from_this());
+        _threads->getMediaThread()->PostDelayedTask([weak]() {
+            const auto strong = weak.lock();
+            if (!strong) {
+                return;
+            }
+            if (strong->_isStopped.load()) {
+                return;
+            }
+            strong->flushPendingRenegotiation();
+        }, webrtc::TimeDelta::Millis(kCallerOfferHoldMs + 1));
+    }
+
+    void requestRenegotiation() {
+        // A capture change or an ICE restart wants a new offer, but only from a
+        // quiet stable state: never while an offer or answer is in flight or owed,
+        // and never ahead of a remote message already received. Otherwise remember
+        // it and send once the exchange settles, rather than trusting WebRTC to
+        // re-raise OnRenegotiationNeeded past its negotiation-needed latch (it does
+        // not, for a direction change made while our answer is current).
+        _pendingRenegotiation = true;
+        flushPendingRenegotiation();
+    }
+
+    // One of our transceivers has no m-line: the callee's own channels after it
+    // answered the caller's first offer, or ours again after a rolled-back offer.
+    bool hasUnassociatedOutgoingTransceiver() const {
+        if (_outgoingAudioTransceiver && !_outgoingAudioTransceiver->mid()) {
+            return true;
+        }
+        if (_outgoingVideoTransceiver && !_outgoingVideoTransceiver->mid() && _outgoingVideoTransceiver->direction() != webrtc::RtpTransceiverDirection::kInactive) {
+            return true;
+        }
+        return false;
+    }
+
+    void flushPendingRenegotiation() {
+        if (!_didBeginNegotiation || !_peerConnection || _isStopped.load()) {
+            return;
+        }
+        if (_isMakingOffer || isNegotiationBusy()) {
+            return;
+        }
+        if (!_pendingRemoteNegotiation.empty()) {
+            return;
+        }
+        if (_peerConnection->signaling_state() != webrtc::PeerConnectionInterface::SignalingState::kStable) {
+            return;
+        }
+        // The callee offers its own channels only after answering the caller's
+        // first offer, as InstanceV2Impl's callee does.
+        if (!_encryptionKey.isOutgoing && !_peerConnection->current_remote_description()) {
+            return;
+        }
+        // The caller's later offers wait for the callee's own first offer, which
+        // both callee engines send right after answering ours. Sent earlier, ours
+        // can cross it, and under the caller-wins rule a 13.0.0 callee then drops
+        // its offer for good: its audio would never be negotiated (seen at 30%
+        // signaling loss, where that offer took 5.6 s). Bounded, in case a callee
+        // has nothing to offer.
+        if (_encryptionKey.isOutgoing && !_hasAppliedRemoteOffer && _firstRemoteAnswerTimestamp != 0 && rtc::TimeMillis() < _firstRemoteAnswerTimestamp + kCallerOfferHoldMs) {
+            return;
+        }
+
+        bool needsOffer = _pendingRenegotiation;
+        // Bounded: a description that keeps failing would otherwise make this an
+        // offer per signaling round trip for the rest of the call.
+        if (!needsOffer && _consecutiveNegotiationFailures < 3 && hasUnassociatedOutgoingTransceiver()) {
+            needsOffer = true;
+        }
+        if (!needsOffer) {
+            return;
+        }
+
+        _pendingRenegotiation = false;
+        sendLocalDescription();
+    }
+
     void sendIceCandidate(const webrtc::IceCandidateInterface *iceCandidate) {
-        // Extract V2Impl-style CandidatesMessage via SignalingTranslator
         signaling::CandidatesMessage candidatesMsg = _signalingTranslator.extractCandidates(iceCandidate);
 
         signaling::Message message;
@@ -906,30 +1170,26 @@ public:
 
     void doSendLocalDescription() {
         auto localDescription = _peerConnection->local_description();
-        if (!localDescription) {
+        if (!localDescription || !localDescription->description()) {
             return;
         }
+        const cricket::SessionDescription *description = localDescription->description();
 
-        const cricket::SessionDescription *cricketDesc = localDescription->description();
-        if (!cricketDesc) {
-            return;
-        }
-
-        // Extract and send InitialSetupMessage
-        signaling::InitialSetupMessage initialSetup = _signalingTranslator.extractInitialSetup(cricketDesc);
-        {
+        // Ahead of the NegotiateChannels it belongs to: our credentials changed
+        // (first exchange, or an ICE restart on either side).
+        if (auto initialSetup = _signalingTranslator.takeInitialSetupIfChanged(description)) {
             signaling::Message message;
-            message.data = std::move(initialSetup);
+            message.data = std::move(initialSetup.value());
             sendSignalingMessage(message);
         }
 
-        // Extract and send NegotiateChannelsMessage
-        signaling::NegotiateChannelsMessage negotiateChannels = _signalingTranslator.extractNegotiateChannels(cricketDesc, _lastSentExchangeId++);
-        {
-            signaling::Message message;
-            message.data = std::move(negotiateChannels);
-            sendSignalingMessage(message);
+        signaling::Message message;
+        if (localDescription->GetType() == webrtc::SdpType::kOffer) {
+            message.data = _signalingTranslator.makeOffer(description);
+        } else {
+            message.data = _signalingTranslator.makeAnswer(description);
         }
+        sendSignalingMessage(message);
     }
 
     void beginSignaling() {
@@ -973,8 +1233,13 @@ public:
         }
     }
 
+    // Also fed by the data channel: InstanceV2Impl sends MediaState only there.
     void processSignalingData(const std::vector<uint8_t> &data) {
         RTC_LOG(LS_INFO) << "processSignalingData: " << std::string(data.begin(), data.end());
+
+        if (!_peerConnection) {
+            return;
+        }
 
         const auto parsedMessage = signaling::Message::parse(data);
         if (!parsedMessage) {
@@ -986,27 +1251,44 @@ public:
 
         if (const auto initialSetup = absl::get_if<signaling::InitialSetupMessage>(&messageData)) {
             RTC_LOG(LS_INFO) << "Received InitialSetupMessage";
-            bool ready = _signalingTranslator.receiveInitialSetup(*initialSetup);
-            if (ready) {
-                applyRemoteDescription();
-            }
-        } else if (const auto negotiateChannels = absl::get_if<signaling::NegotiateChannelsMessage>(&messageData)) {
-            RTC_LOG(LS_INFO) << "Received NegotiateChannelsMessage exchangeId=" << negotiateChannels->exchangeId;
 
-            // Handle exchange ID race condition: caller (outgoing) wins
-            if (_isMakingOffer) {
-                // We're in the middle of making an offer
-                if (_encryptionKey.isOutgoing) {
-                    // We're the caller — ignore their offer, they'll accept ours
-                    RTC_LOG(LS_INFO) << "Ignoring NegotiateChannels — we're outgoing and making offer";
+            // Applied on receipt, as InstanceV2Impl does: it describes the peer's ICE
+            // agent as it is now, so the latest one is right for any description
+            // still to be built. Order cannot be relied on anyway - InstanceV2Impl
+            // sends its own InitialSetup asynchronously, after the answer and offer
+            // that need it.
+            _signalingTranslator.setRemoteSetup(*initialSetup);
+
+            processPendingRemoteNegotiation();
+        } else if (const auto negotiateChannels = absl::get_if<signaling::NegotiateChannelsMessage>(&messageData)) {
+            PendingRemoteNegotiation item;
+            item.channels = *negotiateChannels;
+
+            switch (_signalingTranslator.classify(*negotiateChannels)) {
+                case SignalingTranslator::MessageKind::Stale: {
+                    RTC_LOG(LS_INFO) << "Ignoring NegotiateChannels exchangeId=" << negotiateChannels->exchangeId << ": answers an offer we abandoned";
                     return;
                 }
+                case SignalingTranslator::MessageKind::Answer: {
+                    RTC_LOG(LS_INFO) << "Received NegotiateChannels answer exchangeId=" << negotiateChannels->exchangeId;
+                    item.kind = PendingRemoteNegotiation::Kind::Answer;
+                    break;
+                }
+                case SignalingTranslator::MessageKind::Offer: {
+                    RTC_LOG(LS_INFO) << "Received NegotiateChannels offer exchangeId=" << negotiateChannels->exchangeId;
+                    if (_encryptionKey.isOutgoing && (_isMakingOffer || _signalingTranslator.hasPendingOffer())) {
+                        // Glare. InstanceV2Impl's rule: the caller's offer wins, and the
+                        // callee answers it and offers again afterwards.
+                        RTC_LOG(LS_INFO) << "Ignoring the remote offer: ours is pending and the caller's offer wins";
+                        return;
+                    }
+                    item.kind = PendingRemoteNegotiation::Kind::Offer;
+                    break;
+                }
             }
+            _pendingRemoteNegotiation.push_back(std::move(item));
 
-            bool ready = _signalingTranslator.receiveNegotiateChannels(*negotiateChannels);
-            if (ready) {
-                applyRemoteDescription();
-            }
+            processPendingRemoteNegotiation();
         } else if (const auto candidates = absl::get_if<signaling::CandidatesMessage>(&messageData)) {
             auto parsedCandidates = _signalingTranslator.parseCandidates(*candidates);
             for (auto &candidate : parsedCandidates) {
@@ -1018,18 +1300,80 @@ public:
         }
     }
 
-    void applyRemoteDescription() {
-        const cricket::SessionDescription *localDesc = nullptr;
-        if (_peerConnection->local_description()) {
-            localDesc = _peerConnection->local_description()->description();
-        }
-        auto remoteDescription = _signalingTranslator.buildRemoteDescription(localDesc);
-        if (!remoteDescription) {
-            RTC_LOG(LS_ERROR) << "Could not build remote description";
+    void processPendingRemoteNegotiation() {
+        if (_isStopped.load()) {
             return;
         }
+        while (!_pendingRemoteNegotiation.empty()) {
+            if (isNegotiationBusy()) {
+                return;
+            }
+            if (!_signalingTranslator.hasRemoteSetup()) {
+                // A NegotiateChannels ahead of the first InitialSetupMessage.
+                return;
+            }
 
-        bool isOffer = (remoteDescription->GetType() == webrtc::SdpType::kOffer);
+            auto item = std::move(_pendingRemoteNegotiation.front());
+            _pendingRemoteNegotiation.pop_front();
+
+            const auto signalingState = _peerConnection->signaling_state();
+            if (item.kind == PendingRemoteNegotiation::Kind::Answer) {
+                if (signalingState != webrtc::PeerConnectionInterface::SignalingState::kHaveLocalOffer) {
+                    RTC_LOG(LS_INFO) << "Ignoring NegotiateChannels answer exchangeId=" << item.channels.exchangeId << ": no local offer";
+                    continue;
+                }
+                applyRemoteAnswer(item.channels);
+                return;
+            } else {
+                if (signalingState == webrtc::PeerConnectionInterface::SignalingState::kHaveLocalOffer) {
+                    if (_encryptionKey.isOutgoing) {
+                        RTC_LOG(LS_INFO) << "Ignoring the remote offer: ours is pending and the caller's offer wins";
+                        continue;
+                    }
+                    // Glare as the callee: SetRemoteDescription rolls our offer back
+                    // (enable_implicit_rollback); offer again once this exchange is done.
+                    _signalingTranslator.abandonPendingOffer();
+                    _pendingRenegotiation = true;
+                }
+                applyRemoteOffer(item.channels);
+                return;
+            }
+        }
+    }
+
+    void applyRemoteOffer(signaling::NegotiateChannelsMessage const &offer) {
+        // The current description, not the pending one: as the callee in glare,
+        // our offer is about to be rolled back.
+        const cricket::SessionDescription *currentLocal = nullptr;
+        if (const auto description = _peerConnection->current_local_description()) {
+            currentLocal = description->description();
+        }
+        auto remoteDescription = _signalingTranslator.buildRemoteOffer(offer, currentLocal);
+        if (!remoteDescription) {
+            RTC_LOG(LS_ERROR) << "Could not build the remote offer";
+            return;
+        }
+        setRemoteDescription(std::move(remoteDescription));
+    }
+
+    void applyRemoteAnswer(signaling::NegotiateChannelsMessage const &answer) {
+        const auto localOffer = _peerConnection->pending_local_description();
+        if (!localOffer) {
+            RTC_LOG(LS_ERROR) << "Could not build the remote answer: no local offer";
+            return;
+        }
+        auto remoteDescription = _signalingTranslator.buildRemoteAnswer(answer, localOffer->description());
+        if (!remoteDescription) {
+            RTC_LOG(LS_ERROR) << "Could not build the remote answer";
+            return;
+        }
+        setRemoteDescription(std::move(remoteDescription));
+    }
+
+    void setRemoteDescription(std::unique_ptr<webrtc::SessionDescriptionInterface> remoteDescription) {
+        const bool isOffer = remoteDescription->GetType() == webrtc::SdpType::kOffer;
+
+        _isSettingRemoteDescription = true;
 
         const auto weak = std::weak_ptr<InstanceV2CompatImplInternal>(shared_from_this());
         webrtc::scoped_refptr<webrtc::SetRemoteDescriptionObserverInterface> observer(new rtc::RefCountedObject<SetSessionDescriptionObserver>([threads = _threads, weak, isOffer](webrtc::RTCError error) {
@@ -1043,20 +1387,32 @@ public:
                     return;
                 }
 
-                if (!isOk) {
-                    // Do NOT fall through to sendLocalDescription(): a failed
-                    // SetRemoteDescription(offer) leaves signaling state at kStable,
-                    // and the implicit SetLocalDescription overload picks
-                    // offer-vs-answer from signaling_state() - so we would send an
-                    // offer where the peer awaits an answer.
+                strong->_isSettingRemoteDescription = false;
+
+                if (isOk) {
+                    strong->maybeCommitPendingIceCandidates();
+                    if (isOffer) {
+                        strong->_hasAppliedRemoteOffer = true;
+                        strong->sendLocalDescription();
+                    } else {
+                        strong->_consecutiveNegotiationFailures = 0;
+                        if (strong->_firstRemoteAnswerTimestamp == 0) {
+                            strong->_firstRemoteAnswerTimestamp = rtc::TimeMillis();
+                            strong->scheduleCallerOfferHoldRelease();
+                        }
+                    }
+                } else if (!isOffer) {
+                    // Do NOT leave our offer pending: a caller in have-local-offer
+                    // ignores every remote offer, so the call would never negotiate
+                    // again. (A failed remote offer needs nothing: we stay where we
+                    // were, and never answer from kStable, which would send an offer
+                    // where the peer awaits an answer.)
+                    strong->_consecutiveNegotiationFailures++;
+                    strong->rollback(true);
                     return;
                 }
 
-                strong->maybeCommitPendingIceCandidates();
-
-                if (isOffer) {
-                    strong->sendLocalDescription();
-                }
+                strong->onNegotiationStepCompleted();
             });
         }));
         RTC_LOG(LS_INFO) << "Calling SetRemoteDescription (type=" << webrtc::SdpTypeToString(remoteDescription->GetType()) << ")";
@@ -1177,9 +1533,22 @@ public:
                 strong->onDataChannelStateUpdated();
             });
         };
-        // Data channel onMessage is a no-op — media state goes through signaling
-        dataChannelObserverParams.onMessage = [](webrtc::DataBuffer const &buffer) {
-            RTC_LOG(LS_INFO) << "dataChannelMessage received (ignored in CompatImpl)";
+        // InstanceV2Impl sends MediaState only on its data channel, and parses
+        // everything it receives there as signaling; so do we. Ours goes out
+        // over signaling, which InstanceV2Impl also accepts.
+        dataChannelObserverParams.onMessage = [threads = _threads, weak](webrtc::DataBuffer const &buffer) {
+            if (buffer.binary) {
+                return;
+            }
+            std::vector<uint8_t> data(buffer.data.data(), buffer.data.data() + buffer.data.size());
+            threads->getMediaThread()->PostTask([weak, data = std::move(data)]() {
+                const auto strong = weak.lock();
+                if (!strong) {
+                    return;
+                }
+
+                strong->processSignalingData(data);
+            });
         };
         _dataChannelObserver = std::make_unique<DataChannelObserverImpl>(std::move(dataChannelObserverParams));
         _dataChannel = dataChannel;
@@ -1213,12 +1582,8 @@ public:
         signaling::MediaStateMessage data;
         data.isMuted = _isMicrophoneMuted;
         data.isBatteryLow = _isBatteryLow;
-        if (_outgoingVideoTransceiver) {
-            if (_videoCapture) {
-                data.videoState = signaling::MediaStateMessage::VideoState::Active;
-            } else {
-                data.videoState = signaling::MediaStateMessage::VideoState::Inactive;
-            }
+        if (_outgoingVideoTrack) {
+            data.videoState = signaling::MediaStateMessage::VideoState::Active;
         } else {
             data.videoState = signaling::MediaStateMessage::VideoState::Inactive;
             data.videoRotation = signaling::MediaStateMessage::VideoRotation::Rotation0;
@@ -1238,71 +1603,79 @@ public:
 
         _isPerformingConfiguration = true;
 
-        if (_outgoingVideoTransceiver) {
-            _peerConnection->RemoveTrackOrError(_outgoingVideoTransceiver->sender());
-        }
-        if (_outgoingVideoTrack) {
-            _outgoingVideoTrack = nullptr;
-        }
-        _outgoingVideoTransceiver = nullptr;
+        // One video transceiver for the whole call: a camera turned off leaves it
+        // kInactive without a track (the channel then drops out of our next offer,
+        // which is how InstanceV2Impl removes one), and the next camera reuses it,
+        // so camera toggles do not add m-lines.
+        _outgoingVideoTrack = nullptr;
 
+        webrtc::scoped_refptr<webrtc::VideoTrackInterface> videoTrack;
         auto videoCaptureImpl = GetVideoCaptureAssumingSameThread(videoCapture.get());
-        if (videoCaptureImpl) {
-            if (videoCaptureImpl->isScreenCapture()) {
-            } else {
-                _videoCapture = videoCapture;
+        if (videoCaptureImpl && !videoCaptureImpl->isScreenCapture()) {
+            _videoCapture = videoCapture;
+            videoTrack = _peerConnectionFactory->CreateVideoTrack(videoCaptureImpl->source(), "1");
+        }
 
-                auto videoTrack = _peerConnectionFactory->CreateVideoTrack(videoCaptureImpl->source(), "1");
-                if (videoTrack) {
-                    webrtc::RtpTransceiverInit transceiverInit;
-                    transceiverInit.stream_ids = { "0" };
+        if (!videoTrack) {
+            if (_outgoingVideoTransceiver) {
+                _outgoingVideoTransceiver->sender()->SetTrack(nullptr);
+                _outgoingVideoTransceiver->SetDirectionWithError(webrtc::RtpTransceiverDirection::kInactive);
+            }
+        } else if (_outgoingVideoTransceiver) {
+            if (_outgoingVideoTransceiver->sender()->SetTrack(videoTrack.get())) {
+                _outgoingVideoTransceiver->SetDirectionWithError(webrtc::RtpTransceiverDirection::kSendOnly);
+                _outgoingVideoTrack = videoTrack;
+                _outgoingVideoTrack->set_enabled(true);
+            }
+        } else {
+            webrtc::RtpTransceiverInit transceiverInit;
+            transceiverInit.stream_ids = { "0" };
+            transceiverInit.direction = webrtc::RtpTransceiverDirection::kSendOnly;
 
-                    webrtc::RTCErrorOr<webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>> videoTransceiverOrError = _peerConnection->AddTransceiver(videoTrack, transceiverInit);
-                    if (videoTransceiverOrError.ok()) {
-                        _outgoingVideoTrack = videoTrack;
-                        _outgoingVideoTransceiver = videoTransceiverOrError.value();
+            webrtc::RTCErrorOr<webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>> videoTransceiverOrError = _peerConnection->AddTransceiver(videoTrack, transceiverInit);
+            if (videoTransceiverOrError.ok()) {
+                _outgoingVideoTrack = videoTrack;
+                _outgoingVideoTransceiver = videoTransceiverOrError.value();
 
-                        auto currentCapabilities = _peerConnectionFactory->GetRtpSenderCapabilities(cricket::MediaType::MEDIA_TYPE_VIDEO);
+                auto currentCapabilities = _peerConnectionFactory->GetRtpSenderCapabilities(cricket::MediaType::MEDIA_TYPE_VIDEO);
 
-                        std::vector<std::string> codecPreferences = {
-                            #ifndef WEBRTC_DISABLE_H265
-                            cricket::kH265CodecName,
-                            #endif
-                            cricket::kH264CodecName
-                        };
+                std::vector<std::string> codecPreferences = {
+                    #ifndef WEBRTC_DISABLE_H265
+                    cricket::kH265CodecName,
+                    #endif
+                    cricket::kH264CodecName
+                };
 
-                        for (const auto &codecCapability : currentCapabilities.codecs) {
-                            if (std::find_if(codecPreferences.begin(), codecPreferences.end(), [&](std::string const &value) {
-                                return value == codecCapability.name;
-                            }) != codecPreferences.end()) {
-                                continue;
-                            }
-                            codecPreferences.push_back(codecCapability.name);
+                for (const auto &codecCapability : currentCapabilities.codecs) {
+                    if (std::find_if(codecPreferences.begin(), codecPreferences.end(), [&](std::string const &value) {
+                        return value == codecCapability.name;
+                    }) != codecPreferences.end()) {
+                        continue;
+                    }
+                    codecPreferences.push_back(codecCapability.name);
+                }
+
+                std::vector<webrtc::RtpCodecCapability> codecCapabilities;
+                for (const auto &name : codecPreferences) {
+                    for (const auto &codecCapability : currentCapabilities.codecs) {
+                        if (codecCapability.name == name) {
+                            codecCapabilities.push_back(codecCapability);
+
+                            break;
                         }
-
-                        std::vector<webrtc::RtpCodecCapability> codecCapabilities;
-                        for (const auto &name : codecPreferences) {
-                            for (const auto &codecCapability : currentCapabilities.codecs) {
-                                if (codecCapability.name == name) {
-                                    codecCapabilities.push_back(codecCapability);
-
-                                    break;
-                                }
-                            }
-                        }
-
-                        _outgoingVideoTransceiver->SetCodecPreferences(codecCapabilities);
-
-                        webrtc::RtpParameters parameters = _outgoingVideoTransceiver->sender()->GetParameters();
-                        if (parameters.encodings.empty()) {
-                            parameters.encodings.push_back(webrtc::RtpEncodingParameters());
-                        }
-                        parameters.encodings[0].max_bitrate_bps = 1200 * 1024;
-                        _outgoingVideoTransceiver->sender()->SetParameters(parameters);
-
-                        _outgoingVideoTrack->set_enabled(true);
                     }
                 }
+
+                _outgoingVideoTransceiver->SetCodecPreferences(codecCapabilities);
+
+                webrtc::RtpParameters parameters = _outgoingVideoTransceiver->sender()->GetParameters();
+                if (parameters.encodings.empty()) {
+                    parameters.encodings.push_back(webrtc::RtpEncodingParameters());
+                }
+                parameters.encodings[0].max_bitrate_bps = 1200 * 1024;
+                _outgoingVideoTransceiver->sender()->SetParameters(parameters);
+
+                _outgoingVideoTrack->set_enabled(true);
             }
         }
 
@@ -1310,7 +1683,7 @@ public:
 
         if (_didBeginNegotiation) {
             sendMediaState();
-            sendLocalDescription();
+            requestRenegotiation();
         }
     }
 
@@ -1532,10 +1905,24 @@ private:
     std::unique_ptr<EncryptedConnection> _signalingEncryptedConnection;
 
     SignalingTranslator _signalingTranslator;
-    uint32_t _lastSentExchangeId = 0;
+
+    // Remote NegotiateChannels messages, classified on receipt and kept in arrival
+    // order until they can be applied (see isNegotiationBusy).
+    struct PendingRemoteNegotiation {
+        enum class Kind {
+            Offer,
+            Answer
+        };
+        Kind kind = Kind::Offer;
+        signaling::NegotiateChannelsMessage channels;
+    };
+    std::deque<PendingRemoteNegotiation> _pendingRemoteNegotiation;
 
     bool _isConnected = false;
     bool _isFailed = false;
+    int64_t _lastDisconnectedTimestamp = 0;
+    int32_t _disconnectReportGeneration = 0;
+    int64_t _lastIceRestartTimestamp = 0;
     absl::optional<InstanceNetworking::ConnectionDescription> _currentConnectionDescription;
 
     absl::optional<NetworkStateLogRecord> _currentNetworkStateLogRecord;
@@ -1543,8 +1930,19 @@ private:
     std::vector<StateLogRecord<NetworkBitrateLogRecord>> _networkBitrateLogRecords;
 
     bool _didBeginNegotiation = false;
+    bool _isSettingLocalDescription = false;
+    bool _isSettingRemoteDescription = false;
+    // SetLocalDescription(offer) in flight.
     bool _isMakingOffer = false;
+    // A capture change or an ICE restart asked for an offer, or ours was rolled
+    // back in glare; sent once negotiation is quiet (flushPendingRenegotiation).
+    bool _pendingRenegotiation = false;
+    int _consecutiveNegotiationFailures = 0;
+    bool _hasAppliedRemoteOffer = false;
+    int64_t _firstRemoteAnswerTimestamp = 0;
+    static constexpr int64_t kCallerOfferHoldMs = 10000;
     bool _isPerformingConfiguration = false;
+    bool _useMtProto = false;
 
     webrtc::scoped_refptr<webrtc::AudioTrackInterface> _outgoingAudioTrack;
     webrtc::scoped_refptr<webrtc::RtpTransceiverInterface> _outgoingAudioTransceiver;

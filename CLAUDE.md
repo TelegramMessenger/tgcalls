@@ -211,6 +211,12 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
 - `--drop-rate 0.0-1.0` — signaling packet drop probability
 - `--delay min-max` — signaling delay range in ms (e.g., `50-200`)
 - `--video` — enable H264 video with simulcast in group mode (both CustomImpl and ReferenceImpl participants)
+- `--video-late` — p2p/reflector: both sides get a camera mid-call through `setVideoCapture` (callee at
+  3 s, caller at 5 s) instead of at construction, so each side must offer its new channel
+  mid-call. With `--video` or `--video-late` the summary prints `Video frames: caller received N,
+  callee received M` (a `FakeVideoSink` on each side); every p2p run prints `Remote media state:
+  caller=N callee=M updates`. Neither is a pass criterion (exit code is unchanged); read them, since
+  "exit 0" never proved two-way media. Added 2026-10-11 for the 14.0.0 rewrite.
 - `--video-sink-churn` — with `--video`, once frames flow each participant replaces every incoming video sink five times, one second apart (`addIncomingVideoOutput` with a fresh sink, old sink released) — what the app does on a quality switch, where the tile's view owns the sink. An engine that keeps a raw pointer to a dead sink segfaults in `rtc::VideoBroadcaster::OnFrame`; validation then counts frames on the NEW sinks only. Known limitation: in mixed groups the pairs receiving from a ReferenceImpl SENDER fail this (0 frames after the last replacement) because the host reference sender throttles to ~1–3 fps after the first seconds regardless of sinks (41–65 frames in 30 s vs ~750 from CustomImpl senders; `_minOutgoingVideoBitrateKbit` is never applied there) — use it with reference-only or CustomImpl-only groups, or with reference RECEIVERS of CustomImpl senders.
 - `--video-rerequest` — with `--video`, once frames flow each participant's SFU downlink gets a
   150 ms delay, then five rounds of `setRequestedVideoChannels({})` followed a second later by the
@@ -350,12 +356,15 @@ the incoming-video-sink use-after-free in all three PeerConnection engines; swal
 twice — 15.3% of outbound signalling bytes); the missing baseline network record (~77% of failing
 11.0.0 calls uploaded `"network": []`); and the wasm cores' state semantics, which now match
 11.0.0 (ICE `failed` non-terminal, 20s watchdog, 2s disconnect debounce, throttled ICE restart).
+`InstanceV2CompatImpl` (14.0.0) got the same state semantics, the baseline record and the
+transceiver-removal fix on 2026-10-11 (before that a 14.0.0 call that never connected reported no
+state at all, forever).
 
 **Three experiment flags, all default-off**, read from the server-supplied `customParameters`:
 
 | flag | reaches | effect |
 |---|---|---|
-| `network_reflector_resolve_remote_candidate_ip` | `NativeNetworkingImpl` → `InstanceV2Impl` → versions 7/8/9/12/13 | signalled relay connections can receive binding responses |
+| `network_reflector_resolve_remote_candidate_ip` | `NativeNetworkingImpl` → `InstanceV2Impl` → versions 7/8/9/12/13; also 11/14/18/19 | signalled relay connections can receive binding responses |
 | `network_disable_stun_when_unconfigured` | 11/14/18/19 | stops sending unparseable STUN to reflectors |
 | `network_reference_use_addtrack` | 11.0.0 | removes an extra offer/answer round trip |
 
@@ -391,18 +400,25 @@ Each was proposed by the audit and is wrong: the `WebRTC-UseTurnServerAsStunServ
 one-liner (`BasicPortAllocator` bypasses the trial when the STUN set is empty — exactly the
 reflector case); resolving the **local** relay candidate's IP (the peer-addressing tag travels only
 inside the synthetic hostname, so this kills relay entirely); the sendonly/recvonly directional
-transceiver recipe; `AddTrack` in `InstanceV2CompatImpl` (its `SignalingTranslator` synthesises
-every callee-side remote offer section as `kSendOnly`, so the edit is inert); a Swift `return []`
+transceiver recipe (for 11.0.0; 14.0.0's one-way transceivers are the 13.0.0 protocol's own channel
+model, which it must speak, not this recipe); `AddTrack` in `InstanceV2CompatImpl` (it would be actively wrong there: the 13.0.0 protocol
+keeps each direction on its own m-line, and `created_by_addtrack` would let PeerConnection attach
+our send transceiver to the peer's channel); a Swift `return []`
 credential filter; and re-anchoring `stop()`'s `baseTimestamp` (production 13.0.0 shares the
 construct and emits no version key to key the discontinuity on).
 
 
-## mtproto transport on the PeerConnection engines (11.0.0, 18/19)
+## mtproto transport on the PeerConnection engines (11.0.0, 14.0.0, 18/19)
 
-`network_use_mtproto` works on `InstanceV2ReferenceImpl` (11.0.0) and
-`CallCoreHost` (18/19): full mtproto, zero DTLS, wire bytes identical to 13.0.0
-(`mtproto(RTP)`, `mtproto(0xdcdcdcdc || SCTP)`). Default off. Design record:
+`network_use_mtproto` works on `InstanceV2ReferenceImpl` (11.0.0),
+`InstanceV2CompatImpl` (14.0.0) and `CallCoreHost` (18/19): full mtproto, zero
+DTLS, wire bytes identical to 13.0.0 (`mtproto(RTP)`, `mtproto(0xdcdcdcdc ||
+SCTP)`). Default off. Design record:
 telegram-ios `docs/superpowers/specs/2026-09-16-tgcalls-mtproto-dtls-slot-design.md`.
+
+14.0.0 needs it for more than an A/B: it talks to 13.0.0, which already honours
+the flag, and before 2026-10-11 a 14.0.0 <-> 13.0.0 call under the flag paired
+DTLS with mtproto and failed (`Bad incoming data hash`, no media).
 
 **Shape.** Two settings that MUST travel together, both from one boolean:
 
