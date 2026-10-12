@@ -12,6 +12,7 @@
 #include <mutex>
 #include <random>
 #include <fstream>
+#include <algorithm>
 #include <set>
 #include <string>
 #include <thread>
@@ -20,9 +21,13 @@
 
 #include "group_mode.h"
 #include "group_churn_mode.h"
+#include "group_participant.h"
+#include "fake_video_sink.h"
+#include "platform/fake/FakeInterface.h"
 #include "Instance.h"
 #include "FakeAudioDeviceModule.h"
 #include "VideoCaptureInterface.h"
+#include "StaticThreads.h"
 #include "v2/InstanceV2Impl.h"
 #include "v2/InstanceV2CompatImpl.h"
 #include "v2/InstanceV2ReferenceImpl.h"
@@ -209,6 +214,9 @@ struct CallState {
     tgcalls::State calleeState = tgcalls::State::WaitInit;
     double establishedAt = -1.0;
     std::vector<std::string> errors;
+    // remoteMediaStateUpdated callbacks each side received (p2p/reflector).
+    int callerRemoteMediaStates = 0;
+    int calleeRemoteMediaStates = 0;
 };
 
 // Merges the optional --custom-params JSON object with the wasm_core_path entry the CLI
@@ -258,9 +266,22 @@ int main(int argc, char* argv[]) {
     int participants = 3;
     int referenceParticipants = 0;
     bool enableVideo = false;
+    bool videoLate = false;
+    // --video-late-caller-ms / --video-late-callee-ms: attach that side's camera N ms
+    // after the instances are created (the Android app's shape: the capturer reaches
+    // the engine while the first offer is still in flight). -1 = not used.
+    int videoLateCallerMs = -1;
+    int videoLateCalleeMs = -1;
+    bool earlyVideoRequest = false;
+    bool videoSinkChurn = false;
+    bool videoRerequest = false;
+    bool e2e = false;
+    VideoFeed videoFeed = VideoFeed::Source;
+    bool requestOwnVideo = false;
     int churnCycles = 100;
     std::string networkScenario;
     std::set<int> mutedParticipants;
+    int unmuteAfterSeconds = 0;
 
     for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--duration" && i + 1 < argc) {
@@ -295,10 +316,46 @@ int main(int argc, char* argv[]) {
             referenceParticipants = std::atoi(argv[++i]);
         } else if (std::string(argv[i]) == "--video") {
             enableVideo = true;
+        } else if (std::string(argv[i]) == "--video-late") {
+            videoLate = true;
+        } else if (std::string(argv[i]) == "--video-late-caller-ms" && i + 1 < argc) {
+            videoLateCallerMs = std::atoi(argv[++i]);
+        } else if (std::string(argv[i]) == "--video-late-callee-ms" && i + 1 < argc) {
+            videoLateCalleeMs = std::atoi(argv[++i]);
+        } else if (std::string(argv[i]) == "--early-video-request") {
+            earlyVideoRequest = true;
+        } else if (std::string(argv[i]) == "--e2e") {
+            e2e = true;
+        } else if (std::string(argv[i]) == "--video-sink-churn") {
+            videoSinkChurn = true;
+        } else if (std::string(argv[i]) == "--video-rerequest") {
+            videoRerequest = true;
+        } else if (std::string(argv[i]) == "--video-quality" && i + 1 < argc) {
+            std::string quality = argv[++i];
+            if (quality == "thumbnail") {
+                setRequestedVideoMaxQuality(tgcalls::VideoChannelDescription::Quality::Thumbnail);
+            } else if (quality == "medium") {
+                setRequestedVideoMaxQuality(tgcalls::VideoChannelDescription::Quality::Medium);
+            } else if (quality == "full") {
+                setRequestedVideoMaxQuality(tgcalls::VideoChannelDescription::Quality::Full);
+            } else {
+                fprintf(stderr, "--video-quality must be thumbnail, medium or full\n");
+                return 1;
+            }
+        } else if (std::string(argv[i]) == "--video-via-capture") {
+            videoFeed = VideoFeed::CaptureAtJoin;
+        } else if (std::string(argv[i]) == "--video-via-capture-late") {
+            videoFeed = VideoFeed::CaptureLate;
+        } else if (std::string(argv[i]) == "--request-own-video") {
+            requestOwnVideo = true;
+        } else if (std::string(argv[i]) == "--builtin-codec-order") {
+            tgcalls::setFakePlatformBuiltinCodecOrder(true);
         } else if (std::string(argv[i]) == "--churn-cycles" && i + 1 < argc) {
             churnCycles = std::atoi(argv[++i]);
         } else if (std::string(argv[i]) == "--network-scenario" && i + 1 < argc) {
             networkScenario = argv[++i];
+        } else if (std::string(argv[i]) == "--unmute-after" && i + 1 < argc) {
+            unmuteAfterSeconds = std::atoi(argv[++i]);
         } else if (std::string(argv[i]) == "--mute-participants" && i + 1 < argc) {
             std::string list = argv[++i];
             size_t pos = 0;
@@ -373,7 +430,7 @@ int main(int argc, char* argv[]) {
 
     // Group mode: dispatch to separate implementation
     if (mode == "group") {
-        return runGroupMode(participants, referenceParticipants, duration, gQuiet, enableVideo, networkScenario, mutedParticipants);
+        return runGroupMode(participants, referenceParticipants, duration, gQuiet, enableVideo, networkScenario, mutedParticipants, earlyVideoRequest, videoSinkChurn, e2e, videoFeed, requestOwnVideo, unmuteAfterSeconds, videoRerequest);
     }
     if (mode == "group-churn") {
         return runGroupChurnMode(participants, referenceParticipants, duration, gQuiet, enableVideo, churnCycles);
@@ -452,6 +509,37 @@ int main(int argc, char* argv[]) {
     std::string callerStatsPath = "/tmp/tgcalls_cli_caller_" + std::to_string(getpid()) + ".json";
     std::string calleeStatsPath = "/tmp/tgcalls_cli_callee_" + std::to_string(getpid()) + ".json";
 
+    // --video in p2p/reflector mode: both sides start with the camera already on,
+    // the app's descriptor.videoCapture path (the join-time capture in group mode).
+    // This is the shape that exposed the 18/19 start-glare renegotiation loop.
+    std::shared_ptr<tgcalls::VideoCaptureInterface> callerVideoCapture;
+    std::shared_ptr<tgcalls::VideoCaptureInterface> calleeVideoCapture;
+    const bool videoLateMs = videoLateCallerMs >= 0 || videoLateCalleeMs >= 0;
+    if (enableVideo || videoLate || videoLateMs) {
+        auto threads = tgcalls::StaticThreads::getThreads();
+        callerVideoCapture = tgcalls::VideoCaptureInterface::Create(threads, "caller");
+        calleeVideoCapture = tgcalls::VideoCaptureInterface::Create(threads, "callee");
+        if (videoLate) {
+            logMsg("Main", "video capture will be attached mid-call (callee at 3s, caller at 5s)");
+        } else if (videoLateMs) {
+            logMsg("Main", "video capture: caller %s, callee %s",
+                   videoLateCallerMs >= 0 ? (std::to_string(videoLateCallerMs) + " ms after start").c_str() : (enableVideo ? "at start" : "none"),
+                   videoLateCalleeMs >= 0 ? (std::to_string(videoLateCalleeMs) + " ms after start").c_str() : (enableVideo ? "at start" : "none"));
+        } else {
+            logMsg("Main", "video capture attached to both descriptors");
+        }
+    }
+    // A side has its camera at construction only with --video and no later
+    // attachment of its own (--video-late moves both; a --video-late-*-ms value
+    // moves that side alone, so `--video --video-late-caller-ms 500` gives the
+    // callee its camera at start and the caller its camera at 500 ms).
+    const bool callerCaptureAtStart = enableVideo && !videoLate && videoLateCallerMs < 0;
+    const bool calleeCaptureAtStart = enableVideo && !videoLate && videoLateCalleeMs < 0;
+    // Each side counts the decoded frames it receives, so a video run proves
+    // video flows rather than that it was negotiated.
+    auto callerVideoSink = std::make_shared<FakeVideoSink>();
+    auto calleeVideoSink = std::make_shared<FakeVideoSink>();
+
     // --- Caller descriptor ---
     auto callerDesc = (tgcalls::Descriptor){
         .version = version,
@@ -469,6 +557,7 @@ int main(int argc, char* argv[]) {
             ? std::vector<tgcalls::RtcServer>{makeReflectorServer(reflectorHost, reflectorPort, callerPeerTag)}
             : std::vector<tgcalls::RtcServer>{},
         .encryptionKey = tgcalls::EncryptionKey(keyData, true),
+        .videoCapture = callerCaptureAtStart ? callerVideoCapture : nullptr,
         .stateUpdated = [callState](tgcalls::State state) {
             logMsg("Caller", "state -> %s", stateName(state));
             std::lock_guard<std::mutex> lock(callState->mutex);
@@ -479,6 +568,11 @@ int main(int argc, char* argv[]) {
             if (state == tgcalls::State::Failed) {
                 callState->errors.push_back("Caller entered Failed state");
             }
+        },
+        .remoteMediaStateUpdated = [callState](tgcalls::AudioState audioState, tgcalls::VideoState videoState) {
+            logMsg("Caller", "remote media state: audio %d video %d", (int)audioState, (int)videoState);
+            std::lock_guard<std::mutex> lock(callState->mutex);
+            callState->callerRemoteMediaStates++;
         },
         .signalingDataEmitted = [bridge](const std::vector<uint8_t>& data) {
             logMsg("Caller", "signaling data emitted (%zu bytes)", data.size());
@@ -505,6 +599,7 @@ int main(int argc, char* argv[]) {
             ? std::vector<tgcalls::RtcServer>{makeReflectorServer(reflectorHost, reflectorPort, calleePeerTag)}
             : std::vector<tgcalls::RtcServer>{},
         .encryptionKey = tgcalls::EncryptionKey(keyData, false),
+        .videoCapture = calleeCaptureAtStart ? calleeVideoCapture : nullptr,
         .stateUpdated = [callState](tgcalls::State state) {
             logMsg("Callee", "state -> %s", stateName(state));
             std::lock_guard<std::mutex> lock(callState->mutex);
@@ -515,6 +610,11 @@ int main(int argc, char* argv[]) {
             if (state == tgcalls::State::Failed) {
                 callState->errors.push_back("Callee entered Failed state");
             }
+        },
+        .remoteMediaStateUpdated = [callState](tgcalls::AudioState audioState, tgcalls::VideoState videoState) {
+            logMsg("Callee", "remote media state: audio %d video %d", (int)audioState, (int)videoState);
+            std::lock_guard<std::mutex> lock(callState->mutex);
+            callState->calleeRemoteMediaStates++;
         },
         .signalingDataEmitted = [bridge](const std::vector<uint8_t>& data) {
             logMsg("Callee", "signaling data emitted (%zu bytes)", data.size());
@@ -551,8 +651,49 @@ int main(int argc, char* argv[]) {
         bridge->callee = calleeInstance;
     }
 
+    if (callerVideoCapture) {
+        callerInstance->setIncomingVideoOutput(callerVideoSink);
+        calleeInstance->setIncomingVideoOutput(calleeVideoSink);
+    }
+
     logMsg("Main", "sleeping for %d seconds...", duration);
-    std::this_thread::sleep_for(std::chrono::seconds(duration));
+    if (videoLateMs) {
+        // The camera reaches the engine a fixed time after start, on each side
+        // that asked for it, in time order.
+        std::vector<std::pair<int, bool>> events; // (ms, isCaller)
+        if (videoLateCallerMs >= 0) events.push_back({videoLateCallerMs, true});
+        if (videoLateCalleeMs >= 0) events.push_back({videoLateCalleeMs, false});
+        std::sort(events.begin(), events.end());
+        int elapsedMs = 0;
+        for (const auto &event : events) {
+            if (event.first > elapsedMs) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(event.first - elapsedMs));
+                elapsedMs = event.first;
+            }
+            logMsg("Main", "attaching the %s's video capture at %d ms", event.second ? "caller" : "callee", event.first);
+            if (event.second) {
+                callerInstance->setVideoCapture(callerVideoCapture);
+            } else {
+                calleeInstance->setVideoCapture(calleeVideoCapture);
+            }
+        }
+        int remainingMs = duration * 1000 - elapsedMs;
+        if (remainingMs > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(remainingMs));
+        }
+    } else if (videoLate && duration > 5) {
+        // The camera switched on mid-call, the app's setVideoCapture path: the
+        // callee first, so the callee has to offer its own new channel.
+        std::this_thread::sleep_for(std::chrono::seconds(3));
+        logMsg("Main", "attaching the callee's video capture");
+        calleeInstance->setVideoCapture(calleeVideoCapture);
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        logMsg("Main", "attaching the caller's video capture");
+        callerInstance->setVideoCapture(callerVideoCapture);
+        std::this_thread::sleep_for(std::chrono::seconds(duration - 5));
+    } else {
+        std::this_thread::sleep_for(std::chrono::seconds(duration));
+    }
 
     // Stop both instances
     logMsg("Main", "stopping instances...");
@@ -570,6 +711,12 @@ int main(int argc, char* argv[]) {
         };
     };
 
+    if (callerVideoCapture) {
+        callerVideoCapture->setState(tgcalls::VideoState::Inactive);
+    }
+    if (calleeVideoCapture) {
+        calleeVideoCapture->setState(tgcalls::VideoState::Inactive);
+    }
     callerInstance->stop(onStopped("Caller"));
     calleeInstance->stop(onStopped("Callee"));
 
@@ -648,6 +795,12 @@ int main(int argc, char* argv[]) {
         printf("Stats log:         caller=%d callee=%d bitrate records\n",
                callerStats.bitrateRecords, calleeStats.bitrateRecords);
         printf("BWE non-zero:      %s\n", bweNonZero ? "yes" : "no");
+        printf("Remote media state: caller=%d callee=%d updates\n",
+               callState->callerRemoteMediaStates, callState->calleeRemoteMediaStates);
+        if (callerVideoCapture) {
+            printf("Video frames:      caller received %d, callee received %d\n",
+                   callerVideoSink->frameCount(), calleeVideoSink->frameCount());
+        }
 
         bool statsCollected = (callerStats.bitrateRecords > 0 && calleeStats.bitrateRecords > 0);
 

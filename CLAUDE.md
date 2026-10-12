@@ -13,10 +13,12 @@ mkdir -p build-input/configuration-repository/provisioning
 # (see build-input/configuration-repository/ for existing stubs)
 
 # Build the CLI test tool
-./build-input/bazel-8.4.2 build //submodules/TgVoipWebrtc/tgcalls/tools/cli:tgcalls_cli
+./build-input/bazel-9.2.0-darwin-arm64 build //submodules/TgVoipWebrtc/tgcalls/tools/cli:tgcalls_cli
 ```
 
-The system-installed Bazel (v9) is NOT compatible with this codebase.
+Use the pinned Bazel from `build-input/`, never a system-installed one: the version is pinned in the
+superproject's `versions.json` (`9.2.0` since 2026-09-14, `8.4.2` before that) and `Make.py` downloads it
+and verifies its SHA256. The binary name carries both version and arch.
 
 ## Linux Build
 
@@ -25,18 +27,18 @@ Prerequisites (Ubuntu/Debian):
 apt install gcc g++ cmake meson ninja-build nasm make autoconf automake libtool pkg-config zlib1g-dev libbz2-dev
 ```
 
-Download the Linux Bazel 8.4.2 binary to `build-input/`:
+Download the matching Linux Bazel binary to `build-input/` (use the version `versions.json` pins):
 ```bash
-curl -fL "https://github.com/bazelbuild/bazel/releases/download/8.4.2/bazel-8.4.2-linux-arm64" -o build-input/bazel-8.4.2-linux
-chmod +x build-input/bazel-8.4.2-linux
+curl -fL "https://github.com/bazelbuild/bazel/releases/download/9.2.0/bazel-9.2.0-linux-arm64" -o build-input/bazel-9.2.0-linux
+chmod +x build-input/bazel-9.2.0-linux
 ```
 
 Build the CLI test tool:
 ```bash
-./build-input/bazel-8.4.2-linux build //submodules/TgVoipWebrtc/tgcalls/tools/cli:tgcalls_cli
+./build-input/bazel-9.2.0-linux build //submodules/TgVoipWebrtc/tgcalls/tools/cli:tgcalls_cli
 ```
 
-The same Bazel 8.4.2 version is required. The build uses the system GCC toolchain and system-installed cmake/meson/ninja for third-party library compilation.
+The same Bazel version as `versions.json` is required. The build uses the system GCC toolchain and system-installed cmake/meson/ninja for third-party library compilation.
 
 ## Docker Build
 
@@ -137,6 +139,35 @@ Located at `submodules/TgVoipWebrtc/tgcalls/tools/cli/`. Runs tgcalls instances 
 # ReferenceImpl-only video
 ./bazel-bin/submodules/TgVoipWebrtc/tgcalls/tools/cli/tgcalls_cli --mode group --participants 0 --reference-participants 3 --video --duration 15
 
+# Video requested in the real app's order (before the join response / data channel) — the
+# regression test for ReferenceImpl's "incoming video never arrives in real group calls" bug
+./bazel-bin/submodules/TgVoipWebrtc/tgcalls/tools/cli/tgcalls_cli --mode group --participants 0 --reference-participants 2 --video --early-video-request --duration 15
+
+# Incoming video sinks replaced while frames flow (what a quality switch does in the app) — the
+# regression test for the ReferenceImpl dangling-sink crash in rtc::VideoBroadcaster::OnFrame
+./bazel-bin/submodules/TgVoipWebrtc/tgcalls/tools/cli/tgcalls_cli --mode group --participants 1 --reference-participants 1 --video --video-sink-churn --duration 8
+
+# Every video request dropped and issued again on the same PeerConnection, five times, under a
+# 150 ms downlink delay (what leaving and re-entering the video grid does in the app) — the
+# regression test for ReferenceImpl's "one tile stays frozen after the grid comes back" bug (a
+# default receive stream created from an in-flight packet kept the SSRC's demuxer binding). Needs
+# six participants to hit the window reliably on a host; must give "0/30 stalled".
+./bazel-bin/submodules/TgVoipWebrtc/tgcalls/tools/cli/tgcalls_cli --mode group --participants 0 --reference-participants 6 --video --video-rerequest --duration 6
+
+# Outgoing video handed over the way the iOS wrapper does it — as a VideoCaptureInterface, at join
+# (descriptor.videoCapture) or after it (setVideoCapture) — the regression test for ReferenceImpl's
+# "camera on, server says video, nothing ever sent" bug. Both must give 2/2.
+./bazel-bin/submodules/TgVoipWebrtc/tgcalls/tools/cli/tgcalls_cli --mode group --participants 0 --reference-participants 2 --video --video-via-capture --duration 12
+./bazel-bin/submodules/TgVoipWebrtc/tgcalls/tools/cli/tgcalls_cli --mode group --participants 0 --reference-participants 2 --video --video-via-capture-late --duration 12
+
+# The app's requested list includes the participant's own endpoint; the engine must drop it before
+# the SFU sees it and serve the own-endpoint sink from the camera preview. Must give
+# "Self video requests: 0" and "Own preview missing: 0".
+./bazel-bin/submodules/TgVoipWebrtc/tgcalls/tools/cli/tgcalls_cli --mode group --participants 1 --reference-participants 1 --video --video-via-capture --request-own-video --duration 12
+
+# Group mode with end-to-end encryption (mixed engines)
+./bazel-bin/submodules/TgVoipWebrtc/tgcalls/tools/cli/tgcalls_cli --mode group --participants 1 --reference-participants 1 --video --duration 25 --e2e
+
 # Group churn stress test (100 join/leave cycles, then validate base group)
 ./bazel-bin/submodules/TgVoipWebrtc/tgcalls/tools/cli/tgcalls_cli --mode group-churn --participants 3 --duration 10
 
@@ -164,9 +195,10 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
 - `--wasm-core2 PATH` — same for the callee (defaults to `--wasm-core`; `NONE` forces native)
 - `--custom-params JSON` — sets the caller's engine `customParameters` as a JSON object (merged
   with the `wasm_core_path` entry the CLI synthesises from `--wasm-core`). This is how to
-  exercise the three new default-off flags without a server-side rollout: e.g.
+  exercise the default-off flags without a server-side rollout: e.g.
   `network_disable_stun_when_unconfigured`, `network_reflector_resolve_remote_candidate_ip`,
-  `network_reference_use_addtrack`.
+  `network_reference_immediate_capture_renegotiation` (and `network_reference_use_addtrack`,
+  default ON since 2026-10-12, as `false` to compare against the old two-round shape).
 - `--custom-params2 JSON` — same for the callee. Independent of `--custom-params` — unlike
   `--wasm-core2` there is no fallback to the caller's value — so `--custom-params2` **alone**
   gives the callee different engine parameters than the caller, enabling a within-call A/B on
@@ -180,6 +212,74 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
 - `--drop-rate 0.0-1.0` — signaling packet drop probability
 - `--delay min-max` — signaling delay range in ms (e.g., `50-200`)
 - `--video` — enable H264 video with simulcast in group mode (both CustomImpl and ReferenceImpl participants)
+- `--video-late` — p2p/reflector: both sides get a camera mid-call through `setVideoCapture` (callee at
+  3 s, caller at 5 s) instead of at construction, so each side must offer its new channel
+  mid-call. With `--video` or `--video-late` the summary prints `Video frames: caller received N,
+  callee received M` (a `FakeVideoSink` on each side); every p2p run prints `Remote media state:
+  caller=N callee=M updates`. Neither is a pass criterion (exit code is unchanged); read them, since
+  "exit 0" never proved two-way media. Added 2026-10-11 for the 14.0.0 rewrite.
+- `--video-sink-churn` — with `--video`, once frames flow each participant replaces every incoming video sink five times, one second apart (`addIncomingVideoOutput` with a fresh sink, old sink released) — what the app does on a quality switch, where the tile's view owns the sink. An engine that keeps a raw pointer to a dead sink segfaults in `rtc::VideoBroadcaster::OnFrame`; validation then counts frames on the NEW sinks only. Known limitation: in mixed groups the pairs receiving from a ReferenceImpl SENDER fail this (0 frames after the last replacement) because the host reference sender throttles to ~1–3 fps after the first seconds regardless of sinks (41–65 frames in 30 s vs ~750 from CustomImpl senders; `_minOutgoingVideoBitrateKbit` is never applied there) — use it with reference-only or CustomImpl-only groups, or with reference RECEIVERS of CustomImpl senders.
+- `--video-rerequest` — with `--video`, once frames flow each participant's SFU downlink gets a
+  150 ms delay, then five rounds of `setRequestedVideoChannels({})` followed a second later by the
+  full accumulated set again, on the same PeerConnection, sinks kept throughout. Validation adds
+  `Video after re-request: X/Y stalled (must be 0)`: every sink must receive frames past the count
+  recorded just before the re-request. The regression test for ReferenceImpl's frozen tile after
+  the video grid comes back; needs `--reference-participants 6` to hit the window on a host.
+- `--video-quality thumbnail|medium|full` — with `--video`, every participant requests video with
+  this `maxQuality` and `minQuality` Thumbnail, the shape the app sends (without the flag the harness
+  requests Full/Full, which never exercised the lower qualities). The Go SFU refuses a `maxHeight`
+  below its lowest layer (180), so an engine that maps a quality off the protocol's 180/360/720 scale
+  gets no video. The regression test for ReferenceImpl's thumbnail constraints (it sent `maxHeight 90`;
+  see the ReferenceImpl notes in `submodules/TgVoipWebrtc/CLAUDE.md`):
+  `--participants 0 --reference-participants 2 --video --video-quality thumbnail` must give 2/2.
+- `--builtin-codec-order` — expose the raw builtin WebRTC video factory order to PeerConnection instead of the default iOS-shaped order (two H264 entries, VP8, VP9 profile 0) the fake platform advertises. PeerConnection numbers dynamic payload types by walking that list, so the order decides what lands on PT 104; the builtin host order happens to put an H264 profile there and masked the ReferenceImpl receive-table bug (see the ReferenceImpl notes in `submodules/TgVoipWebrtc/CLAUDE.md`). Use it only to compare against the old behaviour.
+- `--early-video-request` — with `--video`, each joining participant calls `setRequestedVideoChannels` for every already-joined participant right after `emitJoinPayload`, i.e. before the join response is applied and before the data channel opens. That is the real app's call order (`PresentationGroupCall` requests video for known participants immediately after the context issues `emitJoinPayload`); the stock harness only requests video once the SFU announces `ActiveVideoSsrcs`, which arrives ~500 ms after the data channel opens and never exercised that path. Group mode only.
+- `--video-via-capture` / `--video-via-capture-late` — with `--video`, participants hand their outgoing video to the engine as a `VideoCaptureInterface` (built by the fake platform's `FakeVideoCapturer`, tinted by participant id) instead of the CLI-only `descriptor.getVideoSource` shortcut: `--video-via-capture` sets `descriptor.videoCapture` at construction (the iOS wrapper's join-time path, camera already on), `--video-via-capture-late` calls `setVideoCapture()` right after the join response (the wrapper's `requestVideo:` path, camera switched on mid-call). This is the only way the harness exercises the contract the app actually uses; `GroupInstanceReferenceImpl::setVideoCapture` was an empty stub until 2026-09-06 and every `getVideoSource` run passed regardless. Group mode only.
+- `--request-own-video` — with `--video`, every participant's requested-video set also contains its OWN endpoint (and a sink is registered for it), which is what the app hands the engine (its roster includes the local participant; the local tile asks like any other). The SFU never lists the receiver in `ActiveVideoSsrcs`, so the harness appends it itself. Validation then asks the SFU (`GoSfu_QueryRequestedLayer(receiver, receiver)`) whether any participant requested itself — must be 0 — and, when combined with a `--video-via-capture*` feed, requires the own-endpoint sink to have received camera-preview frames ("Own preview missing" must be 0). Group mode only.
+- `--e2e` — group mode only: install a reversible per-participant keyed transform as
+  `descriptor.e2eEncryptDecrypt`, so the run exercises the real encrypted frame path (the two-byte
+  Opus trailer, the H264/VP8 plaintext prefixes, the validation retry). The key is derived from the
+  participant's user id, so an engine that resolves the wrong `userId` fails the tag check instead
+  of silently passing; the nonce is random per call so the four-attempt retry is exercised.
+  Deliberately does NOT set `descriptor.isConference` — that flag is unrelated to encryption and
+  drops CustomImpl's outgoing video to one simulcast layer, removing the `SIM` group the SFU
+  resolves senders through (video goes to 0/2).
+  **The pass counters do not prove decryption.** Ciphertext fed to Opus still produces a level, and
+  the error-resilient H264 decoder emits corrupt frames rather than refusing. Judge decryption by
+  the level *value* (a real 440 Hz sine reads a steady ~0.126–0.133; garbage swings 0.157–1.000),
+  and confirm the harness can fail by keying decrypt on the wrong id — that must give 0/2.
+- `--mute-participants I,J,...` — group mode: the participants with these indexes (0-based over
+  custom then reference) join muted and stay muted unless `--unmute-after` fires. Validation then
+  relaxes "everyone receives audio" to the unmuted participants, requires no peer to report a muted
+  SSRC above level 0.05, and adds a `Muted audio leaks: X/Y (must be 0)` line: the SFU counts the
+  audio RTP packets it receives per SSRC (`GoSfu_QuerySsrcPackets`, read just before teardown) and
+  every participant that stayed muted must have sent **none**. The level check alone cannot see the
+  difference between silence and no stream — `GroupInstanceReferenceImpl` used to mute by disabling
+  the track only, which zeroes samples but keeps encoding, and a muted reference participant sent
+  456 packets in a 10 s run at level 0.000 (fixed 2026-09-15; see the ReferenceImpl notes in
+  `submodules/TgVoipWebrtc/CLAUDE.md`). Use ≥3 participants: with only one unmuted participant the
+  "unmuted participants receive audio" rule fails because it has nobody to hear.
+- `--unmute-after N` — group mode, with `--mute-participants`: run for N seconds, then unmute those
+  participants mid-call. **Nothing is signalled to the peers** — they must notice the new SSRC from
+  the media alone, as in a real call. This is the regression test for "a participant who unmutes after
+  a while is never heard" on `GroupInstanceReferenceImpl`: the unmute deliberately lands *after* the
+  peers have renegotiated for the SSRCs they saw at join, which is when the original design's
+  unsignaled catch-all on mid=0 stopped receiving (see the ReferenceImpl notes in
+  `submodules/TgVoipWebrtc/CLAUDE.md`; since 2026-09-19 mid=0 is sendonly and every SSRC is found
+  from the packets the demuxer drops). Validation adds a `Late unmute heard: X/Y` line requiring
+  every peer to report a real level for the late SSRC. Use ≥3 participants so a first renegotiation
+  actually happens: `--participants 2 --reference-participants 1 --mute-participants 1 --unmute-after 8
+  --duration 20` scored 1/2 before the fix and 2/2 after. Two controls make the result meaningful:
+  the all-custom group (`--participants 3 --mute-participants 1 --unmute-after 8`) passes either way,
+  and the same late unmute with NO prior renegotiation
+  (`--participants 1 --reference-participants 1 --mute-participants 0 --unmute-after 8`) also passes
+  either way — which is what pins the cause to the renegotiation rather than to the lateness.
+- Every group run also prints `Audio levels heard: X/Y pairs` (every peer must report a real level
+  for every unmuted sender — a participant who is audible but never reaches the level reports is
+  the "never shown as speaking" defect) and `Unsignaled audio: N stream(s) (must be 0)` (the engine
+  log is scanned for `Creating unsignaled receive stream`; the reference engine must receive audio
+  only through m-lines that signal the SSRC). Both added 2026-09-19; the unfixed engine scored 6
+  unsignaled streams for 3 reference participants.
 - `--churn-cycles N` — number of join/leave cycles in group-churn mode (default: 100)
 - `--network-scenario NAME` — network simulation test scenario (e.g., `step-down-up`). Group mode only.
 - `--quiet` — summary output only
@@ -257,14 +357,17 @@ the incoming-video-sink use-after-free in all three PeerConnection engines; swal
 twice — 15.3% of outbound signalling bytes); the missing baseline network record (~77% of failing
 11.0.0 calls uploaded `"network": []`); and the wasm cores' state semantics, which now match
 11.0.0 (ICE `failed` non-terminal, 20s watchdog, 2s disconnect debounce, throttled ICE restart).
+`InstanceV2CompatImpl` (14.0.0) got the same state semantics, the baseline record and the
+transceiver-removal fix on 2026-10-11 (before that a 14.0.0 call that never connected reported no
+state at all, forever).
 
-**Three experiment flags, all default-off**, read from the server-supplied `customParameters`:
+**Three experiment flags**, read from the server-supplied `customParameters`:
 
 | flag | reaches | effect |
 |---|---|---|
-| `network_reflector_resolve_remote_candidate_ip` | `NativeNetworkingImpl` → `InstanceV2Impl` → versions 7/8/9/12/13 | signalled relay connections can receive binding responses |
-| `network_disable_stun_when_unconfigured` | 11/14/18/19 | stops sending unparseable STUN to reflectors |
-| `network_reference_use_addtrack` | 11.0.0 | removes an extra offer/answer round trip |
+| `network_reflector_resolve_remote_candidate_ip` | `NativeNetworkingImpl` → `InstanceV2Impl` → versions 7/8/9/12/13; also 11/14/18/19 | default off; signalled relay connections can receive binding responses |
+| `network_disable_stun_when_unconfigured` | 11/14/18/19 | default off; stops sending unparseable STUN to reflectors |
+| `network_reference_use_addtrack` | 11.0.0 | **default ON since 2026-10-12** (see "One-round negotiation" below); `false` restores the two-round shape |
 
 Exercise them with the CLI's `--custom-params '<json>'` (caller) / `--custom-params2` (callee).
 
@@ -298,87 +401,137 @@ Each was proposed by the audit and is wrong: the `WebRTC-UseTurnServerAsStunServ
 one-liner (`BasicPortAllocator` bypasses the trial when the STUN set is empty — exactly the
 reflector case); resolving the **local** relay candidate's IP (the peer-addressing tag travels only
 inside the synthetic hostname, so this kills relay entirely); the sendonly/recvonly directional
-transceiver recipe; `AddTrack` in `InstanceV2CompatImpl` (its `SignalingTranslator` synthesises
-every callee-side remote offer section as `kSendOnly`, so the edit is inert); a Swift `return []`
+transceiver recipe (for 11.0.0; 14.0.0's one-way transceivers are the 13.0.0 protocol's own channel
+model, which it must speak, not this recipe); `AddTrack` in `InstanceV2CompatImpl` (it would be actively wrong there: the 13.0.0 protocol
+keeps each direction on its own m-line, and `created_by_addtrack` would let PeerConnection attach
+our send transceiver to the peer's channel); a Swift `return []`
 credential filter; and re-anchoring `stop()`'s `baseTimestamp` (production 13.0.0 shares the
 construct and emits no version key to key the discontinuity on).
 
 
-## mtproto transport on the PeerConnection engines (11.0.0, 18/19)
+## mtproto transport on the PeerConnection engines (11.0.0, 14.0.0, 18/19)
 
-`network_use_mtproto` works on `InstanceV2ReferenceImpl` (11.0.0) and
-`CallCoreHost` (18/19), producing the same wire bytes as 13.0.0. Default off.
+`network_use_mtproto` works on `InstanceV2ReferenceImpl` (11.0.0),
+`InstanceV2CompatImpl` (14.0.0) and `CallCoreHost` (18/19): full mtproto, zero
+DTLS, wire bytes identical to 13.0.0 (`mtproto(RTP)`, `mtproto(0xdcdcdcdc ||
+SCTP)`). Default off. Design record:
+telegram-ios `docs/superpowers/specs/2026-09-16-tgcalls-mtproto-dtls-slot-design.md`.
 
-**Shape.** Two changes, both gated on the flag:
+14.0.0 needs it for more than an A/B: it talks to 13.0.0, which already honours
+the flag, and before 2026-10-11 a 14.0.0 <-> 13.0.0 call under the flag paired
+DTLS with mtproto and failed (`Bad incoming data hash`, no media).
 
-1. `PeerConnectionFactoryInterface::Options::disable_encryption = true`, set on
-   the factory *before* `CreatePeerConnectionOrError` (that is where
-   `DtlsEnabled()` is read). This makes `JsepTransportController` build a plain
-   `RtpTransport` instead of a `DtlsSrtpTransport`, and stops DTLS entirely.
-2. `PeerConnectionDependencies::ice_transport_factory =
-   MtProtoIceTransportFactory`, which wraps a real `P2PTransportChannel` in
-   `MtProtoIceTransport` and applies `EncryptedConnection` above ICE.
+**Shape.** Two settings that MUST travel together, both from one boolean:
 
-Result: `MtProtoIceTransport -> DtlsTransport (inactive passthrough) ->
-RtpTransport (no SRTP)`. Media is `mtproto(RTP)` and the data channel is
-`mtproto(SCTP)`, with **no DTLS handshake at all** - the same code in the same
-position as 13.0.0's `MtProtoPacketTransport`. Verified on p2p calls: DTLS
-handshake log lines go 45 -> 0, and `Creating UnencryptedRtpTransport` replaces
-`Creating DtlsSrtpTransport`.
+1. `PeerConnectionFactoryInterface::Options::external_transport_security = true`
+   before `CreatePeerConnectionOrError`. A tgcalls seam in the vendored webrtc:
+   plain `RtpTransport` (no SRTP) and no SRTP requirement in `BaseChannel`,
+   while DTLS stays *enabled* so certificates, fingerprints, `a=setup`, the
+   SCTP factory and the data-channel answer are stock.
+2. `PeerConnectionDependencies::dtls_transport_factory =
+   MtProtoDtlsTransportFactory(key)`. Another seam; it puts
+   `v2/MtProtoDtlsTransport` in the DTLS slot.
 
-This requires the "Allow SCTP without DTLS" patch in the vendored webrtc fork -
-see `submodules/TgVoipWebrtc/CLAUDE.md`. Without it `disable_encryption` also
-kills the data channel and no call can connect.
+`MtProtoDtlsTransport` never handshakes (the shared key exists before the call
+starts), reports `kConnected` the first time ICE is writable, stores the
+certificate and remote fingerprint it is handed and verifies neither, and
+answers "no SRTP suite" to anyone who asks. `flags` is ground truth in both
+directions, as in 13.0.0's `MtProtoPacketTransport`: `PF_SRTP_BYPASS` (RTP and
+RTCP from `BaseChannel`) is framed bare, `0` (SCTP from `DcSctpTransport`) gets
+the prefix; on receive the prefix becomes `flags 0` and its absence
+`PF_SRTP_BYPASS`, so `DcSctpTransport` (skips `flags != 0`) never parses media.
+`SendPacket` returns the CALLER's byte count.
 
-**Non-obvious invariants**, each of which cost a failed run:
+**Both ends must have the flag.** Safe in production because
+`phoneCall.custom_parameters` is delivered identically to both participants,
+but know the failure shape: with DTLS enabled for SDP on both sides a one-sided
+flag no longer fails fast at SDP. The mtproto side reports connected as soon as
+ICE is writable and sends frames the stock side drops; the stock side's DTLS
+ClientHellos fail our hash check, one `ERROR! Bad incoming data hash.` line
+each, until the 20 s watchdog gives up.
 
-- **`disable_encryption` is not cosmetic, and it is not optional.** It selects
-  the transport class. Without it you get a `DtlsSrtpTransport`, and there is no
-  pass-through mode: `SrtpTransport` refuses to send (`srtp_transport.cc:43-47`)
-  and drops on receive (`:124-128`) when SRTP is inactive. So the only two
-  outcomes are double encryption or a dead call. Nothing ends up unencrypted -
-  mtproto replaces DTLS-SRTP, and the shared key makes DTLS redundant.
-- **Both ends must have the flag.** `disable_encryption` removes the SDP
-  fingerprint, and the mtproto framing is itself asymmetric, so a one-sided flag
-  fails to connect. Safe in production because `phoneCall.custom_parameters` is
-  delivered identically to both participants.
-- **`flags` cannot carry the SCTP/RTP distinction.** 13.0.0 selects its
-  `0xdcdcdcdc` prefix from `flags`, but the inactive `DtlsTransport` drops that
-  argument on send (`dtls_transport.cc:433`) and `RTC_DCHECK(flags == 0)` on
-  receive (`:599`). `MtProtoIceTransport` therefore infers the type with
-  `InferRtpPacketType` and **always re-emits with `flags == 0`**; a non-zero
-  value aborts a `-c dbg` build. The prefix buys wire parity only, not demux -
-  upstream demux is mutual filtering (`RtpTransport` drops non-RTP,
-  `rtp_transport.cc:266-270`; SCTP validates its own).
-- **The 11 signal/callback bridges in `installBridges()` are not
-  compiler-enforced.** Omit one and it fails silently at runtime - miss
-  `SignalCandidateGathered` and candidates never trickle, so the call simply
-  never connects. All of them live in that one method deliberately. The four
-  callback setters are non-virtual, so each is bridged by a lambda on the inner
-  transport reading our own inherited protected member. Every bridge re-emits
-  with `this`, because the controller keys transports by pointer.
-  `MtProtoIceTransportTest.cpp` covers all 11; it is the reason this approach is
-  safe, so do not weaken it.
-- **Do NOT override `SetIceCredentials` / `SetRemoteIceCredentials`.** They are
-  virtual but not pure, and their base implementations already delegate to
-  `SetIceParameters` / `SetRemoteIceParameters`, which the decorator forwards.
+**Expected log lines in a healthy mtproto call**, so nobody chases them:
+`Creating UnencryptedRtpTransport` twice (upstream spells it "becayse"); exactly
+one `DtlsTransport in connected state has incomplete TLS information` per
+transport (the stats wrapper asking for cipher suites we do not have; fields
+come back absent, which is correct); and zero `Bad incoming data hash`.
 
-**A route that looks right and is not:** subclassing `DtlsSrtpTransport` to skip
-SRTP while leaving DTLS enabled. It works and keeps SCTP, but it defeats the
-purpose - mtproto already carries a shared key, so the DTLS handshake and record
-framing are exactly the overhead worth removing, and it leaves the data channel
-as `mtproto(DTLS(SCTP))` rather than `mtproto(SCTP)`. If you try it anyway, two
-traps: `IsSrtpActive()` must not be forced to `true` (`GetSrtpOverhead` and
-`GetRtpAuthParams` are non-virtual and `RTC_CHECK(send_session_)`, which fires
-in release too), and `SrtpTransport` stores `field_trials` **by reference**
-(`srtp_transport.h:169`), so a temporary `FieldTrialBasedConfig` dangles and
-segfaults mid-handshake.
+**Why not the obvious routes** (each was shipped or tried and cost a regression):
 
-**Also dead, for the record:** subclassing `P2PTransportChannel` (its
-`OnReadPacket` is private and non-virtual, so inbound cannot be intercepted);
-socket- or PortAllocator-level mtproto (would encrypt STUN, which reflectors
-must parse); and injecting a fake DTLS transport via `dtls_transport_factory`
-(hits the same SCTP gate, so the injection choice was never the blocker).
+- `Options::disable_encryption` (2026-09-01 to 2026-09-16). It also turns off
+  certificates, fingerprints and the SCTP factory, so three behaviour patches
+  in the fork had to put them back, and the SDP one was missing at first: the
+  answer rejected the data section on every negotiation and both peers
+  renegotiated in a loop for the whole call (6 s loopback: 4,765
+  `SetLocalDescription` on 11.0.0 versus 4). That storm was the dominant cause
+  of the 2026-09 A/B regression.
+- An ICE-level decorator below the inactive `DtlsTransport`. Stock DTLS drops
+  `flags` on send and forces 0 on receive, so the decorator had to guess the
+  packet type and every media packet was also fed to dcsctp (copy, CRC32c,
+  an `LS_ERROR` line each). Its `SendPacket` also returned the ciphertext
+  length; `RtpTransport` reads that as a failed send and, with the ICE
+  channel's never-cleared ENOTCONN, dropped ready-to-send and paused the
+  pacer while packets were going out.
+- Subclassing `DtlsSrtpTransport`, subclassing `P2PTransportChannel`,
+  socket-level mtproto: see the design record.
+
+**Verification is not "the call connects".** Run
+`tgcalls_cli --mode p2p --duration 6 --version {11.0.0,18.0.0,19.0.0}
+--custom-params '{"network_use_mtproto":true}' --custom-params2
+'{"network_use_mtproto":true}' --log-file …` and require: `Rejected data channel
+transport` 0, `SetLocalDescription` 2 for 11.0.0 (one per side since 2026-10-12; 4 for 18/19), `OPEN_ACK` 1, `PARSE_FAILED` 0,
+`Creating DtlsSrtpTransport` 0, zero DTLS handshake lines, a log the size of a
+plain call (~750 lines / 6 s). `//submodules/TgVoipWebrtc:mtproto_dtls_transport_test`
+pins the transport contract over a real `RtpTransport` and `DcSctpTransport`.
+
+## One-round negotiation and the DTLS-role backstop in 11.0.0 (2026-10-12)
+
+Two defects shared by every `InstanceV2ReferenceImpl` build, found in the 2026-10-11 Android
+log sample (`getlogstgcalls/analysis/FINDINGS-android.md`), fixed here and pinned by
+`tools/cli/run-negotiation-tests.sh` (four p2p scenarios; run it after the CLI build):
+
+- **Every call took two offer/answer rounds.** Both sides pre-create their audio transceiver with
+  `AddTransceiver`, and WebRTC's `FindAvailableTransceiverToReceive` only associates a remote
+  m= section with a local transceiver that was *created by `AddTrack`*. So the callee answered
+  the caller's `m=0` **recvonly**, then immediately offered its own audio as a new m-section
+  (`BUNDLE 0 1 2`): 4 `SetLocalDescription` per call, the callee's audio delayed by one signaling
+  round trip (~1–2 s over SCTP in the field), and a glare window on every call.
+  `network_reference_use_addtrack` is now default ON and covers the camera too
+  (`addSendTransceiver`): the callee's answer is `sendrecv` and a plain or video call is 2
+  `SetLocalDescription`, 1 offer. `AddTrack` never reuses a transceiver that has sent
+  (`has_ever_been_used_to_send`), so a camera toggled off and on still gets a fresh m-line, as
+  before. Under 30% signaling loss with mid-call cameras the old shape lost one side's video in
+  4 of 8 runs, the new one in 1 of 8 (a lost answer the callee's glare rule then ignores for the
+  rest of the call; pre-existing, not addressed).
+- **A rejected answer left the caller without a DTLS role, and it then answered a colliding
+  offer as a second DTLS client.** The Android app attaches the camera after `start()`, and its
+  tgcalls copy offers straight from `setVideoCapture()`, replacing the pending offer; the
+  callee's answer to the first offer is rejected (`The order of m-lines in answer doesn't match`)
+  but has already made the callee the DTLS client (`setup:active`). When the callee's own offer
+  then arrives, WebRTC answers `actpass` with `active` unless the local role is already server,
+  so both sides are clients: `write_alert fatal unexpected_message`, `DTLS transport error,
+  code=1` on a connected ICE path, every later SDP `Failed to set SSL role`, and nothing
+  recovers (43 of 200 Android calls). `sendLocalDescription()` now remembers that the peer
+  answered `setup:active` (accepted or not) and, when answering an offer in that state, creates
+  the answer explicitly and sends it as `setup:passive` (log line `answering with
+  setup:passive`; the role is set on the created description and applied from the CreateAnswer
+  callback on the signaling thread, so nothing can land between creating and applying it). It
+  runs on the side that rejected the stale answer, i.e. the side whose own offer was replaced:
+  it protects a build that carries it from its own mid-flight re-offer, and does nothing for a
+  peer that re-offers against it (an unfixed Android caller still ends up client-vs-client with
+  a fixed callee). On iOS it is dormant, since `requestRenegotiation()` never replaces an
+  in-flight offer; it matters for the Android port. `network_reference_immediate_capture_renegotiation`
+  (CLI-only: read under `TGCALLS_ALLOW_TEST_KNOBS`, defined for `tgcalls_core` and never for the
+  objc_library) restores the pre-2026-09-17 immediate offer so the CLI can reproduce the chain
+  (`android-late-cam`, `android-glare` in the test script: 500 ms fixed signaling delay, caller
+  camera at 2.6 s, callee camera at 2.8 s — the SCTP handshake puts the first offer at the callee
+  at ~2.5 s). A camera `AddTrack` may also reuse the recvonly transceiver carrying the peer's
+  video; `SetCodecPreferences` is then skipped (the transceiver has a `mid()`), since the
+  sender-only list must not narrow an m-line the peer already negotiated.
+
+Not fixable inside a PeerConnection: once both `DtlsTransport`s hold a role and a stream
+(`SetDtlsRole` refuses to change it while `dtls_` exists), no ICE restart recovers a
+client-vs-client handshake; only the prevention above does.
 
 ## Further Context
 
