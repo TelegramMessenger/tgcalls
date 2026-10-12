@@ -195,9 +195,10 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
 - `--wasm-core2 PATH` — same for the callee (defaults to `--wasm-core`; `NONE` forces native)
 - `--custom-params JSON` — sets the caller's engine `customParameters` as a JSON object (merged
   with the `wasm_core_path` entry the CLI synthesises from `--wasm-core`). This is how to
-  exercise the three new default-off flags without a server-side rollout: e.g.
+  exercise the default-off flags without a server-side rollout: e.g.
   `network_disable_stun_when_unconfigured`, `network_reflector_resolve_remote_candidate_ip`,
-  `network_reference_use_addtrack`.
+  `network_reference_immediate_capture_renegotiation` (and `network_reference_use_addtrack`,
+  default ON since 2026-10-12, as `false` to compare against the old two-round shape).
 - `--custom-params2 JSON` — same for the callee. Independent of `--custom-params` — unlike
   `--wasm-core2` there is no fallback to the caller's value — so `--custom-params2` **alone**
   gives the callee different engine parameters than the caller, enabling a within-call A/B on
@@ -360,13 +361,13 @@ twice — 15.3% of outbound signalling bytes); the missing baseline network reco
 transceiver-removal fix on 2026-10-11 (before that a 14.0.0 call that never connected reported no
 state at all, forever).
 
-**Three experiment flags, all default-off**, read from the server-supplied `customParameters`:
+**Three experiment flags**, read from the server-supplied `customParameters`:
 
 | flag | reaches | effect |
 |---|---|---|
-| `network_reflector_resolve_remote_candidate_ip` | `NativeNetworkingImpl` → `InstanceV2Impl` → versions 7/8/9/12/13; also 11/14/18/19 | signalled relay connections can receive binding responses |
-| `network_disable_stun_when_unconfigured` | 11/14/18/19 | stops sending unparseable STUN to reflectors |
-| `network_reference_use_addtrack` | 11.0.0 | removes an extra offer/answer round trip |
+| `network_reflector_resolve_remote_candidate_ip` | `NativeNetworkingImpl` → `InstanceV2Impl` → versions 7/8/9/12/13; also 11/14/18/19 | default off; signalled relay connections can receive binding responses |
+| `network_disable_stun_when_unconfigured` | 11/14/18/19 | default off; stops sending unparseable STUN to reflectors |
+| `network_reference_use_addtrack` | 11.0.0 | **default ON since 2026-10-12** (see "One-round negotiation" below); `false` restores the two-round shape |
 
 Exercise them with the CLI's `--custom-params '<json>'` (caller) / `--custom-params2` (callee).
 
@@ -478,10 +479,59 @@ come back absent, which is correct); and zero `Bad incoming data hash`.
 `tgcalls_cli --mode p2p --duration 6 --version {11.0.0,18.0.0,19.0.0}
 --custom-params '{"network_use_mtproto":true}' --custom-params2
 '{"network_use_mtproto":true}' --log-file …` and require: `Rejected data channel
-transport` 0, `SetLocalDescription` 4, `OPEN_ACK` 1, `PARSE_FAILED` 0,
+transport` 0, `SetLocalDescription` 2 for 11.0.0 (one per side since 2026-10-12; 4 for 18/19), `OPEN_ACK` 1, `PARSE_FAILED` 0,
 `Creating DtlsSrtpTransport` 0, zero DTLS handshake lines, a log the size of a
 plain call (~750 lines / 6 s). `//submodules/TgVoipWebrtc:mtproto_dtls_transport_test`
 pins the transport contract over a real `RtpTransport` and `DcSctpTransport`.
+
+## One-round negotiation and the DTLS-role backstop in 11.0.0 (2026-10-12)
+
+Two defects shared by every `InstanceV2ReferenceImpl` build, found in the 2026-10-11 Android
+log sample (`getlogstgcalls/analysis/FINDINGS-android.md`), fixed here and pinned by
+`tools/cli/run-negotiation-tests.sh` (four p2p scenarios; run it after the CLI build):
+
+- **Every call took two offer/answer rounds.** Both sides pre-create their audio transceiver with
+  `AddTransceiver`, and WebRTC's `FindAvailableTransceiverToReceive` only associates a remote
+  m= section with a local transceiver that was *created by `AddTrack`*. So the callee answered
+  the caller's `m=0` **recvonly**, then immediately offered its own audio as a new m-section
+  (`BUNDLE 0 1 2`): 4 `SetLocalDescription` per call, the callee's audio delayed by one signaling
+  round trip (~1–2 s over SCTP in the field), and a glare window on every call.
+  `network_reference_use_addtrack` is now default ON and covers the camera too
+  (`addSendTransceiver`): the callee's answer is `sendrecv` and a plain or video call is 2
+  `SetLocalDescription`, 1 offer. `AddTrack` never reuses a transceiver that has sent
+  (`has_ever_been_used_to_send`), so a camera toggled off and on still gets a fresh m-line, as
+  before. Under 30% signaling loss with mid-call cameras the old shape lost one side's video in
+  4 of 8 runs, the new one in 1 of 8 (a lost answer the callee's glare rule then ignores for the
+  rest of the call; pre-existing, not addressed).
+- **A rejected answer left the caller without a DTLS role, and it then answered a colliding
+  offer as a second DTLS client.** The Android app attaches the camera after `start()`, and its
+  tgcalls copy offers straight from `setVideoCapture()`, replacing the pending offer; the
+  callee's answer to the first offer is rejected (`The order of m-lines in answer doesn't match`)
+  but has already made the callee the DTLS client (`setup:active`). When the callee's own offer
+  then arrives, WebRTC answers `actpass` with `active` unless the local role is already server,
+  so both sides are clients: `write_alert fatal unexpected_message`, `DTLS transport error,
+  code=1` on a connected ICE path, every later SDP `Failed to set SSL role`, and nothing
+  recovers (43 of 200 Android calls). `sendLocalDescription()` now remembers that the peer
+  answered `setup:active` (accepted or not) and, when answering an offer in that state, creates
+  the answer explicitly and sends it as `setup:passive` (log line `answering with
+  setup:passive`; the role is set on the created description and applied from the CreateAnswer
+  callback on the signaling thread, so nothing can land between creating and applying it). It
+  runs on the side that rejected the stale answer, i.e. the side whose own offer was replaced:
+  it protects a build that carries it from its own mid-flight re-offer, and does nothing for a
+  peer that re-offers against it (an unfixed Android caller still ends up client-vs-client with
+  a fixed callee). On iOS it is dormant, since `requestRenegotiation()` never replaces an
+  in-flight offer; it matters for the Android port. `network_reference_immediate_capture_renegotiation`
+  (CLI-only: read under `TGCALLS_ALLOW_TEST_KNOBS`, defined for `tgcalls_core` and never for the
+  objc_library) restores the pre-2026-09-17 immediate offer so the CLI can reproduce the chain
+  (`android-late-cam`, `android-glare` in the test script: 500 ms fixed signaling delay, caller
+  camera at 2.6 s, callee camera at 2.8 s — the SCTP handshake puts the first offer at the callee
+  at ~2.5 s). A camera `AddTrack` may also reuse the recvonly transceiver carrying the peer's
+  video; `SetCodecPreferences` is then skipped (the transceiver has a `mid()`), since the
+  sender-only list must not narrow an m-line the peer already negotiated.
+
+Not fixable inside a PeerConnection: once both `DtlsTransport`s hold a role and a stream
+(`SetDtlsRole` refuses to change it while `dtls_` exists), no ICE restart recovers a
+client-vs-client handshake; only the prevention above does.
 
 ## Further Context
 

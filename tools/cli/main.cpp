@@ -12,6 +12,7 @@
 #include <mutex>
 #include <random>
 #include <fstream>
+#include <algorithm>
 #include <set>
 #include <string>
 #include <thread>
@@ -266,6 +267,11 @@ int main(int argc, char* argv[]) {
     int referenceParticipants = 0;
     bool enableVideo = false;
     bool videoLate = false;
+    // --video-late-caller-ms / --video-late-callee-ms: attach that side's camera N ms
+    // after the instances are created (the Android app's shape: the capturer reaches
+    // the engine while the first offer is still in flight). -1 = not used.
+    int videoLateCallerMs = -1;
+    int videoLateCalleeMs = -1;
     bool earlyVideoRequest = false;
     bool videoSinkChurn = false;
     bool videoRerequest = false;
@@ -312,6 +318,10 @@ int main(int argc, char* argv[]) {
             enableVideo = true;
         } else if (std::string(argv[i]) == "--video-late") {
             videoLate = true;
+        } else if (std::string(argv[i]) == "--video-late-caller-ms" && i + 1 < argc) {
+            videoLateCallerMs = std::atoi(argv[++i]);
+        } else if (std::string(argv[i]) == "--video-late-callee-ms" && i + 1 < argc) {
+            videoLateCalleeMs = std::atoi(argv[++i]);
         } else if (std::string(argv[i]) == "--early-video-request") {
             earlyVideoRequest = true;
         } else if (std::string(argv[i]) == "--e2e") {
@@ -504,16 +514,27 @@ int main(int argc, char* argv[]) {
     // This is the shape that exposed the 18/19 start-glare renegotiation loop.
     std::shared_ptr<tgcalls::VideoCaptureInterface> callerVideoCapture;
     std::shared_ptr<tgcalls::VideoCaptureInterface> calleeVideoCapture;
-    if (enableVideo || videoLate) {
+    const bool videoLateMs = videoLateCallerMs >= 0 || videoLateCalleeMs >= 0;
+    if (enableVideo || videoLate || videoLateMs) {
         auto threads = tgcalls::StaticThreads::getThreads();
         callerVideoCapture = tgcalls::VideoCaptureInterface::Create(threads, "caller");
         calleeVideoCapture = tgcalls::VideoCaptureInterface::Create(threads, "callee");
         if (videoLate) {
             logMsg("Main", "video capture will be attached mid-call (callee at 3s, caller at 5s)");
+        } else if (videoLateMs) {
+            logMsg("Main", "video capture: caller %s, callee %s",
+                   videoLateCallerMs >= 0 ? (std::to_string(videoLateCallerMs) + " ms after start").c_str() : (enableVideo ? "at start" : "none"),
+                   videoLateCalleeMs >= 0 ? (std::to_string(videoLateCalleeMs) + " ms after start").c_str() : (enableVideo ? "at start" : "none"));
         } else {
             logMsg("Main", "video capture attached to both descriptors");
         }
     }
+    // A side has its camera at construction only with --video and no later
+    // attachment of its own (--video-late moves both; a --video-late-*-ms value
+    // moves that side alone, so `--video --video-late-caller-ms 500` gives the
+    // callee its camera at start and the caller its camera at 500 ms).
+    const bool callerCaptureAtStart = enableVideo && !videoLate && videoLateCallerMs < 0;
+    const bool calleeCaptureAtStart = enableVideo && !videoLate && videoLateCalleeMs < 0;
     // Each side counts the decoded frames it receives, so a video run proves
     // video flows rather than that it was negotiated.
     auto callerVideoSink = std::make_shared<FakeVideoSink>();
@@ -536,7 +557,7 @@ int main(int argc, char* argv[]) {
             ? std::vector<tgcalls::RtcServer>{makeReflectorServer(reflectorHost, reflectorPort, callerPeerTag)}
             : std::vector<tgcalls::RtcServer>{},
         .encryptionKey = tgcalls::EncryptionKey(keyData, true),
-        .videoCapture = videoLate ? nullptr : callerVideoCapture,
+        .videoCapture = callerCaptureAtStart ? callerVideoCapture : nullptr,
         .stateUpdated = [callState](tgcalls::State state) {
             logMsg("Caller", "state -> %s", stateName(state));
             std::lock_guard<std::mutex> lock(callState->mutex);
@@ -578,7 +599,7 @@ int main(int argc, char* argv[]) {
             ? std::vector<tgcalls::RtcServer>{makeReflectorServer(reflectorHost, reflectorPort, calleePeerTag)}
             : std::vector<tgcalls::RtcServer>{},
         .encryptionKey = tgcalls::EncryptionKey(keyData, false),
-        .videoCapture = videoLate ? nullptr : calleeVideoCapture,
+        .videoCapture = calleeCaptureAtStart ? calleeVideoCapture : nullptr,
         .stateUpdated = [callState](tgcalls::State state) {
             logMsg("Callee", "state -> %s", stateName(state));
             std::lock_guard<std::mutex> lock(callState->mutex);
@@ -636,7 +657,31 @@ int main(int argc, char* argv[]) {
     }
 
     logMsg("Main", "sleeping for %d seconds...", duration);
-    if (videoLate && duration > 5) {
+    if (videoLateMs) {
+        // The camera reaches the engine a fixed time after start, on each side
+        // that asked for it, in time order.
+        std::vector<std::pair<int, bool>> events; // (ms, isCaller)
+        if (videoLateCallerMs >= 0) events.push_back({videoLateCallerMs, true});
+        if (videoLateCalleeMs >= 0) events.push_back({videoLateCalleeMs, false});
+        std::sort(events.begin(), events.end());
+        int elapsedMs = 0;
+        for (const auto &event : events) {
+            if (event.first > elapsedMs) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(event.first - elapsedMs));
+                elapsedMs = event.first;
+            }
+            logMsg("Main", "attaching the %s's video capture at %d ms", event.second ? "caller" : "callee", event.first);
+            if (event.second) {
+                callerInstance->setVideoCapture(callerVideoCapture);
+            } else {
+                calleeInstance->setVideoCapture(calleeVideoCapture);
+            }
+        }
+        int remainingMs = duration * 1000 - elapsedMs;
+        if (remainingMs > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(remainingMs));
+        }
+    } else if (videoLate && duration > 5) {
         // The camera switched on mid-call, the app's setVideoCapture path: the
         // callee first, so the callee has to offer its own new channel.
         std::this_thread::sleep_for(std::chrono::seconds(3));
