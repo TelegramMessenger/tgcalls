@@ -132,28 +132,6 @@ private:
     std::function<void(webrtc::RTCError)> _completion;
 };
 
-class CreateSessionDescriptionObserverImpl : public webrtc::CreateSessionDescriptionObserver {
-public:
-    CreateSessionDescriptionObserverImpl(
-        std::function<void(std::unique_ptr<webrtc::SessionDescriptionInterface>)> onSuccess,
-        std::function<void(webrtc::RTCError)> onFailure) :
-    _onSuccess(std::move(onSuccess)),
-    _onFailure(std::move(onFailure)) {
-    }
-
-    void OnSuccess(webrtc::SessionDescriptionInterface *description) override {
-        _onSuccess(std::unique_ptr<webrtc::SessionDescriptionInterface>(description));
-    }
-
-    void OnFailure(webrtc::RTCError error) override {
-        _onFailure(std::move(error));
-    }
-
-private:
-    std::function<void(std::unique_ptr<webrtc::SessionDescriptionInterface>)> _onSuccess;
-    std::function<void(webrtc::RTCError)> _onFailure;
-};
-
 class PeerConnectionDelegateAdapter: public webrtc::PeerConnectionObserver {
 public:
     struct Parameters {
@@ -412,7 +390,7 @@ public:
             }
         }
 
-        _useAddTrack = getCustomParameterBoolDefaultTrue(_customParameters, "network_reference_use_addtrack");
+        _useAddTrack = getCustomParameterBool(_customParameters, "network_reference_use_addtrack");
 
         webrtc::field_trial::InitFieldTrialsFromString(
             "WebRTC-DataChannel-Dcsctp/Enabled/"
@@ -548,7 +526,7 @@ public:
 
                 if (strong->_didBeginNegotiation) {
                     if (strong->_encryptionKey.isOutgoing || strong->_peerConnection->remote_description()) {
-                        strong->requestRenegotiation();
+                        strong->sendLocalDescription();
                     }
                 } else {
                     RTC_LOG(LS_INFO) << "onRenegotiationNeeded: not sending local description";
@@ -825,7 +803,26 @@ public:
             webrtc::scoped_refptr<webrtc::AudioSourceInterface> audioSource = _peerConnectionFactory->CreateAudioSource(audioSourceOptions);
 
             webrtc::scoped_refptr<webrtc::AudioTrackInterface> audioTrack = _peerConnectionFactory->CreateAudioTrack("0", audioSource.get());
-            auto audioTransceiverOrError = addSendTransceiver(audioTrack, transceiverInit);
+            webrtc::RTCErrorOr<webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>> audioTransceiverOrError = [&]() -> webrtc::RTCErrorOr<webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>> {
+                if (!_useAddTrack) {
+                    return _peerConnection->AddTransceiver(audioTrack, transceiverInit);
+                }
+                // AddTrack sets created_by_addtrack(), which
+                // FindAvailableTransceiverToReceive requires before it will associate
+                // the callee's own transceiver with the offerer's m= section. Without
+                // it the callee mints a fresh recvonly transceiver and needs a second
+                // offer/answer before it can send.
+                auto senderOrError = _peerConnection->AddTrack(audioTrack, transceiverInit.stream_ids);
+                if (!senderOrError.ok()) {
+                    return senderOrError.MoveError();
+                }
+                for (const auto &transceiver : _peerConnection->GetTransceivers()) {
+                    if (transceiver->sender() == senderOrError.value()) {
+                        return transceiver;
+                    }
+                }
+                return webrtc::RTCError(webrtc::RTCErrorType::INTERNAL_ERROR, "AddTrack produced no matching transceiver");
+            }();
             if (audioTransceiverOrError.ok()) {
                 _outgoingAudioTrack = audioTrack;
                 _outgoingAudioTransceiver = audioTransceiverOrError.value();
@@ -1092,50 +1089,6 @@ public:
         });
     }
 
-    webrtc::RTCErrorOr<webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>> addSendTransceiver(
-        webrtc::scoped_refptr<webrtc::MediaStreamTrackInterface> track,
-        webrtc::RtpTransceiverInit const &transceiverInit) {
-        if (!_useAddTrack) {
-            return _peerConnection->AddTransceiver(track, transceiverInit);
-        }
-        // AddTrack lets the callee associate its sender with the first remote
-        // m-section instead of requiring a second offer/answer round.
-        auto senderOrError = _peerConnection->AddTrack(track, transceiverInit.stream_ids);
-        if (!senderOrError.ok()) {
-            return senderOrError.MoveError();
-        }
-        for (const auto &transceiver : _peerConnection->GetTransceivers()) {
-            if (transceiver->sender() == senderOrError.value()) {
-                return transceiver;
-            }
-        }
-        return webrtc::RTCError(webrtc::RTCErrorType::INTERNAL_ERROR, "AddTrack produced no matching transceiver");
-    }
-
-    void requestRenegotiation() {
-        if (!_didBeginNegotiation) {
-            return;
-        }
-        _pendingRenegotiation = true;
-        flushPendingRenegotiation();
-    }
-
-    void flushPendingRenegotiation() {
-        if (!_pendingRenegotiation || _isMakingOffer || _isSettingRemoteAnswerPending) {
-            return;
-        }
-        if (_peerConnection->signaling_state() != webrtc::PeerConnectionInterface::SignalingState::kStable) {
-            return;
-        }
-        // The callee must wait for the caller's first offer. Rolling back the
-        // very first offer can orphan the caller's data-channel m-section.
-        if (!_encryptionKey.isOutgoing && !_peerConnection->remote_description()) {
-            return;
-        }
-        _pendingRenegotiation = false;
-        sendLocalDescription();
-    }
-
     void sendLocalDescription() {
         const auto weak = std::weak_ptr<InstanceV2ReferenceImplInternal>(shared_from_this());
 
@@ -1163,34 +1116,9 @@ public:
                 strong->doSendLocalDescription();
 
                 strong->maybeCommitPendingIceCandidates();
-                strong->flushPendingRenegotiation();
             });
         }));
         RTC_LOG(LS_INFO) << "Calling SetLocalDescription";
-        if (_peerAnsweredAsDtlsClient && _peerConnection->signaling_state() == webrtc::PeerConnectionInterface::SignalingState::kHaveRemoteOffer) {
-            webrtc::scoped_refptr<CreateSessionDescriptionObserverImpl> createObserver(
-                new rtc::RefCountedObject<CreateSessionDescriptionObserverImpl>(
-                    [peerConnection = _peerConnection, observer](std::unique_ptr<webrtc::SessionDescriptionInterface> description) {
-                        bool changed = false;
-                        for (auto &transportInfo : description->description()->transport_infos()) {
-                            if (transportInfo.description.connection_role == cricket::CONNECTIONROLE_ACTIVE) {
-                                transportInfo.description.connection_role = cricket::CONNECTIONROLE_PASSIVE;
-                                changed = true;
-                            }
-                        }
-                        if (changed) {
-                            RTC_LOG(LS_INFO) << "answering with setup:passive: the peer already holds the DTLS client role";
-                        }
-                        // Apply on the signaling thread in the CreateAnswer
-                        // callback, without posting through the media thread.
-                        peerConnection->SetLocalDescription(std::move(description), observer);
-                    },
-                    [observer](webrtc::RTCError error) {
-                        observer->OnSetLocalDescriptionComplete(std::move(error));
-                    }));
-            _peerConnection->CreateAnswer(createObserver.get(), webrtc::PeerConnectionInterface::RTCOfferAnswerOptions());
-            return;
-        }
         _peerConnection->SetLocalDescription(observer);
     }
 
@@ -1425,12 +1353,6 @@ public:
             return;
         }
 
-        // Even a rejected answer can fix the peer's DTLS role. Remember it so
-        // that a later offer from that peer cannot make both sides DTLS clients.
-        if (type == "answer" && sdp.find("a=setup:active") != std::string::npos) {
-            _peerAnsweredAsDtlsClient = true;
-        }
-
         _isSettingRemoteAnswerPending = type == "answer";
 
         const auto weak = std::weak_ptr<InstanceV2ReferenceImplInternal>(shared_from_this());
@@ -1461,7 +1383,6 @@ public:
                 if (type == "offer") {
                     strong->sendLocalDescription();
                 }
-                strong->flushPendingRenegotiation();
             });
         }));
         RTC_LOG(LS_INFO) << "Calling SetRemoteDescription";
@@ -1633,7 +1554,10 @@ public:
                     webrtc::RtpTransceiverInit transceiverInit;
                     transceiverInit.stream_ids = { "0" };
 
-                    auto videoTransceiverOrError = addSendTransceiver(videoTrack, transceiverInit);
+                    // Deliberately still AddTransceiver: see network_reference_use_addtrack.
+                    // AddTrack reuse is once-only, so it would not cure m-line growth on
+                    // repeated camera toggles, and it would add a second variable to the A/B.
+                    webrtc::RTCErrorOr<webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>> videoTransceiverOrError = _peerConnection->AddTransceiver(videoTrack, transceiverInit);
                     if (videoTransceiverOrError.ok()) {
                         _outgoingVideoTrack = videoTrack;
                         _outgoingVideoTransceiver = videoTransceiverOrError.value();
@@ -1667,11 +1591,7 @@ public:
                             }
                         }
 
-                        // AddTrack may reuse the recvonly transceiver carrying
-                        // remote video. Its negotiated codecs must be preserved.
-                        if (!_outgoingVideoTransceiver->mid()) {
-                            _outgoingVideoTransceiver->SetCodecPreferences(codecCapabilities);
-                        }
+                        _outgoingVideoTransceiver->SetCodecPreferences(codecCapabilities);
 
                         webrtc::RtpParameters parameters = _outgoingVideoTransceiver->sender()->GetParameters();
                         if (parameters.encodings.empty()) {
@@ -1690,7 +1610,7 @@ public:
 
         if (_didBeginNegotiation) {
             sendMediaState();
-            requestRenegotiation();
+            sendLocalDescription();
         }
     }
 
@@ -1942,10 +1862,8 @@ private:
     bool _didBeginNegotiation = false;
     bool _isMakingOffer = false;
     bool _isSettingRemoteAnswerPending = false;
-    bool _pendingRenegotiation = false;
-    bool _peerAnsweredAsDtlsClient = false;
     bool _isPerformingConfiguration = false;
-    bool _useAddTrack = true;
+    bool _useAddTrack = false;
     bool _useMtProto = false;
 
     webrtc::scoped_refptr<webrtc::AudioTrackInterface> _outgoingAudioTrack;
