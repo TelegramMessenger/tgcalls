@@ -557,7 +557,7 @@ public:
 
                 if (strong->_didBeginNegotiation) {
                     if (strong->_encryptionKey.isOutgoing || strong->_peerConnection->remote_description()) {
-                        strong->sendLocalDescription();
+                        strong->requestRenegotiation();
                     }
                 } else {
                     RTC_LOG(LS_INFO) << "onRenegotiationNeeded: not sending local description";
@@ -1124,6 +1124,30 @@ public:
         return webrtc::RTCError(webrtc::RTCErrorType::INTERNAL_ERROR, "AddTrack produced no matching transceiver");
     }
 
+    void requestRenegotiation() {
+        if (!_didBeginNegotiation) {
+            return;
+        }
+        _pendingRenegotiation = true;
+        flushPendingRenegotiation();
+    }
+
+    void flushPendingRenegotiation() {
+        if (!_pendingRenegotiation || _isMakingOffer || _isSettingRemoteAnswerPending) {
+            return;
+        }
+        if (_peerConnection->signaling_state() != webrtc::PeerConnectionInterface::SignalingState::kStable) {
+            return;
+        }
+        // A callee must not offer before receiving the caller's first offer:
+        // rolling that offer back can orphan its unnegotiated data-channel MID.
+        if (!_encryptionKey.isOutgoing && !_peerConnection->remote_description()) {
+            return;
+        }
+        _pendingRenegotiation = false;
+        sendLocalDescription();
+    }
+
     void sendLocalDescription() {
         const auto weak = std::weak_ptr<InstanceV2ReferenceImplInternal>(shared_from_this());
 
@@ -1151,6 +1175,7 @@ public:
                 strong->doSendLocalDescription();
 
                 strong->maybeCommitPendingIceCandidates();
+                strong->flushPendingRenegotiation();
             });
         }));
         RTC_LOG(LS_INFO) << "Calling SetLocalDescription";
@@ -1456,6 +1481,7 @@ public:
                 if (type == "offer") {
                     strong->sendLocalDescription();
                 }
+                strong->flushPendingRenegotiation();
             });
         }));
         RTC_LOG(LS_INFO) << "Calling SetRemoteDescription";
@@ -1942,6 +1968,7 @@ private:
     bool _didBeginNegotiation = false;
     bool _isMakingOffer = false;
     bool _isSettingRemoteAnswerPending = false;
+    bool _pendingRenegotiation = false;
     bool _isPerformingConfiguration = false;
     bool _useAddTrack = false;
     bool _immediateCaptureRenegotiation = false;
