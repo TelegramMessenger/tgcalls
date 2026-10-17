@@ -16,6 +16,8 @@
 #include "third_party/libyuv/include/libyuv.h"
 #include <StaticThreads.h>
 
+#include "UwpScreenCapturerShader.h"
+
 namespace tgcalls {
 namespace {
 
@@ -45,17 +47,25 @@ constexpr int64_t kPauseAfterEmptyPollsMs = 2000;
 // whenever the compositor is mid-deposit, which this capturer reports as a pause.
 constexpr int kNumBuffers = 2;
 
-// Halved while the source is at least twice the target in either direction, and even
-// because NV12 has no odd dimensions. Powers of two only, deliberately - see the comment
-// on the constants.
-std::pair<int, int> CappedSize(int width, int height) {
+// Halved while the source is at least twice the target in either direction. Powers of
+// two only, deliberately - see the comment on the constants.
+int Halvings(int width, int height) {
+	int halvings = 0;
 	while ((width >= kTargetWidth * 2 || height >= kTargetHeight * 2)
 		&& width >= 4 && height >= 4) {
 		width /= 2;
 		height /= 2;
+		++halvings;
 	}
 
-	return { std::max(2, width & ~1), std::max(2, height & ~1) };
+	return halvings;
+}
+
+// Even because NV12 has no odd dimensions: the odd row or column is cropped, never
+// resampled away.
+std::pair<int, int> CappedSize(int width, int height) {
+	const int halvings = Halvings(width, height);
+	return { std::max(2, (width >> halvings) & ~1), std::max(2, (height >> halvings) & ~1) };
 }
 
 
@@ -96,20 +106,26 @@ void UwpScreenCapturer::create() {
 		return;
 	}
 
+	// Feature level 11 for the compute shader that converts the capture. A GPU without it,
+	// or no hardware device at all, gets WARP, which runs the shader on the CPU.
+	const D3D_FEATURE_LEVEL feature_levels[] = { D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0 };
+
 	HRESULT hr = D3D11CreateDevice(
 	  /*adapter=*/nullptr, D3D_DRIVER_TYPE_HARDWARE,
 	  /*software_rasterizer=*/nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-	  /*feature_levels=*/nullptr, /*feature_levels_size=*/0, D3D11_SDK_VERSION,
+	  feature_levels, ARRAYSIZE(feature_levels), D3D11_SDK_VERSION,
 	  d3d11_device_.put(), /*feature_level=*/nullptr, /*device_context=*/nullptr);
-	if (hr == DXGI_ERROR_UNSUPPORTED) {
-		// If a hardware device could not be created, use WARP which is a high speed
-		// software device.
+	if (FAILED(hr)) {
 		hr = D3D11CreateDevice(
 			/*adapter=*/nullptr, D3D_DRIVER_TYPE_WARP,
 			/*software_rasterizer=*/nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-			/*feature_levels=*/nullptr, /*feature_levels_size=*/0,
+			feature_levels, ARRAYSIZE(feature_levels),
 			D3D11_SDK_VERSION, d3d11_device_.put(), /*feature_level=*/nullptr,
 			/*device_context=*/nullptr);
+	}
+
+	if (SUCCEEDED(hr)) {
+		hr = CreateConverter();
 	}
 
 	if (FAILED(hr)) {
@@ -212,6 +228,13 @@ void UwpScreenCapturer::ProcessFrame() {
 		return;
 	}
 
+	DeliverPendingFrame();
+
+	// A readback that failed has stopped the capture.
+	if (!is_capture_started_) {
+		return;
+	}
+
 	auto capture_frame = frame_pool_.TryGetNextFrame();
 	if (!capture_frame) {
 		// An empty pool says nothing about a pause: the compositor can be mid-deposit, and from
@@ -259,8 +282,6 @@ void UwpScreenCapturer::ProcessFrame() {
 		}
 	}
 
-	// We need to get this CaptureFrame as an ID3D11Texture2D so that we can get
-	// the raw image data in the format required by the DesktopFrame interface.
 	auto d3d_surface = capture_frame.Surface();
 
 	auto direct3DDxgiInterfaceAccess
@@ -274,39 +295,18 @@ void UwpScreenCapturer::ProcessFrame() {
 		return;
 	}
 
-	if (!mapped_texture_) {
-		hr = CreateMappedTexture(texture_2D);
-		if (FAILED(hr)) {
-			//RecordGetFrameResult(GetFrameResult::kCreateMappedTextureFailed);
-			onFatalError();
-			return;
-		}
-	}
-
-	// `texture_2D` can only be read by the GPU, so it is copied into `mapped_texture_`,
-	// which carries D3D11_CPU_ACCESS_READ.
-	winrt::com_ptr<ID3D11DeviceContext> d3d_context;
-	d3d11_device_->GetImmediateContext(d3d_context.put());
-
 	auto new_size = capture_frame.ContentSize();
 
-	// Before the copy, as upstream's WgcCaptureSession does: the copy below takes only the
-	// region the two textures share, so a mapped texture still holding the previous size
-	// would keep a band of stale pixels down its edge.
 	if (previous_size_.Width != new_size.Width ||
 		previous_size_.Height != new_size.Height) {
-		hr = CreateMappedTexture(texture_2D, new_size.Width, new_size.Height);
-		if (FAILED(hr)) {
-			onFatalError();
-			return;
-		}
-
 		winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice directDevice;
 		direct3d_device_->QueryInterface(winrt::guid_of<winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice>(), winrt::put_abi(directDevice));
 
 		frame_pool_.Recreate(directDevice, kPixelFormat, kNumBuffers, new_size);
 	}
 
+	// The frame in hand still has the previous size when the source has just been resized,
+	// so only what both sizes cover is read.
 	const int image_height = std::min(previous_size_.Height, new_size.Height);
 	const int image_width = std::min(previous_size_.Width, new_size.Width);
 	previous_size_ = new_size;
@@ -316,115 +316,154 @@ void UwpScreenCapturer::ProcessFrame() {
 		return;
 	}
 
-	// Only the shared region: CopyResource would take the whole surface, which across a
-	// resize is not the size of the destination.
+	const auto [out_width, out_height] = CappedSize(image_width, image_height);
+	const int block = 1 << Halvings(image_width, image_height);
+
+	if (out_width != output_width_ || out_height != output_height_ || block != block_) {
+		hr = CreateTextures(out_width, out_height, block);
+		if (FAILED(hr)) {
+			onFatalError();
+			return;
+		}
+	}
+
+	// Whole blocks only, from the top left: what a source that is not a multiple of the
+	// block leaves over is cropped, as the even rounding crops an odd row or column.
 	D3D11_BOX region = {};
-	region.right = static_cast<UINT>(image_width);
-	region.bottom = static_cast<UINT>(image_height);
+	region.right = static_cast<UINT>(out_width * block);
+	region.bottom = static_cast<UINT>(out_height * block);
 	region.back = 1;
-	d3d_context->CopySubresourceRegion(mapped_texture_.get(), /*DstSubresource=*/0,
-																			   /*DstX=*/0, /*DstY=*/0, /*DstZ=*/0,
-																			   texture_2D.get(), /*SrcSubresource=*/0, &region);
+	d3d_context_->CopySubresourceRegion(source_.get(), /*DstSubresource=*/0,
+		/*DstX=*/0, /*DstY=*/0, /*DstZ=*/0,
+		texture_2D.get(), /*SrcSubresource=*/0, &region);
+
+	ID3D11ShaderResourceView* const sources[] = { source_view_.get() };
+	ID3D11UnorderedAccessView* const targets[] = { luma_view_.get(), chroma_view_.get() };
+	ID3D11Buffer* const parameters[] = { converter_parameters_.get() };
+	d3d_context_->CSSetShader(converter_.get(), nullptr, 0);
+	d3d_context_->CSSetShaderResources(0, 1, sources);
+	d3d_context_->CSSetUnorderedAccessViews(0, 2, targets, nullptr);
+	d3d_context_->CSSetConstantBuffers(0, 1, parameters);
+
+	// One thread per chroma sample, in groups of 8x8.
+	d3d_context_->Dispatch((out_width / 2 + 7) / 8, (out_height / 2 + 7) / 8, 1);
+
+	// Unbound, or the next frame's copy into source_ finds it still bound for reading.
+	ID3D11ShaderResourceView* const no_sources[] = { nullptr };
+	ID3D11UnorderedAccessView* const no_targets[] = { nullptr, nullptr };
+	d3d_context_->CSSetShaderResources(0, 1, no_sources);
+	d3d_context_->CSSetUnorderedAccessViews(0, 2, no_targets, nullptr);
+
+	d3d_context_->CopyResource(luma_staging_.get(), luma_.get());
+	d3d_context_->CopyResource(chroma_staging_.get(), chroma_.get());
+
+	// Submitted now, so that it has run by the next tick rather than starting then.
+	d3d_context_->Flush();
+
+	pending_frame_ = capture_frame;
+	pending_capture_ms_ = rtc::TimeMillis();
+}
+
+void UwpScreenCapturer::DeliverPendingFrame() {
+	if (pending_frame_ == nullptr) {
+		return;
+	}
+
+	// Released on the way out, once the readback below has waited out everything that
+	// read it.
+	const auto frame = std::move(pending_frame_);
+	pending_frame_ = nullptr;
+
+	const int width = output_width_;
+	const int height = output_height_;
+
+	rtc::scoped_refptr<webrtc::NV12Buffer> buffer = buffer_pool_.CreateNV12Buffer(width, height);
+	if (buffer == nullptr) {
+		buffer = webrtc::NV12Buffer::Create(width, height);
+	}
 
 	D3D11_MAPPED_SUBRESOURCE map_info;
-	hr = d3d_context->Map(mapped_texture_.get(), /*subresource_index=*/0,
-										D3D11_MAP_READ, /*D3D11_MAP_FLAG_DO_NOT_WAIT=*/0,
-										&map_info);
+	HRESULT hr = d3d_context_->Map(luma_staging_.get(), 0, D3D11_MAP_READ, 0, &map_info);
 	if (FAILED(hr)) {
 		onFatalError();
 		return;
 	}
 
-	const size_t row_length = static_cast<size_t>(image_width) * 4;
-	frame_buffer_.resize(row_length * image_height);
+	libyuv::CopyPlane(static_cast<const uint8_t*>(map_info.pData), static_cast<int>(map_info.RowPitch),
+		buffer->MutableDataY(), buffer->StrideY(), width, height);
+	d3d_context_->Unmap(luma_staging_.get(), 0);
 
-	// Copy, unmap, and do everything else afterwards: a staging texture stays mapped for as
-	// long as the CPU reads it, and working in place holds the immediate context on the
-	// device the capture session shares with the compositor.
-	{
-		const uint8_t* src = static_cast<const uint8_t*>(map_info.pData);
-		uint8_t* dst = frame_buffer_.data();
-		for (int i = 0; i < image_height; ++i) {
-			memcpy(dst, src, row_length);
-			dst += row_length;
-			src += map_info.RowPitch;
-		}
+	hr = d3d_context_->Map(chroma_staging_.get(), 0, D3D11_MAP_READ, 0, &map_info);
+	if (FAILED(hr)) {
+		onFatalError();
+		return;
 	}
 
-	d3d_context->Unmap(mapped_texture_.get(), 0);
+	// Interleaved UV, so a chroma row is as many bytes as a luma one.
+	libyuv::CopyPlane(static_cast<const uint8_t*>(map_info.pData), static_cast<int>(map_info.RowPitch),
+		buffer->MutableDataUV(), buffer->StrideUV(), width, height / 2);
+	d3d_context_->Unmap(chroma_staging_.get(), 0);
 
-	const auto [out_width, out_height] = CappedSize(image_width, image_height);
-	const size_t out_stride = static_cast<size_t>(out_width) * 4;
-
-	const uint8_t* out_data = frame_buffer_.data();
-	int out_data_stride = static_cast<int>(row_length);
-	const bool scaled = out_width != image_width || out_height != image_height;
-	if (scaled) {
-		scaled_buffer_.resize(out_stride * out_height);
-		libyuv::ARGBScale(frame_buffer_.data(), static_cast<int>(row_length),
-										image_width, image_height,
-										scaled_buffer_.data(), static_cast<int>(out_stride),
-										out_width, out_height, libyuv::kFilterBox);
-		out_data = scaled_buffer_.data();
-		out_data_stride = static_cast<int>(out_stride);
-	}
-
-	// Compared row by row against the frame that went out last, which is what upstream's
+	// Compared against the frame that went out last, which is what upstream's
 	// detect_updated_region option buys for the desktop capturers we cannot link: rows that
-	// match cost nothing to encode, and a screen that has not changed at all is not sent.
-	// The comparison runs on the delivered frame, so the cap pays for it too.
+	// match cost nothing to encode. Two luma rows and the chroma row they share at a time,
+	// since a change to either moves both.
 	absl::optional<webrtc::VideoFrame::UpdateRect> update_rect;
-	bool content_changed = true;
-	if (previous_buffer_.size() == out_stride * out_height) {
-		// One pixel from the middle of each row first: at full resolution the row by row scan
-		// below reads both frames in full, which is worth paying only once something has moved.
-		// A change that hides from every middle pixel costs nothing but the rect, since the
-		// frame is sent either way.
-		const size_t middle = (static_cast<size_t>(out_width) / 2) * 4;
+	if (previous_frame_ != nullptr && previous_frame_->width() == width
+		&& previous_frame_->height() == height) {
+		const uint8_t* const y = buffer->DataY();
+		const uint8_t* const uv = buffer->DataUV();
+		const uint8_t* const previous_y = previous_frame_->DataY();
+		const uint8_t* const previous_uv = previous_frame_->DataUV();
+		const int stride_y = buffer->StrideY();
+		const int stride_uv = buffer->StrideUV();
+		const int previous_stride_y = previous_frame_->StrideY();
+		const int previous_stride_uv = previous_frame_->StrideUV();
+
+		const auto pair_differs = [&](int pair, int offset, int length) {
+			return memcmp(previous_y + previous_stride_y * (pair * 2) + offset, y + stride_y * (pair * 2) + offset, length) != 0
+				|| memcmp(previous_y + previous_stride_y * (pair * 2 + 1) + offset, y + stride_y * (pair * 2 + 1) + offset, length) != 0
+				|| memcmp(previous_uv + previous_stride_uv * pair + offset, uv + stride_uv * pair + offset, length) != 0;
+		};
+
+		// Two samples from the middle of each pair first: the full scan reads both frames in
+		// full, which is worth paying only once something has moved. A change that hides from
+		// every middle sample costs nothing but the rect, since the frame is sent either way.
+		const int middle = (width / 2) & ~1;
 		bool differs = false;
-		for (int i = 0; i < out_height && !differs; ++i) {
-			const size_t offset = out_stride * i + middle;
-			differs = memcmp(previous_buffer_.data() + offset, out_data + offset, 4) != 0;
+		for (int pair = 0; pair < height / 2 && !differs; ++pair) {
+			differs = pair_differs(pair, middle, 2);
 		}
 
 		int first = -1;
 		int last = -1;
 		if (differs) {
-			for (int i = 0; i < out_height; ++i) {
-				const size_t offset = out_stride * i;
-				if (memcmp(previous_buffer_.data() + offset, out_data + offset, out_stride) != 0) {
+			for (int pair = 0; pair < height / 2; ++pair) {
+				if (pair_differs(pair, 0, width)) {
 					if (first < 0) {
-						first = i;
+						first = pair * 2;
 					}
-					last = i;
+					last = pair * 2 + 1;
 				}
 			}
 		}
 
-		content_changed = first >= 0;
-		if (content_changed) {
-			update_rect = webrtc::VideoFrame::UpdateRect{ 0, first, out_width, last - first + 1 };
+		if (first >= 0) {
+			update_rect = webrtc::VideoFrame::UpdateRect{ 0, first, width, last - first + 1 };
 		}
 	}
 
 	// Delivered whether or not anything changed: an identical frame costs the encoder almost
 	// nothing and is how it converges on a low quantiser. What the comparison above buys is
-	// the update rect, and knowing when the picture last moved.
+	// the update rect.
 	last_delivery_ms_ = rtc::TimeMillis();
-	OnFrame(out_data, out_data_stride, out_width, out_height, update_rect);
+	OnFrame(buffer, pending_capture_ms_, update_rect);
 
-	if (scaled) {
-		scaled_buffer_.swap(previous_buffer_);
-	} else {
-		frame_buffer_.swap(previous_buffer_);
-	}
-	previous_width_ = out_width;
-	previous_height_ = out_height;
-	previous_stride_ = out_data_stride;
+	previous_frame_ = std::move(buffer);
 }
 
 void UwpScreenCapturer::MaybeRepeatLastFrame(int64_t now_ms) {
-	if (previous_buffer_.empty() || _state != VideoState::Active || item_closed_) {
+	if (previous_frame_ == nullptr || _state != VideoState::Active || item_closed_) {
 		return;
 	}
 
@@ -439,8 +478,7 @@ void UwpScreenCapturer::MaybeRepeatLastFrame(int64_t now_ms) {
 	last_delivery_ms_ = now_ms;
 	// No update rect: nothing changed, and an empty one would tell the encoder to leave the
 	// picture alone, which is the opposite of what a repeat is for.
-	OnFrame(previous_buffer_.data(), previous_stride_, previous_width_, previous_height_,
-				absl::nullopt);
+	OnFrame(previous_frame_, now_ms, absl::nullopt);
 }
 
 void UwpScreenCapturer::OnClosed(GraphicsCaptureItem const& sender, winrt::Windows::Foundation::IInspectable const&)
@@ -454,25 +492,82 @@ void UwpScreenCapturer::OnClosed(GraphicsCaptureItem const& sender, winrt::Windo
 	onFatalError();
 }
 
-HRESULT UwpScreenCapturer::CreateMappedTexture(winrt::com_ptr<ID3D11Texture2D> src_texture, UINT width, UINT height) {
-	if (mapped_texture_ != nullptr) {
-		mapped_texture_ = nullptr;
+HRESULT UwpScreenCapturer::CreateConverter() {
+	d3d11_device_->GetImmediateContext(d3d_context_.put());
+
+	HRESULT hr = d3d11_device_->CreateComputeShader(kScreenToNV12Shader, sizeof(kScreenToNV12Shader),
+		nullptr, converter_.put());
+	if (FAILED(hr)) {
+		return hr;
 	}
 
-  D3D11_TEXTURE2D_DESC src_desc;
-  src_texture->GetDesc(&src_desc);
-  D3D11_TEXTURE2D_DESC map_desc;
-  map_desc.Width = width == 0 ? src_desc.Width : width;
-  map_desc.Height = height == 0 ? src_desc.Height : height;
-  map_desc.MipLevels = src_desc.MipLevels;
-  map_desc.ArraySize = src_desc.ArraySize;
-  map_desc.Format = src_desc.Format;
-  map_desc.SampleDesc = src_desc.SampleDesc;
-  map_desc.Usage = D3D11_USAGE_STAGING;
-  map_desc.BindFlags = 0;
-  map_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-  map_desc.MiscFlags = 0;
-  return d3d11_device_->CreateTexture2D(&map_desc, nullptr, mapped_texture_.put());
+	D3D11_BUFFER_DESC desc = {};
+	desc.ByteWidth = 16;
+	desc.Usage = D3D11_USAGE_DEFAULT;
+	desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+	return d3d11_device_->CreateBuffer(&desc, nullptr, converter_parameters_.put());
+}
+
+HRESULT UwpScreenCapturer::CreateTextures(int width, int height, int block) {
+	output_width_ = 0;
+	output_height_ = 0;
+	block_ = 0;
+
+	source_view_ = nullptr;
+	luma_view_ = nullptr;
+	chroma_view_ = nullptr;
+
+	const auto create = [this](UINT texture_width, UINT texture_height, DXGI_FORMAT format,
+		UINT bind_flags, bool staging, winrt::com_ptr<ID3D11Texture2D>& texture) {
+		texture = nullptr;
+
+		D3D11_TEXTURE2D_DESC desc = {};
+		desc.Width = texture_width;
+		desc.Height = texture_height;
+		desc.MipLevels = 1;
+		desc.ArraySize = 1;
+		desc.Format = format;
+		desc.SampleDesc.Count = 1;
+		desc.Usage = staging ? D3D11_USAGE_STAGING : D3D11_USAGE_DEFAULT;
+		desc.BindFlags = bind_flags;
+		desc.CPUAccessFlags = staging ? D3D11_CPU_ACCESS_READ : 0;
+		return d3d11_device_->CreateTexture2D(&desc, nullptr, texture.put());
+	};
+
+	HRESULT hr = create(width * block, height * block, DXGI_FORMAT_B8G8R8A8_UNORM, D3D11_BIND_SHADER_RESOURCE, false, source_);
+	if (SUCCEEDED(hr)) {
+		hr = d3d11_device_->CreateShaderResourceView(source_.get(), nullptr, source_view_.put());
+	}
+	if (SUCCEEDED(hr)) {
+		hr = create(width, height, DXGI_FORMAT_R8_UNORM, D3D11_BIND_UNORDERED_ACCESS, false, luma_);
+	}
+	if (SUCCEEDED(hr)) {
+		hr = d3d11_device_->CreateUnorderedAccessView(luma_.get(), nullptr, luma_view_.put());
+	}
+	if (SUCCEEDED(hr)) {
+		hr = create(width / 2, height / 2, DXGI_FORMAT_R8G8_UNORM, D3D11_BIND_UNORDERED_ACCESS, false, chroma_);
+	}
+	if (SUCCEEDED(hr)) {
+		hr = d3d11_device_->CreateUnorderedAccessView(chroma_.get(), nullptr, chroma_view_.put());
+	}
+	if (SUCCEEDED(hr)) {
+		hr = create(width, height, DXGI_FORMAT_R8_UNORM, 0, true, luma_staging_);
+	}
+	if (SUCCEEDED(hr)) {
+		hr = create(width / 2, height / 2, DXGI_FORMAT_R8G8_UNORM, 0, true, chroma_staging_);
+	}
+	if (FAILED(hr)) {
+		return hr;
+	}
+
+	// The Parameters constant buffer, as UwpScreenCapturer.hlsl declares it.
+	const UINT parameters[4] = { static_cast<UINT>(block), static_cast<UINT>(width / 2), static_cast<UINT>(height / 2), 0 };
+	d3d_context_->UpdateSubresource(converter_parameters_.get(), 0, nullptr, parameters, 0, 0);
+
+	output_width_ = width;
+	output_height_ = height;
+	block_ = block;
+	return S_OK;
 }
 
 void UwpScreenCapturer::setState(VideoState state) {
@@ -541,7 +636,21 @@ void UwpScreenCapturer::stop() {
 	auto const tick = tick_token_;
 
 	tick_token_ = {};
-	mapped_texture_ = nullptr;
+	pending_frame_ = nullptr;
+	source_view_ = nullptr;
+	source_ = nullptr;
+	luma_view_ = nullptr;
+	luma_ = nullptr;
+	chroma_view_ = nullptr;
+	chroma_ = nullptr;
+	luma_staging_ = nullptr;
+	chroma_staging_ = nullptr;
+	output_width_ = 0;
+	output_height_ = 0;
+	block_ = 0;
+	converter_parameters_ = nullptr;
+	converter_ = nullptr;
+	d3d_context_ = nullptr;
 	direct3d_device_ = nullptr;
 	d3d11_device_ = nullptr;
 	is_capture_started_ = false;
@@ -598,36 +707,17 @@ void UwpScreenCapturer::destroy() {
 	stop();
 }
 
-void UwpScreenCapturer::OnFrame(const uint8_t* bytes, int stride, int width, int height,
+void UwpScreenCapturer::OnFrame(rtc::scoped_refptr<webrtc::NV12Buffer> buffer, int64_t timestamp_ms,
 																const absl::optional<webrtc::VideoFrame::UpdateRect>& updateRect) {
 	if (_state != VideoState::Active) {
 		return;
 	}
 
-	const int dst_width = width & ~1;
-	const int dst_height = abs(height) & ~1;
-
-	// NV12, not I420: every Media Foundation H.264 encoder takes NV12, so converting to
-	// I420 here only buys the encoder a second pass over the frame to undo it. Whatever
-	// needs I420 - a software encoder, a renderer - still gets it from ToI420().
-	rtc::scoped_refptr<webrtc::NV12Buffer> buffer =
-		webrtc::NV12Buffer::Create(dst_width, dst_height);
-
-	const int conversionResult = libyuv::ARGBToNV12(
-		bytes, stride,
-		buffer->MutableDataY(), buffer->StrideY(),
-		buffer->MutableDataUV(), buffer->StrideUV(),
-		dst_width, dst_height);
-	if (conversionResult < 0) {
-		RTC_LOG(LS_ERROR) << "Failed to convert capture frame from BGRA to NV12.";
-		return;
-	}
-
 	webrtc::VideoFrame captureFrame =
 		webrtc::VideoFrame::Builder()
-		.set_video_frame_buffer(buffer)
+		.set_video_frame_buffer(std::move(buffer))
 		.set_timestamp_rtp(0)
-		.set_timestamp_ms(rtc::TimeMillis())
+		.set_timestamp_ms(timestamp_ms)
 		.set_rotation(webrtc::kVideoRotation_0)
 		.set_update_rect(updateRect)
 		.build();

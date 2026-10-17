@@ -3,8 +3,10 @@
 
 #include <cstdint>
 #include "api/scoped_refptr.h"
+#include "api/video/nv12_buffer.h"
 #include "api/video/video_frame.h"
 #include "api/video/video_source_interface.h"
+#include "common_video/include/video_frame_buffer_pool.h"
 #include "media/base/video_adapter.h"
 #include "modules/video_capture/video_capture.h"
 
@@ -50,11 +52,9 @@ private:
 	void stop();
 	void onFatalError();
 
-	// Takes the source stride: the caller hands over its own compacted copy, and the
-	// stride is an argument rather than an assumption about the width.
-	// Takes the source stride and, when only part of the screen changed, the area that
-	// did: the software encoders use it to leave the rest alone.
-	void OnFrame(const uint8_t* bytes, int stride, int width, int height,
+	// Takes, when only part of the screen changed, the area that did: the software
+	// encoders use it to leave the rest alone.
+	void OnFrame(rtc::scoped_refptr<webrtc::NV12Buffer> buffer, int64_t timestamp_ms,
 		const absl::optional<webrtc::VideoFrame::UpdateRect>& updateRect);
 
 	bool item_closed_ = false;
@@ -66,18 +66,35 @@ private:
 	GraphicsCaptureSession session_ = nullptr;
 	winrt::com_ptr<ID3D11Device> d3d11_device_;
 	winrt::com_ptr<IInspectable> direct3d_device_;
-	winrt::com_ptr<ID3D11Texture2D> mapped_texture_ = nullptr;
-	// The staging texture is copied here before it is converted. A member, because at
-	// screen resolution this is several megabytes and the tick runs 30 times a second.
-	std::vector<uint8_t> frame_buffer_;
-	// The capture scaled down to the cap, when the screen is bigger than it.
-	std::vector<uint8_t> scaled_buffer_;
-	// The frame that went out last, at delivered size: it is both what the next capture is
-	// compared against and what gets sent again while the screen sits still.
-	std::vector<uint8_t> previous_buffer_;
-	int previous_width_ = 0;
-	int previous_height_ = 0;
-	int previous_stride_ = 0;
+	winrt::com_ptr<ID3D11DeviceContext> d3d_context_;
+
+	// The capture is scaled and converted to NV12 on the GPU by UwpScreenCapturer.hlsl, and
+	// only the result is read back: the capture region is copied into source_, the shader
+	// writes luma_ and chroma_, and those are copied to the staging pair.
+	winrt::com_ptr<ID3D11ComputeShader> converter_;
+	winrt::com_ptr<ID3D11Buffer> converter_parameters_;
+	winrt::com_ptr<ID3D11Texture2D> source_;
+	winrt::com_ptr<ID3D11ShaderResourceView> source_view_;
+	winrt::com_ptr<ID3D11Texture2D> luma_;
+	winrt::com_ptr<ID3D11UnorderedAccessView> luma_view_;
+	winrt::com_ptr<ID3D11Texture2D> chroma_;
+	winrt::com_ptr<ID3D11UnorderedAccessView> chroma_view_;
+	winrt::com_ptr<ID3D11Texture2D> luma_staging_;
+	winrt::com_ptr<ID3D11Texture2D> chroma_staging_;
+	int output_width_ = 0;
+	int output_height_ = 0;
+	int block_ = 0;
+
+	// A frame is read back on the tick after the one that submitted it, by when the GPU is
+	// done with it, so that Map never waits. The capture frame is held until then: the GPU
+	// reads it, and once released the compositor can draw the next one into it.
+	Direct3D11CaptureFrame pending_frame_ = nullptr;
+	int64_t pending_capture_ms_ = 0;
+
+	webrtc::VideoFrameBufferPool buffer_pool_;
+	// The frame that went out last: it is both what the next capture is compared against and
+	// what gets sent again while the screen sits still.
+	rtc::scoped_refptr<webrtc::NV12Buffer> previous_frame_;
 	int64_t last_delivery_ms_ = 0;
 	int64_t first_empty_poll_ms_ = 0;
 
@@ -87,7 +104,9 @@ private:
 	DispatcherQueueController queueController_= nullptr;
 	DispatcherQueueTimer repeatingTimer_= nullptr;
 	winrt::event_token tick_token_{};
-	HRESULT CreateMappedTexture(winrt::com_ptr<ID3D11Texture2D> src_texture, UINT width = 0, UINT height = 0);
+	HRESULT CreateConverter();
+	HRESULT CreateTextures(int width, int height, int block);
+	void DeliverPendingFrame();
 
 	//void OnFrameArrived(Direct3D11CaptureFramePool const& sender, winrt::Windows::Foundation::IInspectable const& args);
 	void OnFrameArrived(DispatcherQueueTimer const& sender, winrt::Windows::Foundation::IInspectable const& args);
