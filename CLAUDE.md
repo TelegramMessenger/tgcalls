@@ -520,12 +520,23 @@ log sample (`getlogstgcalls/analysis/FINDINGS-android.md`), fixed here and pinne
   it protects a build that carries it from its own mid-flight re-offer, and does nothing for a
   peer that re-offers against it (an unfixed Android caller still ends up client-vs-client with
   a fixed callee). On iOS it is dormant, since `requestRenegotiation()` never replaces an
-  in-flight offer; it matters for the Android port. `network_reference_immediate_capture_renegotiation`
+  in-flight offer; it matters for the Android port. WebRTC's own `OnRenegotiationNeeded` goes
+  through `requestRenegotiation()` too (since 2026-10-22, as Android's `03d7b86` does), so no
+  path offers outside a quiet stable state. That change measured neutral in the CLI: the
+  PeerConnection's signaling thread is the media thread, so a stale event could never replace
+  an in-flight offer; it only merges a possible redundant offer round. `network_reference_immediate_capture_renegotiation`
   (CLI-only: read under `TGCALLS_ALLOW_TEST_KNOBS`, defined for `tgcalls_core` and never for the
   objc_library) restores the pre-2026-09-17 immediate offer so the CLI can reproduce the chain
   (`android-late-cam`, `android-glare` in the test script: 500 ms fixed signaling delay, caller
   camera at 2.6 s, callee camera at 2.8 s — the SCTP handshake puts the first offer at the callee
-  at ~2.5 s). A camera `AddTrack` may also reuse the recvonly transceiver carrying the peer's
+  at ~2.5 s). **`android-late-cam` fails about one run in five on its own** (14 of 72 parallel
+  runs, 2026-10-22, before and after the change above alike), so one red run there is not a
+  regression. When the SCTP handshake hands the callee the first offer and its replacement
+  together, the callee is still applying the first, ignores the replacement as glare and
+  answers the first; the caller rejects that answer and the call never connects. It is the
+  production shape of an old Android caller (13.0.0 and earlier re-offer at once) against any
+  13.x callee, and nothing fixes it yet: the callee would have to queue an offer that arrives
+  while it answers instead of ignoring it, since it has no offer of its own. A camera `AddTrack` may also reuse the recvonly transceiver carrying the peer's
   video; `SetCodecPreferences` is then skipped (the transceiver has a `mid()`), since the
   sender-only list must not narrow an m-line the peer already negotiated.
 
