@@ -977,6 +977,9 @@ public:
 
             std::vector<uint32_t> allSsrcs;
             for (const auto &group : description.ssrcGroups) {
+                if (group.ssrcs.empty()) {
+                    continue;
+                }
                 for (auto ssrc : group.ssrcs) {
                     if (std::find(allSsrcs.begin(), allSsrcs.end(), ssrc) == allSsrcs.end()) {
                         allSsrcs.push_back(ssrc);
@@ -995,7 +998,7 @@ public:
             videoRecvStreamParams.ssrcs = allSsrcs;
 
             if (_mainVideoSsrc == 0) {
-                if (description.ssrcGroups.size() == 1) {
+                if (description.ssrcGroups.size() == 1 && !description.ssrcGroups[0].ssrcs.empty()) {
                     _mainVideoSsrc = description.ssrcGroups[0].ssrcs[0];
                 }
             }
