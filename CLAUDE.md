@@ -196,9 +196,11 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
 - `--custom-params JSON` — sets the caller's engine `customParameters` as a JSON object (merged
   with the `wasm_core_path` entry the CLI synthesises from `--wasm-core`). This is how to
   exercise the default-off flags without a server-side rollout: e.g.
-  `network_disable_stun_when_unconfigured`, `network_reflector_resolve_remote_candidate_ip`,
-  `network_reference_immediate_capture_renegotiation` (and `network_reference_use_addtrack`,
-  default ON since 2026-10-12, as `false` to compare against the old two-round shape).
+  `network_disable_stun_when_unconfigured`,
+  `network_reference_immediate_capture_renegotiation` (and the default-ON ones as `false` to
+  compare against the old behaviour: `network_reference_use_addtrack`, ON since 2026-10-12, the old
+  two-round shape; `network_reflector_resolve_remote_candidate_ip`, ON since 2026-10-27, the
+  reflector keying defect).
 - `--custom-params2 JSON` — same for the callee. Independent of `--custom-params` — unlike
   `--wasm-core2` there is no fallback to the caller's value — so `--custom-params2` **alone**
   gives the callee different engine parameters than the caller, enabling a within-call A/B on
@@ -365,13 +367,22 @@ state at all, forever).
 
 | flag | reaches | effect |
 |---|---|---|
-| `network_reflector_resolve_remote_candidate_ip` | `NativeNetworkingImpl` → `InstanceV2Impl` → versions 7/8/9/12/13; also 11/14/18/19 | default off; signalled relay connections can receive binding responses |
+| `network_reflector_resolve_remote_candidate_ip` | `NativeNetworkingImpl` → `InstanceV2Impl` → versions 7/8/9/12/13; also 11/14/18/19 | **default ON since 2026-10-27** (`getCustomParameterBoolDefaultTrue`; the server's explicit `false` turns it off); signalled relay connections can receive binding responses. The legacy `InstanceImpl` (2.7.7, 5.0.0) hardcodes it off |
 | `network_disable_stun_when_unconfigured` | 11/14/18/19 | default off; stops sending unparseable STUN to reflectors |
 | `network_reference_use_addtrack` | 11.0.0 | **default ON since 2026-10-12** (see "One-round negotiation" below); `false` restores the two-round shape |
 
 Exercise them with the CLI's `--custom-params '<json>'` (caller) / `--custom-params2` (callee).
 
-**Before enabling `network_reflector_resolve_remote_candidate_ip`** — the connection key collapses
+**`network_reflector_resolve_remote_candidate_ip` is on by default since 2026-10-27.** Checked
+against a local stand-in reflector (this network blocks UDP to Telegram's), 4–8 CLI calls per arm
+on 11, 13, 14, 18 and 19: with the flag off, signalled reflector connections got 0 binding
+responses (92 and 120 pings on 11 and 13) and every call came up on a prflx twin; with it on (now
+also with no key at all), every signalled connection got its response and was selected first. An
+explicit `false` restores the old behaviour, and a mixed call (one side on) connects as before.
+The collapse below was not exercised (one reflector port per side) and is the thing to watch in
+the field.
+
+**The side effect** — the connection key collapses
 per *candidate*, not per *peer*, and one peer publishes several: `OngoingCallContext.swift` emits
 the v4 and v6 entries of one reflector with the **same `reflectorId` and port**, and there is one
 relay port per network with a fresh random tag. `SocketAddress::operator<` stops comparing
