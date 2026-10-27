@@ -191,6 +191,9 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
 - `--reflector-list addr,addr,...` — comma-separated list, one picked at random
 - `--version VER` — caller tgcalls protocol version (default: `13.0.0`)
 - `--version2 VER` — callee tgcalls protocol version (default: same as `--version`). Enables cross-version interop testing.
+  Either may be `compat:<version>` (2026-10-27): `InstanceV2CompatImpl` constructed under that call
+  version, which the version registry cannot give (it maps 7.0.0–13.0.0 to `InstanceV2Impl`), so
+  `--version compat:8.0.0 --version2 8.0.0` is CompatImpl against an unchanged 8.0.0 peer.
 - `--wasm-core PATH` — CLI-only override: run the caller's pump core from a module file instead of the version-derived default (`NONE` forces native). Mainly for variant modules; version `19.0.0` already uses the module embedded in the binary. Exists only because the CLI target defines `TGCALLS_ALLOW_EXTERNAL_WASM_CORE` — the app has no such loader.
 - `--wasm-core2 PATH` — same for the callee (defaults to `--wasm-core`; `NONE` forces native)
 - `--custom-params JSON` — sets the caller's engine `customParameters` as a JSON object (merged
@@ -274,6 +277,15 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
   and the same late unmute with NO prior renegotiation
   (`--participants 1 --reference-participants 1 --mute-participants 0 --unmute-after 8`) also passes
   either way — which is what pins the cause to the renegotiation rather than to the lateness.
+- `--mute-participants` / `--unmute-after` in p2p/reflector mode (2026-10-27): index 0 is the
+  caller, 1 the callee; the side is muted right after creation and, with `--unmute-after N` (N below
+  `--duration`), unmuted at N s, which also writes a `tgcalls_cli: unmuting the muted side(s)` line
+  into the `--log-file`. Nothing is validated; read the log: a muted side's `AudioSendStream::Start`
+  and `First audio RTP packet sent to pacer` must come after that line. The unmute shares one
+  schedule with the camera attachments (`--video-late`, `--video-late-caller-ms` /
+  `--video-late-callee-ms`), which is how a glare is made to roll a muted side's first offer back
+  (13.0.0 → 14.0.0 with `--delay 0-1200`, caller camera swept over 1000–4000 ms). Added for `InstanceV2CompatImpl`'s mute,
+  which used to keep the send stream running (see `submodules/TgVoipWebrtc/CLAUDE.md`).
 - Every group run also prints `Audio levels heard: X/Y pairs` (every peer must report a real level
   for every unmuted sender — a participant who is audible but never reaches the level reports is
   the "never shown as speaking" defect) and `Unsignaled audio: N stream(s) (must be 0)` (the engine
