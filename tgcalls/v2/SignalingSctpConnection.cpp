@@ -17,17 +17,25 @@
 
 namespace tgcalls {
 
+// RFC 4960's RTO.Max. A longer handshake timer is never meaningful, and a
+// seconds-for-milliseconds slip (1500000) would hold the first INIT
+// retransmission for 25 minutes; dcsctp caps a timer at one day.
+static constexpr int kMaxSignalingSctpTimerMs = 60000;
+
+static void applySignalingSctpTimerOverride(std::map<std::string, json11::Json> const &customParameters, std::string const &name, int &timerMs) {
+    // A value outside 1...kMaxSignalingSctpTimerMs keeps the default: the
+    // factory would run dcsctp's own 1000/1000/3000 ms for one <= 0.
+    const int value = getCustomParameterInt(customParameters, name);
+    if (value > 0 && value <= kMaxSignalingSctpTimerMs) {
+        timerMs = value;
+    }
+}
+
 SignalingSctpConnection::Options SignalingSctpConnection::Options::fromCustomParameters(std::map<std::string, json11::Json> const &customParameters) {
     Options options;
-    if (int v = getCustomParameterInt(customParameters, "network_sctp_t1_init_ms")) {
-        options.t1InitTimeoutMs = v;
-    }
-    if (int v = getCustomParameterInt(customParameters, "network_sctp_t1_cookie_ms")) {
-        options.t1CookieTimeoutMs = v;
-    }
-    if (int v = getCustomParameterInt(customParameters, "network_sctp_max_backoff_ms")) {
-        options.maxBackoffMs = v;
-    }
+    applySignalingSctpTimerOverride(customParameters, "network_sctp_t1_init_ms", options.t1InitTimeoutMs);
+    applySignalingSctpTimerOverride(customParameters, "network_sctp_t1_cookie_ms", options.t1CookieTimeoutMs);
+    applySignalingSctpTimerOverride(customParameters, "network_sctp_max_backoff_ms", options.maxBackoffMs);
     return options;
 }
 

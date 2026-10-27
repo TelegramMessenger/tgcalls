@@ -1,6 +1,7 @@
 #ifndef TGCALLS_CUSTOM_PARAMETERS_H
 #define TGCALLS_CUSTOM_PARAMETERS_H
 
+#include <limits>
 #include <map>
 #include <string>
 
@@ -35,10 +36,17 @@ inline bool getCustomParameterBoolDefaultTrue(std::map<std::string, json11::Json
     return true;
 }
 
+// json11 stores a number with a fraction, an exponent or 10+ digits as a double,
+// and its int_value() casts that unchecked (undefined behaviour past int's
+// range), so the double is range-checked here: a number that does not fit an
+// int reads as absent. A fraction is truncated.
 inline int getCustomParameterInt(std::map<std::string, json11::Json> const &parameters, std::string const &name) {
     const auto value = parameters.find(name);
     if (value != parameters.end() && value->second.is_number()) {
-        return value->second.int_value();
+        const double number = value->second.number_value();
+        if (number >= std::numeric_limits<int>::min() && number <= std::numeric_limits<int>::max()) {
+            return static_cast<int>(number);
+        }
     }
     return 0;
 }
