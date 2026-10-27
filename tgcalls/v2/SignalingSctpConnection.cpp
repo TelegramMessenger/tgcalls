@@ -13,8 +13,23 @@
 #include "system_wrappers/include/clock.h"
 
 #include "FieldTrialsConfig.h"
+#include "v2/CustomParameters.h"
 
 namespace tgcalls {
+
+SignalingSctpConnection::Options SignalingSctpConnection::Options::fromCustomParameters(std::map<std::string, json11::Json> const &customParameters) {
+    Options options;
+    if (int v = getCustomParameterInt(customParameters, "network_sctp_t1_init_ms")) {
+        options.t1InitTimeoutMs = v;
+    }
+    if (int v = getCustomParameterInt(customParameters, "network_sctp_t1_cookie_ms")) {
+        options.t1CookieTimeoutMs = v;
+    }
+    if (int v = getCustomParameterInt(customParameters, "network_sctp_max_backoff_ms")) {
+        options.maxBackoffMs = v;
+    }
+    return options;
+}
 
 // Factory that creates CustomDcSctpSocket (with the t1 timer backoff cap fix)
 // instead of the stock DcSctpSocket, with optional timer overrides for the
@@ -131,6 +146,8 @@ SignalingSctpConnection::SignalingSctpConnection(std::shared_ptr<Threads> thread
 _threads(threads),
 _emitData(emitData),
 _onIncomingData(onIncomingData) {
+    RTC_LOG(LS_INFO) << "SignalingSctpConnection: " << (isInitiator ? "initiator" : "responder") << ", t1_init " << options.t1InitTimeoutMs << " ms, t1_cookie " << options.t1CookieTimeoutMs << " ms, max backoff " << options.maxBackoffMs << " ms";
+
     _threads->getNetworkThread()->BlockingCall([&]() {
         _packetTransport = std::make_unique<SignalingPacketTransport>(threads, emitData, /*writable=*/isInitiator);
 

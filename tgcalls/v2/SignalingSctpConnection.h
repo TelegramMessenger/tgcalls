@@ -12,12 +12,15 @@
 #include "rtc_base/byte_buffer.h"
 #include "media/base/media_channel.h"
 
+#include <map>
+#include <string>
 #include <vector>
 
 #include <absl/types/optional.h>
 
 #include "StaticThreads.h"
 #include "SignalingConnection.h"
+#include "third-party/json11.hpp"
 
 namespace rtc {
 class Socket;
@@ -49,6 +52,12 @@ public:
         int t1CookieTimeoutMs; // 0 = use default
         int maxBackoffMs;      // 0 = use default
         Options() : t1InitTimeoutMs(400), t1CookieTimeoutMs(400), maxBackoffMs(750) {}
+
+        // The defaults above with the server's overrides applied
+        // (network_sctp_t1_init_ms, network_sctp_t1_cookie_ms,
+        // network_sctp_max_backoff_ms; absent or 0 keeps the default). Every
+        // engine that carries its signaling over SCTP builds its options here.
+        static Options fromCustomParameters(std::map<std::string, json11::Json> const &customParameters);
     };
 
     SignalingSctpConnection(std::shared_ptr<Threads> threads, std::function<void(const std::vector<uint8_t> &)> onIncomingData, std::function<void(const std::vector<uint8_t> &)> emitData, bool isInitiator, Options options = Options());

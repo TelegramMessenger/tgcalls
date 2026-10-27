@@ -556,7 +556,8 @@ void CallCoreHost::start() {
             [signalingDataEmitted = _signalingDataEmitted](const std::vector<uint8_t> &data) {
                 signalingDataEmitted(data);
             },
-            _encryptionKey.isOutgoing
+            _encryptionKey.isOutgoing,
+            SignalingSctpConnection::Options::fromCustomParameters(_parsedCustomParameters)
         );
     } else {
         _signalingConnection = std::make_unique<ExternalSignalingConnection>(

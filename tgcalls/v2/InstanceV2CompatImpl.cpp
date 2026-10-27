@@ -431,17 +431,6 @@ public:
         // (both ends get the same custom parameters, and a 13.0.0 peer under
         // nosctp never answers an SCTP INIT); V1 and V2 always bare.
         if (_signalingProtocolVersion == SignalingProtocolVersion::V3 && !getCustomParameterBool(_customParameters, "network_signaling_nosctp")) {
-            SignalingSctpConnection::Options sctpOptions;
-            if (int v = getCustomParameterInt(_customParameters, "network_sctp_t1_init_ms")) {
-                sctpOptions.t1InitTimeoutMs = v;
-            }
-            if (int v = getCustomParameterInt(_customParameters, "network_sctp_t1_cookie_ms")) {
-                sctpOptions.t1CookieTimeoutMs = v;
-            }
-            if (int v = getCustomParameterInt(_customParameters, "network_sctp_max_backoff_ms")) {
-                sctpOptions.maxBackoffMs = v;
-            }
-
             _signalingConnection = std::make_unique<SignalingSctpConnection>(
                 _threads,
                 [threads = _threads, weak](const std::vector<uint8_t> &data) {
@@ -458,7 +447,7 @@ public:
                     signalingDataEmitted(data);
                 },
                 _encryptionKey.isOutgoing,
-                sctpOptions
+                SignalingSctpConnection::Options::fromCustomParameters(_customParameters)
             );
         }
         if (!_signalingConnection) {
