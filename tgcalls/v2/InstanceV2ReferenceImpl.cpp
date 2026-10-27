@@ -471,7 +471,8 @@ public:
                 [signalingDataEmitted = _signalingDataEmitted](const std::vector<uint8_t> &data) {
                     signalingDataEmitted(data);
                 },
-                _encryptionKey.isOutgoing
+                _encryptionKey.isOutgoing,
+                SignalingSctpConnection::Options::fromCustomParameters(_customParameters)
             );
         }
         if (!_signalingConnection) {
