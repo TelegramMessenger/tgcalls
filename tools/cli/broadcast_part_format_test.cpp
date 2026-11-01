@@ -5,6 +5,7 @@
 
 #include "group/AudioStreamingPart.h"
 #include "group/AudioStreamingPartPersistentDecoder.h"
+#include "group/VideoStreamingPart.h"
 
 #include <opus/opus.h>
 
@@ -230,11 +231,106 @@ void testOldDecoderReadsTranscodedAudio() {
     }
 }
 
+const char *kFixtureDir = "submodules/TgVoipWebrtc/tgcalls/tools/go_sfu/testdata/broadcast";
+
+std::vector<uint8_t> fixturePart(int kind, std::string const &endpoint, int quality, int64_t tsMs) {
+    int outLength = 0;
+    char *result = GoSfu_TestFixturePart(const_cast<char *>(kFixtureDir), kind, const_cast<char *>(endpoint.c_str()), quality, tsMs, &outLength);
+    CHECK_TRUE(result != nullptr && outLength > 0);
+    std::vector<uint8_t> bytes;
+    if (result) {
+        bytes.assign((uint8_t *)result, (uint8_t *)result + outLength);
+        GoSfu_Free(result);
+    }
+    return bytes;
+}
+
+// The fixture's burned-in frame counter: bit k is the 16x16 block at x = 16k in the top rows (luma 235 = 1).
+int readFrameCounter(webrtc::VideoFrame const &frame) {
+    auto i420 = frame.video_frame_buffer()->ToI420();
+    int value = 0;
+    for (int bit = 0; bit < 16; bit++) {
+        if (i420->DataY()[8 * i420->StrideY() + 16 * bit + 8] > 128) {
+            value |= 1 << bit;
+        }
+    }
+    return value;
+}
+
+// Reads one video part's 30 frames as the engine does; returns how many matched the expectations.
+int checkVideoFrames(tgcalls::VideoStreamingPart &part, int expectedWidth, int firstCounter) {
+    tgcalls::VideoStreamingSharedState state;
+    double previousPts = -1.0;
+    int good = 0;
+    for (int i = 0; i < 30; i++) {
+        auto frame = part.getFrameAtRelativeTimestamp(&state, (i + 0.5) / 30.0);
+        if (!frame) {
+            std::printf("  no frame at %d\n", i);
+            continue;
+        }
+        bool ok = frame->pts > previousPts && frame->frame.width() == expectedWidth && readFrameCounter(frame->frame) == firstCounter + i;
+        if (!ok) {
+            std::printf("  frame %d: pts %.3f width %d counter %d\n", i, frame->pts, frame->frame.width(), readFrameCounter(frame->frame));
+        }
+        previousPts = frame->pts;
+        good += ok ? 1 : 0;
+    }
+    return good;
+}
+
+void testOldDecoderReadsFixtureVideo() {
+    const int widths[3] = {320, 640, 1280};
+    for (int quality = 0; quality < 3; quality++) {
+        tgcalls::VideoStreamingPart part(fixturePart(1, "ep-b", quality, 3000), tgcalls::VideoStreamingPart::ContentType::Video);
+        auto endpoint = part.getActiveEndpointId();
+        CHECK_TRUE(endpoint.has_value() && endpoint.value() == "ep-b");
+        CHECK_TRUE(checkVideoFrames(part, widths[quality], 90) == 30);
+    }
+}
+
+void testOldDecoderReadsUnified() {
+    // The engine parses a unified part twice, as video and as audio.
+    std::vector<uint8_t> bytes = fixturePart(2, "", 2, 3000);
+    std::vector<uint8_t> copy = bytes;
+    tgcalls::VideoStreamingPart video(std::move(bytes), tgcalls::VideoStreamingPart::ContentType::Video);
+    auto endpoint = video.getActiveEndpointId();
+    // The engine shows unified frames on its "unified" sink whatever the part names (StreamingMediaContext.cpp,
+    // the unified render loop); the server names "".
+    CHECK_TRUE(endpoint.has_value() && endpoint.value() == "");
+    CHECK_TRUE(checkVideoFrames(video, 1280, 90) == 30);
+
+    tgcalls::VideoStreamingPart audio(std::move(copy), tgcalls::VideoStreamingPart::ContentType::Audio);
+    int remaining = audio.getAudioRemainingMilliseconds();
+    CHECK_TRUE(remaining >= 980 && remaining <= 1010);
+    tgcalls::AudioStreamingPartPersistentDecoder decoder;
+    broadcast::ToneDetector detector({broadcast::kUnifiedFrequency});
+    int blocks = 0;
+    int heard = 0;
+    for (int block = 0; block < 98; block++) {
+        auto channels = audio.getAudio10msPerChannel(decoder);
+        if (channels.empty()) {
+            break;
+        }
+        CHECK_TRUE(channels[0].ssrc == 1);
+        if (block < 3 || channels[0].pcmData.size() < 480) {
+            continue;
+        }
+        blocks++;
+        heard += detector.detect(channels[0].pcmData.data(), 480)[0] ? 1 : 0;
+    }
+    CHECK_TRUE(blocks > 80 && heard * 100 >= blocks * 90);
+    if (!(blocks > 80 && heard * 100 >= blocks * 90)) {
+        std::printf("  unified tone heard in %d of %d blocks\n", heard, blocks);
+    }
+}
+
 } // namespace
 
 int main() {
     testOldDecoderReadsEmulatedAudio();
     testOldDecoderReadsTranscodedAudio();
+    testOldDecoderReadsFixtureVideo();
+    testOldDecoderReadsUnified();
 
     if (g_failures != 0) {
         std::printf("%d failure(s)\n", g_failures);

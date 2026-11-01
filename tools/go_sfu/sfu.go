@@ -1317,6 +1317,30 @@ func GoSfu_TestBuildOpusPart(ssrcs *C.uint, n C.int, endpointsJSON *C.char, pack
 	return (*C.char)(C.CBytes(part))
 }
 
+// GoSfu_TestFixturePart is a test hook: a video (kind 1) or unified (kind 2) part from the fixture slices in
+// fixtureDir. The result is freed with GoSfu_Free; nil (and *outLen 0) on error.
+//
+//export GoSfu_TestFixturePart
+func GoSfu_TestFixturePart(fixtureDir *C.char, kind C.int, endpoint *C.char, quality C.int, tsMs C.longlong, outLen *C.int) *C.char {
+	*outLen = 0
+	fixtures, err := loadBroadcastFixtures(C.GoString(fixtureDir))
+	if err != nil {
+		fmt.Printf("[GoSfu] TestFixturePart: %v\n", err)
+		return nil
+	}
+	var part []byte
+	switch int(kind) {
+	case 1:
+		part = fixtures.videoPart(C.GoString(endpoint), int(quality), int64(tsMs))
+	case 2:
+		part = fixtures.unifiedPart(int(quality), int64(tsMs))
+	default:
+		return nil
+	}
+	*outLen = C.int(len(part))
+	return (*C.char)(C.CBytes(part))
+}
+
 // GoSfu_TestBroadcastAudioPart is a test hook: it feeds `count` audio RTP packets (flattened, packetOffsets has
 // count + 1 entries) with their arrival times, senders and SSRCs to a fresh listener-audio builder, then builds the
 // part at tsMs. Participants join in order of their first packet. endpointsJSON maps participant ids to video

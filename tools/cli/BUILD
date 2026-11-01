@@ -46,6 +46,7 @@ cc_test(
     srcs = ["broadcast_part_format_test.cpp"],
     copts = TGCALLS_CLI_COPTS,
     linkopts = TGCALLS_CLI_LINKOPTS,
+    data = ["//submodules/TgVoipWebrtc/tgcalls/tools/go_sfu:broadcast_fixtures"],
     deps = [
         ":broadcast_signals",
         "//submodules/TgVoipWebrtc:tgcalls_core",
