@@ -143,10 +143,98 @@ void testOldDecoderReadsEmulatedAudio() {
     }
 }
 
+// The live path: speakers' 60 ms Opus packets (what GroupInstanceCustomImpl sends), as RTP, through the server's
+// decode-and-re-encode into one part.
+void testOldDecoderReadsTranscodedAudio() {
+    std::vector<double> frequencies = {broadcast::kMarkerFrequencies[0], broadcast::kSpeakerFrequencies[0], broadcast::kSpeakerFrequencies[1]};
+    const int frame60 = 2880;
+    const int64_t anchorMs = 1'700'000'000'000; // a multiple of 20 ms
+    const int64_t partMs = anchorMs + 1000;
+    std::vector<uint8_t> flat;
+    std::vector<int> offsets;
+    std::vector<long long> arrivals;
+    std::vector<int> senders;
+    std::vector<uint32_t> ssrcs;
+    for (int c = 0; c < 3; c++) {
+        int error = 0;
+        OpusEncoder *encoder = opus_encoder_create(kSampleRate, 1, OPUS_APPLICATION_VOIP, &error);
+        opus_encoder_ctl(encoder, OPUS_SET_BITRATE(32000));
+        double phase = 0.0;
+        std::vector<int16_t> pcm(frame60);
+        for (int i = 0; i < 40; i++) { // 2.4 s of 60 ms packets
+            for (int j = 0; j < frame60; j++) {
+                phase += 2.0 * M_PI * frequencies[c] / kSampleRate;
+                pcm[j] = (int16_t)std::lround(broadcast::kToneAmplitude * std::sin(phase));
+            }
+            unsigned char payload[4000];
+            int length = opus_encode(encoder, pcm.data(), frame60, payload, sizeof(payload));
+            CHECK_TRUE(length > 0);
+            uint8_t header[12] = {0x80, 111, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+            uint32_t timestamp = (uint32_t)(i * frame60);
+            uint32_t ssrc = 1001 + c;
+            for (int k = 0; k < 4; k++) {
+                header[4 + k] = (uint8_t)(timestamp >> (24 - 8 * k));
+                header[8 + k] = (uint8_t)(ssrc >> (24 - 8 * k));
+            }
+            offsets.push_back((int)flat.size());
+            flat.insert(flat.end(), header, header + 12);
+            flat.insert(flat.end(), payload, payload + std::max(length, 0));
+            arrivals.push_back(anchorMs + i * 60);
+            senders.push_back(c);
+            ssrcs.push_back(ssrc);
+        }
+        opus_encoder_destroy(encoder);
+    }
+    offsets.push_back((int)flat.size());
+    int outLength = 0;
+    std::string endpoints = "{\"1\":\"ep-b\"}";
+    char *result = GoSfu_TestBroadcastAudioPart(flat.data(), offsets.data(), arrivals.data(), senders.data(), ssrcs.data(),
+                                                (int)arrivals.size(), partMs, const_cast<char *>(endpoints.c_str()), &outLength);
+    CHECK_TRUE(result != nullptr && outLength > 0);
+    if (!result) {
+        return;
+    }
+    std::vector<uint8_t> bytes((uint8_t *)result, (uint8_t *)result + outLength);
+    GoSfu_Free(result);
+
+    tgcalls::AudioStreamingPart part(std::move(bytes), "ogg", false);
+    CHECK_TRUE(part.getRemainingMilliseconds() == 1000);
+    std::map<std::string, int32_t> expectedMapping = {{"ep-b", 1}};
+    CHECK_TRUE(part.getEndpointMapping() == expectedMapping);
+    tgcalls::AudioStreamingPartPersistentDecoder decoder;
+    broadcast::ToneDetector detector(frequencies);
+    int heard[3] = {0, 0, 0};
+    int blocks = 0;
+    for (int block = 0; block < 100; block++) {
+        auto blockChannels = part.get10msPerChannel(decoder);
+        CHECK_TRUE(blockChannels.size() == 3);
+        if (blockChannels.size() != 3) {
+            break;
+        }
+        if (block < 2) {
+            continue;
+        }
+        blocks++;
+        for (int c = 0; c < 3; c++) {
+            CHECK_TRUE(blockChannels[c].ssrc == (uint32_t)(1001 + c));
+            if (blockChannels[c].pcmData.size() >= 480 && detector.detect(blockChannels[c].pcmData.data(), 480)[c]) {
+                heard[c]++;
+            }
+        }
+    }
+    for (int c = 0; c < 3; c++) {
+        CHECK_TRUE(heard[c] * 100 >= blocks * 90);
+        if (heard[c] * 100 < blocks * 90) {
+            std::printf("  transcoded channel %d heard in %d of %d blocks\n", c, heard[c], blocks);
+        }
+    }
+}
+
 } // namespace
 
 int main() {
     testOldDecoderReadsEmulatedAudio();
+    testOldDecoderReadsTranscodedAudio();
 
     if (g_failures != 0) {
         std::printf("%d failure(s)\n", g_failures);

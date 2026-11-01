@@ -123,6 +123,8 @@ type SFU struct {
 	// participant sends nothing" check. Own lock: incremented under s.mu.RLock.
 	audioRTPCountMu sync.Mutex
 	audioRTPCount   map[uint32]int64
+	// Listener audio of the emulated broadcast server: every speaker's audio RTP, decoded onto a timeline.
+	broadcastAudio *broadcastAudio
 	loggerFactory  logging.LoggerFactory
 	log           logging.LeveledLogger
 	ctx           context.Context
@@ -142,6 +144,7 @@ func NewSFU() *SFU {
 		maxActiveLayer: make(map[int]int),
 		twccGenerators: make(map[int]*TransportCCGenerator),
 		audioRTPCount:  make(map[uint32]int64),
+		broadcastAudio: newBroadcastAudio(defaultBroadcastTranscoder(), broadcastDefaultRetainMs),
 		loggerFactory:  lf,
 		log:           lf.NewLogger("sfu"),
 		ctx:           ctx,
@@ -229,6 +232,7 @@ func (s *SFU) Join(participantID int, joinPayloadJSON string, iceControlling boo
 	// 9. Register participant and all SSRCs.
 	s.mu.Lock()
 	s.participants[participantID] = p
+	s.broadcastAudio.participantJoined(participantID)
 	s.ssrcRegistry[audioSSRC] = ssrcInfo{participantID: participantID, kind: "audio", layer: -1}
 	if len(videoLayers) > 0 {
 		s.videoSSRCs[participantID] = videoLayers
@@ -420,6 +424,8 @@ func (s *SFU) processIncomingRTP(from *Participant, pkt []byte, ssrc uint32, str
 		s.audioRTPCountMu.Lock()
 		s.audioRTPCount[ssrc]++
 		s.audioRTPCountMu.Unlock()
+
+		s.broadcastAudio.addPacket(ssrc, from.ID, time.Now().UnixMilli(), pkt)
 
 		// Audio: forward to all other participants unconditionally.
 		s.mu.RLock()
@@ -1020,6 +1026,7 @@ func (s *SFU) Leave(participantID int) error {
 
 	// Remove from participants map.
 	delete(s.participants, participantID)
+	s.broadcastAudio.participantLeft(participantID, time.Now().UnixMilli())
 
 	// Remove all SSRCs owned by this participant.
 	for ssrc, info := range s.ssrcRegistry {
@@ -1304,6 +1311,49 @@ func GoSfu_TestBuildOpusPart(ssrcs *C.uint, n C.int, endpointsJSON *C.char, pack
 	part, err := buildOpusPart(meta, slots)
 	if err != nil {
 		fmt.Printf("[GoSfu] TestBuildOpusPart: %v\n", err)
+		return nil
+	}
+	*outLen = C.int(len(part))
+	return (*C.char)(C.CBytes(part))
+}
+
+// GoSfu_TestBroadcastAudioPart is a test hook: it feeds `count` audio RTP packets (flattened, packetOffsets has
+// count + 1 entries) with their arrival times, senders and SSRCs to a fresh listener-audio builder, then builds the
+// part at tsMs. Participants join in order of their first packet. endpointsJSON maps participant ids to video
+// endpoints ({"0":"ep-a"}). The result is freed with GoSfu_Free; nil (and *outLen 0) on error.
+//
+//export GoSfu_TestBroadcastAudioPart
+func GoSfu_TestBroadcastAudioPart(packets *C.uchar, packetOffsets *C.int, arrivalsMs *C.longlong, participants *C.int, ssrcs *C.uint, count C.int, tsMs C.longlong, endpointsJSON *C.char, outLen *C.int) *C.char {
+	*outLen = 0
+	n := int(count)
+	if n <= 0 {
+		return nil
+	}
+	offsets := unsafe.Slice(packetOffsets, n+1)
+	all := C.GoBytes(unsafe.Pointer(packets), offsets[n])
+	arrivals := unsafe.Slice(arrivalsMs, n)
+	senders := unsafe.Slice(participants, n)
+	packetSSRCs := unsafe.Slice(ssrcs, n)
+	var endpoints map[string]string
+	if err := json.Unmarshal([]byte(C.GoString(endpointsJSON)), &endpoints); err != nil {
+		return nil
+	}
+	videoEndpoints := map[int]string{}
+	for key, endpoint := range endpoints {
+		var participant int
+		if _, err := fmt.Sscanf(key, "%d", &participant); err != nil {
+			return nil
+		}
+		videoEndpoints[participant] = endpoint
+	}
+	audio := newBroadcastAudio(defaultBroadcastTranscoder(), broadcastDefaultRetainMs)
+	for i := 0; i < n; i++ {
+		audio.participantJoined(int(senders[i]))
+		audio.addPacket(uint32(packetSSRCs[i]), int(senders[i]), int64(arrivals[i]), all[offsets[i]:offsets[i+1]])
+	}
+	part, err := audio.part(int64(tsMs), videoEndpoints)
+	if err != nil {
+		fmt.Printf("[GoSfu] TestBroadcastAudioPart: %v\n", err)
 		return nil
 	}
 	*outLen = C.int(len(part))
