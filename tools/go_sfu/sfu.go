@@ -125,6 +125,8 @@ type SFU struct {
 	audioRTPCount   map[uint32]int64
 	// Listener audio of the emulated broadcast server: every speaker's audio RTP, decoded onto a timeline.
 	broadcastAudio *broadcastAudio
+	// The emulated broadcast server: part, time and stream-channel answers per listener.
+	broadcast *broadcastServer
 	loggerFactory  logging.LoggerFactory
 	log           logging.LeveledLogger
 	ctx           context.Context
@@ -135,7 +137,7 @@ func NewSFU() *SFU {
 	lf := logging.NewDefaultLoggerFactory()
 	lf.DefaultLogLevel = logging.LogLevelDebug
 	ctx, cancel := context.WithCancel(context.Background())
-	return &SFU{
+	sfu := &SFU{
 		participants:  make(map[int]*Participant),
 		ssrcRegistry:  make(map[uint32]ssrcInfo),
 		videoSSRCs:     make(map[int][]SimulcastLayer),
@@ -150,6 +152,8 @@ func NewSFU() *SFU {
 		ctx:           ctx,
 		cancel:        cancel,
 	}
+	sfu.broadcast = newBroadcastServer(sfu.broadcastAudio)
+	return sfu
 }
 
 // Join processes a participant's join payload and returns the SFU's join response JSON.

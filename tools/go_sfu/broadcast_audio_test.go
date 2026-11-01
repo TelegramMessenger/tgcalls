@@ -64,11 +64,11 @@ func sendSpeaker(b *broadcastAudio, ssrc uint32, participantID int, startMs int6
 
 func TestParseRTPWithExtensionAndPadding(t *testing.T) {
 	pkt := []byte{0x80 | 0x20 | 0x10 | 0x01, 111, 0, 1, 0x12, 0x34, 0x56, 0x78, 0, 0, 0, 9}
-	pkt = append(pkt, 0, 0, 0, 7)                // one CSRC
-	pkt = append(pkt, 0xbe, 0xde, 0, 1)          // extension header, one 32-bit word
-	pkt = append(pkt, 0x10, 0xaa, 0, 0)          // the extension word
-	pkt = append(pkt, 'a', 'b', 'c')             // payload
-	pkt = append(pkt, 0, 0, 3)                   // padding, last byte = padding length
+	pkt = append(pkt, 0, 0, 0, 7)       // one CSRC
+	pkt = append(pkt, 0xbe, 0xde, 0, 1) // extension header, one 32-bit word
+	pkt = append(pkt, 0x10, 0xaa, 0, 0) // the extension word
+	pkt = append(pkt, 'a', 'b', 'c')    // payload
+	pkt = append(pkt, 0, 0, 3)          // padding, last byte = padding length
 	ts, payload, ok := parseRTP(pkt)
 	if !ok || ts != 0x12345678 || string(payload) != "abc" {
 		t.Fatalf("parseRTP: ok %v ts %x payload %q", ok, ts, payload)

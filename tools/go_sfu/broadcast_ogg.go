@@ -18,14 +18,14 @@ import (
 )
 
 const (
-	broadcastSlotsPerPart  = 50
-	broadcastSlotSamples   = 960 // 20 ms at 48 kHz
-	broadcastMaxChannels   = 8   // AudioStreamingPartInternal ends a part with more
-	broadcastOggSerial     = 0x54474253
-	opusEmptyFrameTOC      = 0xf8 // config 31 (CELT FB 20 ms), mono, code 0
-	broadcastOpusVendor    = "tgcalls-testbench"
-	oggHeaderTypeBOS  byte = 0x02
-	oggHeaderTypeEOS  byte = 0x04
+	broadcastSlotsPerPart      = 50
+	broadcastSlotSamples       = 960 // 20 ms at 48 kHz
+	broadcastMaxChannels       = 8   // AudioStreamingPartInternal ends a part with more
+	broadcastOggSerial         = 0x54474253
+	opusEmptyFrameTOC          = 0xf8 // config 31 (CELT FB 20 ms), mono, code 0
+	broadcastOpusVendor        = "tgcalls-testbench"
+	oggHeaderTypeBOS      byte = 0x02
+	oggHeaderTypeEOS      byte = 0x04
 )
 
 type audioPartMeta struct {
