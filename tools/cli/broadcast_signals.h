@@ -29,6 +29,19 @@ constexpr int kMarkerPeriodSteps = 343;
 // Adjacent steps always differ.
 int markerSymbolAt(int64_t generationMs);
 
+// The order the emulated server shows the fixture's 1 s slices in (go_sfu broadcast_fixtures.go builds the same
+// one): every step changes slice and any two consecutive steps occur once per 81 parts (differences from the de
+// Bruijn sequence B(9, 2)), so three consecutive parts locate a part modulo kFixtureSliceOrderPeriod; the counter
+// alone, which repeats every 10 s, would alias a listener more than 10 s behind live.
+constexpr int kFixtureSlices = 10;
+constexpr int64_t kFixtureSliceOrderPeriod = 162;
+
+// The slice part `partIndex` (its timestamp / 1000) shows.
+int fixtureSliceAt(int64_t partIndex);
+// The index modulo kFixtureSliceOrderPeriod of the last of three consecutive parts that showed slices a, b, c, or
+// nullopt when no three consecutive parts show them.
+std::optional<int> locateFixturePart(int a, int b, int c);
+
 struct SpeakerTone {
     enum class Kind { Fixed, Marker };
 

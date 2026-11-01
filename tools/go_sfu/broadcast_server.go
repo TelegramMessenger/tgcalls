@@ -390,7 +390,9 @@ func (s *broadcastServer) fetch(clientID int, kind partKind, tsMs int64, channel
 		counts.JoinMissing++
 	}
 	s.mu.Unlock()
-	return status, data, s.now().UnixMilli()
+	// The answer's time, as MTProto's message time is the server's clock when it answered, before the transfer
+	// (the app's responseTimestamp): the availability decision above was made at sentAt too.
+	return status, data, sentAt.UnixMilli()
 }
 
 // statsJSON: {"requests": {key: {"success","notReady","resync","joinMissing"}}, "bytes": {key: n}}, keys "audio",

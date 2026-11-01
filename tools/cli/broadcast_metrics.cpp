@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <set>
 
 namespace broadcast {
 
@@ -18,7 +19,8 @@ constexpr int64_t kRtcLatencyMs = 1000;
 constexpr int64_t kLatencyAgreementMs = 20;
 constexpr int64_t kVideoStallMs = 100;
 constexpr int64_t kVideoFrameMs = 33;
-constexpr double kFixtureLoopMs = 10000.0;
+constexpr int kFixtureFramesPerSlice = 30;
+constexpr double kFixtureOrderPeriodMs = kFixtureSliceOrderPeriod * 1000.0;
 
 // Detector order: the 8 marker frequencies, speaker 1, speaker 2, the unified tone.
 constexpr size_t kSpeaker1Index = 8;
@@ -219,34 +221,101 @@ void CodedFrameSink::onFrameAt(const webrtc::VideoFrame &frame, int64_t arrivalM
 VideoReport CodedFrameSink::report(int64_t startMs) const {
     std::lock_guard<std::mutex> lock(_mutex);
     VideoReport report;
-    std::vector<int64_t> latencies;
-    const Frame *previous = nullptr;
+    std::vector<Frame> frames;
     for (const auto &frame : _frames) {
-        if (frame.arrivalMs < startMs) {
-            continue;
+        if (frame.arrivalMs >= startMs) {
+            frames.push_back(frame);
         }
-        report.frames++;
-        report.widths[frame.width]++;
+    }
+    for (size_t i = 0; i < frames.size(); i++) {
+        report.widths[frames[i].width]++;
         if (!report.startMs) {
-            report.startMs = frame.arrivalMs - startMs;
+            report.startMs = frames[i].arrivalMs - startMs;
         }
-        if (previous) {
-            int64_t gap = frame.arrivalMs - previous->arrivalMs;
+        if (i > 0) {
+            int64_t gap = frames[i].arrivalMs - frames[i - 1].arrivalMs;
             if (gap > kVideoStallMs) {
                 report.stallCount++;
                 report.stallMs += gap - kVideoFrameMs;
             }
         }
-        if (frame.counter >= 0) {
-            // The fixture loops every 10 s and part T shows slice (T / 1000) % 10, so a counter is a media time
-            // modulo 10 s; the distance from live is the arrival minus it, modulo 10 s.
-            double latency = std::fmod((double)frame.arrivalMs - frame.counter * 1000.0 / 30.0, kFixtureLoopMs);
+    }
+
+    // Runs of one slice (consecutive parts always show different slices, so a run is one part, shown once or more).
+    struct Run {
+        int slice;
+        std::vector<size_t> frames;
+    };
+    std::vector<Run> runs;
+    for (size_t i = 0; i < frames.size(); i++) {
+        int counter = frames[i].counter;
+        if (counter < 0 || counter >= kFixtureSlices * kFixtureFramesPerSlice) {
+            report.unplacedFrames++;
+            continue;
+        }
+        int slice = counter / kFixtureFramesPerSlice;
+        if (runs.empty() || runs.back().slice != slice) {
+            runs.push_back(Run{slice, {}});
+        }
+        runs.back().frames.push_back(i);
+    }
+
+    // Window i (runs i-2, i-1, i) locates run i; a window counts only when the next one locates the next part, and
+    // then the four runs both cover are placed. A run placed at two different parts is not placed.
+    std::vector<std::optional<int>> located(runs.size());
+    for (size_t i = 2; i < runs.size(); i++) {
+        located[i] = locateFixturePart(runs[i - 2].slice, runs[i - 1].slice, runs[i].slice);
+    }
+    std::vector<std::optional<int64_t>> runPart(runs.size());
+    std::vector<bool> conflicting(runs.size(), false);
+    for (size_t i = 2; i + 1 < runs.size(); i++) {
+        if (!located[i] || !located[i + 1] || *located[i + 1] != (*located[i] + 1) % kFixtureSliceOrderPeriod) {
+            continue;
+        }
+        for (size_t j = 0; j < 4; j++) {
+            int64_t part = ((*located[i] - 2 + (int64_t)j) % kFixtureSliceOrderPeriod + kFixtureSliceOrderPeriod) %
+                kFixtureSliceOrderPeriod;
+            size_t run = i - 2 + j;
+            if (runPart[run] && *runPart[run] != part) {
+                conflicting[run] = true;
+            }
+            runPart[run] = part;
+        }
+    }
+
+    // Placed frames, in arrival order: latency = arrival minus media time, modulo the order's period; the media frame
+    // index (arrival - latency in frames) tells repeats, frames out of order and frames skipped.
+    std::vector<int64_t> latencies;
+    std::set<int64_t> shown;
+    std::optional<int64_t> latestShown;
+    for (size_t r = 0; r < runs.size(); r++) {
+        if (!runPart[r] || conflicting[r]) {
+            report.unplacedFrames += (int)runs[r].frames.size();
+            continue;
+        }
+        for (size_t index : runs[r].frames) {
+            Frame const &frame = frames[index];
+            double mediaMs = *runPart[r] * 1000.0 + (frame.counter % kFixtureFramesPerSlice) * 1000.0 / 30.0;
+            double latency = std::fmod((double)frame.arrivalMs - mediaMs, kFixtureOrderPeriodMs);
             if (latency < 0) {
-                latency += kFixtureLoopMs;
+                latency += kFixtureOrderPeriodMs;
             }
             latencies.push_back((int64_t)std::lround(latency));
+            int64_t mediaFrame = std::llround(((double)frame.arrivalMs - latency) * 30.0 / 1000.0);
+            if (!shown.insert(mediaFrame).second) {
+                report.repeatedFrames++;
+                continue;
+            }
+            report.frames++;
+            if (latestShown && mediaFrame < *latestShown) {
+                report.outOfOrderFrames++;
+                continue;
+            }
+            if (latestShown && mediaFrame > *latestShown + 1) {
+                report.droppedFrames += (int)(mediaFrame - *latestShown - 1);
+            }
+            latestShown = mediaFrame;
         }
-        previous = &frame;
     }
     report.latencyMedianMs = median(latencies);
     if (!latencies.empty()) {

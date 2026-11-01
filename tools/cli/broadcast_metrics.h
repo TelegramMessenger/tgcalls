@@ -85,11 +85,23 @@ private:
     std::vector<int16_t> _mono;
 };
 
+// A tile's frames, placed in media time: a frame's counter names its slice, and runs of slices locate their parts
+// (broadcast::locateFixturePart; a run counts only where two consecutive windows of three agree).
 struct VideoReport {
     std::optional<int64_t> startMs;
+    // Distinct media frames shown (placed ones only).
     int frames = 0;
+    // A media frame shown again (a part delivered twice, interleaved or later).
+    int repeatedFrames = 0;
+    // A media frame shown after a later one.
+    int outOfOrderFrames = 0;
+    // Media frames skipped between two shown ones (a resync, a part never shown).
+    int droppedFrames = 0;
+    // Frames that could not be placed: no readable counter, or a run no agreeing windows locate.
+    int unplacedFrames = 0;
     int stallCount = 0;
     int64_t stallMs = 0;
+    // Arrival minus media time over placed frames; unambiguous up to the slice order's 162 s period.
     std::optional<int64_t> latencyMedianMs;
     std::optional<int64_t> latencyMaxMs;
     std::map<int, int> widths;

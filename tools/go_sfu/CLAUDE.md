@@ -130,7 +130,10 @@ decodes the server's parts with them.
 - **Link**: each client's responses go through `DebugNetworkShaper`'s model (telegram-ios
   `submodules/TelegramCore/Sources/Network/DebugNetworkShaper.swift`) with its profiles: a response's bytes start one
   round trip after the request, or when the link is done with the responses before it, at the profile's bandwidth.
-  `GoSfu_BroadcastFetch` blocks for that time. Not the packet `NetworkSimulator`: parts are whole responses.
+  `GoSfu_BroadcastFetch` blocks for that time. Not the packet `NetworkSimulator`: parts are whole responses. The
+  response timestamp it returns is the answer's time (when the request was decided), not the delivery's: the app's
+  `responseTimestamp` is MTProto's message time, the server's clock when it answered, and the engine re-anchors a
+  resync at it (until the Plan 1 review it was the delivery time, seconds late on a backlogged 3g link).
 - **Listener audio**: the group engine sends 60 ms Opus frames, which cannot be cut into 1-second parts, so every
   speaker's audio RTP (tapped in `processIncomingRTP`) is decoded with libopus onto a 48 kHz timeline taken from its
   RTP timestamps (anchored at the first packet's arrival), and each part's 20 ms slots are re-encoded per channel
@@ -148,8 +151,14 @@ decodes the server's parts with them.
 - **Video and unified parts** come from fixture slices (`testdata/broadcast/`, made by `make-broadcast-fixtures.sh`
   with Homebrew `ffmpeg`, committed so builds never run it): 10 s of `testsrc2` at 320x180, 640x360, 1280x720 (H.264
   baseline, 150/500/1500 kbit/s), one 1 s GOP per file, AAC 1000 Hz tone in the `unified_*` ones, a 16-bit frame
-  counter burned into the top 16 rows. Part T shows slice `(T / 1000) % 10` behind the video-part header (signature
-  `0xa12e810d`, TL string `"mp4"`, one event: endpoint, rotation 0). Video channel `c + 1` is the endpoint of the
+  counter burned into the top 16 rows. Part T shows slice `broadcastFixtureSliceAt(T / 1000)` behind the video-part
+  header (signature `0xa12e810d`, TL string `"mp4"`, one event: endpoint, rotation 0). **The slices are not shown in
+  loop order**: a counter alone tells media time only modulo 10 s, and with `(T / 1000) % 10` (until the Plan 1 review)
+  every listener further behind live read as 10 s less (the old engine's tiles after the step-down: 3–8 s instead of
+  13–18 s). The order is `s_n = s_(n-1) + 1 + d_(n mod 81) (mod 10)`, `d` the de Bruijn sequence B(9, 2): every step
+  changes slice and three consecutive parts locate a part modulo 162 s. The CLI's `broadcast_signals` builds the same
+  order (`fixtureSliceAt`, `locateFixturePart`), and `broadcast_part_format_test` decodes parts of both halves of the
+  period to prove the two agree. Video channel `c + 1` is the endpoint of the
   participant on audio channel `c` of the same second. Unified parts name endpoint `""` (tgcalls shows unified frames
   on its `"unified"` sink whatever the part names). Fixtures rather than the speakers' live H.264: stable part sizes
   per quality (the quality-selection comparison is otherwise the senders' bandwidth-estimation noise), whole GOPs, and

@@ -284,7 +284,20 @@ void testOldDecoderReadsFixtureVideo() {
         tgcalls::VideoStreamingPart part(fixturePart(1, "ep-b", quality, 3000), tgcalls::VideoStreamingPart::ContentType::Video);
         auto endpoint = part.getActiveEndpointId();
         CHECK_TRUE(endpoint.has_value() && endpoint.value() == "ep-b");
-        CHECK_TRUE(checkVideoFrames(part, widths[quality], 90) == 30);
+        CHECK_TRUE(checkVideoFrames(part, widths[quality], 30 * broadcast::fixtureSliceAt(3)) == 30);
+    }
+}
+
+// The server (Go) and the listener's metrics (C++) build the slice order separately; a part's first counter is
+// 30 times its slice. Parts across both halves of the order and a real timestamp.
+void testServerShowsTheSliceOrderTheMetricsExpect() {
+    for (int64_t n : {0, 1, 2, 80, 81, 82, 161, 1'700'000'003}) {
+        tgcalls::VideoStreamingPart part(fixturePart(1, "ep-a", 0, n * 1000), tgcalls::VideoStreamingPart::ContentType::Video);
+        int good = checkVideoFrames(part, 320, 30 * broadcast::fixtureSliceAt(n));
+        if (good != 30) {
+            std::printf("  part %lld: %d of 30 frames carry slice %d\n", (long long)n, good, broadcast::fixtureSliceAt(n));
+        }
+        CHECK_TRUE(good == 30);
     }
 }
 
@@ -297,7 +310,7 @@ void testOldDecoderReadsUnified() {
     // The engine shows unified frames on its "unified" sink whatever the part names (StreamingMediaContext.cpp,
     // the unified render loop); the server names "".
     CHECK_TRUE(endpoint.has_value() && endpoint.value() == "");
-    CHECK_TRUE(checkVideoFrames(video, 1280, 90) == 30);
+    CHECK_TRUE(checkVideoFrames(video, 1280, 30 * broadcast::fixtureSliceAt(3)) == 30);
 
     tgcalls::VideoStreamingPart audio(std::move(copy), tgcalls::VideoStreamingPart::ContentType::Audio);
     int remaining = audio.getAudioRemainingMilliseconds();
@@ -330,6 +343,7 @@ int main() {
     testOldDecoderReadsEmulatedAudio();
     testOldDecoderReadsTranscodedAudio();
     testOldDecoderReadsFixtureVideo();
+    testServerShowsTheSliceOrderTheMetricsExpect();
     testOldDecoderReadsUnified();
 
     if (g_failures != 0) {

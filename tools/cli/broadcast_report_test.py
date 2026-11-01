@@ -5,6 +5,7 @@ candidate against it. Run: python3 -m unittest discover -s submodules/TgVoipWebr
 import io
 import json
 import os
+import random
 import sys
 import tempfile
 import unittest
@@ -34,6 +35,31 @@ def report(scenario="audio", profile="lte", events="", repetition=0, start=1000,
         result["video"]["unified"] = {"startMs": 150, "frames": frames, "stallCount": 0, "stallMs": 0,
                                       "latencyMedianMs": 3500, "latencyMaxMs": 3520, "widths": {"1280": frames}}
     return result
+
+
+def synthetic_metrics():
+    """(metric, rule, mean, sd) shaped like the baseline's checks: millisecond metrics of small and large spread,
+    stall counts, heard blocks, frames, gap blocks, mean levels."""
+    shapes = []
+    for i in range(40):
+        shapes.append(("audio.startMs", 900 + 40 * i, 20 + 15 * i))
+        shapes.append(("audio.latencyMedianMs", 3900 + 30 * i, 15 + 2 * i))
+        shapes.append(("audio.stallMs", 300 * (i % 5), 40 + 60 * (i % 5)))
+        shapes.append(("audio.stallCount", i % 5, 0.3 + 0.1 * (i % 4)))
+        shapes.append(("audio.heardBlocks.2300", 2400 - 10 * i, 10 + i))
+        shapes.append(("video.ep-0.frames", 650 - 5 * i, 8 + i))
+        shapes.append(("handoff.gapBlocks", 11 + (i % 4), 1.5))
+        shapes.append(("levels.speaker0.meanLevel", 0.8, 0.01 + 0.002 * i))
+    return [(metric, broadcast_report.rule_for(metric, "audio"), mean, sd) for metric, mean, sd in shapes]
+
+
+def draw(rng, metric, mean, sd, count):
+    integer = not metric.endswith("Ms") and "meanLevel" not in metric
+    values = []
+    for _ in range(count):
+        value = max(rng.gauss(mean, sd), 0.0)
+        values.append(float(round(value)) if integer else value)
+    return values
 
 
 def write_reports(directory, reports):
@@ -115,28 +141,108 @@ class BroadcastReportTests(unittest.TestCase):
         levels = lambda mean, speaking: {"speaker0": {"meanLevel": mean, "speakingFraction": speaking, "updates": 230}}
         _, baseline_dir = self.make_baseline([report(levels=levels(0.80 + 0.01 * i, 0.30), repetition=i)
                                               for i in range(5)])
+        # A higher mean level passes (the new player reports the 100 ms maximum); a much lower one fails.
+        higher_dir = os.path.join(self.root, "higher")
+        write_reports(higher_dir, [report(levels=levels(0.95, 0.30), repetition=i) for i in range(5)])
+        code, out = self.run_main(["compare", baseline_dir, higher_dir])
+        self.assertEqual(code, 0, out)
+        lower_dir = os.path.join(self.root, "lower")
+        write_reports(lower_dir, [report(levels=levels(0.60, 0.30), repetition=i) for i in range(5)])
+        code, out = self.run_main(["compare", baseline_dir, lower_dir])
+        self.assertNotEqual(code, 0)
+        self.assertIn("levels.speaker0.meanLevel", out)
+
+    def test_speaking_fraction_is_informational(self):
+        # webrtc's VAD judges a steady sine tone speech in one of two modes, picked per run (a speaker reads 0.0 in
+        # some runs and 0.1-0.4 in others): the fraction carries no signal a candidate could be held to.
+        levels = lambda speaking: {"speaker1": {"meanLevel": 0.8, "speakingFraction": speaking, "updates": 240}}
+        modes = [0.0, 0.0, 0.004, 0.41, 0.42]
+        _, baseline_dir = self.make_baseline([report(levels=levels(s), repetition=i) for i, s in enumerate(modes)])
         candidate_dir = os.path.join(self.root, "candidate")
-        write_reports(candidate_dir, [report(levels=levels(0.95, 0.40), repetition=i) for i in range(5)])
+        write_reports(candidate_dir, [report(levels=levels(0.9), repetition=i) for i in range(5)])
+        code, out = self.run_main(["compare", baseline_dir, candidate_dir])
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("speakingFraction", out)
+
+    def test_an_equal_candidate_passes(self):
+        # A candidate drawn from the baseline's own distribution must pass nearly always: with 5 runs a side, "median
+        # at most p90" failed such a candidate on ~13% of checks (~44 of the matrix's 500, on a baseline whose 5 runs
+        # were ~2.5 independent samples). The baseline has 10 runs a cell and the margin is the baseline's p10..p90
+        # spread (at least the metric's slack).
+        rng = random.Random(7)
+        metrics = synthetic_metrics()
+        failures = 0
+        trials = 40
+        for _ in range(trials):
+            for metric, rule, mean, sd in metrics:
+                baseline = broadcast_report.summarize_values(draw(rng, metric, mean, sd, 10))
+                candidate = broadcast_report.percentile(draw(rng, metric, mean, sd, 5), 0.5)
+                failures += broadcast_report.check(metric, rule, candidate, baseline) is not None
+        self.assertLessEqual(failures / trials, 0.5, f"{failures} false failures over {trials} matrices of "
+                                                     f"{len(metrics)} checks")
+
+    def test_a_candidate_well_beyond_the_spread_fails(self):
+        rng = random.Random(8)
+        metrics = synthetic_metrics()
+        detected = 0
+        for metric, rule, mean, sd in metrics:
+            baseline = broadcast_report.summarize_values(draw(rng, metric, mean, sd, 10))
+            step = max(5 * sd, 3 * broadcast_report.slack_for(metric))
+            shifted = mean + step if rule == "lower" else mean - step
+            candidate = broadcast_report.percentile(draw(rng, metric, shifted, sd, 5), 0.5)
+            detected += broadcast_report.check(metric, rule, candidate, baseline) is not None
+        self.assertGreaterEqual(detected / len(metrics), 0.9, f"{detected} of {len(metrics)} regressions caught")
+
+    def test_calibrate_draws_candidates_from_the_recorded_runs(self):
+        # The figures the docs quote come from `calibrate`: the recorded baseline fixed, each candidate's 5 runs drawn
+        # with replacement from the cell's recorded runs. Runs that tie can never fail an equal candidate, and one
+        # worse by max(3 sd, 2 slack) = 2 slack always exceeds a margin of one slack.
+        reports_dir = os.path.join(self.root, "reports")
+        write_reports(reports_dir, [report(start=1000, latency=3900, repetition=i) for i in range(10)])
+        code, out = self.run_main(["calibrate", reports_dir, "--matrices", "20"])
+        self.assertEqual(code, 0, out)
+        self.assertIn("7 checks over 20 matrices: an equal candidate fails 0.00 checks per matrix, 0 in all with "
+                      "--confirm (20 of 20 matrices pass with --confirm)", out)
+        self.assertIn("a candidate worse by max(3 sd, 2 slack) fails 100% of checks, 100% with --confirm", out)
+
+    def test_frame_order_rules(self):
+        # Repeated, out-of-order and dropped frames are lower-is-better (the old engine shows some segments twice
+        # after a quality update; a player that does not passes); frames that could not be placed are informational.
+        self.assertEqual(broadcast_report.rule_for("video.ep-2.repeatedFrames", "tiles"), "lower")
+        self.assertEqual(broadcast_report.rule_for("video.ep-2.outOfOrderFrames", "tiles"), "lower")
+        self.assertEqual(broadcast_report.rule_for("video.unified.droppedFrames", "unified"), "lower")
+        self.assertIsNone(broadcast_report.rule_for("video.ep-2.unplacedFrames", "tiles"))
+        self.assertEqual(broadcast_report.slack_for("video.ep-0.droppedFrames"), 2)
+        baseline = broadcast_report.summarize_values([30.0, 30.0, 30.0, 30.0, 31.0, 30.0, 30.0, 30.0, 30.0, 29.0])
+        self.assertIsNone(broadcast_report.check("video.ep-0.droppedFrames", "lower", 0.0, baseline))
+        self.assertIsNotNone(broadcast_report.check("video.ep-0.droppedFrames", "lower", 90.0, baseline))
+
+    def test_a_run_missing_a_metric_fails(self):
+        # A run that never started has no audio.startMs; leaving it out of the median would pass a candidate that
+        # fails to start in 2 of 5 runs.
+        _, baseline_dir = self.make_baseline([report(start=900 + 50 * i, repetition=i) for i in range(5)])
+        candidate_dir = os.path.join(self.root, "candidate")
+        candidates = [report(start=900, repetition=i) for i in range(5)]
+        candidates[3]["audio"]["startMs"] = None
+        write_reports(candidate_dir, candidates)
         code, out = self.run_main(["compare", baseline_dir, candidate_dir])
         self.assertNotEqual(code, 0)
-        self.assertIn("levels.speaker0.speakingFraction", out)
-        self.assertNotIn("levels.speaker0.meanLevel", out)
+        self.assertIn("FAIL audio-lte-none audio.startMs: missing in 1 of 5 runs", out)
 
-    def test_speaking_fraction_tolerance_follows_the_baselines_spread(self):
-        # The old engine's VAD judges the sine tones speech in a fraction that varies run to run by more than 0.05
-        # around its median: a candidate inside the baseline's p10..p90 widened by 0.05 passes, one beyond it fails.
-        levels = lambda speaking: {"speaker0": {"meanLevel": 0.8, "speakingFraction": speaking, "updates": 240}}
-        spread = [0.30, 0.34, 0.39, 0.41, 0.44]  # p10 0.316, median 0.39, p90 0.428
-        _, baseline_dir = self.make_baseline([report(levels=levels(s), repetition=i) for i, s in enumerate(spread)])
-        inside_dir = os.path.join(self.root, "inside")
-        write_reports(inside_dir, [report(levels=levels(0.32), repetition=i) for i in range(5)])
-        code, out = self.run_main(["compare", baseline_dir, inside_dir])
+    def test_confirm_fails_only_checks_failing_against_both_candidates(self):
+        _, baseline_dir = self.make_baseline([report(start=900 + 50 * i, repetition=i) for i in range(5)])
+        late_dir = os.path.join(self.root, "late")
+        write_reports(late_dir, [report(start=2000, repetition=i) for i in range(5)])
+        on_time_dir = os.path.join(self.root, "on-time")
+        write_reports(on_time_dir, [report(start=950, repetition=i) for i in range(5)])
+        late_again_dir = os.path.join(self.root, "late-again")
+        write_reports(late_again_dir, [report(start=2100, repetition=i) for i in range(5)])
+        code, out = self.run_main(["compare", baseline_dir, late_dir, "--confirm", on_time_dir])
         self.assertEqual(code, 0, out)
-        outside_dir = os.path.join(self.root, "outside")
-        write_reports(outside_dir, [report(levels=levels(0.25), repetition=i) for i in range(5)])
-        code, out = self.run_main(["compare", baseline_dir, outside_dir])
+        self.assertIn("unconfirmed", out)
+        code, out = self.run_main(["compare", baseline_dir, late_dir, "--confirm", late_again_dir])
         self.assertNotEqual(code, 0)
-        self.assertIn("levels.speaker0.speakingFraction", out)
+        self.assertIn("FAIL audio-lte-none audio.startMs", out)
 
     def test_heard_blocks_of_a_tone_the_scenario_does_not_play_are_informational(self):
         # Neighbouring frequencies leak into the detector: the old engine "hears" the unified tone a few blocks a run

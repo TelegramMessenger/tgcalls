@@ -1,12 +1,14 @@
 // What the broadcast testbench measures from a listener's playout and decoded frames.
 
 #include "broadcast_metrics.h"
+#include "broadcast_signals.h"
 
 #include "api/video/i420_buffer.h"
 #include "api/video/video_frame.h"
 
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstdio>
 #include <thread>
 #include <vector>
@@ -35,23 +37,89 @@ webrtc::VideoFrame codedFrame(int width, int height, int counter) {
     return webrtc::VideoFrame::Builder().set_video_frame_buffer(buffer).build();
 }
 
-void testCounterWrapIsContinuous() {
-    broadcast::CodedFrameSink sink;
-    const int counters[] = {297, 298, 299, 0, 1, 2};
-    int64_t arrival = 1'700'000'000'000;
-    for (int counter : counters) {
-        CHECK_TRUE(broadcast::readFrameCounter(codedFrame(320, 180, counter)) == counter);
-        sink.onFrameAt(codedFrame(320, 180, counter), arrival);
-        arrival += 33;
+constexpr int64_t kFirstPart = 1'700'000'000;
+
+// Part `n` as the emulated server shows it (slice fixtureSliceAt(n), 30 frames), `latencyMs` behind live: frame i is
+// generated at n·1000 + i·1000/30 and arrives latencyMs later. `twice` shows every frame twice, interleaved, as two
+// decoders of one segment would.
+void feedPart(broadcast::CodedFrameSink &sink, int64_t n, int64_t latencyMs, bool twice = false) {
+    int slice = broadcast::fixtureSliceAt(n);
+    for (int i = 0; i < 30; i++) {
+        int64_t arrival = n * 1000 + (int64_t)std::lround(i * 1000.0 / 30.0) + latencyMs;
+        sink.onFrameAt(codedFrame(320, 180, 30 * slice + i), arrival);
+        if (twice) {
+            sink.onFrameAt(codedFrame(320, 180, 30 * slice + i), arrival + 1);
+        }
     }
-    auto report = sink.report(1'700'000'000'000 - 500);
-    CHECK_TRUE(report.frames == 6);
+}
+
+// The fixture loops every 10 s; a listener 13.5 s behind live must read 13.5 s, not 3.5 s. Part boundaries where
+// the counter falls (the old 299 -> 0 wrap, now most boundaries) must not read as jumps either.
+void testVideoLatencyBeyondTheFixtureLoop() {
+    CHECK_TRUE(broadcast::readFrameCounter(codedFrame(320, 180, 299)) == 299);
+    broadcast::CodedFrameSink sink;
+    int falls = 0;
+    for (int64_t n = kFirstPart; n < kFirstPart + 20; n++) {
+        feedPart(sink, n, 13'500);
+        falls += broadcast::fixtureSliceAt(n + 1) < broadcast::fixtureSliceAt(n) ? 1 : 0;
+    }
+    CHECK_TRUE(falls > 0);
+    auto report = sink.report(kFirstPart * 1000);
+    CHECK_TRUE(report.latencyMedianMs.has_value() && std::abs(*report.latencyMedianMs - 13'500) <= 1);
+    CHECK_TRUE(report.latencyMaxMs.has_value() && *report.latencyMaxMs - 13'500 <= 2);
+    CHECK_TRUE(report.frames == 600 && report.repeatedFrames == 0 && report.outOfOrderFrames == 0);
+    CHECK_TRUE(report.droppedFrames == 0 && report.unplacedFrames == 0);
     CHECK_TRUE(report.stallCount == 0 && report.stallMs == 0);
-    CHECK_TRUE(report.startMs.has_value() && *report.startMs == 500);
-    CHECK_TRUE(report.widths.size() == 1 && report.widths.at(320) == 6);
-    // Latency (now - counter·1000/30) mod 10 s: constant across the wrap, within the 33 vs 33.3 ms rounding.
-    CHECK_TRUE(report.latencyMedianMs.has_value());
-    CHECK_TRUE(report.latencyMaxMs.has_value() && *report.latencyMaxMs - *report.latencyMedianMs <= 2);
+    CHECK_TRUE(report.startMs.has_value() && *report.startMs == 13'500);
+    CHECK_TRUE(report.widths.size() == 1 && report.widths.at(320) == 600);
+}
+
+// The old engine re-fetches buffered segments at the wrong tile's id after a quality update, so a tile shows some
+// segments twice; a correct player must not need those frames to match it.
+void testRepeatedFramesAreNotFrames() {
+    broadcast::CodedFrameSink sink;
+    for (int64_t n = kFirstPart; n < kFirstPart + 10; n++) {
+        feedPart(sink, n, 4'000, n == kFirstPart + 6);
+    }
+    for (int64_t n = kFirstPart + 10; n < kFirstPart + 20; n++) {
+        feedPart(sink, n, 4'000);
+    }
+    auto report = sink.report(kFirstPart * 1000);
+    CHECK_TRUE(report.frames == 600);
+    CHECK_TRUE(report.repeatedFrames == 30);
+    CHECK_TRUE(report.outOfOrderFrames == 0 && report.droppedFrames == 0 && report.unplacedFrames == 0);
+}
+
+// A resync skips content: the part never shown counts its frames as dropped, and the stream stays placed.
+void testSkippedPartCountsDroppedFrames() {
+    broadcast::CodedFrameSink sink;
+    for (int64_t n = kFirstPart; n < kFirstPart + 10; n++) {
+        feedPart(sink, n, 4'000);
+    }
+    for (int64_t n = kFirstPart + 11; n < kFirstPart + 20; n++) {
+        feedPart(sink, n, 3'000);
+    }
+    auto report = sink.report(kFirstPart * 1000);
+    CHECK_TRUE(report.frames == 570);
+    CHECK_TRUE(report.droppedFrames == 30);
+    CHECK_TRUE(report.repeatedFrames == 0 && report.outOfOrderFrames == 0 && report.unplacedFrames == 0);
+    CHECK_TRUE(report.latencyMaxMs.has_value() && *report.latencyMaxMs - 4'000 <= 2);
+}
+
+// Two parts cannot be located (three consecutive slices are needed, and a second window to agree); four can.
+void testShortStreamsArePlacedOrUnplaced() {
+    broadcast::CodedFrameSink two;
+    feedPart(two, kFirstPart, 4'000);
+    feedPart(two, kFirstPart + 1, 4'000);
+    auto shortReport = two.report(kFirstPart * 1000);
+    CHECK_TRUE(shortReport.frames == 0 && shortReport.unplacedFrames == 60 && !shortReport.latencyMedianMs);
+    CHECK_TRUE(shortReport.startMs.has_value());
+    broadcast::CodedFrameSink four;
+    for (int64_t n = kFirstPart; n < kFirstPart + 4; n++) {
+        feedPart(four, n, 4'000);
+    }
+    auto fourReport = four.report(kFirstPart * 1000);
+    CHECK_TRUE(fourReport.frames == 120 && fourReport.unplacedFrames == 0);
 }
 
 void testVideoStallIsAGapOver100Ms() {
@@ -184,7 +252,10 @@ void testPacerKeepsTenMillisecondPeriod() {
 
 int main() {
     testPacerKeepsTenMillisecondPeriod();
-    testCounterWrapIsContinuous();
+    testVideoLatencyBeyondTheFixtureLoop();
+    testRepeatedFramesAreNotFrames();
+    testSkippedPartCountsDroppedFrames();
+    testShortStreamsArePlacedOrUnplaced();
     testVideoStallIsAGapOver100Ms();
     testRendererMeasuresStartStallsAndLatency();
     testHandoffCountsGapAndOverlap();

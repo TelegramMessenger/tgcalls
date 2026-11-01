@@ -9,119 +9,143 @@
  "implementation": "engine",
  "metrics": {
   "audio.heardBlocks.1000": {
-   "median": 7582.0,
-   "n": 5,
-   "p10": 7578.4,
-   "p90": 7584.6
+   "median": 7550.5,
+   "n": 10,
+   "p10": 7527.4,
+   "p90": 7584.7
   },
   "audio.heardBlocks.2300": {
    "median": 0.0,
-   "n": 5,
+   "n": 10,
    "p10": 0.0,
    "p90": 0.0
   },
   "audio.heardBlocks.2900": {
    "median": 0.0,
-   "n": 5,
+   "n": 10,
    "p10": 0.0,
    "p90": 0.0
   },
   "audio.heardBlocks.marker": {
-   "median": 16.0,
-   "n": 5,
-   "p10": 16.0,
-   "p90": 17.0
+   "median": 69.0,
+   "n": 10,
+   "p10": 65.9,
+   "p90": 77.0
   },
   "audio.stallCount": {
    "median": 5.0,
-   "n": 5,
+   "n": 10,
    "p10": 5.0,
    "p90": 5.0
   },
   "audio.stallMs": {
-   "median": 13510.0,
-   "n": 5,
-   "p10": 13498.0,
-   "p90": 13532.0
+   "median": 13835.0,
+   "n": 10,
+   "p10": 13501.0,
+   "p90": 14064.0
   },
   "audio.startMs": {
-   "median": 584.0,
-   "n": 5,
-   "p10": 584.0,
-   "p90": 594.0
+   "median": 574.0,
+   "n": 10,
+   "p10": 562.1,
+   "p90": 596.0
   },
   "server.bytes.unified_q2": {
-   "median": 15527876.0,
-   "n": 5,
-   "p10": 15522105.8,
-   "p90": 15527876.0
+   "median": 15581683.0,
+   "n": 10,
+   "p10": 15465376.8,
+   "p90": 15597528.4
   },
   "server.requests.unified_q2.joinMissing": {
    "median": 1.0,
-   "n": 5,
+   "n": 10,
    "p10": 1.0,
    "p90": 1.0
   },
   "server.requests.unified_q2.notReady": {
    "median": 12.0,
-   "n": 5,
-   "p10": 11.4,
+   "n": 10,
+   "p10": 11.0,
    "p90": 12.0
   },
   "server.requests.unified_q2.resync": {
    "median": 1.0,
-   "n": 5,
+   "n": 10,
    "p10": 1.0,
    "p90": 1.0
   },
   "server.requests.unified_q2.success": {
    "median": 80.0,
-   "n": 5,
-   "p10": 80.0,
+   "n": 10,
+   "p10": 79.9,
    "p90": 80.0
   },
+  "video.unified.droppedFrames": {
+   "median": 58.0,
+   "n": 10,
+   "p10": 58.0,
+   "p90": 91.1
+  },
   "video.unified.frames": {
-   "median": 2277.0,
-   "n": 5,
-   "p10": 2275.4,
-   "p90": 2278.0
+   "median": 2234.0,
+   "n": 10,
+   "p10": 2199.2,
+   "p90": 2245.2
   },
   "video.unified.latencyMaxMs": {
-   "median": 7658.0,
-   "n": 5,
-   "p10": 7457.2,
-   "p90": 7761.0
+   "median": 17528.5,
+   "n": 10,
+   "p10": 16945.6,
+   "p90": 18214.0
   },
   "video.unified.latencyMedianMs": {
-   "median": 4666.0,
-   "n": 5,
-   "p10": 4573.8,
-   "p90": 4765.8
+   "median": 10984.5,
+   "n": 10,
+   "p10": 10455.6,
+   "p90": 11374.1
+  },
+  "video.unified.outOfOrderFrames": {
+   "median": 0.0,
+   "n": 10,
+   "p10": 0.0,
+   "p90": 0.0
+  },
+  "video.unified.repeatedFrames": {
+   "median": 30.0,
+   "n": 10,
+   "p10": 0.0,
+   "p90": 30.0
   },
   "video.unified.stallCount": {
    "median": 5.0,
-   "n": 5,
+   "n": 10,
    "p10": 5.0,
    "p90": 5.0
   },
   "video.unified.stallMs": {
-   "median": 13595.0,
-   "n": 5,
-   "p10": 13560.0,
-   "p90": 13621.8
+   "median": 13902.5,
+   "n": 10,
+   "p10": 13524.4,
+   "p90": 14102.1
   },
   "video.unified.startMs": {
-   "median": 564.0,
-   "n": 5,
-   "p10": 562.4,
-   "p90": 578.0
+   "median": 567.5,
+   "n": 10,
+   "p10": 555.6,
+   "p90": 594.6
+  },
+  "video.unified.unplacedFrames": {
+   "median": 0.0,
+   "n": 10,
+   "p10": 0.0,
+   "p90": 62.0
   },
   "video.unified.widths.1280": {
-   "median": 2277.0,
-   "n": 5,
-   "p10": 2275.4,
-   "p90": 2278.0
+   "median": 2266.5,
+   "n": 10,
+   "p10": 2261.2,
+   "p90": 2277.8
   }
  },
- "repetitions": 5
+ "repetitions": 10
 }

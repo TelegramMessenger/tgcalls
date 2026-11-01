@@ -26,21 +26,30 @@ int64_t floorDiv(int64_t value, int64_t divisor) {
     return quotient;
 }
 
-void deBruijn(int t, int p, std::array<int, kOrder + 1> &a, std::vector<int> &sequence) {
-    if (t > kOrder) {
-        if (kOrder % p == 0) {
+void deBruijnStep(int alphabet, int order, int t, int p, std::vector<int> &a, std::vector<int> &sequence) {
+    if (t > order) {
+        if (order % p == 0) {
             for (int j = 1; j <= p; j++) {
                 sequence.push_back(a[j]);
             }
         }
     } else {
         a[t] = a[t - p];
-        deBruijn(t + 1, p, a, sequence);
-        for (int j = a[t - p] + 1; j < kAlphabet; j++) {
+        deBruijnStep(alphabet, order, t + 1, p, a, sequence);
+        for (int j = a[t - p] + 1; j < alphabet; j++) {
             a[t] = j;
-            deBruijn(t + 1, t, a, sequence);
+            deBruijnStep(alphabet, order, t + 1, t, a, sequence);
         }
     }
+}
+
+// The de Bruijn sequence B(alphabet, order), by the standard Lyndon-word construction (go_sfu's deBruijn is the
+// same, so both sides build the same slice order).
+std::vector<int> deBruijnSequence(int alphabet, int order) {
+    std::vector<int> a((size_t)(alphabet * order + 1), 0);
+    std::vector<int> sequence;
+    deBruijnStep(alphabet, order, 1, 1, a, sequence);
+    return sequence;
 }
 
 // The difference sequence d (B(7, 3)), its prefix sums, and the position of every cyclic triple of differences.
@@ -51,8 +60,7 @@ struct MarkerTables {
     std::array<int, kAlphabet * kAlphabet * kAlphabet> positionOfTriple{};
 
     MarkerTables() {
-        std::array<int, kOrder + 1> a{};
-        deBruijn(1, 1, a, differences);
+        differences = deBruijnSequence(kAlphabet, kOrder);
         prefix.resize(differences.size() + 1, 0);
         for (size_t i = 0; i < differences.size(); i++) {
             prefix[i + 1] = prefix[i] + differences[i];
@@ -73,6 +81,32 @@ MarkerTables const &markerTables() {
     return tables;
 }
 
+// The fixture slice order: s_n = s_(n-1) + 1 + d_(n mod 81) (mod 10) over one period, s_0 = 0, d = B(9, 2); and the
+// position (mod 81) of every cyclic pair of differences.
+constexpr int kSliceOrderSteps = 81;
+
+struct SliceOrderTables {
+    std::array<int, kFixtureSliceOrderPeriod> order{};
+    std::array<int, (kFixtureSlices - 1) * (kFixtureSlices - 1)> positionOfPair{};
+
+    SliceOrderTables() {
+        std::vector<int> differences = deBruijnSequence(kFixtureSlices - 1, 2);
+        for (int n = 1; n < kFixtureSliceOrderPeriod; n++) {
+            order[n] = (order[n - 1] + 1 + differences[n % kSliceOrderSteps]) % kFixtureSlices;
+        }
+        for (int n = 0; n < kSliceOrderSteps; n++) {
+            int d1 = differences[(n - 1 + kSliceOrderSteps) % kSliceOrderSteps];
+            int d2 = differences[n];
+            positionOfPair[d1 * (kFixtureSlices - 1) + d2] = n;
+        }
+    }
+};
+
+SliceOrderTables const &sliceOrderTables() {
+    static SliceOrderTables tables;
+    return tables;
+}
+
 } // namespace
 
 int markerSymbolAt(int64_t generationMs) {
@@ -84,6 +118,32 @@ int markerSymbolAt(int64_t generationMs) {
     int64_t remainder = terms - periods * kMarkerPeriodSteps;
     int64_t total = terms + periods * tables.periodSum + tables.prefix[(size_t)remainder];
     return (int)(((total % 8) + 8) % 8);
+}
+
+int fixtureSliceAt(int64_t partIndex) {
+    int64_t position = ((partIndex % kFixtureSliceOrderPeriod) + kFixtureSliceOrderPeriod) % kFixtureSliceOrderPeriod;
+    return sliceOrderTables().order[(size_t)position];
+}
+
+std::optional<int> locateFixturePart(int a, int b, int c) {
+    if (a < 0 || a >= kFixtureSlices || b < 0 || b >= kFixtureSlices || c < 0 || c >= kFixtureSlices) {
+        return std::nullopt;
+    }
+    // A step is 1 + d with d in 0..8, so a repeated slice (a step of 0 mod 10) is no step of the order.
+    int d1 = (b - a - 1 + 2 * kFixtureSlices) % kFixtureSlices;
+    int d2 = (c - b - 1 + 2 * kFixtureSlices) % kFixtureSlices;
+    if (d1 == kFixtureSlices - 1 || d2 == kFixtureSlices - 1) {
+        return std::nullopt;
+    }
+    SliceOrderTables const &tables = sliceOrderTables();
+    int position = tables.positionOfPair[d1 * (kFixtureSlices - 1) + d2];
+    // The two halves of the period share the steps; their slices differ by 5.
+    for (int candidate : {position, position + kSliceOrderSteps}) {
+        if (tables.order[(size_t)candidate] == c) {
+            return candidate;
+        }
+    }
+    return std::nullopt;
 }
 
 SpeakerTone SpeakerTone::fixed(double frequency) {

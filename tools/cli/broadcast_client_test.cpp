@@ -152,7 +152,35 @@ void testJoinMissingCallsRejoinWithoutCompletion(GoInt sfu) {
 
 } // namespace
 
+// PresentationGroupCall.requestCall sets connection mode None at once (broadcast stops), then getCurrentGroupCall and
+// the join take a round trip each before it sets Broadcast again.
+void testRejoinStopsAtOnceAndResumesAfterTwoRoundTrips() {
+    auto alive = std::make_shared<std::atomic<bool>>(true);
+    auto start = std::chrono::steady_clock::now();
+    auto elapsedMs = [start]() {
+        return (int64_t)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+    };
+    int64_t stoppedAtMs = -1;
+    int64_t resumedAtMs = -1;
+    runBroadcastRejoin([&]() { stoppedAtMs = elapsedMs(); }, [&]() { resumedAtMs = elapsedMs(); }, 100, alive);
+    CHECK_TRUE(stoppedAtMs >= 0 && stoppedAtMs < 30);
+    CHECK_TRUE(resumedAtMs >= 200 && resumedAtMs < 400);
+
+    // Torn down while rejoining: broadcast is not entered again.
+    auto leaving = std::make_shared<std::atomic<bool>>(true);
+    std::atomic<bool> stopped{false};
+    std::atomic<bool> resumed{false};
+    std::thread rejoin([&]() {
+        runBroadcastRejoin([&]() { stopped = true; }, [&]() { resumed = true; }, 100, leaving);
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    leaving->store(false);
+    rejoin.join();
+    CHECK_TRUE(stopped.load() && !resumed.load());
+}
+
 int main() {
+    testRejoinStopsAtOnceAndResumesAfterTwoRoundTrips();
     GoSfu_Init();
     GoInt sfu = GoSfu_Create();
     CHECK_TRUE(sfu > 0);

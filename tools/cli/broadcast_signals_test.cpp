@@ -154,6 +154,31 @@ void testSilenceDetectsNothing() {
     CHECK_TRUE(!decoder.latencyMs().has_value());
 }
 
+// Three consecutive parts' slices locate the last one modulo the order's period; slices no three consecutive parts
+// show (a repeat, or a pair of steps from elsewhere in the order) locate nothing.
+void testFixtureSliceOrderLocatesParts() {
+    const int64_t period = broadcast::kFixtureSliceOrderPeriod;
+    CHECK_TRUE(period == 162);
+    int located = 0;
+    for (int64_t n = 0; n < period; n++) {
+        int a = broadcast::fixtureSliceAt(n - 2);
+        int b = broadcast::fixtureSliceAt(n - 1);
+        int c = broadcast::fixtureSliceAt(n);
+        CHECK_TRUE(c >= 0 && c < broadcast::kFixtureSlices && a != b && b != c);
+        std::optional<int> position = broadcast::locateFixturePart(a, b, c);
+        located += (position.has_value() && *position == n) ? 1 : 0;
+    }
+    CHECK_TRUE(located == period);
+    CHECK_TRUE(broadcast::fixtureSliceAt(1'700'000'003) == broadcast::fixtureSliceAt(1'700'000'003 + period));
+    CHECK_TRUE(!broadcast::locateFixturePart(3, 3, 4).has_value());
+    // The half check: the same two steps from the other half of the order, shifted by 5, still locate; shifted by
+    // anything else they do not.
+    int a = broadcast::fixtureSliceAt(10), b = broadcast::fixtureSliceAt(11), c = broadcast::fixtureSliceAt(12);
+    std::optional<int> other = broadcast::locateFixturePart((a + 5) % 10, (b + 5) % 10, (c + 5) % 10);
+    CHECK_TRUE(other.has_value() && *other == 12 + 81);
+    CHECK_TRUE(!broadcast::locateFixturePart((a + 1) % 10, (b + 1) % 10, (c + 1) % 10).has_value());
+}
+
 } // namespace
 
 int main() {
@@ -161,6 +186,7 @@ int main() {
     testMarkerLatencyRoundTrip();
     testDetectionSurvivesOpus();
     testSilenceDetectsNothing();
+    testFixtureSliceOrderLocatesParts();
 
     if (g_failures != 0) {
         std::printf("%d failure(s)\n", g_failures);

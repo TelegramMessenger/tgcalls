@@ -79,30 +79,57 @@ broadcast leaves tgcalls; the baseline is `broadcast-baseline/`.
   drifted ~3 % behind the server's and parts were cut short (12 s of stalls in a 25 s run).
 - **Measurements** (`broadcast_metrics`, per 10 ms block / per frame): audio start (first block with an expected tone),
   stalls (≥ 3 consecutive silent blocks after start, outside the handoff window), latency (median/max, before any
-  promotion), tones heard per frequency; per tile: first frame, frames, stalls (inter-frame gap > 100 ms), latency from
-  the fixture's burned-in frame counter (`(arrival − counter·1000/30) mod 10 s`, continuous over the 299 → 0 wrap),
-  widths (which quality was shown); levels per speaker (`speaker0..2`: SSRCs differ between runs) as mean level and
-  fraction with voice; the handoff's gap (blocks with no marker between the promotion and the first block at WebRTC
-  latency, below 1000 ms) and overlap (two markers near full amplitude); the server's requests and bytes. Times are
-  wall-clock ms since the listener entered broadcast. Report: `--broadcast-report PATH` (schema 1).
+  promotion), tones heard per frequency; per tile: first frame, stalls (inter-frame gap > 100 ms), widths (which
+  quality was shown), and from the fixture's burned-in frame counter the frames placed in media time (below): latency,
+  distinct `frames`, `repeatedFrames`, `outOfOrderFrames`, `droppedFrames`, `unplacedFrames`; levels per speaker
+  (`speaker0..2`: SSRCs differ between runs) as mean level and fraction with voice; the handoff's gap (blocks with no
+  marker between the promotion and the first block at WebRTC latency, below 1000 ms) and overlap (two markers near full
+  amplitude); the server's requests and bytes. Times are wall-clock ms since the listener entered broadcast. Report:
+  `--broadcast-report PATH` (schema 1).
+- **Placing frames in media time**: a counter names a slice of the 10 s fixture, and the server shows slices in an
+  order where three consecutive parts locate a part modulo 162 s (go_sfu guide, "Video and unified parts").
+  `CodedFrameSink::report` splits a tile's frames into runs of one slice, locates run i from runs i-2..i
+  (`locateFixturePart`), and places the four runs two consecutive agreeing windows cover; latency is arrival minus
+  media time modulo 162 s. Until the Plan 1 review latency was `(arrival − counter·1000/30) mod 10 s`, which read the
+  old engine's tiles after the step-down, 13–18 s behind live, as 3–8 s. The media frame index separates frames
+  shown twice (the old engine's quality update re-fetches buffered segments at the last channel's id,
+  `StreamingMediaContext::requestPendingVideoQualityUpdate`, so after the 10 s swap ep-2 shows two segments twice and
+  ep-0 drops them) from distinct ones, which a correct player is held to. A run no agreeing windows place (interleaved
+  repeats, a skip landing on the same slice) counts as `unplacedFrames`, and the frames it hides show up as dropped.
 - **Request callbacks** (`broadcast_client`): one thread per part fetch through the blocking `GoSfu_BroadcastFetch`;
   a cancelled task or a torn-down listener (`ParticipantState::broadcastAlive`, cleared by `stopParticipant` before the
-  engine stops) never gets a completion; `responseTimestamp` is seconds; a join-missing answer rejoins as the app does
-  (`None`, then `Broadcast`, after one profile round trip).
-- **The baseline**: `run-broadcast-baseline.sh -j 2 -r 5 -o DIR` (175 runs, ~1.2 h; resumes by skipping existing
-  reports), then `broadcast_report.py aggregate DIR tools/cli/broadcast-baseline` (median, p10, p90 per metric per
-  cell). `broadcast_report.py compare BASELINE CANDIDATE [--metrics prefix,…]` is the bar for a new implementation:
-  lower-is-better metrics (start, stalls, latency, handoff gap/overlap) at most max(p90, median + 50 ms), heard blocks
-  and frames at least p10, speaking fraction within the baseline's p10–p90 widened by 0.05, mean level at least p10;
-  server counts informational. **Heard blocks of a tone the scenario does not play are informational**: the detector
-  "hears" 1000 Hz in listener cells (5–315 blocks a run) and the marker in unified cells (3–17), leakage from
-  neighbouring frequencies that a cleaner player would be failed for. The speaking fraction is webrtc's VAD judging sine
-  tones, which spreads ~±0.05 run to run; a fixed ±0.05 around the median failed the old engine against 3-of-5 subsets
-  of its own runs (4–13 checks per subset). The baseline passes against its own runs and every such subset (575
-  checks). Noisy cell: `audio-poor-lte-events` start (p90/median 2.06).
+  engine stops) never gets a completion; `responseTimestamp` is seconds, the server's answer time; a join-missing
+  answer rejoins in `PresentationGroupCall.requestCall`'s order (`runBroadcastRejoin`): connection mode `None` at once,
+  `Broadcast` two profile round trips later (getCurrentGroupCall, then the join). Until the Plan 1 review the engine
+  kept playing for one round trip and then switched `None`/`Broadcast` back to back, which understated every events
+  cell's stall.
+- **The baseline**: `run-broadcast-baseline.sh -j 2 -r 10 -o DIR` (350 runs, ~2.4 h; resumes by skipping existing
+  reports; run i of R joins when the wall clock's millisecond is i·1000/R: a run's results depend on where it joins
+  within the server's 1 s parts, and until the Plan 1 review the two runs `-j 2` starts together joined at one phase,
+  so 10 runs a cell were 5 samples), then `broadcast_report.py aggregate DIR tools/cli/broadcast-baseline` (median, p10, p90 per metric per
+  cell); the raw reports are kept in `broadcast-baseline/reports/`, so the rules can be recalibrated without a
+  re-run (`broadcast_report.py calibrate`). `broadcast_report.py compare BASELINE CANDIDATE [--metrics prefix,…] [--confirm CANDIDATE2]` is the bar for a
+  new implementation, run with 5 repetitions: lower-is-better metrics (start, stalls, latency, frame order, handoff
+  gap/overlap) at most p90 + margin, heard blocks, frames and mean level at least p10 − margin, the margin being the
+  baseline's p90 − p10 and at least the metric's slack (50 ms, 5 blocks, 2 frames, 1 stall). **Why this shape**: with
+  5 runs a side, the planned "median at most p90" failed a candidate drawn from the baseline's own runs on ~13% of
+  checks (~44 of the matrix's 500; measured on Task 8's baseline, whose 5 runs a cell were ~2.5 independent samples).
+  `broadcast_report.py calibrate broadcast-baseline/reports --matrices 10000` simulates compare as it is used (the
+  recorded baseline fixed, each candidate's 5 runs drawn from the cell's recorded runs): a candidate as good as the
+  old engine fails 0.18 of the matrix's 620 checks on average, and with `--confirm` 19 checks in 10000 matrices
+  (99.8% pass); one worse by max(3 sd, 2 slack) fails 53% of its checks, 42% with `--confirm`, which is what
+  `--confirm` costs. `--confirm` counts a check only if it also fails against a second candidate run (unconfirmed ones
+  are listed). A metric the baseline has in
+  every run fails if any candidate run lacks it (a run that never started). **Informational**: heard blocks of a tone
+  the scenario does not play (the detector "hears" 1000 Hz in listener cells, 0–355 blocks a run, and the marker in
+  unified cells, 9–79, 9–28 in the 25 s runs: leakage from neighbouring frequencies), the speaking fraction (webrtc's
+  VAD judges a steady sine speech in one of two modes picked per run: a speaker reads 0.0 in some runs and 0.1–0.4 in
+  others, so it carries
+  no signal; the audio-core plan must check the VAD port per update instead), `unplacedFrames`, server counts.
 - Tests (host, `bazel test //submodules/TgVoipWebrtc/tgcalls/tools/cli:all`): `broadcast_signals_test` (marker round
-  trip, with Opus), `broadcast_part_format_test` (the server's parts read by tgcalls' own `AudioStreamingPart` /
-  `VideoStreamingPart`: the old decoders are the format's specification), `broadcast_client_test` (cancellation,
-  teardown, time sources, join-missing), `broadcast_metrics_test`; `python3 -m unittest discover -s tools/cli -p
-  'broadcast_report_test.py'`.
+  trip, with Opus; the slice order locates every part), `broadcast_part_format_test` (the server's parts read by
+  tgcalls' own `AudioStreamingPart` / `VideoStreamingPart`: the old decoders are the format's specification; the
+  server's slice order is the metrics'), `broadcast_client_test` (cancellation, teardown, time sources, join-missing,
+  the rejoin order), `broadcast_metrics_test` (latency beyond the loop, repeats, drops); `python3 -m unittest discover
+  -s tools/cli -p 'broadcast_report_test.py'` (the rules, their calibration on synthetic checks, `calibrate`).
 

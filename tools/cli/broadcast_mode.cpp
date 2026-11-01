@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include <vector>
 
+#include "broadcast_client.h"
 #include "broadcast_listener.h"
 #include "broadcast_metrics.h"
 #include "group_participant.h"
@@ -76,6 +77,10 @@ json11::Json videoJson(broadcast::VideoReport const &report) {
     return json11::Json::object{
         {"startMs", optionalJson(report.startMs)},
         {"frames", report.frames},
+        {"repeatedFrames", report.repeatedFrames},
+        {"outOfOrderFrames", report.outOfOrderFrames},
+        {"droppedFrames", report.droppedFrames},
+        {"unplacedFrames", report.unplacedFrames},
         {"stallCount", report.stallCount},
         {"stallMs", (double)report.stallMs},
         {"latencyMedianMs", optionalJson(report.latencyMedianMs)},
@@ -176,11 +181,12 @@ int runBroadcastMode(const BroadcastRunConfig &config) {
     options.onRejoinNeeded = [listenerSlot, rejoinDelayMs, &rejoins]() {
         rejoins++;
         std::thread([listenerSlot, rejoinDelayMs]() {
-            std::this_thread::sleep_for(std::chrono::milliseconds(rejoinDelayMs));
             ParticipantState *listener = listenerSlot->load();
-            if (listener && listener->broadcastAlive && listener->broadcastAlive->load()) {
-                rejoinBroadcast(listener);
+            if (!listener) {
+                return;
             }
+            runBroadcastRejoin([listener]() { stopBroadcast(listener); },
+                               [listener]() { resumeBroadcast(listener); }, rejoinDelayMs, listener->broadcastAlive);
         }).detach();
     };
 

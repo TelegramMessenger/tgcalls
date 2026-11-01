@@ -29,3 +29,9 @@ struct BroadcastRequestCallbacks {
 BroadcastRequestCallbacks makeBroadcastRequestCallbacks(GoInt sfuHandle, int clientId, bool unified,
                                                         std::shared_ptr<std::atomic<bool>> alive,
                                                         std::function<void()> onRejoinNeeded);
+
+// The rejoin after a join-missing answer, on the caller's thread, in PresentationGroupCall.requestCall's order:
+// `stop` (connection mode None) at once, `resume` (Broadcast again) two round trips later (getCurrentGroupCall, then
+// the join). Either is skipped once `alive` is cleared.
+void runBroadcastRejoin(std::function<void()> const &stop, std::function<void()> const &resume, int roundTripMs,
+                        std::shared_ptr<std::atomic<bool>> const &alive);

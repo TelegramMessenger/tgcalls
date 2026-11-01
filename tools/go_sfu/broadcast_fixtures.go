@@ -62,8 +62,59 @@ func encodeTLString(s string) []byte {
 	return out
 }
 
+// The order parts show the slices in. The fixture loops every 10 s, so a frame's counter alone tells its media time
+// modulo 10 s, and a listener further behind live would read as nearer. In this order every step changes slice and
+// any two consecutive steps occur once per 81 parts: s_n = s_(n-1) + 1 + d_(n mod 81) (mod 10), d the de Bruijn
+// sequence B(9, 2). Three consecutive parts therefore locate a part modulo 162 (s_(n+81) = s_n + 5 tells the two
+// halves apart); the listener's metrics do (broadcast::locateFixturePart in tools/cli/broadcast_signals, which builds
+// the same sequence).
+const (
+	broadcastSliceOrderSteps = 81
+	broadcastSlicePeriod     = 2 * broadcastSliceOrderSteps
+)
+
+var broadcastSliceOrder = func() [broadcastSlicePeriod]int {
+	differences := deBruijn(broadcastFixtureSlices-1, 2)
+	var order [broadcastSlicePeriod]int
+	for n := 1; n < broadcastSlicePeriod; n++ {
+		order[n] = (order[n-1] + 1 + differences[n%broadcastSliceOrderSteps]) % broadcastFixtureSlices
+	}
+	return order
+}()
+
+// deBruijn is the de Bruijn sequence B(k, n), by the standard Lyndon-word construction.
+func deBruijn(k, n int) []int {
+	a := make([]int, k*n+1)
+	var sequence []int
+	var step func(t, p int)
+	step = func(t, p int) {
+		if t > n {
+			if n%p == 0 {
+				sequence = append(sequence, a[1:p+1]...)
+			}
+			return
+		}
+		a[t] = a[t-p]
+		step(t+1, p)
+		for j := a[t-p] + 1; j < k; j++ {
+			a[t] = j
+			step(t+1, t)
+		}
+	}
+	step(1, 1)
+	return sequence
+}
+
+func broadcastFixtureSliceAt(partIndex int64) int {
+	position := partIndex % broadcastSlicePeriod
+	if position < 0 {
+		position += broadcastSlicePeriod
+	}
+	return broadcastSliceOrder[position]
+}
+
 func broadcastFixtureSlice(tsMs int64) int {
-	return int(floorDiv64(tsMs, 1000) % broadcastFixtureSlices)
+	return broadcastFixtureSliceAt(floorDiv64(tsMs, 1000))
 }
 
 func wrapVideoPart(endpoint string, slice []byte) []byte {

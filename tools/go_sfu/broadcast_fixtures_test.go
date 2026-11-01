@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -67,29 +68,56 @@ func TestVideoPartHeader(t *testing.T) {
 	if rotation != 0 || extra != 0 {
 		t.Fatalf("rotation %d extra %d", rotation, extra)
 	}
-	slice, err := os.ReadFile(filepath.Join("testdata", "broadcast", "video_q1_03.mp4"))
+	slice, err := os.ReadFile(filepath.Join("testdata", "broadcast", fmt.Sprintf("video_q1_%02d.mp4", broadcastFixtureSliceAt(3))))
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}
 	if !bytes.Equal(part[offset+8:], slice) {
-		t.Fatalf("the part's body is not slice 3 of quality 1")
+		t.Fatalf("the part's body is not part 3's slice of quality 1")
 	}
 	unified := fixtures.unifiedPart(2, 3000)
-	unifiedSlice, _ := os.ReadFile(filepath.Join("testdata", "broadcast", "unified_q2_03.mp4"))
+	unifiedSlice, _ := os.ReadFile(filepath.Join("testdata", "broadcast", fmt.Sprintf("unified_q2_%02d.mp4", broadcastFixtureSliceAt(3))))
 	if !bytes.HasSuffix(unified, unifiedSlice) {
-		t.Fatalf("the unified part's body is not unified slice 3 of quality 2")
+		t.Fatalf("the unified part's body is not part 3's unified slice of quality 2")
 	}
 }
 
-func TestSliceIndexWraps(t *testing.T) {
+// A frame's counter tells only its slice, which repeats every 10 s; a listener further behind live must still be
+// measurable. Every step of the order changes slice, and three consecutive parts' slices occur once per period.
+func TestSliceOrderLocatesThreeConsecutiveParts(t *testing.T) {
+	seen := map[[3]int]int64{}
+	for n := int64(0); n < broadcastSlicePeriod; n++ {
+		a, b, c := broadcastFixtureSliceAt(n-2), broadcastFixtureSliceAt(n-1), broadcastFixtureSliceAt(n)
+		if c < 0 || c >= broadcastFixtureSlices {
+			t.Fatalf("part %d: slice %d", n, c)
+		}
+		if a == b || b == c {
+			t.Fatalf("parts %d..%d repeat a slice: %d %d %d", n-2, n, a, b, c)
+		}
+		key := [3]int{a, b, c}
+		if previous, ok := seen[key]; ok {
+			t.Fatalf("parts %d and %d both end the slices %v", previous, n, key)
+		}
+		seen[key] = n
+	}
+	for _, n := range []int64{-1, 5, 1_700_000_003} {
+		if broadcastFixtureSliceAt(n) != broadcastFixtureSliceAt(n+broadcastSlicePeriod) {
+			t.Fatalf("part %d: the order does not repeat after %d parts", n, broadcastSlicePeriod)
+		}
+	}
+}
+
+func TestPartShowsTheSliceOfItsTimestamp(t *testing.T) {
 	fixtures := loadTestFixtures(t)
-	for _, c := range []struct {
-		tsMs  int64
-		slice string
-	}{{9000, "video_q0_09.mp4"}, {10000, "video_q0_00.mp4"}, {1_700_000_003_000, "video_q0_03.mp4"}} {
-		want, _ := os.ReadFile(filepath.Join("testdata", "broadcast", c.slice))
-		if !bytes.HasSuffix(fixtures.videoPart("e", 0, c.tsMs), want) {
-			t.Fatalf("tsMs %d: not %s", c.tsMs, c.slice)
+	for _, tsMs := range []int64{0, 9000, 10000, 1_700_000_003_000} {
+		slice := broadcastFixtureSliceAt(floorDiv64(tsMs, 1000))
+		want, _ := os.ReadFile(filepath.Join("testdata", "broadcast", fmt.Sprintf("video_q0_%02d.mp4", slice)))
+		if !bytes.HasSuffix(fixtures.videoPart("e", 0, tsMs), want) {
+			t.Fatalf("tsMs %d: not slice %d", tsMs, slice)
+		}
+		unified, _ := os.ReadFile(filepath.Join("testdata", "broadcast", fmt.Sprintf("unified_q1_%02d.mp4", slice)))
+		if !bytes.HasSuffix(fixtures.unifiedPart(1, tsMs), unified) {
+			t.Fatalf("tsMs %d: unified not slice %d", tsMs, slice)
 		}
 	}
 }

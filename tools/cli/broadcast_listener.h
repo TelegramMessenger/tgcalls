@@ -30,5 +30,7 @@ std::unique_ptr<ParticipantState> createBroadcastListener(int id, GoInt sfuHandl
 // setJoinResponsePayload. The listener stays muted. Returns false if the join failed.
 bool promoteListenerToSpeaker(ParticipantState *listener, GoInt sfuHandle);
 
-// What the app does on a join-missing answer while in broadcast: leave broadcast and enter it again.
-void rejoinBroadcast(ParticipantState *listener);
+// What the app does on a join-missing answer while in broadcast (PresentationGroupCall.requestCall): leave broadcast
+// (connection mode None), and once it has joined again, enter it again. runBroadcastRejoin orders the two.
+void stopBroadcast(ParticipantState *listener);
+void resumeBroadcast(ParticipantState *listener);

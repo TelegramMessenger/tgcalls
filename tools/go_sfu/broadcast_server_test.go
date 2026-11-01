@@ -59,6 +59,31 @@ func TestAvailability(t *testing.T) {
 	}
 }
 
+// The app's responseTimestamp is MTProto's message time: the server's clock when it answered, before the transfer
+// (MTRequestMessageService). The engine re-anchors a resync at it, so the link's hold must not move it.
+func TestResponseTimestampIsTheAnswerTime(t *testing.T) {
+	server, clock := newTestServer(t)
+	mustAddClient(t, server, 1, "1000000,300", "")
+	part := int64(testNowMs)
+	requestMs := part + 1000 + 300
+	clock.set(requestMs)
+	status, data, responseMs := server.fetch(1, partUnified, part, 1, 2)
+	if status != statusSuccess || len(data) == 0 {
+		t.Fatalf("status %d, %d bytes", status, len(data))
+	}
+	if held := clock.now().UnixMilli() - requestMs; held < 300 {
+		t.Fatalf("the link held the response %d ms, want at least its round trip", held)
+	}
+	if responseMs != requestMs {
+		t.Fatalf("responseMs %d, want the answer time %d", responseMs, requestMs)
+	}
+	clock.set(requestMs + 5000)
+	if status, _, responseMs := server.fetch(1, partUnified, testNowMs+60000, 1, 2); status != statusNotReady ||
+		responseMs != requestMs+5000 {
+		t.Fatalf("not ready: status %d, responseMs %d, want %d", status, responseMs, requestMs+5000)
+	}
+}
+
 func TestOddTimestamps(t *testing.T) {
 	server, _ := newTestServer(t)
 	mustAddClient(t, server, 1, "1000000000,0", "")

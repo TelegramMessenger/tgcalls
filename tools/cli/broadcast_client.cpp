@@ -1,5 +1,6 @@
 #include "broadcast_client.h"
 
+#include <chrono>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -107,4 +108,18 @@ BroadcastRequestCallbacks makeBroadcastRequestCallbacks(GoInt sfuHandle, int cli
         return startFetch(sfuHandle, clientId, kind, timestampMs, channelId, serverQuality(quality), alive, onRejoinNeeded, std::move(completion));
     };
     return callbacks;
+}
+
+void runBroadcastRejoin(std::function<void()> const &stop, std::function<void()> const &resume, int roundTripMs,
+                        std::shared_ptr<std::atomic<bool>> const &alive) {
+    // PresentationGroupCall.requestCall: connection mode None at once, then getCurrentGroupCall and the join (a round
+    // trip each), then Broadcast again.
+    if (!alive || !alive->load()) {
+        return;
+    }
+    stop();
+    std::this_thread::sleep_for(std::chrono::milliseconds(2 * roundTripMs));
+    if (alive->load()) {
+        resume();
+    }
 }

@@ -163,8 +163,11 @@ bool promoteListenerToSpeaker(ParticipantState *listener, GoInt sfuHandle) {
     return true;
 }
 
-void rejoinBroadcast(ParticipantState *listener) {
+void stopBroadcast(ParticipantState *listener) {
     listener->instance->setConnectionMode(tgcalls::GroupConnectionMode::GroupConnectionModeNone, false, false);
+}
+
+void resumeBroadcast(ParticipantState *listener) {
     listener->instance->setConnectionMode(tgcalls::GroupConnectionMode::GroupConnectionModeBroadcast, false,
                                           listener->broadcastUnified);
 }
