@@ -22,6 +22,7 @@
 #include "AudioFrame.h"
 #include "fake_video_source.h"
 #include "fake_video_sink.h"
+#include "broadcast_signals.h"
 
 // CGo header
 #include "submodules/TgVoipWebrtc/tgcalls/tools/go_sfu/go_sfu.h"
@@ -37,12 +38,13 @@ double groupElapsed();
 void groupLog(const char* tag, const char* fmt, ...);
 
 // ---------------------------------------------------------------------------
-// GroupSineRecorder - generates 440 Hz sine tone
+// GroupSineRecorder - generates a sine tone: 440 Hz by default, or a broadcast testbench speaker's tone (fixed or
+// the time-coded marker, whose pitch follows the wall clock at each sample)
 // ---------------------------------------------------------------------------
 
 class GroupSineRecorder : public tgcalls::FakeAudioDeviceModule::Recorder {
 public:
-    GroupSineRecorder();
+    explicit GroupSineRecorder(broadcast::SpeakerTone tone = broadcast::SpeakerTone::fixed(440.0));
     tgcalls::AudioFrame Record() override;
     int32_t WaitForUs() override;
 
@@ -50,11 +52,11 @@ private:
     static constexpr size_t kSampleRate = 48000;
     static constexpr size_t kChannels = 2;
     static constexpr size_t kFrameSamples = 480;
-    static constexpr double kFrequency = 440.0;
     static constexpr double kAmplitude = 3000.0;
 
+    broadcast::SpeakerTone tone_;
     std::vector<int16_t> buffer_;
-    uint64_t phase_ = 0;
+    double phase_ = 0.0;
 };
 
 // ---------------------------------------------------------------------------
@@ -174,6 +176,11 @@ struct ParticipantState {
     // same PeerConnection. Guarded by `videoSinksMutex`.
     std::map<std::string, int> videoFramesAtRerequest;
     bool videoRerequested{false};
+
+    // Broadcast testbench listener: false once the listener is torn down, so fetches still in flight never call
+    // into its engine (stopParticipant clears it before the instance stops).
+    std::shared_ptr<std::atomic<bool>> broadcastAlive;
+    bool broadcastUnified{false};
 };
 
 // ---------------------------------------------------------------------------
@@ -249,7 +256,8 @@ std::unique_ptr<ParticipantState> createParticipant(
     bool earlyVideoRequest = false,
     bool e2e = false,
     VideoFeed videoFeed = VideoFeed::Source,
-    bool requestOwnVideo = false
+    bool requestOwnVideo = false,
+    broadcast::SpeakerTone tone = broadcast::SpeakerTone::fixed(440.0)
 );
 
 // Replaces every participant's incoming video sinks: for each endpoint a

@@ -289,10 +289,11 @@ func scriptedStatusLocked(client *broadcastClient, elapsed time.Duration) (partS
 	return statusSuccess, false
 }
 
-// answer decides a request at `nowMs` (the server's clock when the request arrives).
-func (s *broadcastServer) answer(client *broadcastClient, kind partKind, tsMs int64, channelID int32, quality int, nowMs int64) (partStatus, []byte) {
+// answer decides a request at `now` (the server's clock when the request arrives).
+func (s *broadcastServer) answer(client *broadcastClient, kind partKind, tsMs int64, channelID int32, quality int, now time.Time) (partStatus, []byte) {
+	nowMs := now.UnixMilli()
 	s.mu.Lock()
-	if status, scripted := scriptedStatusLocked(client, time.UnixMilli(nowMs).Sub(client.addedAt)); scripted {
+	if status, scripted := scriptedStatusLocked(client, now.Sub(client.addedAt)); scripted {
 		s.mu.Unlock()
 		return status, nil
 	}
@@ -361,7 +362,7 @@ func (s *broadcastServer) fetch(clientID int, kind partKind, tsMs int64, channel
 		return statusResync, nil, sentAt.UnixMilli()
 	}
 
-	status, data := s.answer(client, kind, tsMs, channelID, quality, sentAt.UnixMilli())
+	status, data := s.answer(client, kind, tsMs, channelID, quality, sentAt)
 	size := len(data)
 	if status != statusSuccess {
 		data = nil

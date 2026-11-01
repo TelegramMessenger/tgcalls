@@ -42,18 +42,25 @@ void groupLog(const char* tag, const char* fmt, ...) {
 // GroupSineRecorder
 // ---------------------------------------------------------------------------
 
-GroupSineRecorder::GroupSineRecorder() {
+GroupSineRecorder::GroupSineRecorder(broadcast::SpeakerTone tone) :
+tone_(tone) {
     buffer_.resize(kFrameSamples * kChannels);
 }
 
 tgcalls::AudioFrame GroupSineRecorder::Record() {
+    // The marker's pitch is read off the wall clock (the broadcast listener decodes generation times from it).
+    int64_t frameStartMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
     for (size_t i = 0; i < kFrameSamples; ++i) {
-        double t = static_cast<double>(phase_) / kSampleRate;
-        int16_t sample = static_cast<int16_t>(kAmplitude * std::sin(2.0 * M_PI * kFrequency * t));
+        double frequency = tone_.frequencyAt(frameStartMs + (int64_t)(i * 1000 / kSampleRate));
+        int16_t sample = static_cast<int16_t>(kAmplitude * std::sin(phase_));
+        phase_ += 2.0 * M_PI * frequency / kSampleRate;
+        if (phase_ > 2.0 * M_PI) {
+            phase_ -= 2.0 * M_PI;
+        }
         for (size_t ch = 0; ch < kChannels; ++ch) {
             buffer_[i * kChannels + ch] = sample;
         }
-        ++phase_;
     }
 
     tgcalls::AudioFrame frame;
@@ -360,7 +367,8 @@ std::unique_ptr<ParticipantState> createParticipant(
     bool earlyVideoRequest,
     bool e2e,
     VideoFeed videoFeed,
-    bool requestOwnVideo
+    bool requestOwnVideo,
+    broadcast::SpeakerTone tone
 ) {
     auto state = std::make_unique<ParticipantState>();
     state->id = id;
@@ -371,7 +379,7 @@ std::unique_ptr<ParticipantState> createParticipant(
 
     std::string tag = "P" + std::to_string(id);
 
-    auto recorder = std::make_shared<GroupSineRecorder>();
+    auto recorder = std::make_shared<GroupSineRecorder>(tone);
     auto renderer = std::make_shared<GroupNoOpRenderer>();
 
     ParticipantState* statePtr = state.get();
@@ -608,6 +616,11 @@ void stopParticipant(ParticipantState* state, GoInt sfuHandle) {
     if (!state || !state->instance) return;
 
     std::string tag = "P" + std::to_string(state->id);
+
+    // A broadcast listener's fetches in flight must not call into the engine being stopped.
+    if (state->broadcastAlive) {
+        state->broadcastAlive->store(false);
+    }
 
     // Remove from SFU first so broadcasts go out to remaining participants.
     GoInt rc = GoSfu_Leave(sfuHandle, (GoInt)state->id);

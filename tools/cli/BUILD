@@ -40,6 +40,27 @@ TGCALLS_CLI_LINKOPTS = select({
     "//conditions:default": ["-framework", "CoreFoundation", "-framework", "Security"],
 })
 
+# A broadcast listener's request callbacks, served by the Go SFU's emulated broadcast server.
+cc_library(
+    name = "broadcast_client",
+    srcs = ["broadcast_client.cpp"],
+    hdrs = ["broadcast_client.h"],
+    copts = TGCALLS_CLI_COPTS,
+    deps = [
+        "//submodules/TgVoipWebrtc:tgcalls_core",
+        "//submodules/TgVoipWebrtc/tgcalls/tools/go_sfu",
+    ],
+)
+
+cc_test(
+    name = "broadcast_client_test",
+    srcs = ["broadcast_client_test.cpp"],
+    copts = TGCALLS_CLI_COPTS,
+    linkopts = TGCALLS_CLI_LINKOPTS,
+    data = ["//submodules/TgVoipWebrtc/tgcalls/tools/go_sfu:broadcast_fixtures"],
+    deps = [":broadcast_client"],
+)
+
 # The emulated broadcast server's parts, read by the decoders today's engine uses.
 cc_test(
     name = "broadcast_part_format_test",
@@ -68,6 +89,8 @@ cc_binary(
         "fake_video_source.h",
         "fake_video_source.cpp",
         "fake_video_sink.h",
+        "broadcast_listener.cpp",
+        "broadcast_listener.h",
     ],
     copts = [
         "-I{}/tgcalls/tgcalls".format("submodules/TgVoipWebrtc"),
@@ -88,10 +111,13 @@ cc_binary(
         "//conditions:default": ["-framework", "CoreFoundation", "-framework", "Security"],
     }),
     deps = [
+        ":broadcast_client",
+        ":broadcast_signals",
         "//submodules/TgVoipWebrtc:tgcalls_core",
         "//submodules/TgVoipWebrtc/tgcalls/tools/go_sfu",
     ],
     data = [
+        "//submodules/TgVoipWebrtc/tgcalls/tools/go_sfu:broadcast_fixtures",
         "//submodules/TgVoipWebrtc:reference_core_wasm",
         "//submodules/TgVoipWebrtc:variant_core_wasm",
     ],

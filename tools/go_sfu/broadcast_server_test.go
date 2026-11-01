@@ -178,3 +178,13 @@ func TestStatsCount(t *testing.T) {
 		t.Fatalf("bytes %v, want %d", stats.Bytes, len(first)+len(second))
 	}
 }
+
+// An event at 0 s fires on a fetch made the instant the client is added, sub-millisecond clock included.
+func TestEventAtZeroFiresImmediately(t *testing.T) {
+	server, clock := newTestServer(t)
+	clock.t = time.UnixMilli(testNowMs).Add(500 * time.Microsecond)
+	mustAddClient(t, server, 1, "1000000000,0", "join-missing@0")
+	if status, _, _ := server.fetch(1, partUnified, testNowMs-5000, 1, 2); status != statusJoinMissing {
+		t.Fatalf("status %d, want join missing", status)
+	}
+}
