@@ -1262,6 +1262,54 @@ func GoSfu_Free(ptr *C.char) {
 	C.free(unsafe.Pointer(ptr))
 }
 
+// GoSfu_TestBuildOpusPart is a test hook: it builds one listener-audio part from packets the caller encoded.
+// packets is flattened slot-major (50 slots × n channels); packetOffsets has 50·n + 1 entries and an empty range is
+// an empty frame. endpointsJSON maps channel indexes to video endpoints ({"0":"ep-a"}). The result is freed with
+// GoSfu_Free; nil (and *outLen 0) on error.
+//
+//export GoSfu_TestBuildOpusPart
+func GoSfu_TestBuildOpusPart(ssrcs *C.uint, n C.int, endpointsJSON *C.char, packets *C.uchar, packetOffsets *C.int, outLen *C.int) *C.char {
+	*outLen = 0
+	channels := int(n)
+	if channels <= 0 {
+		return nil
+	}
+	meta := audioPartMeta{VideoEndpoints: map[int]string{}}
+	for _, ssrc := range unsafe.Slice(ssrcs, channels) {
+		meta.SSRCs = append(meta.SSRCs, uint32(ssrc))
+	}
+	var endpoints map[string]string
+	if err := json.Unmarshal([]byte(C.GoString(endpointsJSON)), &endpoints); err != nil {
+		return nil
+	}
+	for key, endpoint := range endpoints {
+		var channel int
+		if _, err := fmt.Sscanf(key, "%d", &channel); err != nil {
+			return nil
+		}
+		meta.VideoEndpoints[channel] = endpoint
+	}
+	offsets := unsafe.Slice(packetOffsets, broadcastSlotsPerPart*channels+1)
+	all := C.GoBytes(unsafe.Pointer(packets), offsets[len(offsets)-1])
+	slots := make([][][]byte, broadcastSlotsPerPart)
+	for s := range slots {
+		slots[s] = make([][]byte, channels)
+		for c := 0; c < channels; c++ {
+			i := s*channels + c
+			if start, end := int(offsets[i]), int(offsets[i+1]); end > start {
+				slots[s][c] = all[start:end]
+			}
+		}
+	}
+	part, err := buildOpusPart(meta, slots)
+	if err != nil {
+		fmt.Printf("[GoSfu] TestBuildOpusPart: %v\n", err)
+		return nil
+	}
+	*outLen = C.int(len(part))
+	return (*C.char)(C.CBytes(part))
+}
+
 //export GoSfu_Shutdown
 func GoSfu_Shutdown() {
 	sfuRegistryMu.Lock()
