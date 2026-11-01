@@ -1,6 +1,8 @@
 #include "broadcast_signals.h"
 
+#include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 
 namespace broadcast {
@@ -149,13 +151,25 @@ int strongestMarkerSymbol(std::vector<double> const &amplitudes) {
     return best;
 }
 
+int32_t RealTimePacer::nextWaitUs() {
+    int64_t nowUs = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (_startUs < 0) {
+        _startUs = nowUs;
+    }
+    _frames++;
+    int64_t dueUs = _startUs + _frames * kBlockMs * 1000;
+    return (int32_t)std::max<int64_t>(0, dueUs - nowUs);
+}
+
 void MarkerDecoder::push(int64_t blockEndMs, int symbolOrMinus1) {
     if (symbolOrMinus1 < 0) {
         _missingBlocks++;
         _candidateBlocks = 0;
-        if (_missingBlocks >= kMissingBlocksToReset) {
+        if (_missingBlocks >= kMissingBlocksToReset && (!_steps.empty() || _latencyMs)) {
             _steps.clear();
             _latencyMs.reset();
+            _updates++;
         }
         return;
     }
@@ -192,6 +206,7 @@ void MarkerDecoder::push(int64_t blockEndMs, int symbolOrMinus1) {
     int d3 = difference(3);
     if (d1 >= kAlphabet || d2 >= kAlphabet || d3 >= kAlphabet) {
         _latencyMs.reset();
+        _updates++;
         return;
     }
     int position = markerTables().positionOfTriple[(d1 * kAlphabet + d2) * kAlphabet + d3];
@@ -201,10 +216,15 @@ void MarkerDecoder::push(int64_t blockEndMs, int symbolOrMinus1) {
         latency += period;
     }
     _latencyMs = latency;
+    _updates++;
 }
 
 std::optional<int64_t> MarkerDecoder::latencyMs() const {
     return _latencyMs;
+}
+
+uint64_t MarkerDecoder::updates() const {
+    return _updates;
 }
 
 } // namespace broadcast

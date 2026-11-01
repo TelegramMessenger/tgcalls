@@ -253,7 +253,12 @@ func (b *broadcastAudio) slotsFor(tsMs int64) (audioPartMeta, [][][]byte, error)
 	defer b.mu.Unlock()
 	speakers := b.channelSpeakersLocked(tsMs)
 	if len(speakers) == 0 {
-		return audioPartMeta{}, nil, errors.New("no speakers")
+		// Nobody has spoken by this second: one silent channel, listing no speakers.
+		slots := make([][][]byte, broadcastSlotsPerPart)
+		for s := range slots {
+			slots[s] = make([][]byte, 1)
+		}
+		return audioPartMeta{VideoEndpoints: map[int]string{}}, slots, nil
 	}
 	meta := audioPartMeta{VideoEndpoints: map[int]string{}}
 	for _, speaker := range speakers {

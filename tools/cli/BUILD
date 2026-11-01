@@ -61,6 +61,29 @@ cc_test(
     deps = [":broadcast_client"],
 )
 
+# What the broadcast testbench measures from a listener's playout, frames and levels.
+cc_library(
+    name = "broadcast_metrics",
+    srcs = ["broadcast_metrics.cpp"],
+    hdrs = ["broadcast_metrics.h"],
+    copts = TGCALLS_CLI_COPTS,
+    deps = [
+        ":broadcast_signals",
+        "//submodules/TgVoipWebrtc:tgcalls_core",
+    ],
+)
+
+cc_test(
+    name = "broadcast_metrics_test",
+    srcs = ["broadcast_metrics_test.cpp"],
+    copts = TGCALLS_CLI_COPTS,
+    linkopts = TGCALLS_CLI_LINKOPTS,
+    deps = [
+        ":broadcast_metrics",
+        "//submodules/TgVoipWebrtc/tgcalls/tools/go_sfu",
+    ],
+)
+
 # The emulated broadcast server's parts, read by the decoders today's engine uses.
 cc_test(
     name = "broadcast_part_format_test",
@@ -91,6 +114,8 @@ cc_binary(
         "fake_video_sink.h",
         "broadcast_listener.cpp",
         "broadcast_listener.h",
+        "broadcast_mode.cpp",
+        "broadcast_mode.h",
     ],
     copts = [
         "-I{}/tgcalls/tgcalls".format("submodules/TgVoipWebrtc"),
@@ -112,6 +137,7 @@ cc_binary(
     }),
     deps = [
         ":broadcast_client",
+        ":broadcast_metrics",
         ":broadcast_signals",
         "//submodules/TgVoipWebrtc:tgcalls_core",
         "//submodules/TgVoipWebrtc/tgcalls/tools/go_sfu",

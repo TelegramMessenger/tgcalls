@@ -60,6 +60,19 @@ private:
 // order), or -1 when none reaches the detection threshold.
 int strongestMarkerSymbol(std::vector<double> const &amplitudes);
 
+// Waits for tgcalls' FakeAudioDeviceModule, which sleeps the returned wait after each 10 ms frame: deadline-based,
+// so frames come at real time whatever each frame costs (a fixed 10 ms wait runs slow by that cost, and a speaker's
+// RTP clock would drift behind the server's).
+class RealTimePacer {
+public:
+    // Microseconds until the next frame is due (0 when late); the first call starts the schedule.
+    int32_t nextWaitUs();
+
+private:
+    int64_t _startUs = -1;
+    int64_t _frames = 0;
+};
+
 // Turns the per-block strongest marker symbol into the playout latency.
 class MarkerDecoder {
 public:
@@ -69,6 +82,9 @@ public:
 
     // Playout clock minus generation clock for the current step, once four consecutive steps have been seen.
     std::optional<int64_t> latencyMs() const;
+    // Counts each recomputation of latencyMs() (a new step decoded, or a reset), so a caller can compare
+    // consecutive decodes even when they are equal.
+    uint64_t updates() const;
 
 private:
     struct Step {
@@ -82,6 +98,7 @@ private:
     int64_t _candidateStartMs = 0;
     int _candidateBlocks = 0;
     std::optional<int64_t> _latencyMs;
+    uint64_t _updates = 0;
 };
 
 } // namespace broadcast

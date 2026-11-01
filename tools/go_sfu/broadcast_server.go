@@ -318,6 +318,7 @@ func (s *broadcastServer) answer(client *broadcastClient, kind partKind, tsMs in
 		}
 		part, err := s.audio.part(tsMs, endpoints)
 		if err != nil {
+			fmt.Printf("[GoSfu] broadcast audio part %d: %v\n", tsMs, err)
 			return statusNotReady, nil
 		}
 		s.mu.Lock()

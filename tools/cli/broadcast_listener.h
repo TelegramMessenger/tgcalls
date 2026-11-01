@@ -15,6 +15,8 @@ struct BroadcastListenerOptions {
     std::shared_ptr<tgcalls::FakeAudioDeviceModule::Renderer> renderer;
     // A part request answered "join missing": the mode rejoins as the app does.
     std::function<void()> onRejoinNeeded;
+    // Every audio level update the engine reports.
+    std::function<void(tgcalls::GroupLevelsUpdate const &)> onLevels;
 };
 
 // Creates the listener without joining the SFU: muted, the request callbacks bound to the server (client

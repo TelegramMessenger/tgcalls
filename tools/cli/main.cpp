@@ -21,6 +21,7 @@
 
 #include "group_mode.h"
 #include "group_churn_mode.h"
+#include "broadcast_mode.h"
 #include "group_participant.h"
 #include "fake_video_sink.h"
 #include "platform/fake/FakeInterface.h"
@@ -296,6 +297,8 @@ static std::string buildCustomParameters(std::string const &wasmCorePath, std::s
 int main(int argc, char* argv[]) {
     int duration = 10;
     std::string mode;
+    BroadcastRunConfig broadcastConfig;
+    bool durationGiven = false;
     std::string reflectorAddr;
     std::string reflectorList;
     std::string version = "13.0.0";
@@ -331,6 +334,21 @@ int main(int argc, char* argv[]) {
     for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--duration" && i + 1 < argc) {
             duration = std::atoi(argv[++i]);
+            durationGiven = true;
+        } else if (std::string(argv[i]) == "--broadcast-scenario" && i + 1 < argc) {
+            broadcastConfig.scenario = argv[++i];
+        } else if (std::string(argv[i]) == "--broadcast-profile" && i + 1 < argc) {
+            broadcastConfig.profile = argv[++i];
+        } else if (std::string(argv[i]) == "--broadcast-events" && i + 1 < argc) {
+            broadcastConfig.events = argv[++i];
+        } else if (std::string(argv[i]) == "--broadcast-availability-delay-ms" && i + 1 < argc) {
+            broadcastConfig.availabilityDelayMs = std::atoi(argv[++i]);
+        } else if (std::string(argv[i]) == "--broadcast-report" && i + 1 < argc) {
+            broadcastConfig.reportPath = argv[++i];
+        } else if (std::string(argv[i]) == "--broadcast-fixtures" && i + 1 < argc) {
+            broadcastConfig.fixtureDir = argv[++i];
+        } else if (std::string(argv[i]) == "--repetition" && i + 1 < argc) {
+            broadcastConfig.repetition = std::atoi(argv[++i]);
         } else if (std::string(argv[i]) == "--quiet") {
             gQuiet = true;
         } else if (std::string(argv[i]) == "--mode" && i + 1 < argc) {
@@ -465,15 +483,22 @@ int main(int argc, char* argv[]) {
 
     // Validate --mode
     if (mode.empty()) {
-        fprintf(stderr, "Error: --mode is required (p2p, reflector, group, or group-churn)\n");
+        fprintf(stderr, "Error: --mode is required (p2p, reflector, group, group-churn, or broadcast)\n");
         return 1;
     }
-    if (mode != "p2p" && mode != "reflector" && mode != "group" && mode != "group-churn") {
-        fprintf(stderr, "Error: --mode must be 'p2p', 'reflector', 'group', or 'group-churn'\n");
+    if (mode != "p2p" && mode != "reflector" && mode != "group" && mode != "group-churn" && mode != "broadcast") {
+        fprintf(stderr, "Error: --mode must be 'p2p', 'reflector', 'group', 'group-churn', or 'broadcast'\n");
         return 1;
     }
 
     // Group mode: dispatch to separate implementation
+    if (mode == "broadcast") {
+        if (durationGiven) {
+            broadcastConfig.durationS = duration;
+        }
+        broadcastConfig.quiet = gQuiet;
+        return runBroadcastMode(broadcastConfig);
+    }
     if (mode == "group") {
         return runGroupMode(participants, referenceParticipants, duration, gQuiet, enableVideo, networkScenario, mutedParticipants, earlyVideoRequest, videoSinkChurn, e2e, videoFeed, requestOwnVideo, unmuteAfterSeconds, videoRerequest);
     }

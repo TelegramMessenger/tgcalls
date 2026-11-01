@@ -311,9 +311,13 @@ func opusTags(meta audioPartMeta) []byte {
 
 // buildOpusPart writes one listener-audio part: slots[s][c] is channel c's packet for 20 ms slot s, nil for none.
 func buildOpusPart(meta audioPartMeta, slots [][][]byte) ([]byte, error) {
+	// A part listing no speakers still carries one (silent) stream.
 	channels := len(meta.SSRCs)
-	if channels == 0 || channels > broadcastMaxChannels {
-		return nil, fmt.Errorf("listener audio needs 1-%d channels, got %d", broadcastMaxChannels, channels)
+	if channels > broadcastMaxChannels {
+		return nil, fmt.Errorf("listener audio takes at most %d channels, got %d", broadcastMaxChannels, channels)
+	}
+	if channels == 0 {
+		channels = 1
 	}
 	if len(slots) != broadcastSlotsPerPart {
 		return nil, fmt.Errorf("listener audio needs %d slots, got %d", broadcastSlotsPerPart, len(slots))

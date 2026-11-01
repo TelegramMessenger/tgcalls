@@ -75,7 +75,8 @@ tgcalls::AudioFrame GroupSineRecorder::Record() {
 }
 
 int32_t GroupSineRecorder::WaitForUs() {
-    return 10000; // 10ms
+    // Real-time frames: a fixed 10 ms wait after each frame would run the microphone slow by each frame's cost.
+    return pacer_.nextWaitUs();
 }
 
 // ---------------------------------------------------------------------------

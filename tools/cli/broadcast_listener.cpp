@@ -28,8 +28,13 @@ public:
         return frame;
     }
 
+    int32_t WaitForUs() override {
+        return _pacer.nextWaitUs();
+    }
+
 private:
     std::vector<int16_t> _buffer;
+    broadcast::RealTimePacer _pacer;
 };
 
 } // namespace
@@ -59,7 +64,11 @@ std::unique_ptr<ParticipantState> createBroadcastListener(int id, GoInt sfuHandl
             statePtr->wasConnected.store(true);
         }
     };
-    descriptor.audioLevelsUpdated = [statePtr](tgcalls::GroupLevelsUpdate const &update) {
+    auto onLevels = options.onLevels;
+    descriptor.audioLevelsUpdated = [statePtr, onLevels](tgcalls::GroupLevelsUpdate const &update) {
+        if (onLevels) {
+            onLevels(update);
+        }
         std::lock_guard<std::mutex> lock(statePtr->audioLevelsMutex);
         for (const auto &level : update.updates) {
             if (level.ssrc != 0 && level.value.level > 0.05f) {

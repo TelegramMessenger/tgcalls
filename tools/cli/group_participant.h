@@ -55,6 +55,7 @@ private:
     static constexpr double kAmplitude = 3000.0;
 
     broadcast::SpeakerTone tone_;
+    broadcast::RealTimePacer pacer_;
     std::vector<int16_t> buffer_;
     double phase_ = 0.0;
 };

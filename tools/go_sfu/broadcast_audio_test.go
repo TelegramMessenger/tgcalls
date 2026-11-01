@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/binary"
+	"strings"
 	"testing"
 )
 
@@ -178,8 +179,24 @@ func TestLeaverStaysEmptyUntilNextPart(t *testing.T) {
 	}
 }
 
-func TestNoSpeakersIsAnError(t *testing.T) {
-	if _, _, err := newTestBroadcastAudio().slotsFor(101_000); err == nil {
-		t.Fatalf("a part with no speakers built")
+// A second nobody spoke in is still a part: one silent channel, listing no speakers. (Answering NotReady would
+// stall the old engine for good: it retries a NotReady part forever.)
+func TestNoSpeakersIsAnEmptyPart(t *testing.T) {
+	b := newTestBroadcastAudio()
+	meta, slots, err := b.slotsFor(101_000)
+	if err != nil || len(meta.SSRCs) != 0 || len(slots) != 50 || len(slots[0]) != 1 || slots[0][0] != nil {
+		t.Fatalf("slotsFor: %v, %d ssrcs, %d slots", err, len(meta.SSRCs), len(slots))
+	}
+	part, err := b.part(101_000, nil)
+	if err != nil {
+		t.Fatalf("part: %v", err)
+	}
+	pages := parseOggPages(t, part)
+	if len(pages) != 52 || pages[0].packet[9] != 1 {
+		t.Fatalf("%d pages, %d channels", len(pages), pages[0].packet[9])
+	}
+	tags := string(pages[1].packet)
+	if !strings.Contains(tags, "TG_META=AAAAAAAAAAA=") {
+		t.Fatalf("TG_META should list no channels: %q", tags)
 	}
 }
