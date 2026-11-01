@@ -1,0 +1,151 @@
+{
+ "availabilityDelayMs": 300,
+ "cell": {
+  "events": "notready-burst@8,resync@14,join-missing@18",
+  "profile": "wifi",
+  "scenario": "audio"
+ },
+ "durationS": 25,
+ "implementation": "engine",
+ "metrics": {
+  "audio.heardBlocks.1000": {
+   "median": 32.0,
+   "n": 5,
+   "p10": 6.2,
+   "p90": 70.2
+  },
+  "audio.heardBlocks.2300": {
+   "median": 2291.0,
+   "n": 5,
+   "p10": 2256.2,
+   "p90": 2334.0
+  },
+  "audio.heardBlocks.2900": {
+   "median": 2291.0,
+   "n": 5,
+   "p10": 2258.6,
+   "p90": 2334.0
+  },
+  "audio.heardBlocks.marker": {
+   "median": 2291.0,
+   "n": 5,
+   "p10": 2246.4,
+   "p90": 2319.8
+  },
+  "audio.latencyMaxMs": {
+   "median": 3905.0,
+   "n": 5,
+   "p10": 3892.2,
+   "p90": 6674.6
+  },
+  "audio.latencyMedianMs": {
+   "median": 3896.0,
+   "n": 5,
+   "p10": 3875.2,
+   "p90": 3910.8
+  },
+  "audio.stallCount": {
+   "median": 1.0,
+   "n": 5,
+   "p10": 1.0,
+   "p90": 1.0
+  },
+  "audio.stallMs": {
+   "median": 1010.0,
+   "n": 5,
+   "p10": 860.0,
+   "p90": 1328.0
+  },
+  "audio.startMs": {
+   "median": 1143.0,
+   "n": 5,
+   "p10": 604.6,
+   "p90": 1292.6
+  },
+  "levels.speaker0.meanLevel": {
+   "median": 0.8400577765040927,
+   "n": 5,
+   "p10": 0.8245404706197452,
+   "p90": 0.8453295061611125
+  },
+  "levels.speaker0.speakingFraction": {
+   "median": 0.36486486486486486,
+   "n": 5,
+   "p10": 0.3511034482758621,
+   "p90": 0.41430615164520745
+  },
+  "levels.speaker0.updates": {
+   "median": 225.0,
+   "n": 5,
+   "p10": 223.2,
+   "p90": 232.6
+  },
+  "levels.speaker1.meanLevel": {
+   "median": 0.7653422223197089,
+   "n": 5,
+   "p10": 0.7652890633622726,
+   "p90": 0.7707861410961754
+  },
+  "levels.speaker1.speakingFraction": {
+   "median": 0.26180257510729615,
+   "n": 5,
+   "p10": 0.0,
+   "p90": 0.37933333333333336
+  },
+  "levels.speaker1.updates": {
+   "median": 225.0,
+   "n": 5,
+   "p10": 223.2,
+   "p90": 232.6
+  },
+  "levels.speaker2.meanLevel": {
+   "median": 0.7623197456797817,
+   "n": 5,
+   "p10": 0.7618724481866166,
+   "p90": 0.7637413664987718
+  },
+  "levels.speaker2.speakingFraction": {
+   "median": 0.37777777777777777,
+   "n": 5,
+   "p10": 0.29945945945945945,
+   "p90": 0.4015095456563563
+  },
+  "levels.speaker2.updates": {
+   "median": 225.0,
+   "n": 5,
+   "p10": 223.2,
+   "p90": 232.6
+  },
+  "server.bytes.audio": {
+   "median": 340130.0,
+   "n": 5,
+   "p10": 305327.4,
+   "p90": 367043.6
+  },
+  "server.requests.audio.joinMissing": {
+   "median": 1.0,
+   "n": 5,
+   "p10": 1.0,
+   "p90": 1.0
+  },
+  "server.requests.audio.notReady": {
+   "median": 141.0,
+   "n": 5,
+   "p10": 109.8,
+   "p90": 141.0
+  },
+  "server.requests.audio.resync": {
+   "median": 1.0,
+   "n": 5,
+   "p10": 1.0,
+   "p90": 1.0
+  },
+  "server.requests.audio.success": {
+   "median": 26.0,
+   "n": 5,
+   "p10": 26.0,
+   "p90": 28.0
+  }
+ },
+ "repetitions": 5
+}

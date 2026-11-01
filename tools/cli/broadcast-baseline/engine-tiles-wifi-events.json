@@ -1,0 +1,379 @@
+{
+ "availabilityDelayMs": 300,
+ "cell": {
+  "events": "notready-burst@8,resync@14,join-missing@18",
+  "profile": "wifi",
+  "scenario": "tiles"
+ },
+ "durationS": 25,
+ "implementation": "engine",
+ "metrics": {
+  "audio.heardBlocks.1000": {
+   "median": 26.0,
+   "n": 5,
+   "p10": 8.6,
+   "p90": 86.6
+  },
+  "audio.heardBlocks.2300": {
+   "median": 2327.0,
+   "n": 5,
+   "p10": 2262.8,
+   "p90": 2405.0
+  },
+  "audio.heardBlocks.2900": {
+   "median": 2327.0,
+   "n": 5,
+   "p10": 2262.0,
+   "p90": 2401.4
+  },
+  "audio.heardBlocks.marker": {
+   "median": 2322.0,
+   "n": 5,
+   "p10": 2246.6,
+   "p90": 2401.2
+  },
+  "audio.latencyMaxMs": {
+   "median": 3919.0,
+   "n": 5,
+   "p10": 3886.0,
+   "p90": 14338.600000000002
+  },
+  "audio.latencyMedianMs": {
+   "median": 3883.0,
+   "n": 5,
+   "p10": 3851.2,
+   "p90": 3906.2
+  },
+  "audio.stallCount": {
+   "median": 1.0,
+   "n": 5,
+   "p10": 1.0,
+   "p90": 1.0
+  },
+  "audio.stallMs": {
+   "median": 770.0,
+   "n": 5,
+   "p10": 452.0,
+   "p90": 1130.0
+  },
+  "audio.startMs": {
+   "median": 1013.0,
+   "n": 5,
+   "p10": 538.2,
+   "p90": 1262.2
+  },
+  "levels.speaker0.meanLevel": {
+   "median": 0.828376329959707,
+   "n": 5,
+   "p10": 0.815162946874409,
+   "p90": 0.8379858919081706
+  },
+  "levels.speaker0.speakingFraction": {
+   "median": 0.4022346368715084,
+   "n": 5,
+   "p10": 0.3483687118348357,
+   "p90": 0.44049685011292045
+  },
+  "levels.speaker0.updates": {
+   "median": 181.0,
+   "n": 5,
+   "p10": 179.0,
+   "p90": 189.2
+  },
+  "levels.speaker1.meanLevel": {
+   "median": 0.763977652488474,
+   "n": 5,
+   "p10": 0.7631619260490686,
+   "p90": 0.7642953829360493
+  },
+  "levels.speaker1.speakingFraction": {
+   "median": 0.0,
+   "n": 5,
+   "p10": 0.0,
+   "p90": 0.08497819133469034
+  },
+  "levels.speaker1.updates": {
+   "median": 181.0,
+   "n": 5,
+   "p10": 179.0,
+   "p90": 189.2
+  },
+  "levels.speaker2.meanLevel": {
+   "median": 0.7694013150114762,
+   "n": 5,
+   "p10": 0.7602326395206309,
+   "p90": 0.7699410967710368
+  },
+  "levels.speaker2.speakingFraction": {
+   "median": 0.23756906077348067,
+   "n": 5,
+   "p10": 0.16312849162011173,
+   "p90": 0.24629339305711084
+  },
+  "levels.speaker2.updates": {
+   "median": 181.0,
+   "n": 5,
+   "p10": 179.0,
+   "p90": 189.2
+  },
+  "server.bytes.audio": {
+   "median": 329464.0,
+   "n": 5,
+   "p10": 306012.2,
+   "p90": 352444.4
+  },
+  "server.bytes.video_q0": {
+   "median": 455667.0,
+   "n": 5,
+   "p10": 417857.0,
+   "p90": 458249.4
+  },
+  "server.bytes.video_q1": {
+   "median": 1473715.0,
+   "n": 5,
+   "p10": 1349461.0,
+   "p90": 1481446.6
+  },
+  "server.bytes.video_q2": {
+   "median": 4296499.0,
+   "n": 5,
+   "p10": 3941215.0,
+   "p90": 4307092.0
+  },
+  "server.requests.audio.joinMissing": {
+   "median": 1.0,
+   "n": 5,
+   "p10": 0.4,
+   "p90": 1.0
+  },
+  "server.requests.audio.notReady": {
+   "median": 74.0,
+   "n": 5,
+   "p10": 68.6,
+   "p90": 93.6
+  },
+  "server.requests.audio.resync": {
+   "median": 1.0,
+   "n": 5,
+   "p10": 1.0,
+   "p90": 1.0
+  },
+  "server.requests.audio.success": {
+   "median": 28.0,
+   "n": 5,
+   "p10": 26.0,
+   "p90": 28.0
+  },
+  "server.requests.video_q0.joinMissing": {
+   "median": 0.0,
+   "n": 5,
+   "p10": 0.0,
+   "p90": 0.6000000000000001
+  },
+  "server.requests.video_q0.notReady": {
+   "median": 68.0,
+   "n": 5,
+   "p10": 58.0,
+   "p90": 71.6
+  },
+  "server.requests.video_q0.resync": {
+   "median": 0.0,
+   "n": 5,
+   "p10": 0.0,
+   "p90": 0.0
+  },
+  "server.requests.video_q0.success": {
+   "median": 23.0,
+   "n": 5,
+   "p10": 21.0,
+   "p90": 23.0
+  },
+  "server.requests.video_q1.joinMissing": {
+   "median": 0.0,
+   "n": 5,
+   "p10": 0.0,
+   "p90": 0.0
+  },
+  "server.requests.video_q1.notReady": {
+   "median": 68.0,
+   "n": 5,
+   "p10": 58.0,
+   "p90": 72.0
+  },
+  "server.requests.video_q1.resync": {
+   "median": 0.0,
+   "n": 5,
+   "p10": 0.0,
+   "p90": 0.0
+  },
+  "server.requests.video_q1.success": {
+   "median": 23.0,
+   "n": 5,
+   "p10": 21.0,
+   "p90": 23.0
+  },
+  "server.requests.video_q2.joinMissing": {
+   "median": 0.0,
+   "n": 5,
+   "p10": 0.0,
+   "p90": 0.0
+  },
+  "server.requests.video_q2.notReady": {
+   "median": 68.0,
+   "n": 5,
+   "p10": 58.0,
+   "p90": 72.0
+  },
+  "server.requests.video_q2.resync": {
+   "median": 0.0,
+   "n": 5,
+   "p10": 0.0,
+   "p90": 0.0
+  },
+  "server.requests.video_q2.success": {
+   "median": 23.0,
+   "n": 5,
+   "p10": 21.0,
+   "p90": 23.0
+  },
+  "video.ep-0.frames": {
+   "median": 519.0,
+   "n": 5,
+   "p10": 500.0,
+   "p90": 542.0
+  },
+  "video.ep-0.latencyMaxMs": {
+   "median": 3412.0,
+   "n": 5,
+   "p10": 3385.0,
+   "p90": 3419.0
+  },
+  "video.ep-0.latencyMedianMs": {
+   "median": 3395.0,
+   "n": 5,
+   "p10": 3356.8,
+   "p90": 3406.6
+  },
+  "video.ep-0.stallCount": {
+   "median": 3.0,
+   "n": 5,
+   "p10": 3.0,
+   "p90": 3.0
+  },
+  "video.ep-0.stallMs": {
+   "median": 4163.0,
+   "n": 5,
+   "p10": 3840.0,
+   "p90": 4501.6
+  },
+  "video.ep-0.startMs": {
+   "median": 3620.0,
+   "n": 5,
+   "p10": 3140.2,
+   "p90": 3865.6
+  },
+  "video.ep-0.widths.1280": {
+   "median": 260.0,
+   "n": 5,
+   "p10": 253.4,
+   "p90": 272.0
+  },
+  "video.ep-0.widths.320": {
+   "median": 270.0,
+   "n": 5,
+   "p10": 240.0,
+   "p90": 270.0
+  },
+  "video.ep-1.frames": {
+   "median": 519.0,
+   "n": 5,
+   "p10": 500.0,
+   "p90": 542.0
+  },
+  "video.ep-1.latencyMaxMs": {
+   "median": 3413.0,
+   "n": 5,
+   "p10": 3385.0,
+   "p90": 3419.4
+  },
+  "video.ep-1.latencyMedianMs": {
+   "median": 3396.0,
+   "n": 5,
+   "p10": 3356.8,
+   "p90": 3406.6
+  },
+  "video.ep-1.stallCount": {
+   "median": 3.0,
+   "n": 5,
+   "p10": 3.0,
+   "p90": 3.0
+  },
+  "video.ep-1.stallMs": {
+   "median": 4163.0,
+   "n": 5,
+   "p10": 3840.2,
+   "p90": 4502.0
+  },
+  "video.ep-1.startMs": {
+   "median": 3621.0,
+   "n": 5,
+   "p10": 3141.6,
+   "p90": 3866.6
+  },
+  "video.ep-1.widths.640": {
+   "median": 519.0,
+   "n": 5,
+   "p10": 500.0,
+   "p90": 542.0
+  },
+  "video.ep-2.frames": {
+   "median": 519.0,
+   "n": 5,
+   "p10": 500.0,
+   "p90": 542.0
+  },
+  "video.ep-2.latencyMaxMs": {
+   "median": 3413.0,
+   "n": 5,
+   "p10": 3386.0,
+   "p90": 3419.4
+  },
+  "video.ep-2.latencyMedianMs": {
+   "median": 3396.0,
+   "n": 5,
+   "p10": 3357.8,
+   "p90": 3407.6
+  },
+  "video.ep-2.stallCount": {
+   "median": 3.0,
+   "n": 5,
+   "p10": 3.0,
+   "p90": 3.0
+  },
+  "video.ep-2.stallMs": {
+   "median": 4159.0,
+   "n": 5,
+   "p10": 3837.6,
+   "p90": 4499.6
+  },
+  "video.ep-2.startMs": {
+   "median": 3625.0,
+   "n": 5,
+   "p10": 3144.6,
+   "p90": 3870.2
+  },
+  "video.ep-2.widths.1280": {
+   "median": 270.0,
+   "n": 5,
+   "p10": 240.0,
+   "p90": 270.0
+  },
+  "video.ep-2.widths.320": {
+   "median": 260.0,
+   "n": 5,
+   "p10": 253.4,
+   "p90": 272.0
+  }
+ },
+ "repetitions": 5
+}

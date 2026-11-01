@@ -1,0 +1,127 @@
+{
+ "availabilityDelayMs": 300,
+ "cell": {
+  "events": "",
+  "profile": "3g",
+  "scenario": "unified"
+ },
+ "durationS": 25,
+ "implementation": "engine",
+ "metrics": {
+  "audio.heardBlocks.1000": {
+   "median": 2102.0,
+   "n": 5,
+   "p10": 2102.0,
+   "p90": 2144.6
+  },
+  "audio.heardBlocks.2300": {
+   "median": 0.0,
+   "n": 5,
+   "p10": 0.0,
+   "p90": 0.0
+  },
+  "audio.heardBlocks.2900": {
+   "median": 0.0,
+   "n": 5,
+   "p10": 0.0,
+   "p90": 0.0
+  },
+  "audio.heardBlocks.marker": {
+   "median": 6.0,
+   "n": 5,
+   "p10": 6.0,
+   "p90": 7.0
+  },
+  "audio.stallCount": {
+   "median": 1.0,
+   "n": 5,
+   "p10": 0.0,
+   "p90": 1.0
+  },
+  "audio.stallMs": {
+   "median": 610.0,
+   "n": 5,
+   "p10": 0.0,
+   "p90": 628.0
+  },
+  "audio.startMs": {
+   "median": 3353.0,
+   "n": 5,
+   "p10": 3343.4,
+   "p90": 3550.0
+  },
+  "server.bytes.unified_q2": {
+   "median": 4265725.0,
+   "n": 5,
+   "p10": 4265725.0,
+   "p90": 4296853.0
+  },
+  "server.requests.unified_q2.joinMissing": {
+   "median": 0.0,
+   "n": 5,
+   "p10": 0.0,
+   "p90": 0.0
+  },
+  "server.requests.unified_q2.notReady": {
+   "median": 0.0,
+   "n": 5,
+   "p10": 0.0,
+   "p90": 0.0
+  },
+  "server.requests.unified_q2.resync": {
+   "median": 0.0,
+   "n": 5,
+   "p10": 0.0,
+   "p90": 0.0
+  },
+  "server.requests.unified_q2.success": {
+   "median": 22.0,
+   "n": 5,
+   "p10": 22.0,
+   "p90": 22.0
+  },
+  "video.unified.frames": {
+   "median": 630.0,
+   "n": 5,
+   "p10": 630.0,
+   "p90": 646.0
+  },
+  "video.unified.latencyMaxMs": {
+   "median": 7628.0,
+   "n": 5,
+   "p10": 7370.4,
+   "p90": 7729.2
+  },
+  "video.unified.latencyMedianMs": {
+   "median": 7619.0,
+   "n": 5,
+   "p10": 7359.2,
+   "p90": 7722.6
+  },
+  "video.unified.stallCount": {
+   "median": 0.0,
+   "n": 5,
+   "p10": 0.0,
+   "p90": 0.0
+  },
+  "video.unified.stallMs": {
+   "median": 0.0,
+   "n": 5,
+   "p10": 0.0,
+   "p90": 0.0
+  },
+  "video.unified.startMs": {
+   "median": 3348.0,
+   "n": 5,
+   "p10": 3339.8,
+   "p90": 3545.0
+  },
+  "video.unified.widths.1280": {
+   "median": 630.0,
+   "n": 5,
+   "p10": 630.0,
+   "p90": 646.0
+  }
+ },
+ "repetitions": 5
+}

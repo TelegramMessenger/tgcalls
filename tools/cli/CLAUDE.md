@@ -50,3 +50,59 @@ In-process test harness for tgcalls. See the root `CLAUDE.md` for build instruct
 - Two ways a participant feeds outgoing video (`VideoFeed` in group_participant.h): `Source` — `descriptor.getVideoSource` returning the `FakeVideoTrackSource` above (the CLI's original shortcut, no app uses it); `CaptureAtJoin` / `CaptureLate` (`--video-via-capture` / `--video-via-capture-late`) — a real `tgcalls::VideoCaptureInterface::Create(threads, "<id>")`, handed over as `descriptor.videoCapture` or via `setVideoCapture()` after the join response, exactly as the iOS wrapper does. For that to produce frames on the host, the fake platform implements `makeVideoSource` (a `FakePlatformVideoSource`: plain adapted source, pushed into) and `makeVideoCapturer` (`FakeVideoCapturer`: 1280x720 @ 30 fps, tint from `deviceId`, a sweeping bar for motion, also feeds the uncropped preview sink) in `tgcalls/platform/fake/FakeVideoCapturer.{h,cpp}`. Both used to return nullptr, which is why `setVideoCapture` could be a no-op in the reference engine without any test noticing.
 - `--request-own-video`: `requestVideoFromEndpoints()` appends the participant's own endpoint to every request (the SFU's `ActiveVideoSsrcs` never names the receiver, but the app's roster includes the local participant and is handed to the engine unfiltered) and registers a sink for it. Validation reads `GoSfu_QueryRequestedLayer(receiver, receiver)` before the SFU is destroyed (`ParticipantState::sfuSelfRequestedLayer`) — any value ≥ 0 means the engine let a self-request through — and, for Capture* feeds, requires the own-endpoint sink to have received preview frames (`videoViaCapture` outlives the released `videoCapture`). The own-endpoint sink is never counted as a received pair.
 - Group mode source: `submodules/TgVoipWebrtc/tgcalls/tools/cli/group_mode.cpp`
+
+## Architecture (Broadcast)
+
+`--mode broadcast` (2026-11-01) measures **today's engine as a broadcast listener**: `GroupInstanceCustomImpl` in
+`GroupConnectionModeBroadcast`, fetching 1-second parts from the Go SFU's emulated broadcast server (see the go_sfu
+`CLAUDE.md`, "Broadcast server"). It exists to record the old engine's behaviour as the baseline the app-side broadcast
+player (telegram-ios `docs/superpowers/specs/2026-11-01-broadcast-playback-out-of-tgcalls-design.md`) must meet before
+broadcast leaves tgcalls; the baseline is `broadcast-baseline/`.
+
+- **Scenarios** (`broadcast_mode.cpp`): three CustomImpl speakers in WebRTC (`createParticipant` with a
+  `broadcast::SpeakerTone`): speaker 0 the time-coded marker, 1 and 2 fixed 2300 / 2900 Hz, endpoints `ep-0..ep-2`.
+  The listener (`createBroadcastListener`, id 100, server client 1) joins once every speaker's audio has reached the
+  SFU plus 3 s, so its first parts are not from before anyone spoke. `audio`: listener audio only. `tiles`: tiles
+  ep-0 thumbnail, ep-1 medium, ep-2 full; at 10 s ep-0 and ep-2 swap (the engine's in-place quality update). `unified`:
+  no speakers, an RTMP stream's listener (unified parts, sink `"unified"`). `handoff`: at 12 s
+  `promoteListenerToSpeaker` in `PresentationGroupCall`'s order (`None` keeping broadcast, join payload, SFU join,
+  `Rtc`, join response). `--duration` counts from the listener entering broadcast.
+- **The marker** (`broadcast_signals`): its pitch steps every 100 ms of the sender's wall clock through 8 frequencies
+  (500-1900 Hz), each step a different pitch, any 3 consecutive differences unique per 343 steps (de Bruijn B(7,3) of
+  differences). `MarkerDecoder` turns the listener's playout back into playout-minus-generation time: the distance from
+  live, and at a handoff which copy is heard (the broadcast and WebRTC copies carry the same Opus payloads, so they can
+  only be told apart by when they were generated). `RecordingRenderer` only believes a decoded latency once two
+  consecutive steps agree within 20 ms (triples spanning a handoff decode to garbage).
+- **Real-time pacing**: `FakeAudioDeviceModule` sleeps the returned wait after each 10 ms frame, so a fixed 10 ms wait
+  runs a microphone or a playout slow by each frame's cost. `RealTimePacer` (deadline-based) paces `GroupSineRecorder`
+  (every mode's speakers), the listener's silent recorder and `RecordingRenderer`. Without it a speaker's RTP clock
+  drifted ~3 % behind the server's and parts were cut short (12 s of stalls in a 25 s run).
+- **Measurements** (`broadcast_metrics`, per 10 ms block / per frame): audio start (first block with an expected tone),
+  stalls (≥ 3 consecutive silent blocks after start, outside the handoff window), latency (median/max, before any
+  promotion), tones heard per frequency; per tile: first frame, frames, stalls (inter-frame gap > 100 ms), latency from
+  the fixture's burned-in frame counter (`(arrival − counter·1000/30) mod 10 s`, continuous over the 299 → 0 wrap),
+  widths (which quality was shown); levels per speaker (`speaker0..2`: SSRCs differ between runs) as mean level and
+  fraction with voice; the handoff's gap (blocks with no marker between the promotion and the first block at WebRTC
+  latency, below 1000 ms) and overlap (two markers near full amplitude); the server's requests and bytes. Times are
+  wall-clock ms since the listener entered broadcast. Report: `--broadcast-report PATH` (schema 1).
+- **Request callbacks** (`broadcast_client`): one thread per part fetch through the blocking `GoSfu_BroadcastFetch`;
+  a cancelled task or a torn-down listener (`ParticipantState::broadcastAlive`, cleared by `stopParticipant` before the
+  engine stops) never gets a completion; `responseTimestamp` is seconds; a join-missing answer rejoins as the app does
+  (`None`, then `Broadcast`, after one profile round trip).
+- **The baseline**: `run-broadcast-baseline.sh -j 2 -r 5 -o DIR` (175 runs, ~1.2 h; resumes by skipping existing
+  reports), then `broadcast_report.py aggregate DIR tools/cli/broadcast-baseline` (median, p10, p90 per metric per
+  cell). `broadcast_report.py compare BASELINE CANDIDATE [--metrics prefix,…]` is the bar for a new implementation:
+  lower-is-better metrics (start, stalls, latency, handoff gap/overlap) at most max(p90, median + 50 ms), heard blocks
+  and frames at least p10, speaking fraction within the baseline's p10–p90 widened by 0.05, mean level at least p10;
+  server counts informational. **Heard blocks of a tone the scenario does not play are informational**: the detector
+  "hears" 1000 Hz in listener cells (5–315 blocks a run) and the marker in unified cells (3–17), leakage from
+  neighbouring frequencies that a cleaner player would be failed for. The speaking fraction is webrtc's VAD judging sine
+  tones, which spreads ~±0.05 run to run; a fixed ±0.05 around the median failed the old engine against 3-of-5 subsets
+  of its own runs (4–13 checks per subset). The baseline passes against its own runs and every such subset (575
+  checks). Noisy cell: `audio-poor-lte-events` start (p90/median 2.06).
+- Tests (host, `bazel test //submodules/TgVoipWebrtc/tgcalls/tools/cli:all`): `broadcast_signals_test` (marker round
+  trip, with Opus), `broadcast_part_format_test` (the server's parts read by tgcalls' own `AudioStreamingPart` /
+  `VideoStreamingPart`: the old decoders are the format's specification), `broadcast_client_test` (cancellation,
+  teardown, time sources, join-missing), `broadcast_metrics_test`; `python3 -m unittest discover -s tools/cli -p
+  'broadcast_report_test.py'`.
+
