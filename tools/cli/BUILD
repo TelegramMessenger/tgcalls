@@ -1,4 +1,24 @@
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+
+# Time-coded speaker tones and their detector (the broadcast testbench).
+cc_library(
+    name = "broadcast_signals",
+    srcs = ["broadcast_signals.cpp"],
+    hdrs = ["broadcast_signals.h"],
+    copts = ["-std=c++17"],
+)
+
+cc_test(
+    name = "broadcast_signals_test",
+    srcs = ["broadcast_signals_test.cpp"],
+    copts = ["-std=c++17"],
+    deps = [
+        ":broadcast_signals",
+        "//third-party/opus:opus",
+    ],
+)
 
 cc_binary(
     name = "tgcalls_cli",
