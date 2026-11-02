@@ -8,6 +8,8 @@ cc_library(
     srcs = ["broadcast_signals.cpp"],
     hdrs = ["broadcast_signals.h"],
     copts = ["-std=c++17"],
+    # Used by the new player's runner (telegram-ios Tests/BroadcastRunner), as are the libraries below marked public.
+    visibility = ["//visibility:public"],
 )
 
 cc_test(
@@ -71,6 +73,7 @@ cc_library(
         ":broadcast_signals",
         "//submodules/TgVoipWebrtc:tgcalls_core",
     ],
+    visibility = ["//visibility:public"],
 )
 
 cc_test(
@@ -80,6 +83,27 @@ cc_test(
     linkopts = TGCALLS_CLI_LINKOPTS,
     deps = [
         ":broadcast_metrics",
+        "//submodules/TgVoipWebrtc/tgcalls/tools/go_sfu",
+    ],
+)
+
+# The broadcast report (schema 1): broadcast mode's, and the new player's runner's (telegram-ios Tests/BroadcastRunner).
+cc_library(
+    name = "broadcast_report",
+    srcs = ["broadcast_report.cpp"],
+    hdrs = ["broadcast_report.h"],
+    copts = TGCALLS_CLI_COPTS,
+    deps = [":broadcast_metrics"],
+    visibility = ["//visibility:public"],
+)
+
+cc_test(
+    name = "broadcast_report_writer_test",
+    srcs = ["broadcast_report_test.cpp"],
+    copts = TGCALLS_CLI_COPTS,
+    linkopts = TGCALLS_CLI_LINKOPTS,
+    deps = [
+        ":broadcast_report",
         "//submodules/TgVoipWebrtc/tgcalls/tools/go_sfu",
     ],
 )
@@ -99,19 +123,35 @@ cc_test(
     ],
 )
 
+# Group participants on the Go SFU (CustomImpl and ReferenceImpl), also the broadcast speakers.
+cc_library(
+    name = "group_participant",
+    srcs = [
+        "group_participant.cpp",
+        "fake_video_source.cpp",
+    ],
+    hdrs = [
+        "group_participant.h",
+        "fake_video_source.h",
+        "fake_video_sink.h",
+    ],
+    copts = TGCALLS_CLI_COPTS,
+    deps = [
+        ":broadcast_signals",
+        "//submodules/TgVoipWebrtc:tgcalls_core",
+        "//submodules/TgVoipWebrtc/tgcalls/tools/go_sfu",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 cc_binary(
     name = "tgcalls_cli",
     srcs = [
         "main.cpp",
         "group_mode.cpp",
         "group_mode.h",
-        "group_participant.cpp",
-        "group_participant.h",
         "group_churn_mode.cpp",
         "group_churn_mode.h",
-        "fake_video_source.h",
-        "fake_video_source.cpp",
-        "fake_video_sink.h",
         "broadcast_listener.cpp",
         "broadcast_listener.h",
         "broadcast_mode.cpp",
@@ -138,7 +178,9 @@ cc_binary(
     deps = [
         ":broadcast_client",
         ":broadcast_metrics",
+        ":broadcast_report",
         ":broadcast_signals",
+        ":group_participant",
         "//submodules/TgVoipWebrtc:tgcalls_core",
         "//submodules/TgVoipWebrtc/tgcalls/tools/go_sfu",
     ],

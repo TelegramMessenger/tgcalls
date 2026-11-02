@@ -194,18 +194,25 @@ HandoffReport RecordingRenderer::handoffReport(int64_t startMs, int64_t promoted
     return report;
 }
 
-int readFrameCounter(webrtc::VideoFrame const &frame) {
-    auto i420 = frame.video_frame_buffer()->ToI420();
-    if (!i420 || i420->width() < 16 * 16 || i420->height() < 16) {
+int readFrameCounter(const uint8_t *y, int strideY, int width, int height) {
+    if (!y || width < 16 * 16 || height < 16) {
         return -1;
     }
     int value = 0;
     for (int bit = 0; bit < 16; bit++) {
-        if (i420->DataY()[8 * i420->StrideY() + 16 * bit + 8] > 128) {
+        if (y[8 * strideY + 16 * bit + 8] > 128) {
             value |= 1 << bit;
         }
     }
     return value;
+}
+
+int readFrameCounter(webrtc::VideoFrame const &frame) {
+    auto i420 = frame.video_frame_buffer()->ToI420();
+    if (!i420) {
+        return -1;
+    }
+    return readFrameCounter(i420->DataY(), i420->StrideY(), i420->width(), i420->height());
 }
 
 void CodedFrameSink::OnFrame(const webrtc::VideoFrame &frame) {
@@ -213,7 +220,11 @@ void CodedFrameSink::OnFrame(const webrtc::VideoFrame &frame) {
 }
 
 void CodedFrameSink::onFrameAt(const webrtc::VideoFrame &frame, int64_t arrivalMs) {
-    Frame entry{arrivalMs, frame.width(), readFrameCounter(frame)};
+    onFrameAt(frame.width(), readFrameCounter(frame), arrivalMs);
+}
+
+void CodedFrameSink::onFrameAt(int width, int counter, int64_t arrivalMs) {
+    Frame entry{arrivalMs, width, counter};
     std::lock_guard<std::mutex> lock(_mutex);
     _frames.push_back(entry);
 }

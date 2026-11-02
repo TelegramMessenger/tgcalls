@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """The broadcast testbench's baseline and comparison.
 
-  broadcast_report.py aggregate <reports-dir> <out-dir>
+  broadcast_report.py aggregate <reports-dir> <out-dir> [--prefix <name>]
       Groups `tgcalls_cli --mode broadcast` reports into cells (scenario, profile, events) and writes one baseline
-      file per cell, engine-<scenario>-<profile>-<none|events>.json: per metric its median, p10 and p90 over the
-      repetitions.
+      file per cell, <name>-<scenario>-<profile>-<none|events>.json (name: engine by default; the new player's runner
+      writes player): per metric its median, p10 and p90 over the repetitions.
 
   broadcast_report.py compare <baseline-dir> <candidate-reports-dir> [--metrics prefix,prefix] [--confirm <dir>]
       Exit 0 only if every candidate cell passes against its baseline cell. The margin of every rule is the baseline's
@@ -137,7 +137,7 @@ def group(reports):
     return cells
 
 
-def aggregate(reports_dir, out_dir):
+def aggregate(reports_dir, out_dir, prefix="engine"):
     os.makedirs(out_dir, exist_ok=True)
     for cell, reports in sorted(group(load_reports(reports_dir)).items()):
         scenario, profile, events = cell
@@ -150,7 +150,7 @@ def aggregate(reports_dir, out_dir):
             "repetitions": len(reports),
             "metrics": summarize(reports),
         }
-        path = os.path.join(out_dir, f"engine-{cell_name(cell)}.json")
+        path = os.path.join(out_dir, f"{prefix}-{cell_name(cell)}.json")
         with open(path, "w") as f:
             json.dump(baseline, f, indent=1, sort_keys=True)
             f.write("\n")
@@ -294,7 +294,8 @@ def calibrate(reports_dir, matrices=1000, seed=11):
 
 def main(argv):
     if len(argv) >= 3 and argv[0] == "aggregate":
-        return aggregate(argv[1], argv[2])
+        prefix = argv[argv.index("--prefix") + 1] if "--prefix" in argv else "engine"
+        return aggregate(argv[1], argv[2], prefix)
     if len(argv) >= 2 and argv[0] == "calibrate":
         matrices = int(argv[argv.index("--matrices") + 1]) if "--matrices" in argv else 1000
         return calibrate(argv[1], matrices)

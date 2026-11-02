@@ -248,9 +248,38 @@ void testPacerKeepsTenMillisecondPeriod() {
     }
 }
 
+// A player that shows frames from pixel buffers or its own planes records them by width and counter.
+void testFramesRecordedByCounterMatchFrames() {
+    broadcast::CodedFrameSink byFrame;
+    broadcast::CodedFrameSink byCounter;
+    for (int64_t n = 0; n < 6; n++) {
+        const int slice = broadcast::fixtureSliceAt(kFirstPart + n);
+        for (int i = 0; i < 30; i++) {
+            const int counter = slice * 30 + i;
+            const auto frame = codedFrame(320, 180, counter);
+            const int64_t arrival = (kFirstPart + n) * 1000 + i * 1000 / 30 + 3500;
+            auto i420 = frame.video_frame_buffer()->ToI420();
+            CHECK_TRUE(broadcast::readFrameCounter(i420->DataY(), i420->StrideY(), i420->width(), i420->height()) == counter);
+            byFrame.onFrameAt(frame, arrival);
+            byCounter.onFrameAt(frame.width(), counter, arrival);
+        }
+    }
+    const auto a = byFrame.report(kFirstPart * 1000);
+    const auto b = byCounter.report(kFirstPart * 1000);
+    CHECK_TRUE(a.frames == b.frames && a.frames > 0);
+    CHECK_TRUE(a.startMs == b.startMs);
+    CHECK_TRUE(a.latencyMedianMs == b.latencyMedianMs);
+    CHECK_TRUE(a.repeatedFrames == b.repeatedFrames && a.droppedFrames == b.droppedFrames);
+    CHECK_TRUE(a.unplacedFrames == b.unplacedFrames && a.widths == b.widths);
+    // Too small to carry a counter.
+    std::vector<uint8_t> tiny(100 * 10, 255);
+    CHECK_TRUE(broadcast::readFrameCounter(tiny.data(), 100, 100, 10) == -1);
+}
+
 } // namespace
 
 int main() {
+    testFramesRecordedByCounterMatchFrames();
     testPacerKeepsTenMillisecondPeriod();
     testVideoLatencyBeyondTheFixtureLoop();
     testRepeatedFramesAreNotFrames();

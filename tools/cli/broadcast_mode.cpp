@@ -14,6 +14,7 @@
 #include "broadcast_client.h"
 #include "broadcast_listener.h"
 #include "broadcast_metrics.h"
+#include "broadcast_report.h"
 #include "group_participant.h"
 #include "third-party/json11.hpp"
 
@@ -40,10 +41,6 @@ int profileRoundTripMs(const std::string &profile) {
     return 100;
 }
 
-json11::Json optionalJson(std::optional<int64_t> value) {
-    return value ? json11::Json((double)*value) : json11::Json(nullptr);
-}
-
 tgcalls::VideoChannelDescription tile(ParticipantState const *speaker, int index, tgcalls::VideoChannelDescription::Quality quality) {
     tgcalls::VideoChannelDescription description;
     description.audioSsrc = speaker->audioSsrc;
@@ -52,41 +49,6 @@ tgcalls::VideoChannelDescription tile(ParticipantState const *speaker, int index
     description.minQuality = tgcalls::VideoChannelDescription::Quality::Thumbnail;
     description.maxQuality = quality;
     return description;
-}
-
-json11::Json audioJson(broadcast::AudioReport const &report) {
-    json11::Json::object heard;
-    for (const auto &[key, value] : report.heardBlocks) {
-        heard[key] = value;
-    }
-    return json11::Json::object{
-        {"startMs", optionalJson(report.startMs)},
-        {"stallCount", report.stallCount},
-        {"stallMs", (double)report.stallMs},
-        {"latencyMedianMs", optionalJson(report.latencyMedianMs)},
-        {"latencyMaxMs", optionalJson(report.latencyMaxMs)},
-        {"heardBlocks", heard},
-    };
-}
-
-json11::Json videoJson(broadcast::VideoReport const &report) {
-    json11::Json::object widths;
-    for (const auto &[width, count] : report.widths) {
-        widths[std::to_string(width)] = count;
-    }
-    return json11::Json::object{
-        {"startMs", optionalJson(report.startMs)},
-        {"frames", report.frames},
-        {"repeatedFrames", report.repeatedFrames},
-        {"outOfOrderFrames", report.outOfOrderFrames},
-        {"droppedFrames", report.droppedFrames},
-        {"unplacedFrames", report.unplacedFrames},
-        {"stallCount", report.stallCount},
-        {"stallMs", (double)report.stallMs},
-        {"latencyMedianMs", optionalJson(report.latencyMedianMs)},
-        {"latencyMaxMs", optionalJson(report.latencyMaxMs)},
-        {"widths", widths},
-    };
 }
 
 void sleepMs(int ms) {
@@ -236,8 +198,7 @@ int runBroadcastMode(const BroadcastRunConfig &config) {
     }
 
     char *statsRaw = GoSfu_BroadcastStats(sfu, kClientId);
-    std::string statsError;
-    json11::Json serverStats = json11::Json::parse(statsRaw ? statsRaw : "{}", statsError);
+    const std::string serverStats = statsRaw ? statsRaw : "{}";
     if (statsRaw) {
         GoSfu_Free(statsRaw);
     }
@@ -249,45 +210,25 @@ int runBroadcastMode(const BroadcastRunConfig &config) {
     }
 
     broadcast::AudioReport audio = renderer->audioReport(startMs, promotedAtMs);
-    json11::Json::object video;
+    broadcast::BroadcastReportInput input;
+    input.scenario = scenario;
+    input.profile = config.profile;
+    input.events = config.events;
+    input.implementation = "engine";
+    input.availabilityDelayMs = config.availabilityDelayMs;
+    input.durationS = config.durationS;
+    input.repetition = config.repetition;
+    input.rejoins = rejoins.load();
+    input.audio = audio;
     for (const auto &[endpoint, sink] : sinks) {
-        video[endpoint] = videoJson(sink->report(startMs));
+        input.video[endpoint] = sink->report(startMs);
     }
-    json11::Json::object levelsJson;
-    for (const auto &[name, stats] : levels->stats(speakerNames)) {
-        levelsJson[name] = json11::Json::object{
-            {"meanLevel", stats.meanLevel},
-            {"speakingFraction", stats.speakingFraction},
-            {"updates", stats.updates},
-        };
-    }
-    json11::Json handoff = nullptr;
+    input.levels = levels->stats(speakerNames);
     if (promotedAtMs) {
-        broadcast::HandoffReport report = renderer->handoffReport(startMs, *promotedAtMs);
-        handoff = json11::Json::object{
-            {"promotedAtMs", (double)report.promotedAtMs},
-            {"gapBlocks", report.gapBlocks},
-            {"overlapBlocks", report.overlapBlocks},
-            {"rtcFirstHeardMs", optionalJson(report.rtcFirstHeardMs)},
-        };
+        input.handoff = renderer->handoffReport(startMs, *promotedAtMs);
     }
-    json11::Json result = json11::Json::object{
-        {"schema", 1},
-        {"implementation", "engine"},
-        {"scenario", scenario},
-        {"profile", config.profile},
-        {"events", config.events},
-        {"availabilityDelayMs", config.availabilityDelayMs},
-        {"durationS", config.durationS},
-        {"repetition", config.repetition},
-        {"rejoins", rejoins.load()},
-        {"audio", audioJson(audio)},
-        {"video", video},
-        {"levels", levelsJson},
-        {"handoff", handoff},
-        {"server", serverStats},
-    };
-    std::string text = result.dump();
+    input.serverStatsJson = serverStats;
+    std::string text = broadcast::broadcastReportJson(input);
 
     bool written = true;
     if (!config.reportPath.empty()) {

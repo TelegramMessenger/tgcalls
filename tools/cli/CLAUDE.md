@@ -126,6 +126,12 @@ broadcast leaves tgcalls; the baseline is `broadcast-baseline/`.
   VAD judges a steady sine speech in one of two modes picked per run: a speaker reads 0.0 in some runs and 0.1–0.4 in
   others, so it carries
   no signal; the audio-core plan must check the VAD port per update instead), `unplacedFrames`, server counts.
+- **Libraries for the new player's runner** (telegram-ios `Tests/BroadcastRunner`, which plays the same scenarios with the
+  app-side player and is held to this baseline): `broadcast_signals`, `broadcast_metrics`, `broadcast_report` (the report
+  writer, `broadcastReportJson`, which broadcast mode also uses) and `group_participant` (the speakers) are public. Keep
+  their outputs identical for both: the report's keys are what `broadcast_report.py compare` matches.
+  `CodedFrameSink::onFrameAt(width, counter, arrival)` and `readFrameCounter(y, stride, width, height)` take frames from a
+  player that does not hand over `webrtc::VideoFrame`s. `aggregate --prefix player` names a candidate's summary.
 - Tests (host, `bazel test //submodules/TgVoipWebrtc/tgcalls/tools/cli:all`): `broadcast_signals_test` (marker round
   trip, with Opus; the slice order locates every part), `broadcast_part_format_test` (the server's parts read by
   tgcalls' own `AudioStreamingPart` / `VideoStreamingPart`: the old decoders are the format's specification; the

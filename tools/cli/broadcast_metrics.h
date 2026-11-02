@@ -109,11 +109,15 @@ struct VideoReport {
 
 // The fixture's burned-in frame counter (bit k = the 16x16 block at x = 16k in the top rows, luma > 128 = 1).
 int readFrameCounter(webrtc::VideoFrame const &frame);
+// The same from a luma plane (a pixel buffer's or a decoder's); -1 when the frame is too small to carry it.
+int readFrameCounter(const uint8_t *y, int strideY, int width, int height);
 
 class CodedFrameSink : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
 public:
     void OnFrame(const webrtc::VideoFrame &frame) override;
     void onFrameAt(const webrtc::VideoFrame &frame, int64_t arrivalMs);
+    // A frame shown by a player that reads the counter itself (readFrameCounter on its luma plane).
+    void onFrameAt(int width, int counter, int64_t arrivalMs);
     VideoReport report(int64_t startMs) const;
 
 private:

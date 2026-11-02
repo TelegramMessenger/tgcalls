@@ -83,6 +83,14 @@ class BroadcastReportTests(unittest.TestCase):
             code = broadcast_report.main(args)
         return code, out.getvalue()
 
+    def test_aggregate_prefix_names_the_files(self):
+        reports_dir = os.path.join(self.root, "reports")
+        write_reports(reports_dir, [report(start=100, repetition=0)])
+        out_dir = os.path.join(self.root, "player")
+        code, _ = self.run_main(["aggregate", reports_dir, out_dir, "--prefix", "player"])
+        self.assertEqual(code, 0)
+        self.assertEqual(os.listdir(out_dir), ["player-audio-lte-none.json"])
+
     def test_aggregate_percentiles(self):
         reports_dir = os.path.join(self.root, "reports")
         write_reports(reports_dir, [report(start=100, repetition=0), report(start=200, repetition=1),
