@@ -181,7 +181,6 @@ struct ParticipantState {
     // Broadcast testbench listener: false once the listener is torn down, so fetches still in flight never call
     // into its engine (stopParticipant clears it before the instance stops).
     std::shared_ptr<std::atomic<bool>> broadcastAlive;
-    bool broadcastUnified{false};
 };
 
 // ---------------------------------------------------------------------------

@@ -178,7 +178,7 @@ Located at `submodules/TgVoipWebrtc/tgcalls/tools/cli/`. Runs tgcalls instances 
 ./bazel-bin/submodules/TgVoipWebrtc/tgcalls/tools/cli/tgcalls_cli --mode group-churn --participants 2 --reference-participants 1 --video --duration 10
 ```
 
-`--mode` is required (`p2p`, `reflector`, `group`, `group-churn`, or `broadcast`) unless `--reflector-list` is used (implies reflector mode). Exit code 0 = success. Exit code 1 = failure.
+`--mode` is required (`p2p`, `reflector`, `group` or `group-churn`) unless `--reflector-list` is used (implies reflector mode). Exit code 0 = success. Exit code 1 = failure.
 
 For p2p/reflector: success = call established, stats logs non-empty, BWE non-zero for both sides.
 For group (audio): success = all N participants report `isConnected = true` AND all participants receive remote audio (non-zero SSRC with level > 0.05 via `audioLevelsUpdated`). Remote 440Hz sine tone typically arrives at ~0.126 level.
@@ -186,7 +186,7 @@ For group (video): audio criteria plus every participant receives ≥1 decoded v
 For group-churn: success = all churn cycles complete without crash/hang AND base group passes group validation (all connected, all receiving audio, and if video, all receiving video from all other base participants).
 
 ### CLI Options
-- `--mode p2p|reflector|group|group-churn|broadcast` — call mode (required unless `--reflector-list` used)
+- `--mode p2p|reflector|group|group-churn` — call mode (required unless `--reflector-list` used)
 - `--reflector host:port` — single reflector address
 - `--reflector-list addr,addr,...` — comma-separated list, one picked at random
 - `--version VER` — caller tgcalls protocol version (default: `13.0.0`)
@@ -296,13 +296,6 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
   unsignaled streams for 3 reference participants.
 - `--churn-cycles N` — number of join/leave cycles in group-churn mode (default: 100)
 - `--network-scenario NAME` — network simulation test scenario (e.g., `step-down-up`). Group mode only.
-- `--broadcast-scenario audio|tiles|unified|handoff`, `--broadcast-profile wifi|lte|poor-lte|3g|step-down|<bps>,<rttMs>`,
-  `--broadcast-events notready-burst@S,resync@S,join-missing@S`, `--broadcast-availability-delay-ms N` (default 300),
-  `--broadcast-report PATH`, `--broadcast-fixtures DIR` (default the go_sfu `testdata/broadcast`, run from the repository
-  root), `--repetition N` (recorded only) — broadcast mode (2026-11-01): today's engine as a broadcast listener against
-  the Go SFU's emulated broadcast server, measured into a JSON report. See `tools/cli/CLAUDE.md`, "Architecture
-  (Broadcast)", for the scenarios and measurements and `tools/go_sfu/CLAUDE.md`, "Broadcast server", for the server.
-  `tools/cli/run-broadcast-baseline.sh` runs the matrix; `tools/cli/broadcast_report.py` aggregates and compares.
 - `--quiet` — summary output only
 - `--log-file PATH` — write RTC_LOG output to a file — log sinks are process-global, so one flag captures both sides; needed to observe `[core]` marker lines
 
@@ -310,10 +303,10 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
 - **P2P**: Direct loopback, `enableP2P=true`, no servers configured
 - **Reflector**: Routes through a Telegram UDP reflector, `enableP2P=false`, configures `RtcServer` with `login="reflector"` and random peer tags (16 bytes, byte 0 = `0x00` for caller, `0x01` for callee)
 - **Group**: In-process SFU with N participants using `GroupInstanceCustomImpl` and/or `GroupInstanceReferenceImpl`. The SFU is implemented in Go using Pion's low-level ICE/DTLS/SRTP/SCTP APIs (not PeerConnection), linked into the same process via CGo c-archive. Each participant gets a full ICE + DTLS + SRTP + SCTP transport stack over localhost UDP. Audio RTP is selectively forwarded between all participants. With `--video`, H264 video with 3-layer simulcast is enabled. Mixed-implementation groups (CustomImpl + ReferenceImpl) are supported via `--reference-participants`.
-- **Broadcast**: today's `GroupInstanceCustomImpl` in broadcast mode (an RTMP stream's listener, or a large chat's listener
-  with speakers in WebRTC and a promotion to speaker) against the Go SFU's emulated broadcast server; the run's playout,
-  frames and levels go into a report. Its baseline (`tools/cli/broadcast-baseline/`) is what the app-side player that
-  replaces broadcast in tgcalls is compared with.
+- **Broadcast**: tgcalls no longer plays broadcast (the app-side player replaced it). The broadcast testbench stays: the
+  Go SFU's emulated broadcast server (`tools/go_sfu/CLAUDE.md`, "Broadcast server"), the measuring libraries and the
+  old engine's recorded baseline, `tools/cli/broadcast-baseline/`, which telegram-ios's `Tests/BroadcastRunner` is held
+  to (`tools/cli/CLAUDE.md`, "The broadcast testbench").
 - **Group Churn**: Stress test for participant join/leave dynamics. Creates a base group of N participants, then rapidly cycles an additional participant in and out `--churn-cycles` times (default 100). After churn, validates that the base group is healthy: all connected, all receiving audio, and if `--video` is enabled, all receiving video. Alternates between CustomImpl and ReferenceImpl for the cycling participant. The `--duration` controls the stabilization wait after churn completes.
 
 ## Project Structure

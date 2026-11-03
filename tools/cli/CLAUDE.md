@@ -51,22 +51,24 @@ In-process test harness for tgcalls. See the root `CLAUDE.md` for build instruct
 - `--request-own-video`: `requestVideoFromEndpoints()` appends the participant's own endpoint to every request (the SFU's `ActiveVideoSsrcs` never names the receiver, but the app's roster includes the local participant and is handed to the engine unfiltered) and registers a sink for it. Validation reads `GoSfu_QueryRequestedLayer(receiver, receiver)` before the SFU is destroyed (`ParticipantState::sfuSelfRequestedLayer`) — any value ≥ 0 means the engine let a self-request through — and, for Capture* feeds, requires the own-endpoint sink to have received preview frames (`videoViaCapture` outlives the released `videoCapture`). The own-endpoint sink is never counted as a received pair.
 - Group mode source: `submodules/TgVoipWebrtc/tgcalls/tools/cli/group_mode.cpp`
 
-## Architecture (Broadcast)
+## The broadcast testbench (the emulated server and the baseline)
 
-`--mode broadcast` (2026-11-01) measures **today's engine as a broadcast listener**: `GroupInstanceCustomImpl` in
-`GroupConnectionModeBroadcast`, fetching 1-second parts from the Go SFU's emulated broadcast server (see the go_sfu
-`CLAUDE.md`, "Broadcast server"). It exists to record the old engine's behaviour as the baseline the app-side broadcast
-player (telegram-ios `docs/superpowers/specs/2026-11-01-broadcast-playback-out-of-tgcalls-design.md`) must meet before
-broadcast leaves tgcalls; the baseline is `broadcast-baseline/`.
+tgcalls no longer plays broadcast: the app-side player (telegram-ios
+`docs/superpowers/specs/2026-11-01-broadcast-playback-out-of-tgcalls-design.md`) replaced it. What stays here is the
+Go SFU's emulated broadcast server (1-second parts; go_sfu `CLAUDE.md`, "Broadcast server"), the measuring libraries,
+and `broadcast-baseline/`: the old engine's behaviour as a broadcast listener (`GroupInstanceCustomImpl` in broadcast
+mode), recorded with this CLI's former `--mode broadcast`. The baseline stays as recorded and can no longer be
+re-recorded. telegram-ios's `Tests/BroadcastRunner` plays the same scenarios with the app-side player and is held to it
+(`run-broadcast-baseline.sh --cli <its binary>`).
 
-- **Scenarios** (`broadcast_mode.cpp`): three CustomImpl speakers in WebRTC (`createParticipant` with a
-  `broadcast::SpeakerTone`): speaker 0 the time-coded marker, 1 and 2 fixed 2300 / 2900 Hz, endpoints `ep-0..ep-2`.
-  The listener (`createBroadcastListener`, id 100, server client 1) joins once every speaker's audio has reached the
-  SFU plus 3 s, so its first parts are not from before anyone spoke. `audio`: listener audio only. `tiles`: tiles
+- **Scenarios** (as recorded, and as the runner plays them): three CustomImpl speakers in WebRTC (`createParticipant`
+  with a `broadcast::SpeakerTone`): speaker 0 the time-coded marker, 1 and 2 fixed 2300 / 2900 Hz, endpoints
+  `ep-0..ep-2`. The listener (id 100, server client 1) joins once every speaker's audio has reached the SFU plus 3 s,
+  so its first parts are not from before anyone spoke. `audio`: listener audio only. `tiles`: tiles
   ep-0 thumbnail, ep-1 medium, ep-2 full; at 10 s ep-0 and ep-2 swap (the engine's in-place quality update). `unified`:
   no speakers, an RTMP stream's listener (unified parts, sink `"unified"`). `handoff`: at 12 s
   `promoteListenerToSpeaker` in `PresentationGroupCall`'s order (`None` keeping broadcast, join payload, SFU join,
-  `Rtc`, join response). `--duration` counts from the listener entering broadcast.
+  `Rtc`, join response). The duration counts from the listener entering broadcast.
 - **The marker** (`broadcast_signals`): its pitch steps every 100 ms of the sender's wall clock through 8 frequencies
   (500-1900 Hz), each step a different pitch, any 3 consecutive differences unique per 343 steps (de Bruijn B(7,3) of
   differences). `MarkerDecoder` turns the listener's playout back into playout-minus-generation time: the distance from
@@ -75,7 +77,7 @@ broadcast leaves tgcalls; the baseline is `broadcast-baseline/`.
   consecutive steps agree within 20 ms (triples spanning a handoff decode to garbage).
 - **Real-time pacing**: `FakeAudioDeviceModule` sleeps the returned wait after each 10 ms frame, so a fixed 10 ms wait
   runs a microphone or a playout slow by each frame's cost. `RealTimePacer` (deadline-based) paces `GroupSineRecorder`
-  (every mode's speakers), the listener's silent recorder and `RecordingRenderer`. Without it a speaker's RTP clock
+  (every mode's speakers), a broadcast listener's silent recorder and `RecordingRenderer`. Without it a speaker's RTP clock
   drifted ~3 % behind the server's and parts were cut short (12 s of stalls in a 25 s run).
 - **Measurements** (`broadcast_metrics`, per 10 ms block / per frame): audio start (first block with an expected tone),
   stalls (≥ 3 consecutive silent blocks after start, outside the handoff window), latency (median/max, before any
@@ -85,7 +87,7 @@ broadcast leaves tgcalls; the baseline is `broadcast-baseline/`.
   (`speaker0..2`: SSRCs differ between runs) as mean level and fraction with voice; the handoff's gap (blocks with no
   marker between the promotion and the first block at WebRTC latency, below 1000 ms) and overlap (two markers near full
   amplitude); the server's requests and bytes. Times are wall-clock ms since the listener entered broadcast. Report:
-  `--broadcast-report PATH` (schema 1).
+  schema 1 (`broadcastReportJson`).
 - **Placing frames in media time**: a counter names a slice of the 10 s fixture, and the server shows slices in an
   order where three consecutive parts locate a part modulo 162 s (go_sfu guide, "Video and unified parts").
   `CodedFrameSink::report` splits a tile's frames into runs of one slice, locates run i from runs i-2..i
@@ -96,13 +98,10 @@ broadcast leaves tgcalls; the baseline is `broadcast-baseline/`.
   `StreamingMediaContext::requestPendingVideoQualityUpdate`, so after the 10 s swap ep-2 shows two segments twice and
   ep-0 drops them) from distinct ones, which a correct player is held to. A run no agreeing windows place (interleaved
   repeats, a skip landing on the same slice) counts as `unplacedFrames`, and the frames it hides show up as dropped.
-- **Request callbacks** (`broadcast_client`): one thread per part fetch through the blocking `GoSfu_BroadcastFetch`;
-  a cancelled task or a torn-down listener (`ParticipantState::broadcastAlive`, cleared by `stopParticipant` before the
-  engine stops) never gets a completion; `responseTimestamp` is seconds, the server's answer time; a join-missing
-  answer rejoins in `PresentationGroupCall.requestCall`'s order (`runBroadcastRejoin`): connection mode `None` at once,
-  `Broadcast` two profile round trips later (getCurrentGroupCall, then the join). Until the Plan 1 review the engine
-  kept playing for one round trip and then switched `None`/`Broadcast` back to back, which understated every events
-  cell's stall.
+- **The rejoin, as recorded**: a join-missing answer rejoined in `PresentationGroupCall.requestCall`'s order:
+  connection mode `None` at once, `Broadcast` two profile round trips later (getCurrentGroupCall, then the join). The
+  runner's rejoin follows the same order. `ParticipantState::broadcastAlive` (cleared by `stopParticipant` before the
+  engine stops) still keeps fetches in flight from calling into a torn-down listener.
 - **The baseline**: `run-broadcast-baseline.sh -j 2 -r 10 -o DIR` (350 runs, ~2.4 h; resumes by skipping existing
   reports; run i of R joins when the wall clock's millisecond is i·1000/R: a run's results depend on where it joins
   within the server's 1 s parts, and until the Plan 1 review the two runs `-j 2` starts together joined at one phase,
@@ -128,14 +127,14 @@ broadcast leaves tgcalls; the baseline is `broadcast-baseline/`.
   no signal; the audio-core plan must check the VAD port per update instead), `unplacedFrames`, server counts.
 - **Libraries for the new player's runner** (telegram-ios `Tests/BroadcastRunner`, which plays the same scenarios with the
   app-side player and is held to this baseline): `broadcast_signals`, `broadcast_metrics`, `broadcast_report` (the report
-  writer, `broadcastReportJson`, which broadcast mode also uses) and `group_participant` (the speakers) are public. Keep
-  their outputs identical for both: the report's keys are what `broadcast_report.py compare` matches.
+  writer, `broadcastReportJson`) and `group_participant` (the speakers) are public. Keep their outputs as the baseline
+  recorded them: the report's keys are what `broadcast_report.py compare` matches.
   `CodedFrameSink::onFrameAt(width, counter, arrival)` and `readFrameCounter(y, stride, width, height)` take frames from a
   player that does not hand over `webrtc::VideoFrame`s. `aggregate --prefix player` names a candidate's summary.
 - Tests (host, `bazel test //submodules/TgVoipWebrtc/tgcalls/tools/cli:all`): `broadcast_signals_test` (marker round
-  trip, with Opus; the slice order locates every part), `broadcast_part_format_test` (the server's parts read by
-  tgcalls' own `AudioStreamingPart` / `VideoStreamingPart`: the old decoders are the format's specification; the
-  server's slice order is the metrics'), `broadcast_client_test` (cancellation, teardown, time sources, join-missing,
-  the rejoin order), `broadcast_metrics_test` (latency beyond the loop, repeats, drops); `python3 -m unittest discover
-  -s tools/cli -p 'broadcast_report_test.py'` (the rules, their calibration on synthetic checks, `calibrate`).
+  trip, with Opus; the slice order locates every part), `broadcast_metrics_test` (latency beyond the loop, repeats,
+  drops), `broadcast_report_writer_test`; `python3 -m unittest discover -s tools/cli -p 'broadcast_report_test.py'`
+  (the rules, their calibration on synthetic checks, `calibrate`). The server's parts read by the old engine's decoders
+  (the format's specification) are telegram-ios's `//Tests/BroadcastRunner:broadcast_part_format_test`, on their
+  test-only copy.
 

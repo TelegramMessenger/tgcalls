@@ -1,6 +1,9 @@
 #!/bin/bash
-# Runs the broadcast testbench matrix with today's engine (tgcalls_cli --mode broadcast) and leaves one JSON report
-# per run in the output directory; broadcast_report.py aggregates them into a baseline or compares them against one.
+# Runs the broadcast testbench matrix with a broadcast player that takes the old engine's broadcast flags
+# (`--mode broadcast --broadcast-scenario …`: telegram-ios's Tests/BroadcastRunner, whose run-matrix.sh passes --cli)
+# and leaves one JSON report per run in the output directory; broadcast_report.py aggregates them into a baseline or
+# compares them against one. The old engine's baseline (broadcast-baseline/) was recorded with `tgcalls_cli --mode
+# broadcast`, which left tgcalls with broadcast playback: it stays as recorded and can no longer be re-recorded.
 #
 # Matrix: scenarios audio, tiles, unified x profiles wifi, lte, poor-lte, 3g, step-down x events none /
 # notready-burst@8,resync@14,join-missing@18, plus handoff x the five profiles without events; -r repetitions each
@@ -18,17 +21,18 @@
 # of ~120-400 ms with the phase, so runs 100 ms apart often share one). A sleep of whole seconds would not help: the
 # part period is 1 s.
 #
-# Run from the repository root after building //submodules/TgVoipWebrtc/tgcalls/tools/cli:tgcalls_cli:
-#   submodules/TgVoipWebrtc/tgcalls/tools/cli/run-broadcast-baseline.sh -j 2 -r 10 -o /tmp/broadcast-reports
-#   python3 submodules/TgVoipWebrtc/tgcalls/tools/cli/broadcast_report.py aggregate /tmp/broadcast-reports \
-#       submodules/TgVoipWebrtc/tgcalls/tools/cli/broadcast-baseline
+# Run from the repository root with a player binary, e.g. the runner (Tests/BroadcastRunner/run-matrix.sh does this):
+#   submodules/TgVoipWebrtc/tgcalls/tools/cli/run-broadcast-baseline.sh --cli ./bazel-bin/Tests/BroadcastRunner/broadcast_runner \
+#       -j 2 -r 5 -o /tmp/broadcast-reports
+#   python3 submodules/TgVoipWebrtc/tgcalls/tools/cli/broadcast_report.py compare \
+#       submodules/TgVoipWebrtc/tgcalls/tools/cli/broadcast-baseline /tmp/broadcast-reports
 set -euo pipefail
 
 JOBS=2
 REPS=10
 OUT=broadcast-reports
 ONLY=""
-CLI=./bazel-bin/submodules/TgVoipWebrtc/tgcalls/tools/cli/tgcalls_cli
+CLI=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -37,12 +41,16 @@ while [ $# -gt 0 ]; do
         -o) OUT="$2"; shift 2 ;;
         --only) ONLY="$2"; shift 2 ;;
         --cli) CLI="$2"; shift 2 ;;
-        *) echo "usage: $0 [-j jobs] [-r repetitions] [-o dir] [--only scenario] [--cli path]" >&2; exit 2 ;;
+        *) echo "usage: $0 --cli path [-j jobs] [-r repetitions] [-o dir] [--only scenario]" >&2; exit 2 ;;
     esac
 done
 
+if [ -z "$CLI" ]; then
+    echo "--cli is required: the old engine's broadcast mode left tgcalls, so pass a player binary, e.g. Tests/BroadcastRunner/run-matrix.sh's broadcast_runner" >&2
+    exit 2
+fi
 if [ ! -x "$CLI" ]; then
-    echo "no tgcalls_cli at $CLI: build //submodules/TgVoipWebrtc/tgcalls/tools/cli:tgcalls_cli first" >&2
+    echo "no player binary at $CLI: build //Tests/BroadcastRunner:broadcast_runner first (Tests/BroadcastRunner/run-matrix.sh)" >&2
     exit 1
 fi
 mkdir -p "$OUT"

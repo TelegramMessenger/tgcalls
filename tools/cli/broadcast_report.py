@@ -2,9 +2,11 @@
 """The broadcast testbench's baseline and comparison.
 
   broadcast_report.py aggregate <reports-dir> <out-dir> [--prefix <name>]
-      Groups `tgcalls_cli --mode broadcast` reports into cells (scenario, profile, events) and writes one baseline
-      file per cell, <name>-<scenario>-<profile>-<none|events>.json (name: engine by default; the new player's runner
-      writes player): per metric its median, p10 and p90 over the repetitions.
+      Groups broadcast testbench reports into cells (scenario, profile, events) and writes one baseline file per cell,
+      <name>-<scenario>-<profile>-<none|events>.json: per metric its median, p10 and p90 over the repetitions. name is
+      engine by default, the prefix of the recorded baseline (broadcast-baseline/, from the old engine's
+      `tgcalls_cli --mode broadcast`, which left tgcalls with broadcast playback); the new player's runner writes
+      player.
 
   broadcast_report.py compare <baseline-dir> <candidate-reports-dir> [--metrics prefix,prefix] [--confirm <dir>]
       Exit 0 only if every candidate cell passes against its baseline cell. The margin of every rule is the baseline's
