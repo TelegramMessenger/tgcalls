@@ -2,8 +2,8 @@ package main
 
 // Video and unified parts of the emulated broadcast server, from fixture slices (testdata/broadcast, made by
 // make-broadcast-fixtures.sh): ten 1 s mp4 files per quality, one GOP each, looped over the live clock. A part is
-// the video-part header tgcalls' VideoStreamingPart reads (signature, container, one event naming the endpoint and
-// rotation) followed by the slice.
+// the video-part header the old engine's video part decoder read (signature, container, one event naming the endpoint
+// and rotation) followed by the slice.
 
 import (
 	"encoding/binary"
@@ -16,8 +16,8 @@ const (
 	broadcastVideoPartSignature = 0xa12e810d
 	broadcastFixtureSlices      = 10
 	broadcastQualities          = 3
-	// The endpoint a unified part names. tgcalls' StreamingMediaContext shows unified frames on the sink registered
-	// as "unified" whatever the part names; the empty string is what the real server's 32-byte header (the only
+	// The endpoint a unified part names. A stream's player shows unified frames as "unified" whatever the part names
+	// (the old engine did too); the empty string is what the real server's 32-byte header (the only
 	// shape the app's Swift prototypes accept) holds.
 	broadcastUnifiedEndpoint = ""
 )

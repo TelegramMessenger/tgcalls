@@ -1331,23 +1331,6 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
 
 namespace {
 
-class BroadcastPartTaskImpl : public tgcalls::BroadcastPartTask {
-public:
-    BroadcastPartTaskImpl(id<OngoingGroupCallBroadcastPartTask> task) {
-        _task = task;
-    }
-    
-    virtual ~BroadcastPartTaskImpl() {
-    }
-    
-    virtual void cancel() override {
-        [_task cancel];
-    }
-    
-private:
-    id<OngoingGroupCallBroadcastPartTask> _task;
-};
-
 class RequestMediaChannelDescriptionTaskImpl : public tgcalls::RequestMediaChannelDescriptionTask {
 public:
     RequestMediaChannelDescriptionTaskImpl(id<OngoingGroupCallMediaChannelDescriptionTask> task) {
@@ -1395,9 +1378,6 @@ private:
     outputDeviceId:(NSString * _Nonnull)outputDeviceId
     videoCapturer:(OngoingCallThreadLocalContextVideoCapturer * _Nullable)videoCapturer
     requestMediaChannelDescriptions:(id<OngoingGroupCallMediaChannelDescriptionTask> _Nonnull (^ _Nonnull)(NSArray<NSNumber *> * _Nonnull, void (^ _Nonnull)(NSArray<OngoingGroupCallMediaChannelDescription *> * _Nonnull)))requestMediaChannelDescriptions
-    requestCurrentTime:(id<OngoingGroupCallBroadcastPartTask> _Nonnull (^ _Nonnull)(void (^ _Nonnull)(int64_t)))requestCurrentTime
-    requestAudioBroadcastPart:(id<OngoingGroupCallBroadcastPartTask> _Nonnull (^ _Nonnull)(int64_t, int64_t, void (^ _Nonnull)(OngoingGroupCallBroadcastPart * _Nullable)))requestAudioBroadcastPart
-    requestVideoBroadcastPart:(id<OngoingGroupCallBroadcastPartTask> _Nonnull (^ _Nonnull)(int64_t, int64_t, int32_t, OngoingGroupCallRequestedVideoQuality, void (^ _Nonnull)(OngoingGroupCallBroadcastPart * _Nullable)))requestVideoBroadcastPart
     outgoingAudioBitrateKbit:(int32_t)outgoingAudioBitrateKbit
     videoContentType:(OngoingGroupCallVideoContentType)videoContentType
     enableNoiseSuppression:(bool)enableNoiseSuppression
@@ -1507,7 +1487,6 @@ encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, boo
                     }
                     GroupCallNetworkState mappedState;
                     mappedState.isConnected = networkState.isConnected;
-                    mappedState.isTransitioningFromBroadcastToRtc = networkState.isTransitioningFromBroadcastToRtc;
                     networkStateUpdated(mappedState);
                 }];
             },
@@ -1545,101 +1524,6 @@ encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, boo
             .initialInputDeviceId = inputDeviceId.UTF8String,
             .initialOutputDeviceId = outputDeviceId.UTF8String,
             .videoCapture = [_videoCapturer getInterface],
-            .requestCurrentTime = [requestCurrentTime](std::function<void(int64_t)> completion) {
-                id<OngoingGroupCallBroadcastPartTask> task = requestCurrentTime(^(int64_t result) {
-                    completion(result);
-                });
-                return std::make_shared<BroadcastPartTaskImpl>(task);
-            },
-            .requestAudioBroadcastPart = [requestAudioBroadcastPart](int64_t timestampMilliseconds, int64_t durationMilliseconds, std::function<void(tgcalls::BroadcastPart &&)> completion) -> std::shared_ptr<tgcalls::BroadcastPartTask> {
-                id<OngoingGroupCallBroadcastPartTask> task = requestAudioBroadcastPart(timestampMilliseconds, durationMilliseconds, ^(OngoingGroupCallBroadcastPart * _Nullable part) {
-                    tgcalls::BroadcastPart parsedPart;
-                    parsedPart.timestampMilliseconds = part.timestampMilliseconds;
-                    
-                    parsedPart.responseTimestamp = part.responseTimestamp;
-                    
-                    tgcalls::BroadcastPart::Status mappedStatus;
-                    switch (part.status) {
-                        case OngoingGroupCallBroadcastPartStatusSuccess: {
-                            mappedStatus = tgcalls::BroadcastPart::Status::Success;
-                            break;
-                        }
-                        case OngoingGroupCallBroadcastPartStatusNotReady: {
-                            mappedStatus = tgcalls::BroadcastPart::Status::NotReady;
-                            break;
-                        }
-                        case OngoingGroupCallBroadcastPartStatusResyncNeeded: {
-                            mappedStatus = tgcalls::BroadcastPart::Status::ResyncNeeded;
-                            break;
-                        }
-                        default: {
-                            mappedStatus = tgcalls::BroadcastPart::Status::NotReady;
-                            break;
-                        }
-                    }
-                    parsedPart.status = mappedStatus;
-                    
-                    parsedPart.data.resize(part.oggData.length);
-                    [part.oggData getBytes:parsedPart.data.data() length:part.oggData.length];
-                    
-                    completion(std::move(parsedPart));
-                });
-                return std::make_shared<BroadcastPartTaskImpl>(task);
-            },
-            .requestVideoBroadcastPart = [requestVideoBroadcastPart](int64_t timestampMilliseconds, int64_t durationMilliseconds, int32_t channelId, tgcalls::VideoChannelDescription::Quality quality, std::function<void(tgcalls::BroadcastPart &&)> completion) -> std::shared_ptr<tgcalls::BroadcastPartTask> {
-                OngoingGroupCallRequestedVideoQuality mappedQuality;
-                switch (quality) {
-                    case tgcalls::VideoChannelDescription::Quality::Thumbnail: {
-                        mappedQuality = OngoingGroupCallRequestedVideoQualityThumbnail;
-                        break;
-                    }
-                    case tgcalls::VideoChannelDescription::Quality::Medium: {
-                        mappedQuality = OngoingGroupCallRequestedVideoQualityMedium;
-                        break;
-                    }
-                    case tgcalls::VideoChannelDescription::Quality::Full: {
-                        mappedQuality = OngoingGroupCallRequestedVideoQualityFull;
-                        break;
-                    }
-                    default: {
-                        mappedQuality = OngoingGroupCallRequestedVideoQualityThumbnail;
-                        break;
-                    }
-                }
-                id<OngoingGroupCallBroadcastPartTask> task = requestVideoBroadcastPart(timestampMilliseconds, durationMilliseconds, channelId, mappedQuality, ^(OngoingGroupCallBroadcastPart * _Nullable part) {
-                    tgcalls::BroadcastPart parsedPart;
-                    parsedPart.timestampMilliseconds = part.timestampMilliseconds;
-
-                    parsedPart.responseTimestamp = part.responseTimestamp;
-
-                    tgcalls::BroadcastPart::Status mappedStatus;
-                    switch (part.status) {
-                        case OngoingGroupCallBroadcastPartStatusSuccess: {
-                            mappedStatus = tgcalls::BroadcastPart::Status::Success;
-                            break;
-                        }
-                        case OngoingGroupCallBroadcastPartStatusNotReady: {
-                            mappedStatus = tgcalls::BroadcastPart::Status::NotReady;
-                            break;
-                        }
-                        case OngoingGroupCallBroadcastPartStatusResyncNeeded: {
-                            mappedStatus = tgcalls::BroadcastPart::Status::ResyncNeeded;
-                            break;
-                        }
-                        default: {
-                            mappedStatus = tgcalls::BroadcastPart::Status::NotReady;
-                            break;
-                        }
-                    }
-                    parsedPart.status = mappedStatus;
-
-                    parsedPart.data.resize(part.oggData.length);
-                    [part.oggData getBytes:parsedPart.data.data() length:part.oggData.length];
-
-                    completion(std::move(parsedPart));
-                });
-                return std::make_shared<BroadcastPartTaskImpl>(task);
-            },
             .outgoingAudioBitrateKbit = outgoingAudioBitrateKbit,
             .disableOutgoingAudioProcessing = disableOutgoingAudioProcessing,
             .disableAudioInput = disableAudioInput,
@@ -1728,20 +1612,12 @@ encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, boo
     }
 }
 
-- (void)setConnectionMode:(OngoingCallConnectionMode)connectionMode keepBroadcastConnectedIfWasEnabled:(bool)keepBroadcastConnectedIfWasEnabled isUnifiedBroadcast:(bool)isUnifiedBroadcast {
+- (void)setConnectionMode:(OngoingCallConnectionMode)connectionMode {
     if (_instance) {
         tgcalls::GroupConnectionMode mappedConnectionMode;
         switch (connectionMode) {
-            case OngoingCallConnectionModeNone: {
-                mappedConnectionMode = tgcalls::GroupConnectionMode::GroupConnectionModeNone;
-                break;
-            }
             case OngoingCallConnectionModeRtc: {
                 mappedConnectionMode = tgcalls::GroupConnectionMode::GroupConnectionModeRtc;
-                break;
-            }
-            case OngoingCallConnectionModeBroadcast: {
-                mappedConnectionMode = tgcalls::GroupConnectionMode::GroupConnectionModeBroadcast;
                 break;
             }
             default: {
@@ -1749,7 +1625,7 @@ encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, boo
                 break;
             }
         }
-        _instance->setConnectionMode(mappedConnectionMode, keepBroadcastConnectedIfWasEnabled, isUnifiedBroadcast);
+        _instance->setConnectionMode(mappedConnectionMode);
     }
 }
 
@@ -2021,21 +1897,6 @@ encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, boo
         _peerId = peerId;
         _audioSsrc = audioSsrc;
         _videoDescription = videoDescription;
-    }
-    return self;
-}
-
-@end
-
-@implementation OngoingGroupCallBroadcastPart
-
-- (instancetype _Nonnull)initWithTimestampMilliseconds:(int64_t)timestampMilliseconds responseTimestamp:(double)responseTimestamp status:(OngoingGroupCallBroadcastPartStatus)status oggData:(NSData * _Nonnull)oggData {
-    self = [super init];
-    if (self != nil) {
-        _timestampMilliseconds = timestampMilliseconds;
-        _responseTimestamp = responseTimestamp;
-        _status = status;
-        _oggData = oggData;
     }
     return self;
 }

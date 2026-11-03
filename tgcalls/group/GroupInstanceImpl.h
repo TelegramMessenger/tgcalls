@@ -61,38 +61,13 @@ struct GroupActivitiesUpdate {
 };
 
 
-class BroadcastPartTask {
-public:
-    virtual ~BroadcastPartTask() = default;
-
-    virtual void cancel() = 0;
-};
-
-struct BroadcastPart {
-    struct VideoParams {
-    };
-
-    enum class Status {
-        Success,
-        NotReady,
-        ResyncNeeded
-    };
-
-    int64_t timestampMilliseconds = 0;
-    double responseTimestamp = 0;
-    Status status = Status::NotReady;
-    std::vector<uint8_t> data;
-};
-
 enum class GroupConnectionMode {
     GroupConnectionModeNone,
-    GroupConnectionModeRtc,
-    GroupConnectionModeBroadcast
+    GroupConnectionModeRtc
 };
 
 struct GroupNetworkState {
     bool isConnected = false;
-    bool isTransitioningFromBroadcastToRtc = false;
     GroupConnectionMode connectionMode = GroupConnectionMode::GroupConnectionModeRtc;
 };
 
@@ -172,9 +147,6 @@ struct GroupInstanceDescriptor {
     std::function<webrtc::scoped_refptr<WrappedAudioDeviceModule>(webrtc::TaskQueueFactory*)> createWrappedAudioDeviceModule;
     std::shared_ptr<VideoCaptureInterface> videoCapture; // deprecated
     std::function<webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface>()> getVideoSource;
-    std::function<std::shared_ptr<BroadcastPartTask>(std::function<void(int64_t)>)> requestCurrentTime;
-    std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, std::function<void(BroadcastPart &&)>)> requestAudioBroadcastPart;
-    std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, int32_t, VideoChannelDescription::Quality, std::function<void(BroadcastPart &&)>)> requestVideoBroadcastPart;
     int outgoingAudioBitrateKbit{32};
     bool disableOutgoingAudioProcessing{false};
     bool disableAudioInput{false};
@@ -202,7 +174,7 @@ public:
 
     virtual void stop(std::function<void()> completion) = 0;
 
-    virtual void setConnectionMode(GroupConnectionMode connectionMode, bool keepBroadcastIfWasEnabled, bool isUnifiedBroadcast) = 0;
+    virtual void setConnectionMode(GroupConnectionMode connectionMode) = 0;
 
     virtual void emitJoinPayload(std::function<void(GroupJoinPayload const &)> completion) = 0;
     virtual void setJoinResponsePayload(std::string const &payload) = 0;

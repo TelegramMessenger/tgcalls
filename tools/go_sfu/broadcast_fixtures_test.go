@@ -9,7 +9,8 @@ import (
 	"testing"
 )
 
-// readTLString reads a TL string as tgcalls' VideoStreamingPart does, except that it takes the 3-byte length whole.
+// readTLString reads a TL string as the old engine's video part decoder did, except that it takes the 3-byte length
+// whole.
 func readTLString(t *testing.T, data []byte, offset int) (string, int) {
 	if data[offset] == 254 {
 		length := int(data[offset+1]) | int(data[offset+2])<<8 | int(data[offset+3])<<16

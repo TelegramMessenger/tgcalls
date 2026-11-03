@@ -268,8 +268,6 @@ typedef NS_ENUM(int32_t, OngoingCallDataSavingWebrtc) {
 
 typedef struct {
     bool isConnected;
-    bool isTransitioningFromBroadcastToRtc;
-    bool isBroadcast;
 } GroupCallNetworkState;
 
 typedef NS_ENUM(int32_t, OngoingGroupCallMediaChannelType) {
@@ -290,12 +288,6 @@ typedef NS_ENUM(int32_t, OngoingGroupCallMediaChannelType) {
 
 @end
 
-@protocol OngoingGroupCallBroadcastPartTask <NSObject>
-
-- (void)cancel;
-
-@end
-
 @protocol OngoingGroupCallMediaChannelDescriptionTask <NSObject>
 
 - (void)cancel;
@@ -304,14 +296,7 @@ typedef NS_ENUM(int32_t, OngoingGroupCallMediaChannelType) {
 
 typedef NS_ENUM(int32_t, OngoingCallConnectionMode) {
     OngoingCallConnectionModeNone,
-    OngoingCallConnectionModeRtc,
-    OngoingCallConnectionModeBroadcast
-};
-
-typedef NS_ENUM(int32_t, OngoingGroupCallBroadcastPartStatus) {
-    OngoingGroupCallBroadcastPartStatusSuccess,
-    OngoingGroupCallBroadcastPartStatusNotReady,
-    OngoingGroupCallBroadcastPartStatusResyncNeeded
+    OngoingCallConnectionModeRtc
 };
 
 typedef NS_ENUM(int32_t, OngoingGroupCallVideoContentType) {
@@ -319,17 +304,6 @@ typedef NS_ENUM(int32_t, OngoingGroupCallVideoContentType) {
     OngoingGroupCallVideoContentTypeGeneric,
     OngoingGroupCallVideoContentTypeScreencast,
 };
-
-@interface OngoingGroupCallBroadcastPart : NSObject
-
-@property (nonatomic, readonly) int64_t timestampMilliseconds;
-@property (nonatomic, readonly) double responseTimestamp;
-@property (nonatomic, readonly) OngoingGroupCallBroadcastPartStatus status;
-@property (nonatomic, strong, readonly) NSData * _Nonnull oggData;
-
-- (instancetype _Nonnull)initWithTimestampMilliseconds:(int64_t)timestampMilliseconds responseTimestamp:(double)responseTimestamp status:(OngoingGroupCallBroadcastPartStatus)status oggData:(NSData * _Nonnull)oggData;
-
-@end
 
 typedef NS_ENUM(int32_t, OngoingGroupCallRequestedVideoQuality) {
     OngoingGroupCallRequestedVideoQualityThumbnail,
@@ -389,9 +363,6 @@ typedef NS_ENUM(int32_t, OngoingGroupCallRequestedVideoQuality) {
     outputDeviceId:(NSString * _Nonnull)outputDeviceId
     videoCapturer:(OngoingCallThreadLocalContextVideoCapturer * _Nullable)videoCapturer
     requestMediaChannelDescriptions:(id<OngoingGroupCallMediaChannelDescriptionTask> _Nonnull (^ _Nonnull)(NSArray<NSNumber *> * _Nonnull, void (^ _Nonnull)(NSArray<OngoingGroupCallMediaChannelDescription *> * _Nonnull)))requestMediaChannelDescriptions
-    requestCurrentTime:(id<OngoingGroupCallBroadcastPartTask> _Nonnull (^ _Nonnull)(void (^ _Nonnull)(int64_t)))requestAudioBroadcastPart
-    requestAudioBroadcastPart:(id<OngoingGroupCallBroadcastPartTask> _Nonnull (^ _Nonnull)(int64_t, int64_t, void (^ _Nonnull)(OngoingGroupCallBroadcastPart * _Nullable)))requestAudioBroadcastPart
-    requestVideoBroadcastPart:(id<OngoingGroupCallBroadcastPartTask> _Nonnull (^ _Nonnull)(int64_t, int64_t, int32_t, OngoingGroupCallRequestedVideoQuality, void (^ _Nonnull)(OngoingGroupCallBroadcastPart * _Nullable)))requestVideoBroadcastPart
     outgoingAudioBitrateKbit:(int32_t)outgoingAudioBitrateKbit
     videoContentType:(OngoingGroupCallVideoContentType)videoContentType
     enableNoiseSuppression:(bool)enableNoiseSuppression
@@ -410,7 +381,7 @@ typedef NS_ENUM(int32_t, OngoingGroupCallRequestedVideoQuality) {
 
 - (void)setTone:(CallAudioTone * _Nullable)tone;
 
-- (void)setConnectionMode:(OngoingCallConnectionMode)connectionMode keepBroadcastConnectedIfWasEnabled:(bool)keepBroadcastConnectedIfWasEnabled isUnifiedBroadcast:(bool)isUnifiedBroadcast;
+- (void)setConnectionMode:(OngoingCallConnectionMode)connectionMode;
 
 - (void)emitJoinPayload:(void (^ _Nonnull)(NSString * _Nonnull, uint32_t))completion;
 - (void)setJoinResponsePayload:(NSString * _Nonnull)payload;

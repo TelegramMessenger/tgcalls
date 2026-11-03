@@ -1,8 +1,8 @@
 package main
 
 // Listener-audio parts of the emulated broadcast server: one second of every speaker's Opus packets, combined into a
-// single multichannel Ogg Opus stream (RFC 7845, channel mapping family 255) the way tgcalls' AudioStreamingPart
-// reads it: one channel per speaker, the channel -> ssrc map and the video endpoint map as OpusTags comments
+// single multichannel Ogg Opus stream (RFC 7845, channel mapping family 255) the way the old engine's listener audio
+// decoder read it: one channel per speaker, the channel -> ssrc map and the video endpoint map as OpusTags comments
 // (TG_META, ACTIVE_MASK, ENDPOINTS). The packets are the speakers' own (no re-encode); a slot with no packet carries
 // an empty Opus frame.
 
@@ -20,7 +20,7 @@ import (
 const (
 	broadcastSlotsPerPart      = 50
 	broadcastSlotSamples       = 960 // 20 ms at 48 kHz
-	broadcastMaxChannels       = 8   // AudioStreamingPartInternal ends a part with more
+	broadcastMaxChannels       = 8   // the old engine's decoder ended a part with more
 	broadcastOggSerial         = 0x54474253
 	opusEmptyFrameTOC          = 0xf8 // config 31 (CELT FB 20 ms), mono, code 0
 	broadcastOpusVendor        = "tgcalls-testbench"

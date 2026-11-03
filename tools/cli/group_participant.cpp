@@ -529,8 +529,7 @@ std::unique_ptr<ParticipantState> createParticipant(
     }
 
     // Set connection mode
-    state->instance->setConnectionMode(
-        tgcalls::GroupConnectionMode::GroupConnectionModeRtc, false, false);
+    state->instance->setConnectionMode(tgcalls::GroupConnectionMode::GroupConnectionModeRtc);
 
     // Emit join payload
     std::mutex joinMutex;

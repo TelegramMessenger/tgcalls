@@ -94,9 +94,8 @@ re-recorded. telegram-ios's `Tests/BroadcastRunner` plays the same scenarios wit
   (`locateFixturePart`), and places the four runs two consecutive agreeing windows cover; latency is arrival minus
   media time modulo 162 s. Until the Plan 1 review latency was `(arrival − counter·1000/30) mod 10 s`, which read the
   old engine's tiles after the step-down, 13–18 s behind live, as 3–8 s. The media frame index separates frames
-  shown twice (the old engine's quality update re-fetches buffered segments at the last channel's id,
-  `StreamingMediaContext::requestPendingVideoQualityUpdate`, so after the 10 s swap ep-2 shows two segments twice and
-  ep-0 drops them) from distinct ones, which a correct player is held to. A run no agreeing windows place (interleaved
+  shown twice (the old engine's quality update re-fetched buffered segments at the last channel's id, so after the
+  10 s swap ep-2 shows two segments twice and ep-0 drops them) from distinct ones, which a correct player is held to. A run no agreeing windows place (interleaved
   repeats, a skip landing on the same slice) counts as `unplacedFrames`, and the frames it hides show up as dropped.
 - **The rejoin, as recorded**: a join-missing answer rejoined in `PresentationGroupCall.requestCall`'s order:
   connection mode `None` at once, `Broadcast` two profile round trips later (getCurrentGroupCall, then the join). The

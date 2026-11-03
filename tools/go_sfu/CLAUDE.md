@@ -119,8 +119,8 @@ time or a stream's newest part. The old engine's baseline was recorded against i
 `Tests/BroadcastRunner` drives it now (see `tools/cli/CLAUDE.md`, "The broadcast testbench"). Files: `broadcast_server.go` (rules, link, events, stats), `broadcast_audio.go` (listener audio from
 live RTP), `broadcast_ogg.go` (the Ogg Opus part writer), `broadcast_fixtures.go` (video and unified parts),
 `broadcast_libopus.go` (cgo libopus), `broadcast_exports.go` (`GoSfu_Broadcast*`). Formats are what the old engine's part
-decoders read (`AudioStreamingPart*`, `VideoStreamingPart`, which left tgcalls with broadcast; a test-only copy is in
-telegram-ios's `submodules/TgVoipWebrtc/BroadcastMedia/Tests/EngineReference`); telegram-ios's
+decoders read (they left tgcalls with broadcast; a test-only copy is in telegram-ios's
+`submodules/TgVoipWebrtc/BroadcastMedia/Tests/EngineReference`); telegram-ios's
 `//Tests/BroadcastRunner:broadcast_part_format_test` decodes the server's parts with them.
 
 - **Rules**: parts are 1000 ms on the Unix-millisecond grid. A part `[T, T+1000)` is available from
