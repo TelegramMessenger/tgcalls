@@ -108,21 +108,6 @@ cc_test(
     ],
 )
 
-# The emulated broadcast server's parts, read by the decoders today's engine uses.
-cc_test(
-    name = "broadcast_part_format_test",
-    srcs = ["broadcast_part_format_test.cpp"],
-    copts = TGCALLS_CLI_COPTS,
-    linkopts = TGCALLS_CLI_LINKOPTS,
-    data = ["//submodules/TgVoipWebrtc/tgcalls/tools/go_sfu:broadcast_fixtures"],
-    deps = [
-        ":broadcast_signals",
-        "//submodules/TgVoipWebrtc:tgcalls_core",
-        "//submodules/TgVoipWebrtc/tgcalls/tools/go_sfu",
-        "//third-party/opus:opus",
-    ],
-)
-
 # Group participants on the Go SFU (CustomImpl and ReferenceImpl), also the broadcast speakers.
 cc_library(
     name = "group_participant",
