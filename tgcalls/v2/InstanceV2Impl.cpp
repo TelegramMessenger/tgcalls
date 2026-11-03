@@ -981,16 +981,7 @@ public:
         const auto weak = std::weak_ptr<InstanceV2ImplInternal>(shared_from_this());
 
         if (_signalingProtocolVersion == SignalingProtocolVersion::V3 && !getCustomParameterBool(_customParameters, "network_signaling_nosctp")) {
-            SignalingSctpConnection::Options sctpOptions;
-            if (int v = getCustomParameterInt(_customParameters, "network_sctp_t1_init_ms")) {
-                sctpOptions.t1InitTimeoutMs = v;
-            }
-            if (int v = getCustomParameterInt(_customParameters, "network_sctp_t1_cookie_ms")) {
-                sctpOptions.t1CookieTimeoutMs = v;
-            }
-            if (int v = getCustomParameterInt(_customParameters, "network_sctp_max_backoff_ms")) {
-                sctpOptions.maxBackoffMs = v;
-            }
+            const auto sctpOptions = SignalingSctpConnection::Options::fromCustomParameters(_customParameters);
 
             _signalingConnection = std::make_shared<SignalingSctpConnection>(
                 _threads,

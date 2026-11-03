@@ -18,6 +18,7 @@
 
 #include "StaticThreads.h"
 #include "SignalingConnection.h"
+#include "third-party/json11.hpp"
 
 namespace rtc {
 class Socket;
@@ -49,9 +50,10 @@ public:
         int t1CookieTimeoutMs; // 0 = use default
         int maxBackoffMs;      // 0 = use default
         Options() : t1InitTimeoutMs(400), t1CookieTimeoutMs(400), maxBackoffMs(750) {}
+        static Options fromCustomParameters(std::map<std::string, json11::Json> const &customParameters);
     };
 
-    SignalingSctpConnection(std::shared_ptr<Threads> threads, std::function<void(const std::vector<uint8_t> &)> onIncomingData, std::function<void(const std::vector<uint8_t> &)> emitData, bool isInitiator, Options options = Options());
+    SignalingSctpConnection(std::shared_ptr<Threads> threads, std::function<void(const std::vector<uint8_t> &)> onIncomingData, std::function<void(const std::vector<uint8_t> &)> emitData, bool isInitiator, Options options);
     virtual ~SignalingSctpConnection();
 
     virtual void receiveExternal(const std::vector<uint8_t> &data) override;

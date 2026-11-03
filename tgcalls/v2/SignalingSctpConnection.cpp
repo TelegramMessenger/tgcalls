@@ -13,8 +13,28 @@
 #include "system_wrappers/include/clock.h"
 
 #include "FieldTrialsConfig.h"
+#include "v2/CustomParameters.h"
 
 namespace tgcalls {
+
+static constexpr int kMaxSignalingSctpTimerMs = 60000;
+
+static void applySignalingSctpTimerOverride(std::map<std::string, json11::Json> const &customParameters, std::string const &name, int &timerMs) {
+    const int value = getCustomParameterInt(customParameters, name);
+    if (value > 0 && value <= kMaxSignalingSctpTimerMs) {
+        timerMs = value;
+    }
+}
+
+SignalingSctpConnection::Options SignalingSctpConnection::Options::fromCustomParameters(std::map<std::string, json11::Json> const &customParameters) {
+    Options options;
+    applySignalingSctpTimerOverride(customParameters, "network_sctp_t1_init_ms", options.t1InitTimeoutMs);
+    applySignalingSctpTimerOverride(customParameters, "network_sctp_t1_cookie_ms", options.t1CookieTimeoutMs);
+    applySignalingSctpTimerOverride(customParameters, "network_sctp_max_backoff_ms", options.maxBackoffMs);
+    return options;
+}
+
+
 
 // Factory that creates CustomDcSctpSocket (with the t1 timer backoff cap fix)
 // instead of the stock DcSctpSocket, with optional timer overrides for the

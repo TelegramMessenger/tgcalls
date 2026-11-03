@@ -1,6 +1,7 @@
 #ifndef TGCALLS_CUSTOM_PARAMETERS_H
 #define TGCALLS_CUSTOM_PARAMETERS_H
 
+#include <limits>
 #include <map>
 #include <string>
 
@@ -38,7 +39,10 @@ inline bool getCustomParameterBoolDefaultTrue(std::map<std::string, json11::Json
 inline int getCustomParameterInt(std::map<std::string, json11::Json> const &parameters, std::string const &name) {
     const auto value = parameters.find(name);
     if (value != parameters.end() && value->second.is_number()) {
-        return value->second.int_value();
+        const double number = value->second.number_value();
+        if (number >= std::numeric_limits<int>::min() && number <= std::numeric_limits<int>::max()) {
+            return static_cast<int>(number);
+        }
     }
     return 0;
 }
