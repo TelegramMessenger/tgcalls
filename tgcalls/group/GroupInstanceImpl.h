@@ -188,6 +188,7 @@ struct GroupInstanceDescriptor {
     std::function<void(bool)> onMutedSpeechActivityDetected;
     std::function<std::vector<uint8_t>(std::vector<uint8_t> const &, int64_t, bool, int32_t)> e2eEncryptDecrypt;
     bool isConference{false};
+    std::function<void(int16_t *, size_t, size_t, uint32_t)> onPlayoutFrame;
 };
 
 template <typename T>

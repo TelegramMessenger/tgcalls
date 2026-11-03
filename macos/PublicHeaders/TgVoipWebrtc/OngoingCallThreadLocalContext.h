@@ -377,7 +377,12 @@ typedef NS_ENUM(int32_t, OngoingGroupCallRequestedVideoQuality) {
 
 @end
 
+#include <TgVoipWebrtc/BroadcastAudioCoreC.h>
+#include <TgVoipWebrtc/BroadcastMediaC.h>
+
 @interface GroupCallThreadLocalContext : NSObject
+
+@property (nonatomic, readonly) BroadcastAudioCoreRef _Nonnull broadcastAudioCore;
 
 @property (nonatomic, copy) void (^ _Nullable signalBarsChanged)(int32_t);
 

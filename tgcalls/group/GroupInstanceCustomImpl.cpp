@@ -1171,7 +1171,8 @@ struct DecodedBroadcastPart {
 
 class AudioDeviceDataObserverShared {
 public:
-    AudioDeviceDataObserverShared() {
+    explicit AudioDeviceDataObserverShared(std::function<void(int16_t *, size_t, size_t, uint32_t)> onPlayoutFrame) :
+    _onPlayoutFrame(std::move(onPlayoutFrame)) {
     }
 
     ~AudioDeviceDataObserverShared() {
@@ -1192,10 +1193,13 @@ public:
             _renderer.render([&context](int16_t *samples, size_t numSamples, size_t numChannels, uint32_t sampleRate) {
                 context->getAudio(samples, numSamples, numChannels, sampleRate);
             }, audio_samples, num_samples, num_channels, samples_per_sec);
+        } else if (_onPlayoutFrame) {
+            _onPlayoutFrame(audio_samples, num_samples, num_channels, samples_per_sec);
         }
     }
 
 private:
+    const std::function<void(int16_t *, size_t, size_t, uint32_t)> _onPlayoutFrame;
     webrtc::Mutex _mutex;
     StreamingAudioRenderer _renderer;
     std::shared_ptr<StreamingMediaContext> _streamingContext;
@@ -1332,6 +1336,7 @@ public:
     _audioLevelsUpdated(descriptor.audioLevelsUpdated),
     _activitiesUpdated(descriptor.ssrcActivityUpdated),
     _onAudioFrame(descriptor.onAudioFrame),
+    _onPlayoutFrame(std::move(descriptor.onPlayoutFrame)),
     _requestMediaChannelDescriptions(descriptor.requestMediaChannelDescriptions),
     _dataChannelMessageReceived(descriptor.dataChannelMessageReceived),
     _requestCurrentTime(descriptor.requestCurrentTime),
@@ -1503,7 +1508,7 @@ public:
     #endif
         }
 
-        _audioDeviceDataObserverShared = std::make_shared<AudioDeviceDataObserverShared>();
+        _audioDeviceDataObserverShared = std::make_shared<AudioDeviceDataObserverShared>(std::move(_onPlayoutFrame));
 
         _threads->getWorkerThread()->BlockingCall([this, isMuted = _isMuted]() mutable {
             _audioDeviceModule = createAudioDeviceModule();
@@ -3657,6 +3662,7 @@ private:
     std::function<void(GroupLevelsUpdate const &)> _audioLevelsUpdated;
     std::function<void(GroupActivitiesUpdate const &)> _activitiesUpdated;
     std::function<void(uint32_t, const AudioFrame &)> _onAudioFrame;
+    std::function<void(int16_t *, size_t, size_t, uint32_t)> _onPlayoutFrame;
     std::function<std::shared_ptr<RequestMediaChannelDescriptionTask>(std::vector<uint32_t> const &, std::function<void(std::vector<MediaChannelDescription> &&)>)> _requestMediaChannelDescriptions;
     std::function<void(std::string const &)> _dataChannelMessageReceived;
     std::function<std::shared_ptr<BroadcastPartTask>(std::function<void(int64_t)>)> _requestCurrentTime;
