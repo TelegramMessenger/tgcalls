@@ -3,14 +3,24 @@
 
 #include <memory>
 
+#include "api/video_codecs/sdp_video_format.h"
 #include "api/video_codecs/video_decoder_factory.h"
 #include "api/video_codecs/video_encoder_factory.h"
 
 namespace tgcalls {
 
-// `inner`'s formats with AV1 appended last, so the codecs before it keep their payload types. Creating AV1 gives the
-// SVT-AV1 encoder when `allowAv1Encoding`, else the refusing encoder: a device lists AV1 so that a two-way video line
-// carries it, but only a device allowed to encode AV1 ever does. Everything else comes from `inner`.
+// `format` with the fmtp parameters WebRTC's SDP parser fills in when a description omits them
+// (BackfillCodecParameters in pc/webrtc_sdp.cc): VP9 profile-id 0, H264 packetization-mode 0, AV1 profile 0,
+// level-idx 5 and tier 0, H265 level-id 93 and tx-mode SRST. Values already present are kept.
+webrtc::SdpVideoFormat WithSdpDefaultParameters(webrtc::SdpVideoFormat format);
+
+// `inner`'s formats with AV1 appended last, so the codecs before it keep their payload types, each listed with
+// WithSdpDefaultParameters. A send codec negotiated from a parsed remote description carries those defaults, and
+// pinning it (RtpEncodingParameters::codec) needs exact parameter equality with the sender's own list
+// (Codec::MatchesRtpCodec): a bare "AV1" or "H265" could never be pinned. Spelling out a default changes nothing on
+// the wire, since the peer's parser fills in the same values. `inner` is handed its own formats back. Creating AV1
+// gives the SVT-AV1 encoder when `allowAv1Encoding`, else the refusing encoder: a device lists AV1 so that a two-way
+// video line carries it, but only a device allowed to encode AV1 ever does. Everything else comes from `inner`.
 std::unique_ptr<webrtc::VideoEncoderFactory> WrapEncoderFactoryWithAv1(std::unique_ptr<webrtc::VideoEncoderFactory> inner,
                                                                        bool allowAv1Encoding);
 

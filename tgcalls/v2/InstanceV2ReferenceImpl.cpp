@@ -61,6 +61,9 @@
 #include "v2/ReflectorRelayPortFactory.h"
 #include "v2/MtProtoDtlsTransport.h"
 #include "v2/CustomParameters.h"
+#if TGCALLS_ENABLE_AV1
+#include "av1/Av1SendCodec.h"
+#endif
 #ifdef WEBRTC_IOS
 #include "platform/darwin/iOS/tgcalls_audio_device_module_ios.h"
 #endif
@@ -515,9 +518,25 @@ public:
         peerConnectionFactoryDependencies.audio_encoder_factory = webrtc::CreateAudioEncoderFactory<webrtc::AudioEncoderOpus>();
         peerConnectionFactoryDependencies.audio_decoder_factory = webrtc::CreateAudioDecoderFactory<webrtc::AudioDecoderOpus>();
 
+#if TGCALLS_ENABLE_AV1
+        // AV1 is offered (and decoded) unless the server's video_av1 is false; this side encodes it only where the
+        // chip gate and video_av1_send allow, and the send pin (applyVideoSendCodecPin) decides what is sent.
+        _av1Settings = Av1CallSettingsFromCustomParameters(_customParameters, PlatformInterface::SharedInstance()->canEncodeAv1Realtime());
+        if (_av1Settings.offerAv1) {
+            const bool allowAv1Encoding = _av1Settings.sendAv1 && _av1Settings.deviceMaySendAv1;
+            RTC_LOG(LS_INFO) << "InstanceV2ReferenceImpl: AV1 offered, encoding allowed: " << (allowAv1Encoding ? 1 : 0) << " (" << sideName() << ")";
+            peerConnectionFactoryDependencies.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactoryWithAv1(true, allowAv1Encoding);
+            peerConnectionFactoryDependencies.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactoryWithAv1();
+        } else {
+            RTC_LOG(LS_INFO) << "InstanceV2ReferenceImpl: AV1 not offered (" << sideName() << ")";
+            peerConnectionFactoryDependencies.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory(true);
+            peerConnectionFactoryDependencies.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactory();
+        }
+#else
         peerConnectionFactoryDependencies.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory(true);
         peerConnectionFactoryDependencies.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactory();
-        
+#endif
+
         webrtc::EnableMedia(peerConnectionFactoryDependencies);
 
         peerConnectionFactoryDependencies.event_log_factory = std::make_unique<webrtc::RtcEventLogFactory>(peerConnectionFactoryDependencies.task_queue_factory.get());
@@ -1155,6 +1174,13 @@ public:
 
                 strong->maybeCommitPendingIceCandidates();
 
+#if TGCALLS_ENABLE_AV1
+                // Our answer just completed a negotiation round (an offer leaves us in have-local-offer).
+                if (strong->_peerConnection->signaling_state() == webrtc::PeerConnectionInterface::SignalingState::kStable) {
+                    strong->applyVideoSendCodecPin();
+                }
+#endif
+
                 // An answer just took us back to stable; after an offer this is
                 // a no-op until its answer lands.
                 strong->flushPendingRenegotiation();
@@ -1496,6 +1522,13 @@ public:
 
                 strong->maybeCommitPendingIceCandidates();
 
+#if TGCALLS_ENABLE_AV1
+                // An answer just completed a negotiation round.
+                if (type == "answer") {
+                    strong->applyVideoSendCodecPin();
+                }
+#endif
+
                 if (type == "offer") {
                     strong->sendLocalDescription();
                 }
@@ -1688,6 +1721,13 @@ public:
                             #endif
                             cricket::kH264CodecName
                         };
+#if TGCALLS_ENABLE_AV1
+                        if (_av1Settings.testOfferAv1First) {
+                            // CLI-only: lead with AV1, as a peer whose stock list does, so the answerer's default
+                            // send codec is AV1 until its pin lands.
+                            codecPreferences.insert(codecPreferences.begin(), cricket::kAv1CodecName);
+                        }
+#endif
 
                         for (const auto &codecCapability : currentCapabilities.codecs) {
                             if (std::find_if(codecPreferences.begin(), codecPreferences.end(), [&](std::string const &value) {
@@ -1748,6 +1788,44 @@ public:
             }
         }
     }
+
+#if TGCALLS_ENABLE_AV1
+    const char *sideName() const {
+        return _encryptionKey.isOutgoing ? "caller" : "callee";
+    }
+
+    // Pins the camera sender to ChooseVideoSendCodec's choice among the codecs the last negotiation round gave it:
+    // AV1 when this side may send it, else H.265, else H.264. Called after every completed round (a renegotiation
+    // keeps a pin whose codec is still negotiated and clears one that is not; webrtc_video_engine.cc). Before the
+    // first round the sender has no codecs and nothing is pinned: a codec pinned then from the capabilities would
+    // reach the first send stream with the init parameters, and against a peer without it the whole parameter set,
+    // max_bitrate_bps included, would be rejected there. Without AV1 offered nothing is pinned, as before AV1.
+    void applyVideoSendCodecPin() {
+        if (!_av1Settings.offerAv1 || !_outgoingVideoTransceiver) {
+            return;
+        }
+        const auto sender = _outgoingVideoTransceiver->sender();
+        webrtc::RtpParameters parameters = sender->GetParameters();
+        if (parameters.encodings.empty() || parameters.codecs.empty()) {
+            return;
+        }
+        const std::vector<webrtc::RtpCodec> available(parameters.codecs.begin(), parameters.codecs.end());
+        const bool av1Allowed = _av1Settings.sendAv1 && _av1Settings.deviceMaySendAv1 && _av1SendAllowedByPower;
+        const auto codec = ChooseVideoSendCodec(available, av1Allowed);
+        if (!codec) {
+            return;
+        }
+        for (auto &encoding : parameters.encodings) {
+            encoding.codec = *codec;
+        }
+        const auto result = sender->SetParameters(parameters);
+        if (!result.ok()) {
+            RTC_LOG(LS_ERROR) << "InstanceV2ReferenceImpl: pinning the video send codec to " << codec->name << " failed: " << result.message() << " (" << sideName() << ")";
+            return;
+        }
+        RTC_LOG(LS_INFO) << "InstanceV2ReferenceImpl: video send codec pinned to " << codec->name << " (" << sideName() << ")";
+    }
+#endif
 
     void setRequestedVideoAspect(float aspect) {
     }
@@ -1966,6 +2044,10 @@ private:
     std::shared_ptr<Threads> _threads;
     std::vector<RtcServer> _rtcServers;
     std::map<std::string, json11::Json> _customParameters;
+#if TGCALLS_ENABLE_AV1
+    Av1CallSettings _av1Settings;
+    bool _av1SendAllowedByPower = true;
+#endif
     std::unique_ptr<Proxy> _proxy;
     bool _enableP2P = false;
     EncryptionKey _encryptionKey;
