@@ -152,6 +152,9 @@ struct GroupInstanceDescriptor {
     bool disableAudioInput{false};
     bool ios_enableSystemMute{false};
     VideoContentType videoContentType{VideoContentType::None};
+    // A screencast captured in-app on iOS (ScreenCaptureKit): hardware H264 at level 5.2, up to 60 fps,
+    // 3 Mbit/s. Otherwise (the ReplayKit broadcast, other platforms) a screencast encodes as before.
+    bool iosInAppScreencast{false};
     bool initialEnableNoiseSuppression{false};
     std::vector<VideoCodecName> videoCodecPreferences;
     std::function<std::shared_ptr<RequestMediaChannelDescriptionTask>(std::vector<uint32_t> const &, std::function<void(std::vector<MediaChannelDescription> &&)>)> requestMediaChannelDescriptions;

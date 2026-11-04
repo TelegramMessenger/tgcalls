@@ -13,6 +13,7 @@
 #include "GroupNetworkManager.h"
 #include "group/GroupFrameTransformer.h"
 #include "group/GroupAudioCapturePostProcessor.h"
+#include "group/ScreencastSendParameters.h"
 
 #include "api/audio_codecs/audio_decoder_factory_template.h"
 #include "api/audio_codecs/audio_encoder_factory_template.h"
@@ -30,6 +31,7 @@
 #include "api/call/audio_sink.h"
 #include "modules/audio_processing/audio_buffer.h"
 #include "absl/strings/match.h"
+#include "rtc_base/strings/string_builder.h"
 #include "modules/audio_processing/agc2/vad_wrapper.h"
 #include "pc/channel.h"
 #include "pc/rtp_transport.h"
@@ -1244,6 +1246,7 @@ public:
     _isConference(descriptor.isConference),
     _minOutgoingVideoBitrateKbit(descriptor.minOutgoingVideoBitrateKbit),
     _videoContentType(descriptor.videoContentType),
+    _iosInAppScreencast(descriptor.videoContentType == VideoContentType::Screencast && descriptor.iosInAppScreencast),
     _videoCodecPreferences(std::move(descriptor.videoCodecPreferences)),
     _e2eEncryptDecrypt(descriptor.e2eEncryptDecrypt),
     _eventLog(std::make_unique<webrtc::RtcEventLogNull>()),
@@ -1437,7 +1440,8 @@ public:
         peerConnectionFactoryDeps.audio_encoder_factory = webrtc::CreateAudioEncoderFactory<webrtc::AudioEncoderOpus, webrtc::AudioEncoderL16>();
         peerConnectionFactoryDeps.audio_decoder_factory = webrtc::CreateAudioDecoderFactory<webrtc::AudioDecoderOpus, webrtc::AudioDecoderL16>();
 
-        peerConnectionFactoryDeps.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory(false, _videoContentType == VideoContentType::Screencast);
+        // preferHardwareEncoding is what selects the in-app screencast's encoder (DarwinInterface).
+        peerConnectionFactoryDeps.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory(_iosInAppScreencast, _videoContentType == VideoContentType::Screencast);
         peerConnectionFactoryDeps.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactory();
 
 #if USE_RNNOISE
@@ -1536,6 +1540,7 @@ public:
             }
 
             strong->writeStateLogRecords();
+            strong->updateScreencastLayerSizesIfNeeded();
 
             strong->beginLogTimer(1000);
             
@@ -1699,10 +1704,77 @@ public:
         updateVideoSend();
     }
 
+    // The outgoing source's frame size before adaptation, or (0, 0) while no frame has arrived.
+    std::pair<int, int> currentOutgoingVideoFrameSize() {
+        if (!_getVideoSource) {
+            return std::make_pair(0, 0);
+        }
+        const auto source = _getVideoSource();
+        webrtc::VideoTrackSourceInterface::Stats stats;
+        if (!source || !source->GetStats(&stats)) {
+            return std::make_pair(0, 0);
+        }
+        return std::make_pair(stats.input_width, stats.input_height);
+    }
+
+    // The in-app iOS screencast sizes its layers by the frame size, which changes when the phone
+    // folds or rotates: called every second (the log timer).
+    void updateScreencastLayerSizesIfNeeded() {
+        if (!_iosInAppScreencast || !_outgoingVideoChannel) {
+            return;
+        }
+        if (currentOutgoingVideoFrameSize() != _appliedScreencastFrameSize) {
+            adjustVideoSendParams();
+        }
+    }
+
     void adjustVideoSendParams() {
         if (!_outgoingVideoChannel) {
             return;
         }
+
+#ifdef WEBRTC_IOS
+        // The iOS screencast (in-app capture): top or only layer capped at 3 Mbit/s,
+        // every layer up to 60 fps; see ScreencastSendParameters.h.
+        if (_iosInAppScreencast) {
+            // Layer sizes follow the frames (folding, rotation): see updateScreencastLayerSizesIfNeeded.
+            const auto frameSize = currentOutgoingVideoFrameSize();
+            _appliedScreencastFrameSize = frameSize;
+            _threads->getWorkerThread()->BlockingCall([this, frameSize]() {
+                webrtc::RtpParameters rtpParameters = _outgoingVideoChannel->send_channel()->GetRtpSendParameters(_outgoingVideoSsrcs.simulcastLayers[0].ssrc);
+                const auto layers = iosScreencastLayerParameters((int)rtpParameters.encodings.size(), frameSize.first, frameSize.second);
+                const int minimumConstraintForLayer[3] = { 180, 360, 720 };
+                for (size_t i = 0; i < rtpParameters.encodings.size() && i < layers.size(); i++) {
+                    auto &encoding = rtpParameters.encodings[i];
+                    if (layers[i].minBitrateBps > 0) {
+                        encoding.min_bitrate_bps = layers[i].minBitrateBps;
+                    }
+                    encoding.max_bitrate_bps = layers[i].maxBitrateBps;
+                    encoding.max_framerate = layers[i].maxFramerate;
+                    // Also for a single layer (conference): the top layer is encoded at a video-like size.
+                    encoding.scale_resolution_down_by = layers[i].scaleResolutionDownBy;
+                    if (rtpParameters.encodings.size() == 3) {
+                        encoding.active = _outgoingVideoConstraint >= minimumConstraintForLayer[i];
+                    }
+                }
+
+                const auto result = _outgoingVideoChannel->send_channel()->SetRtpSendParameters(_outgoingVideoSsrcs.simulcastLayers[0].ssrc, rtpParameters);
+                const auto applied = _outgoingVideoChannel->send_channel()->GetRtpSendParameters(_outgoingVideoSsrcs.simulcastLayers[0].ssrc);
+                rtc::StringBuilder description;
+                for (size_t i = 0; i < applied.encodings.size(); i++) {
+                    const auto &encoding = applied.encodings[i];
+                    description << " {" << i << ": max " << encoding.max_bitrate_bps.value_or(-1)
+                        << ", min " << encoding.min_bitrate_bps.value_or(-1)
+                        << ", scale " << encoding.scale_resolution_down_by.value_or(-1.0)
+                        << ", fps " << encoding.max_framerate.value_or(-1.0)
+                        << ", active " << (encoding.active ? 1 : 0) << "}";
+                }
+                RTC_LOG(LS_INFO) << "Screencast send parameters for " << frameSize.first << "x" << frameSize.second
+                    << (result.ok() ? "" : std::string(" rejected: ") + result.message()) << ", applied:" << description.str();
+            });
+            return;
+        }
+#endif
 
         if (_videoContentType == VideoContentType::Screencast) {
             _threads->getWorkerThread()->BlockingCall([this]() {
@@ -2278,6 +2350,12 @@ public:
             return;
         }
 
+        if (_videoContentType == VideoContentType::Screencast) {
+            const auto profileLevelId = _selectedPayloadType->videoCodec.params.find("profile-level-id");
+            RTC_LOG(LS_INFO) << "Screencast video codec: " << _selectedPayloadType->videoCodec.name
+                << ", profile-level-id: " << (profileLevelId != _selectedPayloadType->videoCodec.params.end() ? profileLevelId->second : std::string("none"));
+        }
+
         _videoExtensionMap.emplace_back(1, webrtc::RtpExtension::kAudioLevelUri);
         _videoExtensionMap.emplace_back(2, webrtc::RtpExtension::kAbsSendTimeUri);
         _videoExtensionMap.emplace_back(3, webrtc::RtpExtension::kTransportSequenceNumberUri);
@@ -2306,7 +2384,15 @@ public:
                 preferences.start_bitrate_bps = std::max(preferences.min_bitrate_bps, 400 * 1000);
             }
             if (_videoContentType == VideoContentType::Screencast) {
+#ifdef WEBRTC_IOS
+                if (_iosInAppScreencast) {
+                    preferences.max_bitrate_bps = std::max(preferences.min_bitrate_bps, iosScreencastTotalMaxBitrateBps());
+                } else {
+                    preferences.max_bitrate_bps = std::max(preferences.min_bitrate_bps, (1020 + 32) * 1000);
+                }
+#else
                 preferences.max_bitrate_bps = std::max(preferences.min_bitrate_bps, (1020 + 32) * 1000);
+#endif
             } else {
                 preferences.max_bitrate_bps = std::max(preferences.min_bitrate_bps, (1020 + 32) * 1000);
             }
@@ -3430,6 +3516,10 @@ private:
     bool _isConference{false};
     int _minOutgoingVideoBitrateKbit{100};
     VideoContentType _videoContentType{VideoContentType::None};
+    // See GroupInstanceDescriptor::iosInAppScreencast.
+    bool _iosInAppScreencast{false};
+    // The frame size the in-app screencast's layer sizes were last computed for.
+    std::pair<int, int> _appliedScreencastFrameSize{0, 0};
     std::vector<VideoCodecName> _videoCodecPreferences;
     std::function<std::vector<uint8_t>(std::vector<uint8_t> const &, int64_t, bool, int32_t)> _e2eEncryptDecrypt;
 

@@ -25,6 +25,11 @@ RTC_OBJC_EXPORT
 
 - (instancetype)initWithPreferHardwareH264:(bool)preferHardwareH264 preferX264:(bool)preferX264;
 
+/** highestH264Level: advertise a single H264 format, constrained high at level 5.2 (the
+ *  highest VideoToolbox level), instead of the per-device constrained high and baseline
+ *  entries. Used by the iOS screencast, which encodes screen-sized frames at 60 fps. */
+- (instancetype)initWithPreferHardwareH264:(bool)preferHardwareH264 preferX264:(bool)preferX264 highestH264Level:(bool)highestH264Level;
+
 + (NSArray<RTCVideoCodecInfo *> *)supportedCodecs;
 
 @end

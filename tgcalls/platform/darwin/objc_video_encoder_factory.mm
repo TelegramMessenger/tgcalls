@@ -43,8 +43,8 @@ namespace {
 
 class ObjCVideoEncoder : public VideoEncoder {
  public:
-  ObjCVideoEncoder(id<RTC_OBJC_TYPE(RTCVideoEncoder)> encoder)
-      : encoder_(encoder), implementation_name_([encoder implementationName].stdString) {}
+  ObjCVideoEncoder(id<RTC_OBJC_TYPE(RTCVideoEncoder)> encoder, bool trustsRateController)
+      : encoder_(encoder), implementation_name_([encoder implementationName].stdString), trusts_rate_controller_(trustsRateController) {}
 
   int32_t InitEncode(const VideoCodec *codec_settings, const Settings &encoder_settings) override {
     RTC_OBJC_TYPE(RTCVideoEncoderSettings) *settings =
@@ -113,12 +113,16 @@ class ObjCVideoEncoder : public VideoEncoder {
                                             ScalingSettings::kOff;
 
     info.is_hardware_accelerated = true;
+    // VideoStreamEncoder runs its own frame dropper unless the encoder's rate control is
+    // trusted (see CustomObjCVideoEncoderFactory).
+    info.has_trusted_rate_controller = trusts_rate_controller_;
     return info;
   }
 
  private:
   id<RTC_OBJC_TYPE(RTCVideoEncoder)> encoder_;
   const std::string implementation_name_;
+  const bool trusts_rate_controller_;
 };
 
 class ObjcVideoEncoderSelector : public VideoEncoderFactory::EncoderSelectorInterface {
@@ -153,8 +157,8 @@ class ObjcVideoEncoderSelector : public VideoEncoderFactory::EncoderSelectorInte
 }  // namespace
 
 CustomObjCVideoEncoderFactory::CustomObjCVideoEncoderFactory(
-    id<RTC_OBJC_TYPE(RTCVideoEncoderFactory)> encoder_factory)
-    : encoder_factory_(encoder_factory) {}
+    id<RTC_OBJC_TYPE(RTCVideoEncoderFactory)> encoder_factory, bool trustsRateController)
+    : encoder_factory_(encoder_factory), trusts_rate_controller_(trustsRateController) {}
 
 CustomObjCVideoEncoderFactory::~CustomObjCVideoEncoderFactory() {}
 
@@ -191,7 +195,7 @@ std::unique_ptr<VideoEncoder> CustomObjCVideoEncoderFactory::CreateVideoEncoder(
   if ([encoder isKindOfClass:[RTCWrappedNativeVideoEncoder class]]) {
     return [(RTCWrappedNativeVideoEncoder *)encoder releaseWrappedEncoder];
   } else {
-    return std::unique_ptr<ObjCVideoEncoder>(new ObjCVideoEncoder(encoder));
+    return std::unique_ptr<ObjCVideoEncoder>(new ObjCVideoEncoder(encoder, trusts_rate_controller_));
   }
 }
 

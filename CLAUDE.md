@@ -223,6 +223,15 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
   callee received M` (a `FakeVideoSink` on each side); every p2p run prints `Remote media state:
   caller=N callee=M updates`. Neither is a pass criterion (exit code is unchanged); read them, since
   "exit 0" never proved two-way media. Added 2026-10-11 for the 14.0.0 rewrite.
+- `--video-screencast` — p2p/reflector, with `--video`, `--video-late` or `--video-late-*-ms`: both
+  sides' captures are created as screen captures (`isScreenCapture`, what the iOS screencast
+  capturer is). Every private-call engine must then show `Video frames` both ways: 7/8/9/12/13 on
+  their separate screencast channel, 10/11, 14 and 18/19 on the camera's transceiver with the
+  screencast encoding (`group/ScreencastSendParameters.h`: `target_bps: 3000000` in the encoder
+  stats where the camera reads 1228800). The screen is encoded as video, at the frame size handed over
+  (the iOS app brings it to at most 1 Mpx; the CLI's 1280x720 stays): `content_type: kRealtimeVideo`
+  for every version, 13.0.0 included. Those changes are iOS-only (`kIosPrivateCallScreencast`);
+  the CLI builds them through `TGCALLS_ALLOW_TEST_KNOBS`, so the check exercises them on the host.
 - `--video-sink-churn` — with `--video`, once frames flow each participant replaces every incoming video sink five times, one second apart (`addIncomingVideoOutput` with a fresh sink, old sink released) — what the app does on a quality switch, where the tile's view owns the sink. An engine that keeps a raw pointer to a dead sink segfaults in `rtc::VideoBroadcaster::OnFrame`; validation then counts frames on the NEW sinks only. Known limitation: in mixed groups the pairs receiving from a ReferenceImpl SENDER fail this (0 frames after the last replacement) because the host reference sender throttles to ~1–3 fps after the first seconds regardless of sinks (41–65 frames in 30 s vs ~750 from CustomImpl senders; `_minOutgoingVideoBitrateKbit` is never applied there) — use it with reference-only or CustomImpl-only groups, or with reference RECEIVERS of CustomImpl senders.
 - `--video-rerequest` — with `--video`, once frames flow each participant's SFU downlink gets a
   150 ms delay, then five rounds of `setRequestedVideoChannels({})` followed a second later by the

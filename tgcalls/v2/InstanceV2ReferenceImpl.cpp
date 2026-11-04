@@ -6,6 +6,7 @@
 #include "v2/NativeNetworkingImpl.h"
 #include "v2/Signaling.h"
 #include "v2/ContentNegotiation.h"
+#include "group/ScreencastSendParameters.h"
 
 #include "CodecSelectHelper.h"
 
@@ -1663,8 +1664,10 @@ public:
 
         auto videoCaptureImpl = GetVideoCaptureAssumingSameThread(videoCapture.get());
         if (videoCaptureImpl) {
-            if (videoCaptureImpl->isScreenCapture()) {
-            } else {
+            // On iOS a screen capture goes out as the camera does (this engine has no
+            // separate screencast channel); only its encoding differs, below.
+            const bool isScreenCapture = videoCaptureImpl->isScreenCapture();
+            if (!isScreenCapture || kIosPrivateCallScreencast) {
                 _videoCapture = videoCapture;
 
                 auto videoTrack = _peerConnectionFactory->CreateVideoTrack(videoCaptureImpl->source(), "1");
@@ -1718,7 +1721,14 @@ public:
                         if (parameters.encodings.empty()) {
                             parameters.encodings.push_back(webrtc::RtpEncodingParameters());
                         }
-                        parameters.encodings[0].max_bitrate_bps = 1200 * 1024;
+                        if (isScreenCapture) {
+                            const auto screencast = iosScreencastLayerParameters(1)[0];
+                            parameters.encodings[0].max_bitrate_bps = screencast.maxBitrateBps;
+                            parameters.encodings[0].max_framerate = screencast.maxFramerate;
+                            parameters.encodings[0].scale_resolution_down_by = screencast.scaleResolutionDownBy;
+                        } else {
+                            parameters.encodings[0].max_bitrate_bps = 1200 * 1024;
+                        }
                         _outgoingVideoTransceiver->sender()->SetParameters(parameters);
 
                         _outgoingVideoTrack->set_enabled(true);

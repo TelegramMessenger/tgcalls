@@ -7,6 +7,7 @@
 #include "v2/Signaling.h"
 #include "v2/SignalingTranslator.h"
 #include "v2/ContentNegotiation.h"
+#include "group/ScreencastSendParameters.h"
 
 #include "CodecSelectHelper.h"
 
@@ -1732,10 +1733,15 @@ public:
         // so camera toggles do not add m-lines.
         _outgoingVideoTrack = nullptr;
 
+        // On iOS a screen capture goes out on the same transceiver as the camera
+        // (the 13.0.0 protocol's screencast channel is not implemented here); only
+        // its encoding differs (applyOutgoingVideoEncoding).
         webrtc::scoped_refptr<webrtc::VideoTrackInterface> videoTrack;
+        bool isScreenCapture = false;
         auto videoCaptureImpl = GetVideoCaptureAssumingSameThread(videoCapture.get());
-        if (videoCaptureImpl && !videoCaptureImpl->isScreenCapture()) {
+        if (videoCaptureImpl && (!videoCaptureImpl->isScreenCapture() || kIosPrivateCallScreencast)) {
             _videoCapture = videoCapture;
+            isScreenCapture = videoCaptureImpl->isScreenCapture();
             videoTrack = _peerConnectionFactory->CreateVideoTrack(videoCaptureImpl->source(), "1");
         }
 
@@ -1747,6 +1753,7 @@ public:
         } else if (_outgoingVideoTransceiver) {
             if (_outgoingVideoTransceiver->sender()->SetTrack(videoTrack.get())) {
                 _outgoingVideoTransceiver->SetDirectionWithError(webrtc::RtpTransceiverDirection::kSendOnly);
+                applyOutgoingVideoEncoding(isScreenCapture);
                 _outgoingVideoTrack = videoTrack;
                 _outgoingVideoTrack->set_enabled(true);
             }
@@ -1791,12 +1798,7 @@ public:
 
                 _outgoingVideoTransceiver->SetCodecPreferences(codecCapabilities);
 
-                webrtc::RtpParameters parameters = _outgoingVideoTransceiver->sender()->GetParameters();
-                if (parameters.encodings.empty()) {
-                    parameters.encodings.push_back(webrtc::RtpEncodingParameters());
-                }
-                parameters.encodings[0].max_bitrate_bps = 1200 * 1024;
-                _outgoingVideoTransceiver->sender()->SetParameters(parameters);
+                applyOutgoingVideoEncoding(isScreenCapture);
 
                 _outgoingVideoTrack->set_enabled(true);
             }
@@ -1808,6 +1810,27 @@ public:
             sendMediaState();
             requestRenegotiation();
         }
+    }
+
+    // The outgoing video encoding for the track kind now on the transceiver: a
+    // reused transceiver carries the previous track's values, so a camera after a
+    // screen share gets the camera's back.
+    void applyOutgoingVideoEncoding(bool isScreenCapture) {
+        webrtc::RtpParameters parameters = _outgoingVideoTransceiver->sender()->GetParameters();
+        if (parameters.encodings.empty()) {
+            parameters.encodings.push_back(webrtc::RtpEncodingParameters());
+        }
+        if (isScreenCapture) {
+            const auto screencast = iosScreencastLayerParameters(1)[0];
+            parameters.encodings[0].max_bitrate_bps = screencast.maxBitrateBps;
+            parameters.encodings[0].max_framerate = screencast.maxFramerate;
+            parameters.encodings[0].scale_resolution_down_by = screencast.scaleResolutionDownBy;
+        } else {
+            parameters.encodings[0].max_bitrate_bps = 1200 * 1024;
+            parameters.encodings[0].max_framerate = absl::nullopt;
+            parameters.encodings[0].scale_resolution_down_by = absl::nullopt;
+        }
+        _outgoingVideoTransceiver->sender()->SetParameters(parameters);
     }
 
     void setRequestedVideoAspect(float aspect) {

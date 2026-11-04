@@ -29,6 +29,7 @@
 #include "v2/ExternalSignalingConnection.h"
 #include "v2/SignalingSctpConnection.h"
 #include "v2/CustomParameters.h"
+#include "group/ScreencastSendParameters.h"
 #include "v2wasm/CoreBase64.h"
 #include "v2wasm/EmbeddedCoreModule.h"
 #include "v2wasm/NativeCoreBackend.h"
@@ -637,9 +638,10 @@ void CallCoreHost::start() {
     // Stock start() applies descriptor.videoCapture before beginSignaling(), so
     // the camera is part of the first offer; the core reproduces that from this
     // flag (see the post-create check below).
+    // On iOS a screen capture counts: it goes out as the camera (see setVideoCapture).
     bool hasInitialVideoCapture = false;
     if (const auto captureImpl = GetVideoCaptureAssumingSameThread(_videoCapture.get())) {
-        hasInitialVideoCapture = !captureImpl->isScreenCapture();
+        hasInitialVideoCapture = !captureImpl->isScreenCapture() || kIosPrivateCallScreencast;
     }
     const std::string configJson = json11::Json(json11::Json::object{
         {"abiVersion", 1},
@@ -1214,9 +1216,21 @@ void CallCoreHost::executeAddTransceiver(json11::Json const &command) {
         track = _peerConnectionFactory->CreateAudioTrack("0", audioSource.get());
     } else if (trackSource == "camera") {
         auto videoCaptureImpl = GetVideoCaptureAssumingSameThread(_videoCapture.get());
-        if (!videoCaptureImpl || videoCaptureImpl->isScreenCapture()) {
+        if (!videoCaptureImpl || (videoCaptureImpl->isScreenCapture() && !kIosPrivateCallScreencast)) {
             emitErrorEvent("no usable video capture", "pc_add_transceiver");
             return;
+        }
+        if (videoCaptureImpl->isScreenCapture()) {
+            // The core asked for a camera transceiver (it is told every capture is
+            // one); a screen capture gets the screencast encoding instead of the
+            // core's camera values. Set as init encodings, so a rollback keeps them.
+            const auto screencast = iosScreencastLayerParameters(1)[0];
+            if (transceiverInit.send_encodings.empty()) {
+                transceiverInit.send_encodings.push_back(webrtc::RtpEncodingParameters());
+            }
+            transceiverInit.send_encodings[0].max_bitrate_bps = screencast.maxBitrateBps;
+            transceiverInit.send_encodings[0].max_framerate = screencast.maxFramerate;
+            transceiverInit.send_encodings[0].scale_resolution_down_by = screencast.scaleResolutionDownBy;
         }
         track = _peerConnectionFactory->CreateVideoTrack(videoCaptureImpl->source(), "1");
         if (!track) {
@@ -1676,9 +1690,13 @@ void CallCoreHost::executeClose() {
 
 void CallCoreHost::setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture) {
     _videoCapture = videoCapture;
+    // On iOS every capture is reported as a camera: like the stock 11.0.0 engine, a
+    // screen capture goes out on the camera's transceiver (the core drops screencasts),
+    // and executeAddTransceiver gives it the screencast encoding. Elsewhere the core is
+    // told, and drops it, as before.
     bool screencast = false;
     if (const auto captureImpl = GetVideoCaptureAssumingSameThread(videoCapture.get())) {
-        screencast = captureImpl->isScreenCapture();
+        screencast = captureImpl->isScreenCapture() && !kIosPrivateCallScreencast;
     }
     deliverEvent({ {"@type", "video_capture"}, {"active", videoCapture != nullptr}, {"screencast", screencast} });
 }

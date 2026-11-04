@@ -312,6 +312,9 @@ int main(int argc, char* argv[]) {
     int referenceParticipants = 0;
     bool enableVideo = false;
     bool videoLate = false;
+    // --video-screencast: p2p/reflector captures are created as screen captures
+    // (isScreenCapture), what the iOS screencast capturer is.
+    bool videoScreencast = false;
     // --video-late-caller-ms / --video-late-callee-ms: attach that side's camera N ms
     // after the instances are created (the Android app's shape: the capturer reaches
     // the engine while the first offer is still in flight). -1 = not used.
@@ -363,6 +366,8 @@ int main(int argc, char* argv[]) {
             enableVideo = true;
         } else if (std::string(argv[i]) == "--video-late") {
             videoLate = true;
+        } else if (std::string(argv[i]) == "--video-screencast") {
+            videoScreencast = true;
         } else if (std::string(argv[i]) == "--video-late-caller-ms" && i + 1 < argc) {
             videoLateCallerMs = std::atoi(argv[++i]);
         } else if (std::string(argv[i]) == "--video-late-callee-ms" && i + 1 < argc) {
@@ -562,8 +567,8 @@ int main(int argc, char* argv[]) {
     const bool videoLateMs = videoLateCallerMs >= 0 || videoLateCalleeMs >= 0;
     if (enableVideo || videoLate || videoLateMs) {
         auto threads = tgcalls::StaticThreads::getThreads();
-        callerVideoCapture = tgcalls::VideoCaptureInterface::Create(threads, "caller");
-        calleeVideoCapture = tgcalls::VideoCaptureInterface::Create(threads, "callee");
+        callerVideoCapture = tgcalls::VideoCaptureInterface::Create(threads, "caller", videoScreencast);
+        calleeVideoCapture = tgcalls::VideoCaptureInterface::Create(threads, "callee", videoScreencast);
         if (videoLate) {
             logMsg("Main", "video capture will be attached mid-call (callee at 3s, caller at 5s)");
         } else if (videoLateMs) {

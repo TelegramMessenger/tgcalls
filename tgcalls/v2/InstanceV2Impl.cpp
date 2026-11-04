@@ -6,6 +6,7 @@
 #include "v2/NativeNetworkingImpl.h"
 #include "v2/Signaling.h"
 #include "v2/ContentNegotiation.h"
+#include "group/ScreencastSendParameters.h"
 
 #include "CodecSelectHelper.h"
 #include "platform/PlatformInterface.h"
@@ -453,7 +454,9 @@ public:
     _channelManager(channelManager),
     _rotationUpdated(rotationUpdated) {
         cricket::VideoOptions videoOptions;
-        videoOptions.is_screencast = isScreencast;
+        // An iOS screen share is encoded as video, like the camera (frame rate kept, resolution
+        // adapted), not as screen content (resolution kept, frames dropped).
+        videoOptions.is_screencast = isScreencast && !kIosPrivateCallScreencast;
 
         _outgoingVideoChannel = _channelManager->CreateVideoChannel(call, cricket::MediaConfig(), std::to_string(mediaContent.ssrc), false, NativeNetworkingImpl::getDefaulCryptoOptions(), videoOptions, videoBitrateAllocatorFactory);
         _threads->getNetworkThread()->BlockingCall([&]() {
@@ -478,6 +481,16 @@ public:
 #endif
             cricket::kH264CodecName
         };
+        if (isScreencast && kIosPrivateCallScreencast) {
+            // The screencast encodes H264 (hardware, at 60 fps on iOS) whenever the
+            // peer takes it.
+            codecPreferences = {
+                cricket::kH264CodecName,
+#ifndef WEBRTC_DISABLE_H265
+                cricket::kH265CodecName,
+#endif
+            };
+        }
 
         std::vector<cricket::VideoCodec> codecs;
         for (const auto &name : codecPreferences) {
@@ -492,6 +505,21 @@ public:
                 codecs.push_back(codec);
             }
         }
+#ifdef WEBRTC_IOS
+        if (isScreencast) {
+            // The encoder caps its frame rate by the H264 level, and the device table's level
+            // (High 4.1 on recent iPhones) allows ~19 fps at screen size: the screencast asks for 5.2,
+            // as the group screencast does. The receiver's decoder reads the level from the stream.
+            for (auto &codec : codecs) {
+                if (codec.name == cricket::kH264CodecName) {
+                    std::string profileLevelId;
+                    if (codec.GetParam(cricket::kH264FmtpProfileLevelId, &profileLevelId)) {
+                        codec.SetParam(cricket::kH264FmtpProfileLevelId, iosScreencastH264ProfileLevelId(profileLevelId));
+                    }
+                }
+            }
+        }
+#endif
 
         auto outgoingVideoDescription = std::make_unique<cricket::VideoContentDescription>();
         for (const auto &rtpExtension : mediaContent.rtpExtensions) {
@@ -539,7 +567,16 @@ public:
 
             webrtc::RtpParameters rtpParameters = _outgoingVideoChannel->send_channel()->GetRtpSendParameters(mediaContent.ssrc);
 
-            if (isScreencast) {
+            if (isScreencast && kIosPrivateCallScreencast) {
+                // Tuned as video (no degradation preference: the camera's default), at the screencast's
+                // size, bitrate and frame rate.
+                if (!rtpParameters.encodings.empty()) {
+                    const auto screencast = iosScreencastLayerParameters(1)[0];
+                    rtpParameters.encodings[0].max_bitrate_bps = screencast.maxBitrateBps;
+                    rtpParameters.encodings[0].max_framerate = screencast.maxFramerate;
+                    rtpParameters.encodings[0].scale_resolution_down_by = screencast.scaleResolutionDownBy;
+                }
+            } else if (isScreencast) {
                 rtpParameters.degradation_preference = webrtc::DegradationPreference::MAINTAIN_RESOLUTION;
             }
 

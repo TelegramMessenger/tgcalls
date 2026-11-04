@@ -65,6 +65,19 @@ void DarwinInterface::configurePlatformAudio(int numChanels) {
 }
 
 std::unique_ptr<webrtc::VideoEncoderFactory> DarwinInterface::makeVideoEncoderFactory(bool preferHardwareEncoding, bool isScreencast) {
+#ifdef WEBRTC_IOS
+    if (isScreencast && preferHardwareEncoding) {
+        // The in-app screencast (GroupInstanceDescriptor::iosInAppScreencast) encodes
+        // screen-sized frames at up to 60 fps: VideoToolbox H264 at the highest level, so
+        // the level never clamps the frame rate. A ReplayKit screencast asks for software
+        // H264 (preferHardwareEncoding false) and gets the factory below, as before.
+        // VideoToolbox's rate control is trusted: WebRTC's frame dropper would otherwise drop
+        // frames on every scroll burst.
+        auto nativeFactory = std::make_unique<webrtc::CustomObjCVideoEncoderFactory>([[TGRTCDefaultVideoEncoderFactory alloc] initWithPreferHardwareH264:true preferX264:false highestH264Level:true], true);
+        auto nativeHardwareFactory = std::make_unique<webrtc::CustomObjCVideoEncoderFactory>([[TGRTCDefaultVideoEncoderFactory alloc] initWithPreferHardwareH264:true preferX264:false highestH264Level:true], true);
+        return std::make_unique<webrtc::SimulcastVideoEncoderFactory>(std::move(nativeFactory), std::move(nativeHardwareFactory));
+    }
+#endif
     auto nativeFactory = std::make_unique<webrtc::CustomObjCVideoEncoderFactory>([[TGRTCDefaultVideoEncoderFactory alloc] initWithPreferHardwareH264:preferHardwareEncoding preferX264:false]);
     if (!preferHardwareEncoding) {
         auto nativeHardwareFactory = std::make_unique<webrtc::CustomObjCVideoEncoderFactory>([[TGRTCDefaultVideoEncoderFactory alloc] initWithPreferHardwareH264:!isScreencast preferX264:false]);
