@@ -100,7 +100,8 @@ std::unique_ptr<webrtc::VideoEncoderFactory> DarwinInterface::makeVideoEncoderFa
 }
 
 std::unique_ptr<webrtc::VideoDecoderFactory> DarwinInterface::makeVideoDecoderFactoryWithAv1() {
-    return CustomObjCToNativeVideoDecoderFactory([[TGRTCDefaultVideoDecoderFactory alloc] initWithAv1:true]);
+    // The encoder side lists its formats with the SDP defaults, so the decoder side must too (WrapDecoderFactoryWithSdpDefaults).
+    return WrapDecoderFactoryWithSdpDefaults(CustomObjCToNativeVideoDecoderFactory([[TGRTCDefaultVideoDecoderFactory alloc] initWithAv1:true]));
 }
 
 bool DarwinInterface::canEncodeAv1Realtime() {

@@ -171,6 +171,65 @@ void TestAv1FactoriesListSdpDefaults() {
     }
 }
 
+// A two-way video line's codec list takes the decoder's parameters and the camera's preferences (from the encoder's
+// list) match it exactly: every decoder format must have an encoder twin with the same parameters, or that codec drops
+// out of every offer and answer.
+void TestAv1EncoderAndDecoderFormatsAgree() {
+    tgcalls::FakeInterface platform;
+    const auto encoderFormats = platform.makeVideoEncoderFactoryWithAv1(true, true)->GetSupportedFormats();
+    const auto decoderFormats = platform.makeVideoDecoderFactoryWithAv1()->GetSupportedFormats();
+    for (const auto &decoderFormat : decoderFormats) {
+        bool sameName = false;
+        bool twin = false;
+        for (const auto &encoderFormat : encoderFormats) {
+            if (encoderFormat.name == decoderFormat.name) {
+                sameName = true;
+                twin = twin || encoderFormat.parameters == decoderFormat.parameters;
+            }
+        }
+        if (sameName && !twin) {
+            std::fprintf(stderr, "decoder %s has no encoder format with the same parameters\n", decoderFormat.name.c_str());
+        }
+        CHECK_TRUE(!sameName || twin);
+    }
+}
+
+// An inner decoder factory that lists H265 bare, as Darwin's does, and records the formats it is asked about.
+class RecordingDecoderFactory : public webrtc::VideoDecoderFactory {
+public:
+    std::vector<webrtc::SdpVideoFormat> GetSupportedFormats() const override {
+        return {webrtc::SdpVideoFormat("H265")};
+    }
+    CodecSupport QueryCodecSupport(const webrtc::SdpVideoFormat &format, bool referenceScaling) const override {
+        queried.push_back(format);
+        return CodecSupport();
+    }
+    std::unique_ptr<webrtc::VideoDecoder> Create(const webrtc::Environment &env,
+                                                 const webrtc::SdpVideoFormat &format) override {
+        created.push_back(format);
+        return nullptr;
+    }
+    mutable std::vector<webrtc::SdpVideoFormat> queried;
+    std::vector<webrtc::SdpVideoFormat> created;
+};
+
+void TestSdpDefaultsDecoderGetsItsOwnFormat() {
+    auto inner = std::make_unique<RecordingDecoderFactory>();
+    auto *recorder = inner.get();
+    auto factory = tgcalls::WrapDecoderFactoryWithSdpDefaults(std::move(inner));
+    const auto listed = factory->GetSupportedFormats();
+    CHECK_TRUE(listed.size() == 1);
+    if (listed.size() != 1) {
+        return;
+    }
+    CHECK_TRUE(Param(listed[0].parameters, "level-id") == "93");
+    CHECK_TRUE(Param(listed[0].parameters, "tx-mode") == "SRST");
+    factory->Create(webrtc::CreateEnvironment(), listed[0]);
+    factory->QueryCodecSupport(listed[0], false);
+    CHECK_TRUE(recorder->created.size() == 1 && recorder->created[0].parameters.empty());
+    CHECK_TRUE(recorder->queried.size() == 1 && recorder->queried[0].parameters.empty());
+}
+
 // An inner factory that lists H265 bare, as Darwin's does, and records the formats it is asked about.
 class RecordingEncoderFactory : public webrtc::VideoEncoderFactory {
 public:
@@ -266,6 +325,8 @@ int main() {
     TestSdpDefaultsMatchTheParser();
     TestAv1FactoriesListSdpDefaults();
     TestInnerFactoryGetsItsOwnFormat();
+    TestAv1EncoderAndDecoderFormatsAgree();
+    TestSdpDefaultsDecoderGetsItsOwnFormat();
     TestCpuFamilyGate();
     if (failures != 0) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);

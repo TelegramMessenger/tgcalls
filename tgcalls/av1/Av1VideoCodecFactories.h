@@ -24,8 +24,16 @@ webrtc::SdpVideoFormat WithSdpDefaultParameters(webrtc::SdpVideoFormat format);
 std::unique_ptr<webrtc::VideoEncoderFactory> WrapEncoderFactoryWithAv1(std::unique_ptr<webrtc::VideoEncoderFactory> inner,
                                                                        bool allowAv1Encoding);
 
-// `inner`'s formats with AV1 appended last; creating AV1 gives WebRTC's dav1d decoder.
+// `inner`'s formats with a bare AV1 appended last, as Darwin's ObjC decoder factory lists it; creating AV1 gives WebRTC's
+// dav1d decoder. The fake platform puts WrapDecoderFactoryWithSdpDefaults on top, as Darwin does.
 std::unique_ptr<webrtc::VideoDecoderFactory> WrapDecoderFactoryWithDav1d(std::unique_ptr<webrtc::VideoDecoderFactory> inner);
+
+// `inner`'s formats listed with WithSdpDefaultParameters, `inner` handed its own format back. Every AV1 decoder factory
+// needs it, not only the encoder side: a two-way video line's codec list takes the DECODER's parameters
+// (NegotiateCodecs(recv, send) in pc/media_session.cc keeps "ours"), and the camera's codec preferences, which come from
+// the encoder's list, match it by exact parameter equality (MatchCodecPreference). An encoder listing "AV1" or "H265"
+// with the defaults against a decoder listing them bare drops both from every offer and answer.
+std::unique_ptr<webrtc::VideoDecoderFactory> WrapDecoderFactoryWithSdpDefaults(std::unique_ptr<webrtc::VideoDecoderFactory> inner);
 
 } // namespace tgcalls
 

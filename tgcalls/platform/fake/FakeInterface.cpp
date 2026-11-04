@@ -154,7 +154,8 @@ std::unique_ptr<webrtc::VideoEncoderFactory> FakeInterface::makeVideoEncoderFact
 }
 
 std::unique_ptr<webrtc::VideoDecoderFactory> FakeInterface::makeVideoDecoderFactoryWithAv1() {
-  return WrapDecoderFactoryWithDav1d(makeVideoDecoderFactory());
+  // Composed as on Darwin: a decoder factory listing AV1 bare, with the SDP defaults added on top.
+  return WrapDecoderFactoryWithSdpDefaults(WrapDecoderFactoryWithDav1d(makeVideoDecoderFactory()));
 }
 #endif
 
