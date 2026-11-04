@@ -232,6 +232,10 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
   (the iOS app brings it to at most 1 Mpx; the CLI's 1280x720 stays): `content_type: kRealtimeVideo`
   for every version, 13.0.0 included. Those changes are iOS-only (`kIosPrivateCallScreencast`);
   the CLI builds them through `TGCALLS_ALLOW_TEST_KNOBS`, so the check exercises them on the host.
+- `--av1-power-off-ms` / `--av1-power-on-ms` `caller|callee:MS` — p2p/reflector: that side's power state pauses (or
+  allows again) sending AV1 MS after the instances are created (`Instance::setVideoSendAv1AllowedByPower`), on the
+  camera schedule; repeatable. Writes `tgcalls_cli: AV1 paused|allowed by power on the <side>` into the `--log-file`.
+  `run-av1-tests.sh` uses it (see "AV1 in InstanceV2ReferenceImpl").
 - `--video-sink-churn` — with `--video`, once frames flow each participant replaces every incoming video sink five times, one second apart (`addIncomingVideoOutput` with a fresh sink, old sink released) — what the app does on a quality switch, where the tile's view owns the sink. An engine that keeps a raw pointer to a dead sink segfaults in `rtc::VideoBroadcaster::OnFrame`; validation then counts frames on the NEW sinks only. Known limitation: in mixed groups the pairs receiving from a ReferenceImpl SENDER fail this (0 frames after the last replacement) because the host reference sender throttles to ~1–3 fps after the first seconds regardless of sinks (41–65 frames in 30 s vs ~750 from CustomImpl senders; `_minOutgoingVideoBitrateKbit` is never applied there) — use it with reference-only or CustomImpl-only groups, or with reference RECEIVERS of CustomImpl senders.
 - `--video-rerequest` — with `--video`, once frames flow each participant's SFU downlink gets a
   150 ms delay, then five rounds of `setRequestedVideoChannels({})` followed a second later by the
@@ -579,6 +583,76 @@ log sample (`getlogstgcalls/analysis/FINDINGS-android.md`), fixed here and pinne
 Not fixable inside a PeerConnection: once both `DtlsTransport`s hold a role and a stream
 (`SetDtlsRole` refuses to change it while `dtls_` exists), no ICE restart recovers a
 client-vs-client handshake; only the prevention above does.
+
+## AV1 in InstanceV2ReferenceImpl (10.0.0, 11.0.0)
+
+Only `InstanceV2ReferenceImpl` offers AV1. It encodes with SVT-AV1 (`tgcalls/av1/SvtAv1Encoder`) and decodes with
+VideoToolbox where the chip decodes AV1 in hardware (`platform/darwin/Av1VideoToolboxDecoder`, `TGRTCVideoDecoderAV1`),
+else with WebRTC's dav1d decoder. The decoder is chosen once, at creation; there is no fallback from VideoToolbox to
+dav1d at runtime.
+
+- **The factories are opt-in.** `PlatformInterface::makeVideoEncoderFactoryWithAv1(preferHardware, allowAv1Encoding)`,
+  `makeVideoDecoderFactoryWithAv1()` and `canEncodeAv1Realtime()` are non-pure with AV1-free defaults; only the Darwin
+  and fake platforms override them, under `TGCALLS_ENABLE_AV1`. Every other engine, and Android, desktop and UWP, keep
+  their factories. `DarwinInterface::supportsEncoding(AV1)` stays false.
+- **AV1 is appended last** (`av1/Av1VideoCodecFactories`), so the codecs before it keep their payload types.
+- **The AV1 factories list every format with the SDP parser's fmtp defaults** (`WithSdpDefaultParameters`, mirroring
+  `BackfillCodecParameters` in `pc/webrtc_sdp.cc`: VP9 `profile-id`, H264 `packetization-mode`, AV1 `profile` /
+  `level-idx` / `tier`, H265 `level-id` / `tx-mode`). Pinning a codec needs exact parameter equality between the
+  sender's own codec list and the negotiated codec (`Codec::MatchesRtpCodec`), and a negotiated codec comes from a parsed
+  description with those defaults filled in: a bare `AV1`, or Darwin's bare `H265`, can never be pinned
+  ("Attempted to use an unsupported codec for layer 0"). The wire is unchanged, since the peer's parser fills the same
+  values, and so are offer/answer intersections, whose sameness checks apply the defaults. The inner factory is handed
+  its own format back. `TestSdpDefaultsMatchTheParser` (`av1_platform_factories_test`) ties the defaults to the parser.
+- **Every device lists AV1 for sending; the pin decides what is sent.** A sendrecv m-line carries the intersection of
+  send and receive codecs (`pc/media_session.cc`), so a device that may only receive AV1 still lists it as a send codec.
+  After every completed negotiation round (our answer applied in `kStable`, or the peer's answer applied),
+  `applyVideoSendCodecPin()` sets `encodings[0].codec` through `SetParameters`, with no renegotiation, to
+  `ChooseVideoSendCodec`'s pick among the negotiated codecs: AV1 when this side may send it, else H265, else H264, never
+  RTX, RED or FEC. A renegotiation keeps a pin whose codec is still negotiated (`SetSenderParameters` in
+  `webrtc_video_engine.cc`). With AV1 not offered nothing is pinned.
+- **Nothing is pinned before the first round.** A codec set then goes into the sender's init parameters, which `SetSsrc`
+  applies wholesale, and against a peer without that codec the whole set is rejected, `max_bitrate_bps` included, with
+  the error ignored. The first frames can therefore come from the default codec's encoder for a few milliseconds before
+  the pin lands.
+- **The refusing encoder is the backstop.** A side not allowed to encode AV1 gets `CreateRefusingAv1Encoder()`, whose
+  `InitEncode` fails, so WebRTC switches encoders (`RequestEncoderSwitch`) if AV1 is ever its default (an offer that
+  leads with AV1).
+- **Who may send AV1:** `video_av1_send`, the power input, and the chip gate (`av1/Av1DeviceGate`: `hw.cpufamily`
+  against a deny-list of the families before A18/M4, which LLVM's `getHostCPUName` maps to `apple-a17`, `apple-m3` and
+  older; an unknown family counts as capable) or `video_av1_send_any_device`.
+- **`customParameters` keys** (`av1/Av1SendCodec`):
+  - `video_av1` (default true): false keeps AV1 out of the call's factories, so it is neither offered nor decoded.
+  - `video_av1_send` (default true): false never sends AV1, but still offers and decodes it.
+  - `video_av1_send_any_device` (default false): true lets a device the chip gate excludes send AV1.
+  - CLI-only, read under `TGCALLS_ALLOW_TEST_KNOBS`: `video_av1_test_device_incapable` (this side behaves as an older
+    device) and `video_av1_test_offer_av1_first` (AV1 leads the camera's codec preferences, as a peer's stock list may).
+- **The power input:** `Instance::setVideoSendAv1AllowedByPower(bool)`, a no-op for every other engine. This engine
+  keeps the value and re-pins at once; set before the camera's first round, it decides that round's pin. The app
+  computes it with `Av1SendPowerPolicy` (TelegramVoip), which `PresentationCall` feeds from Low Power Mode, the thermal
+  state and the battery level. AV1 sending stops at once in Low Power Mode, below 20% battery, or at a serious or
+  critical thermal state. It returns only when all three are clear, with the battery at 25% or more (or unknown), and
+  30 s after the switch away. Charging is not read.
+- **The encoder** runs SVT-AV1 in its RTC mode: low delay, CBR, `enc_mode` 11, `level_of_parallelism` 3, no periodic
+  keyframes, full range. A keyframe on request carries the sequence header. Rate changes go through SVT's events without
+  a restart, and frame-rate changes only when the rate moves by more than 10%. A new resolution re-initialises the
+  encoder: SVT's `RES_CHANGE_EVENT` needs 8-aligned sizes and cannot grow past the first size. Never call
+  `svt_av1_enc_get_packet` after a failed `svt_av1_enc_send_picture`: in low delay it blocks forever. QP is on SVT's
+  0–63 scale (scaler thresholds 30/52).
+- **Log lines:**
+  - `InstanceV2ReferenceImpl: AV1 offered, encoding allowed: <0|1> (<caller|callee>)` or `AV1 not offered (<side>)`,
+    once per call.
+  - `video send codec pinned to <codec> (<side>)` for each pin, and `pinning the video send codec to <codec> failed: …`
+    when the sender rejects one.
+  - `AV1 sending paused|allowed by power (<side>)`.
+  - `SvtAv1Encoder: initialized WxH, N kbps` and `Av1: encoding refused on this device`.
+- **Tests:**
+  - `tools/cli/run-av1-tests.sh`: nine p2p scenarios. They cover both sides on AV1, an incapable callee (including
+    against an offer led by AV1), both killswitches, 10.0.0, late cameras, a mid-call power flip and power off before
+    the camera. Each asserts the pins, the SetLocalDescription count and frames both ways.
+  - Host tests: `svt_av1_api_test` (`//third-party/svt-av1`), `svt_av1_encoder_test`, `av1_round_trip_test` (SVT-AV1,
+    then WebRTC's AV1 packetizer and depacketizer, then dav1d), `av1_videotoolbox_decoder_test` (bit-exact against
+    dav1d, macOS only), `av1_platform_factories_test`, `av1_send_codec_test`.
 
 ## Further Context
 
