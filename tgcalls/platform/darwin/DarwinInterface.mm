@@ -16,6 +16,10 @@
 #include "DarwinVideoSource.h"
 #include "objc_video_encoder_factory.h"
 #include "objc_video_decoder_factory.h"
+#if TGCALLS_ENABLE_AV1
+#include "av1/Av1DeviceGate.h"
+#include "av1/Av1VideoCodecFactories.h"
+#endif
 #include "sdk/objc/native/src/objc_frame_buffer.h"
 #import "sdk/objc/components/video_frame_buffer/RTCCVPixelBuffer.h"
 
@@ -89,6 +93,20 @@ std::unique_ptr<webrtc::VideoEncoderFactory> DarwinInterface::makeVideoEncoderFa
 std::unique_ptr<webrtc::VideoDecoderFactory> DarwinInterface::makeVideoDecoderFactory() {
     return CustomObjCToNativeVideoDecoderFactory([[TGRTCDefaultVideoDecoderFactory alloc] init]);
 }
+
+#if TGCALLS_ENABLE_AV1
+std::unique_ptr<webrtc::VideoEncoderFactory> DarwinInterface::makeVideoEncoderFactoryWithAv1(bool preferHardwareEncoding, bool allowAv1Encoding) {
+    return WrapEncoderFactoryWithAv1(makeVideoEncoderFactory(preferHardwareEncoding, false), allowAv1Encoding);
+}
+
+std::unique_ptr<webrtc::VideoDecoderFactory> DarwinInterface::makeVideoDecoderFactoryWithAv1() {
+    return CustomObjCToNativeVideoDecoderFactory([[TGRTCDefaultVideoDecoderFactory alloc] initWithAv1:true]);
+}
+
+bool DarwinInterface::canEncodeAv1Realtime() {
+    return CurrentCpuCanEncodeAv1Realtime();
+}
+#endif
 
 bool DarwinInterface::supportsEncoding(const std::string &codecName) {
     if (false) {

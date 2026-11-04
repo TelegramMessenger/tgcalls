@@ -18,6 +18,10 @@
 #include "media/base/media_constants.h"
 //#include "api/video_track_source_proxy.h"
 
+#if TGCALLS_ENABLE_AV1
+#include "av1/Av1VideoCodecFactories.h"
+#endif
+
 namespace tgcalls {
 
 namespace {
@@ -143,6 +147,16 @@ std::unique_ptr<webrtc::VideoDecoderFactory> FakeInterface::makeVideoDecoderFact
   if (gUseBuiltinCodecOrder) return factory;
   return std::make_unique<IosOrderVideoDecoderFactory>(std::move(factory));
 }
+
+#if TGCALLS_ENABLE_AV1
+std::unique_ptr<webrtc::VideoEncoderFactory> FakeInterface::makeVideoEncoderFactoryWithAv1(bool preferHardwareEncoding, bool allowAv1Encoding) {
+  return WrapEncoderFactoryWithAv1(makeVideoEncoderFactory(preferHardwareEncoding, false), allowAv1Encoding);
+}
+
+std::unique_ptr<webrtc::VideoDecoderFactory> FakeInterface::makeVideoDecoderFactoryWithAv1() {
+  return WrapDecoderFactoryWithDav1d(makeVideoDecoderFactory());
+}
+#endif
 
 webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> FakeInterface::makeVideoSource(rtc::Thread *signalingThread,
                                                                                      rtc::Thread *workerThread) {

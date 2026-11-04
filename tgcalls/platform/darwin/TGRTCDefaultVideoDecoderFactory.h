@@ -20,6 +20,12 @@ NS_ASSUME_NONNULL_BEGIN
  */
 RTC_OBJC_EXPORT
 @interface TGRTCDefaultVideoDecoderFactory : NSObject <RTCVideoDecoderFactory>
+
+#if TGCALLS_ENABLE_AV1
+// With `av1`, AV1 is listed last and decoded through VideoToolbox where the chip decodes AV1, dav1d otherwise.
+- (instancetype)initWithAv1:(bool)av1;
+#endif
+
 @end
 
 NS_ASSUME_NONNULL_END
