@@ -224,6 +224,19 @@ void TestCpuFamilyGate() {
         0x72015832, // PALMA (M3 Max)
         0x2876f5b5, // COLL (A17 Pro)
         0x5f4dea93, // LOBOS (M3 Pro)
+        // Intel Macs never encode AV1.
+        0xaa33392b, // INTEL_6_13
+        0x78ea4fbc, // INTEL_PENRYN
+        0x6b5a4cd2, // INTEL_NEHALEM
+        0x573b5eec, // INTEL_WESTMERE
+        0x5490b78c, // INTEL_SANDYBRIDGE
+        0x1f65e835, // INTEL_IVYBRIDGE
+        0x10b282dc, // INTEL_HASWELL
+        0x582ed09c, // INTEL_BROADWELL
+        0x37fc219f, // INTEL_SKYLAKE
+        0x0f817246, // INTEL_KABYLAKE
+        0x38435547, // INTEL_ICELAKE
+        0x1cf8a03e, // INTEL_COMETLAKE
     };
     for (uint32_t family : older) {
         CHECK_TRUE(!tgcalls::IsAv1EncodeCapableCpuFamily(family));

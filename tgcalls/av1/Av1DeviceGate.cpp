@@ -34,6 +34,19 @@ constexpr uint32_t kFamiliesBeforeAv1Encoding[] = {
     0x0cc90e64, // ARM_13
     0x96077ef1, // ARM_14
     0xa8511bca, // ARM_15
+    // Intel Macs never encode AV1 (CPUFAMILY_INTEL_*; Comet Lake is the last Intel Mac).
+    0xaa33392b, // INTEL_6_13
+    0x78ea4fbc, // INTEL_PENRYN
+    0x6b5a4cd2, // INTEL_NEHALEM
+    0x573b5eec, // INTEL_WESTMERE
+    0x5490b78c, // INTEL_SANDYBRIDGE
+    0x1f65e835, // INTEL_IVYBRIDGE
+    0x10b282dc, // INTEL_HASWELL
+    0x582ed09c, // INTEL_BROADWELL
+    0x37fc219f, // INTEL_SKYLAKE
+    0x0f817246, // INTEL_KABYLAKE
+    0x38435547, // INTEL_ICELAKE
+    0x1cf8a03e, // INTEL_COMETLAKE
 };
 
 } // namespace
@@ -48,7 +61,8 @@ bool IsAv1EncodeCapableCpuFamily(uint32_t cpuFamily) {
 }
 
 bool CurrentCpuCanEncodeAv1Realtime() {
-#if defined(__APPLE__)
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))
+    // Apple silicon only: an x86 build never encodes AV1, on an Intel Mac or translated by Rosetta.
     uint32_t family = 0;
     size_t size = sizeof(family);
     if (sysctlbyname("hw.cpufamily", &family, &size, nullptr, 0) != 0) {

@@ -618,9 +618,10 @@ dav1d at runtime.
 - **The refusing encoder is the backstop.** A side not allowed to encode AV1 gets `CreateRefusingAv1Encoder()`, whose
   `InitEncode` fails, so WebRTC switches encoders (`RequestEncoderSwitch`) if AV1 is ever its default (an offer that
   leads with AV1).
-- **Who may send AV1:** `video_av1_send`, the power input, and the chip gate (`av1/Av1DeviceGate`: `hw.cpufamily`
-  against a deny-list of the families before A18/M4, which LLVM's `getHostCPUName` maps to `apple-a17`, `apple-m3` and
-  older; an unknown family counts as capable) or `video_av1_send_any_device`.
+- **Who may send AV1:** `video_av1_send`, the power input, and the chip gate (`av1/Av1DeviceGate`) or
+  `video_av1_send_any_device`. The gate reads `hw.cpufamily` against a deny-list: the Apple families before A18/M4
+  (which LLVM's `getHostCPUName` maps to `apple-a17`, `apple-m3` and older) and every Intel family. An unknown family
+  counts as capable. An x86 build never encodes AV1, on an Intel Mac or under Rosetta.
 - **`customParameters` keys** (`av1/Av1SendCodec`):
   - `video_av1` (default true): false keeps AV1 out of the call's factories, so it is neither offered nor decoded.
   - `video_av1_send` (default true): false never sends AV1, but still offers and decodes it.
