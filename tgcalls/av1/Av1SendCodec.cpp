@@ -44,21 +44,40 @@ Av1CallSettings Av1CallSettingsFromCustomParameters(const std::map<std::string, 
     return settings;
 }
 
-std::optional<webrtc::RtpCodec> ChooseVideoSendCodec(const std::vector<webrtc::RtpCodec> &available, bool av1Allowed) {
+std::vector<webrtc::RtpCodec> VideoSendCodecCandidates(const std::vector<webrtc::RtpCodec> &available, bool av1Allowed) {
+    const auto av1 = FirstNamed(available, cricket::kAv1CodecName);
+    if (!av1) {
+        return {};
+    }
     if (av1Allowed) {
-        if (auto av1 = FirstNamed(available, cricket::kAv1CodecName)) {
-            return av1;
+        return {*av1};
+    }
+    std::vector<webrtc::RtpCodec> candidates;
+    for (const char *name : {cricket::kH265CodecName, cricket::kH264CodecName}) {
+        for (const auto &codec : available) {
+            if (IsNamed(codec, name)) {
+                candidates.push_back(codec);
+            }
         }
     }
-    if (auto h265 = FirstNamed(available, cricket::kH265CodecName)) {
-        return h265;
-    }
-    if (auto h264 = FirstNamed(available, cricket::kH264CodecName)) {
-        return h264;
-    }
     for (const auto &codec : available) {
-        if (!IsNamed(codec, cricket::kAv1CodecName) && !IsResilienceCodec(codec)) {
+        if (!IsNamed(codec, cricket::kAv1CodecName) && !IsNamed(codec, cricket::kH265CodecName) &&
+            !IsNamed(codec, cricket::kH264CodecName) && !IsResilienceCodec(codec)) {
+            candidates.push_back(codec);
+        }
+    }
+    return candidates;
+}
+
+std::optional<webrtc::RtpCodec> PinVideoSendCodec(const std::vector<webrtc::RtpCodec> &candidates,
+                                                  const std::function<bool(const webrtc::RtpCodec &)> &tryPin,
+                                                  const std::function<bool()> &sendsAv1) {
+    for (const auto &codec : candidates) {
+        if (tryPin(codec)) {
             return codec;
+        }
+        if (!sendsAv1()) {
+            return std::nullopt;
         }
     }
     return std::nullopt;

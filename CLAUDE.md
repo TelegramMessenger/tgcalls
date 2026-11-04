@@ -596,21 +596,37 @@ dav1d at runtime.
   and fake platforms override them, under `TGCALLS_ENABLE_AV1`. Every other engine, and Android, desktop and UWP, keep
   their factories. `DarwinInterface::supportsEncoding(AV1)` stays false.
 - **AV1 is appended last** (`av1/Av1VideoCodecFactories`), so the codecs before it keep their payload types.
-- **The AV1 factories list every format with the SDP parser's fmtp defaults** (`WithSdpDefaultParameters`, mirroring
-  `BackfillCodecParameters` in `pc/webrtc_sdp.cc`: VP9 `profile-id`, H264 `packetization-mode`, AV1 `profile` /
-  `level-idx` / `tier`, H265 `level-id` / `tx-mode`). Pinning a codec needs exact parameter equality between the
-  sender's own codec list and the negotiated codec (`Codec::MatchesRtpCodec`), and a negotiated codec comes from a parsed
-  description with those defaults filled in: a bare `AV1`, or Darwin's bare `H265`, can never be pinned
-  ("Attempted to use an unsupported codec for layer 0"). The wire is unchanged, since the peer's parser fills the same
-  values, and so are offer/answer intersections, whose sameness checks apply the defaults. The inner factory is handed
-  its own format back. `TestSdpDefaultsMatchTheParser` (`av1_platform_factories_test`) ties the defaults to the parser.
+- **Both AV1 factories, encoder and decoder, list every format with the SDP parser's fmtp defaults**
+  (`WithSdpDefaultParameters`, mirroring `BackfillCodecParameters` in `pc/webrtc_sdp.cc`: VP9 `profile-id`, H264
+  `packetization-mode`, AV1 `profile` / `level-idx` / `tier`, H265 `level-id` / `tx-mode`). Two exact-equality
+  comparisons depend on it:
+  - A pin needs exact parameter equality between the sender's own codec list and the negotiated codec
+    (`Codec::MatchesRtpCodec`), and a negotiated codec comes from a parsed description with the defaults filled in. A
+    bare `AV1`, or Darwin's bare `H265`, can never be pinned ("Attempted to use an unsupported codec for layer 0").
+  - A two-way video line's codec list takes the **decoder's** parameters (`NegotiateCodecs(recv, send)` in
+    `pc/media_session.cc` keeps "ours"), and the camera's codec preferences, built from the encoder's list, match it by
+    exact equality (`MatchCodecPreference`). An encoder side with the defaults against a decoder side without them drops
+    AV1, H265 and VP9 from every offer and answer.
+
+  So the encoder wrapper adds them, and the decoder side gets `WrapDecoderFactoryWithSdpDefaults`, on Darwin around the
+  ObjC factory (which lists bare formats). The fake platform is composed the same way, its dav1d wrapper listing a bare
+  `AV1`, so the CLI runs Darwin's shape. The wire is unchanged, since the peer's parser fills the same values, and so are
+  offer/answer intersections, whose sameness checks apply the defaults. Each inner factory is handed its own format
+  back. Tests in `av1_platform_factories_test`: `TestSdpDefaultsMatchTheParser` ties the defaults to the parser, and
+  `TestAv1EncoderAndDecoderFormatsAgree` checks that the two sides agree.
 - **Every device lists AV1 for sending; the pin decides what is sent.** A sendrecv m-line carries the intersection of
   send and receive codecs (`pc/media_session.cc`), so a device that may only receive AV1 still lists it as a send codec.
   After every completed negotiation round (our answer applied in `kStable`, or the peer's answer applied),
-  `applyVideoSendCodecPin()` sets `encodings[0].codec` through `SetParameters`, with no renegotiation, to
-  `ChooseVideoSendCodec`'s pick among the negotiated codecs: AV1 when this side may send it, else H265, else H264, never
-  RTX, RED or FEC. A renegotiation keeps a pin whose codec is still negotiated (`SetSenderParameters` in
-  `webrtc_video_engine.cc`). With AV1 not offered nothing is pinned.
+  `applyVideoSendCodecPin()` sets `encodings[0].codec` through `SetParameters`, with no renegotiation
+  (`VideoSendCodecCandidates`, `PinVideoSendCodec`):
+  - When this side may send AV1, the candidate is AV1 alone. If that pin is rejected, the default codec stays.
+  - Otherwise the candidates are H265, then H264, then the rest, never RTX, RED or FEC. A rejected pin moves on to the
+    next candidate only while the sender still sends AV1. A sender already off AV1 keeps its codec.
+  - When AV1 was not negotiated, or this side does not offer it, nothing is pinned: a peer without AV1 gets today's
+    call, the default codec.
+
+  A renegotiation keeps a pin whose codec is still negotiated and clears one that is not (`SetSenderParameters` in
+  `webrtc_video_engine.cc`).
 - **Nothing is pinned before the first round.** A codec set then goes into the sender's init parameters, which `SetSsrc`
   applies wholesale, and against a peer without that codec the whole set is rejected, `max_bitrate_bps` included, with
   the error ignored. The first frames can therefore come from the default codec's encoder for a few milliseconds before
@@ -631,7 +647,8 @@ dav1d at runtime.
 - **The power input:** `Instance::setVideoSendAv1AllowedByPower(bool)`, a no-op for every other engine. This engine
   keeps the value and re-pins at once; set before the camera's first round, it decides that round's pin. The app
   computes it with `Av1SendPowerPolicy` (TelegramVoip), which `PresentationCall` feeds from Low Power Mode, the thermal
-  state and the battery level. AV1 sending stops at once in Low Power Mode, below 20% battery, or at a serious or
+  state and the battery level. `OngoingCallContext` keeps the latest value and replays it when the native context is
+  created: the native context exists only once the audio session is active, which is later than the first value. AV1 sending stops at once in Low Power Mode, below 20% battery, or at a serious or
   critical thermal state. It returns only when all three are clear, with the battery at 25% or more (or unknown), and
   30 s after the switch away. Charging is not read.
 - **The encoder** runs SVT-AV1 in its RTC mode: low delay, CBR, `enc_mode` 11, `level_of_parallelism` 3, no periodic
@@ -648,9 +665,10 @@ dav1d at runtime.
   - `AV1 sending paused|allowed by power (<side>)`.
   - `SvtAv1Encoder: initialized WxH, N kbps` and `Av1: encoding refused on this device`.
 - **Tests:**
-  - `tools/cli/run-av1-tests.sh`: nine p2p scenarios. They cover both sides on AV1, an incapable callee (including
-    against an offer led by AV1), both killswitches, 10.0.0, late cameras, a mid-call power flip and power off before
-    the camera. Each asserts the pins, the SetLocalDescription count and frames both ways.
+  - `tools/cli/run-av1-tests.sh`: ten p2p scenarios. They cover both sides on AV1, an incapable callee (including
+    against an offer led by AV1), both killswitches, a peer without AV1 (no pin on either side), 10.0.0, late cameras,
+    a mid-call power flip and power off before the camera. Each asserts the pins, the SetLocalDescription count and
+    frames both ways.
   - Host tests: `svt_av1_api_test` (`//third-party/svt-av1`), `svt_av1_encoder_test`, `av1_round_trip_test` (SVT-AV1,
     then WebRTC's AV1 packetizer and depacketizer, then dav1d), `av1_videotoolbox_decoder_test` (bit-exact against
     dav1d, macOS only), `av1_platform_factories_test`, `av1_send_codec_test`.

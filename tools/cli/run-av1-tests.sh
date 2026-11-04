@@ -73,6 +73,14 @@ check "AV1 pins" "$(count 'pinned to AV1' "$LOG")" "0"
 check "SVT-AV1 encoders initialised" "$(count 'SvtAv1Encoder: initialized' "$LOG")" "0"
 both_frames
 
+# A peer without AV1 gets today's call: AV1 is not negotiated, so neither side pins a codec.
+run av1-peer-without-av1 --version 11.0.0 --video --custom-params '{"video_av1":false}'
+check "AV1 not offered" "$(count 'AV1 not offered (caller)' "$LOG")" "1"
+check "callee offers AV1" "$(count 'AV1 offered, encoding allowed: 1 (callee)' "$LOG")" "1"
+check "pins" "$(count 'video send codec pinned to' "$LOG")" "0"
+check "SVT-AV1 encoders initialised" "$(count 'SvtAv1Encoder: initialized' "$LOG")" "0"
+both_frames
+
 run av1-killswitch-send --version 11.0.0 --video --custom-params '{"video_av1_send":false}'
 check "caller may not encode AV1" "$(count 'AV1 offered, encoding allowed: 0 (caller)' "$LOG")" "1"
 check "caller's last pin" "$(last_pin caller)" "H264"

@@ -35,13 +35,15 @@ webrtc::RtpCodec Codec(const char *name) {
     return codec;
 }
 
-std::optional<std::string> Chosen(const std::vector<webrtc::RtpCodec> &available, bool av1Allowed) {
-    auto codec = tgcalls::ChooseVideoSendCodec(available, av1Allowed);
-    if (!codec) {
-        return std::nullopt;
+std::vector<std::string> Candidates(const std::vector<webrtc::RtpCodec> &available, bool av1Allowed) {
+    std::vector<std::string> names;
+    for (const auto &codec : tgcalls::VideoSendCodecCandidates(available, av1Allowed)) {
+        names.push_back(codec.name);
     }
-    return codec->name;
+    return names;
 }
+
+using Names = std::vector<std::string>;
 
 void TestDefaults() {
     auto settings = tgcalls::Av1CallSettingsFromCustomParameters(Parameters("{}"), true);
@@ -75,24 +77,56 @@ void TestTestKnobs() {
     CHECK_TRUE(first.testOfferAv1First);
 }
 
-void TestAv1ChosenWhenAllowed() {
-    CHECK_TRUE(Chosen({Codec("H265"), Codec("H264"), Codec("VP8"), Codec("AV1")}, true) == std::optional<std::string>("AV1"));
+// Allowed: AV1 alone. A rejected AV1 pin leaves the default codec rather than moving a capable device elsewhere.
+void TestAv1AloneWhenAllowed() {
+    CHECK_TRUE(Candidates({Codec("H265"), Codec("H264"), Codec("VP8"), Codec("AV1")}, true) == Names({"AV1"}));
 }
 
 void TestH265ThenH264WhenNotAllowed() {
-    CHECK_TRUE(Chosen({Codec("AV1"), Codec("VP8"), Codec("H264"), Codec("H265")}, false) == std::optional<std::string>("H265"));
-    CHECK_TRUE(Chosen({Codec("AV1"), Codec("VP8"), Codec("H264")}, false) == std::optional<std::string>("H264"));
-    CHECK_TRUE(Chosen({Codec("AV1"), Codec("VP9"), Codec("VP8")}, false) == std::optional<std::string>("VP9"));
+    CHECK_TRUE(Candidates({Codec("AV1"), Codec("VP8"), Codec("H264"), Codec("H265")}, false) == Names({"H265", "H264", "VP8"}));
+    CHECK_TRUE(Candidates({Codec("AV1"), Codec("VP8"), Codec("H264"), Codec("H264")}, false) == Names({"H264", "H264", "VP8"}));
+    CHECK_TRUE(Candidates({Codec("AV1"), Codec("VP9"), Codec("VP8")}, false) == Names({"VP9", "VP8"}));
 }
 
-void TestNoAv1Negotiated() {
-    CHECK_TRUE(Chosen({Codec("H264"), Codec("H265"), Codec("VP8")}, true) == std::optional<std::string>("H265"));
+// A peer without AV1 gets today's call: nothing is pinned, allowed or not.
+void TestNoAv1NegotiatedPinsNothing() {
+    CHECK_TRUE(Candidates({Codec("H264"), Codec("H265"), Codec("VP8")}, true).empty());
+    CHECK_TRUE(Candidates({Codec("H264"), Codec("H265"), Codec("VP8")}, false).empty());
 }
 
 void TestSkipsRtxRedFec() {
-    CHECK_TRUE(Chosen({Codec("AV1"), Codec("rtx"), Codec("red"), Codec("ulpfec"), Codec("flexfec-03"), Codec("VP8")}, false) ==
-               std::optional<std::string>("VP8"));
-    CHECK_TRUE(!Chosen({Codec("AV1"), Codec("rtx")}, false).has_value());
+    CHECK_TRUE(Candidates({Codec("AV1"), Codec("rtx"), Codec("red"), Codec("ulpfec"), Codec("flexfec-03"), Codec("VP8")}, false) ==
+               Names({"VP8"}));
+    CHECK_TRUE(Candidates({Codec("AV1"), Codec("rtx")}, false).empty());
+}
+
+// A pin the sender rejects (exact parameter equality, e.g. a peer's H265 level) moves on to the next candidate while
+// the sender still sends AV1: a device told to leave AV1 must leave it.
+void TestRejectedPinFallsBackWhileOnAv1() {
+    std::vector<std::string> tried;
+    const auto pinned = tgcalls::PinVideoSendCodec(
+        tgcalls::VideoSendCodecCandidates({Codec("AV1"), Codec("H264"), Codec("H265")}, false),
+        [&](const webrtc::RtpCodec &codec) {
+            tried.push_back(codec.name);
+            return codec.name != "H265";
+        },
+        [] { return true; });
+    CHECK_TRUE(pinned.has_value() && pinned->name == "H264");
+    CHECK_TRUE(tried == Names({"H265", "H264"}));
+}
+
+// Already off AV1, a rejected pin keeps the codec being sent rather than falling further down the list.
+void TestRejectedPinKeepsANonAv1Codec() {
+    std::vector<std::string> tried;
+    const auto pinned = tgcalls::PinVideoSendCodec(
+        tgcalls::VideoSendCodecCandidates({Codec("AV1"), Codec("H264"), Codec("H265")}, false),
+        [&](const webrtc::RtpCodec &codec) {
+            tried.push_back(codec.name);
+            return false;
+        },
+        [] { return false; });
+    CHECK_TRUE(!pinned.has_value());
+    CHECK_TRUE(tried == Names({"H265"}));
 }
 
 } // namespace
@@ -102,10 +136,12 @@ int main() {
     TestKillswitches();
     TestAnyDeviceOverridesGate();
     TestTestKnobs();
-    TestAv1ChosenWhenAllowed();
+    TestAv1AloneWhenAllowed();
     TestH265ThenH264WhenNotAllowed();
-    TestNoAv1Negotiated();
+    TestNoAv1NegotiatedPinsNothing();
     TestSkipsRtxRedFec();
+    TestRejectedPinFallsBackWhileOnAv1();
+    TestRejectedPinKeepsANonAv1Codec();
     if (failures != 0) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;

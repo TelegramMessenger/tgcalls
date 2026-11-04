@@ -1794,36 +1794,45 @@ public:
         return _encryptionKey.isOutgoing ? "caller" : "callee";
     }
 
-    // Pins the camera sender to ChooseVideoSendCodec's choice among the codecs the last negotiation round gave it:
-    // AV1 when this side may send it, else H.265, else H.264. Called after every completed round (a renegotiation
-    // keeps a pin whose codec is still negotiated and clears one that is not; webrtc_video_engine.cc). Before the
-    // first round the sender has no codecs and nothing is pinned: a codec pinned then from the capabilities would
-    // reach the first send stream with the init parameters, and against a peer without it the whole parameter set,
-    // max_bitrate_bps included, would be rejected there. Without AV1 offered nothing is pinned, as before AV1.
+    // Pins the camera sender among the codecs the last negotiation round gave it (VideoSendCodecCandidates): AV1 when
+    // this side may send it, else H.265, else H.264; nothing when AV1 was not negotiated, so a peer without AV1 gets
+    // today's call. Called after every completed round (a renegotiation keeps a pin whose codec is still negotiated
+    // and clears one that is not; webrtc_video_engine.cc). Before the first round the sender has no codecs and nothing
+    // is pinned: a codec pinned then from the capabilities would reach the first send stream with the init parameters,
+    // and against a peer without it the whole parameter set, max_bitrate_bps included, would be rejected there.
+    // Without AV1 offered nothing is pinned either.
     void applyVideoSendCodecPin() {
         if (!_av1Settings.offerAv1 || !_outgoingVideoTransceiver) {
             return;
         }
         const auto sender = _outgoingVideoTransceiver->sender();
-        webrtc::RtpParameters parameters = sender->GetParameters();
+        const webrtc::RtpParameters parameters = sender->GetParameters();
         if (parameters.encodings.empty() || parameters.codecs.empty()) {
             return;
         }
         const std::vector<webrtc::RtpCodec> available(parameters.codecs.begin(), parameters.codecs.end());
         const bool av1Allowed = _av1Settings.sendAv1 && _av1Settings.deviceMaySendAv1 && _av1SendAllowedByPower;
-        const auto codec = ChooseVideoSendCodec(available, av1Allowed);
-        if (!codec) {
-            return;
-        }
-        for (auto &encoding : parameters.encodings) {
-            encoding.codec = *codec;
-        }
-        const auto result = sender->SetParameters(parameters);
-        if (!result.ok()) {
-            RTC_LOG(LS_ERROR) << "InstanceV2ReferenceImpl: pinning the video send codec to " << codec->name << " failed: " << result.message() << " (" << sideName() << ")";
-            return;
-        }
-        RTC_LOG(LS_INFO) << "InstanceV2ReferenceImpl: video send codec pinned to " << codec->name << " (" << sideName() << ")";
+        PinVideoSendCodec(VideoSendCodecCandidates(available, av1Allowed), [&](const webrtc::RtpCodec &codec) {
+            // A fresh transaction for every attempt: SetParameters ends the previous one, accepted or not.
+            webrtc::RtpParameters attempt = sender->GetParameters();
+            if (attempt.encodings.empty()) {
+                return false;
+            }
+            for (auto &encoding : attempt.encodings) {
+                encoding.codec = codec;
+            }
+            const auto result = sender->SetParameters(attempt);
+            if (!result.ok()) {
+                RTC_LOG(LS_ERROR) << "InstanceV2ReferenceImpl: pinning the video send codec to " << codec.name << " failed: " << result.message() << " (" << sideName() << ")";
+                return false;
+            }
+            RTC_LOG(LS_INFO) << "InstanceV2ReferenceImpl: video send codec pinned to " << codec.name << " (" << sideName() << ")";
+            return true;
+        }, [&] {
+            // GetParameters lists the codec being sent first.
+            const auto current = sender->GetParameters();
+            return !current.codecs.empty() && absl::EqualsIgnoreCase(current.codecs.front().name, cricket::kAv1CodecName);
+        });
     }
 #endif
 
