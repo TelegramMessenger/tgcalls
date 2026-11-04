@@ -154,6 +154,9 @@ void TestInitEncodeAndFirstKeyframe() {
     CHECK_TRUE(first.width == 1280 && first.height == 720);
     auto header = SequenceHeaderOf(first);
     CHECK_TRUE(header.has_value());
+    // The camera and every VideoToolbox codec in tgcalls work in full-range NV12; the stream must say so, or
+    // VideoToolbox converts the range on decode.
+    CHECK_TRUE(header.has_value() && header->fullRange);
     encoder->Release();
 }
 

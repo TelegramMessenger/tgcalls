@@ -253,6 +253,8 @@ private:
         config.frame_rate_numerator = frameRate;
         config.frame_rate_denominator = 1;
         config.encoder_bit_depth = 8;
+        // tgcalls' camera and VideoToolbox codecs work in full-range NV12.
+        config.color_range = EB_CR_FULL_RANGE;
         config.rtc = true;
         config.pred_structure = LOW_DELAY;
         config.rate_control_mode = SVT_AV1_RC_MODE_CBR;

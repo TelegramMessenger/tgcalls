@@ -35,11 +35,16 @@ struct Av1SequenceHeader {
     int subsamplingX = 1;
     int subsamplingY = 1;
     int chromaSamplePosition = 0;
+    bool fullRange = false;
     uint32_t maxWidth = 0;
     uint32_t maxHeight = 0;
 };
 
 std::optional<Av1SequenceHeader> ParseAv1SequenceHeader(const Av1Obu &obu);
+
+// The AV1CodecConfigurationRecord ("av1C", AV1-ISOBMFF 2.3) for a sequence header OBU: four bytes of fields from the
+// header, then the OBU itself as configOBUs. Empty if the OBU does not parse.
+std::vector<uint8_t> MakeAv1CodecConfigurationRecord(const Av1Obu &sequenceHeader);
 
 } // namespace tgcalls
 

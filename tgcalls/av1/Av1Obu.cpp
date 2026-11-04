@@ -216,16 +216,17 @@ std::optional<Av1SequenceHeader> ParseAv1SequenceHeader(const Av1Obu &obu) {
         matrixCoefficients = r.read(8);
     }
     if (header.monochrome) {
-        r.readFlag(); // color_range
+        header.fullRange = r.readFlag(); // color_range
         header.subsamplingX = 1;
         header.subsamplingY = 1;
         header.chromaSamplePosition = 0;
     } else if (colorPrimaries == kColorPrimariesBt709 && transferCharacteristics == kTransferCharacteristicsSrgb &&
                matrixCoefficients == kMatrixCoefficientsIdentity) {
+        header.fullRange = true;
         header.subsamplingX = 0;
         header.subsamplingY = 0;
     } else {
-        r.readFlag(); // color_range
+        header.fullRange = r.readFlag(); // color_range
         if (header.profile == 0) {
             header.subsamplingX = 1;
             header.subsamplingY = 1;
@@ -248,6 +249,23 @@ std::optional<Av1SequenceHeader> ParseAv1SequenceHeader(const Av1Obu &obu) {
         return std::nullopt;
     }
     return header;
+}
+
+std::vector<uint8_t> MakeAv1CodecConfigurationRecord(const Av1Obu &sequenceHeader) {
+    auto header = ParseAv1SequenceHeader(sequenceHeader);
+    if (!header) {
+        return {};
+    }
+    std::vector<uint8_t> record;
+    record.reserve(4 + sequenceHeader.size);
+    record.push_back(0x81); // marker, version 1
+    record.push_back(uint8_t(((header->profile & 0x7) << 5) | (header->level & 0x1f)));
+    record.push_back(uint8_t(((header->tier & 1) << 7) | (header->highBitdepth ? 0x40 : 0) | (header->twelveBit ? 0x20 : 0) |
+                             (header->monochrome ? 0x10 : 0) | ((header->subsamplingX & 1) << 3) |
+                             ((header->subsamplingY & 1) << 2) | (header->chromaSamplePosition & 3)));
+    record.push_back(0); // no initial_presentation_delay
+    record.insert(record.end(), sequenceHeader.data, sequenceHeader.data + sequenceHeader.size);
+    return record;
 }
 
 } // namespace tgcalls

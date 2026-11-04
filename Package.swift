@@ -44,6 +44,10 @@ let package = Package(
                       // AV1 needs SVT-AV1 and dav1d, which this build does not have yet (Bazel defines
                       // TGCALLS_ENABLE_AV1; this build does not).
                       "tgcalls/av1",
+                      "tgcalls/platform/darwin/Av1VideoToolboxDecoder.cpp",
+                      "tgcalls/platform/darwin/Av1VideoToolboxDecoder.h",
+                      "tgcalls/platform/darwin/TGRTCVideoDecoderAV1.mm",
+                      "tgcalls/platform/darwin/TGRTCVideoDecoderAV1.h",
                       "tgcalls/legacy/InstanceImplLegacy.h",
                       "tgcalls/legacy/InstanceImplLegacy.cpp"
                      ],
