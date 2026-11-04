@@ -1827,6 +1827,21 @@ public:
     }
 #endif
 
+    // Re-pins at once: SetParameters on the sender, no renegotiation. Before the camera's first negotiation round
+    // only the value is kept, and that round's pin reads it.
+    void setVideoSendAv1AllowedByPower(bool allowed) {
+#if TGCALLS_ENABLE_AV1
+        if (_av1SendAllowedByPower == allowed) {
+            return;
+        }
+        _av1SendAllowedByPower = allowed;
+        RTC_LOG(LS_INFO) << "InstanceV2ReferenceImpl: AV1 sending " << (allowed ? "allowed" : "paused") << " by power (" << sideName() << ")";
+        applyVideoSendCodecPin();
+#else
+        (void)allowed;
+#endif
+    }
+
     void setRequestedVideoAspect(float aspect) {
     }
 
@@ -2208,6 +2223,12 @@ void InstanceV2ReferenceImpl::setAudioOutputDevice(std::string id) {
 void InstanceV2ReferenceImpl::setIsLowBatteryLevel(bool isLowBatteryLevel) {
     _internal->perform([isLowBatteryLevel](InstanceV2ReferenceImplInternal *internal) {
         internal->setIsLowBatteryLevel(isLowBatteryLevel);
+    });
+}
+
+void InstanceV2ReferenceImpl::setVideoSendAv1AllowedByPower(bool allowed) {
+    _internal->perform([allowed](InstanceV2ReferenceImplInternal *internal) {
+        internal->setVideoSendAv1AllowedByPower(allowed);
     });
 }
 

@@ -200,6 +200,10 @@ public:
     }
 
     virtual void setIsLowBatteryLevel(bool isLowBatteryLevel) = 0;
+    // Whether the device's power state (Low Power Mode, battery, thermal state) lets this side send AV1. Only
+    // InstanceV2ReferenceImpl sends AV1; every other engine ignores it.
+    virtual void setVideoSendAv1AllowedByPower(bool allowed) {
+    }
 
 	virtual std::string getLastError() = 0;
 	virtual std::string getDebugInfo() = 0;

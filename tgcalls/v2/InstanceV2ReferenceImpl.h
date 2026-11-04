@@ -37,6 +37,7 @@ public:
 	void setOutputVolume(float level) override;
 	void setAudioOutputDuckingEnabled(bool enabled) override;
     void setIsLowBatteryLevel(bool isLowBatteryLevel) override;
+    void setVideoSendAv1AllowedByPower(bool allowed) override;
     static std::vector<std::string> GetVersions();
     static int GetConnectionMaxLayer();
 	std::string getLastError() override;

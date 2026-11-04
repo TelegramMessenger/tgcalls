@@ -320,6 +320,15 @@ int main(int argc, char* argv[]) {
     // the engine while the first offer is still in flight). -1 = not used.
     int videoLateCallerMs = -1;
     int videoLateCalleeMs = -1;
+    // --av1-power-off-ms / --av1-power-on-ms caller|callee:MS: that side's power state stops (or again allows)
+    // sending AV1 MS after the instances are created (Instance::setVideoSendAv1AllowedByPower), on the camera
+    // schedule. Repeatable.
+    struct Av1PowerEvent {
+        int ms;
+        bool caller;
+        bool allowed;
+    };
+    std::vector<Av1PowerEvent> av1PowerEvents;
     bool earlyVideoRequest = false;
     bool videoSinkChurn = false;
     bool videoRerequest = false;
@@ -372,6 +381,16 @@ int main(int argc, char* argv[]) {
             videoLateCallerMs = std::atoi(argv[++i]);
         } else if (std::string(argv[i]) == "--video-late-callee-ms" && i + 1 < argc) {
             videoLateCalleeMs = std::atoi(argv[++i]);
+        } else if ((std::string(argv[i]) == "--av1-power-off-ms" || std::string(argv[i]) == "--av1-power-on-ms") && i + 1 < argc) {
+            const bool allowed = std::string(argv[i]) == "--av1-power-on-ms";
+            const std::string value = argv[++i];
+            const auto colon = value.find(':');
+            const std::string side = colon == std::string::npos ? std::string() : value.substr(0, colon);
+            if (side != "caller" && side != "callee") {
+                fprintf(stderr, "%s takes caller:MS or callee:MS, got %s\n", argv[i - 1], value.c_str());
+                return 1;
+            }
+            av1PowerEvents.push_back({std::atoi(value.c_str() + colon + 1), side == "caller", allowed});
         } else if (std::string(argv[i]) == "--early-video-request") {
             earlyVideoRequest = true;
         } else if (std::string(argv[i]) == "--e2e") {
@@ -723,11 +742,17 @@ int main(int argc, char* argv[]) {
     // --video-late: the camera switched on mid-call, the app's setVideoCapture
     // path, the callee first, so the callee has to offer its own new channel.
     const bool videoLateFixed = videoLate && !videoLateMs && duration > 5;
-    if (videoLateMs || videoLateFixed || unmuteMidCall) {
+    if (videoLateMs || videoLateFixed || unmuteMidCall || !av1PowerEvents.empty()) {
         // Mid-call events in time order: a side's camera reaching the engine a
-        // fixed time after start, and the unmute.
-        enum class Event { CallerCamera, CalleeCamera, Unmute };
+        // fixed time after start, the unmute, and AV1 paused or allowed by power.
+        enum class Event { CallerCamera, CalleeCamera, Unmute, CallerAv1PowerOff, CallerAv1PowerOn, CalleeAv1PowerOff, CalleeAv1PowerOn };
         std::vector<std::pair<int, Event>> events; // (ms, event)
+        for (const auto &power : av1PowerEvents) {
+            const Event event = power.caller
+                ? (power.allowed ? Event::CallerAv1PowerOn : Event::CallerAv1PowerOff)
+                : (power.allowed ? Event::CalleeAv1PowerOn : Event::CalleeAv1PowerOff);
+            events.push_back({power.ms, event});
+        }
         if (videoLateCallerMs >= 0) events.push_back({videoLateCallerMs, Event::CallerCamera});
         if (videoLateCalleeMs >= 0) events.push_back({videoLateCalleeMs, Event::CalleeCamera});
         if (videoLateFixed) {
@@ -761,6 +786,17 @@ int main(int argc, char* argv[]) {
                         calleeInstance->setMuteMicrophone(false);
                     }
                     break;
+                case Event::CallerAv1PowerOff:
+                case Event::CallerAv1PowerOn:
+                case Event::CalleeAv1PowerOff:
+                case Event::CalleeAv1PowerOn: {
+                    const bool caller = event.second == Event::CallerAv1PowerOff || event.second == Event::CallerAv1PowerOn;
+                    const bool allowed = event.second == Event::CallerAv1PowerOn || event.second == Event::CalleeAv1PowerOn;
+                    logMsg("Main", "AV1 %s by power on the %s at %d ms", allowed ? "allowed" : "paused", caller ? "caller" : "callee", event.first);
+                    RTC_LOG(LS_INFO) << "tgcalls_cli: AV1 " << (allowed ? "allowed" : "paused") << " by power on the " << (caller ? "caller" : "callee");
+                    (caller ? callerInstance : calleeInstance)->setVideoSendAv1AllowedByPower(allowed);
+                    break;
+                }
             }
         }
         int remainingMs = duration * 1000 - elapsedMs;
