@@ -41,6 +41,9 @@ let package = Package(
                       "tgcalls/platform/darwin/CustomExternalCapturer.h",
                       "tgcalls/group/ScreencastSendParametersTest.cpp",
                       "tgcalls/group/GroupFrameTransformerTest.cpp",
+                      // AV1 needs SVT-AV1 and dav1d, which this build does not have yet (Bazel defines
+                      // TGCALLS_ENABLE_AV1; this build does not).
+                      "tgcalls/av1",
                       "tgcalls/legacy/InstanceImplLegacy.h",
                       "tgcalls/legacy/InstanceImplLegacy.cpp"
                      ],
