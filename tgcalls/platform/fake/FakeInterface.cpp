@@ -171,6 +171,10 @@ bool FakeInterface::supportsEncoding(const std::string &codecName) {
 
 void FakeInterface::adaptVideoSource(webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> videoSource, int width,
                                      int height, int fps) {
+  // The only source this platform hands out is a FakePlatformVideoSource (makeVideoSource).
+  if (videoSource) {
+    static_cast<FakePlatformVideoSource *>(videoSource.get())->OnOutputFormatRequest(width, height, fps);
+  }
 }
 
 std::unique_ptr<VideoCapturerInterface> FakeInterface::makeVideoCapturer(
@@ -183,7 +187,8 @@ std::unique_ptr<VideoCapturerInterface> FakeInterface::makeVideoCapturer(
   auto fakeSource = rtc::scoped_refptr<FakePlatformVideoSource>(
       static_cast<FakePlatformVideoSource *>(source.get()));
   outResolution = std::make_pair(1280, 720);
-  return std::make_unique<FakeVideoCapturer>(std::move(fakeSource), std::move(deviceId), std::move(stateUpdated));
+  return std::make_unique<FakeVideoCapturer>(std::move(fakeSource), std::move(deviceId), std::move(stateUpdated),
+                                             std::move(captureInfoUpdated));
 }
 
 std::unique_ptr<PlatformInterface> CreatePlatformInterface() {

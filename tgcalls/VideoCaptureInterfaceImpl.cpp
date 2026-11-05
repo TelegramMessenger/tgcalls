@@ -110,6 +110,9 @@ void VideoCaptureInterfaceObject::setPreferredAspectRatio(float aspectRatio) {
     updateAspectRateAdaptation();
 }
 
+// The frame rate a call's camera video is capped at, for every call type and codec (the camera captures at 30).
+constexpr int kMaxCaptureFramerate = 30;
+
 void VideoCaptureInterfaceObject::updateAspectRateAdaptation() {
     if (_videoCapturer) {
         if (_videoCapturerResolution.first != 0 && _videoCapturerResolution.second != 0) {
@@ -126,9 +129,9 @@ void VideoCaptureInterfaceObject::updateAspectRateAdaptation() {
                     ? originalHeight
                     : int(std::round(originalHeight / aspectRatio));
 
-                PlatformInterface::SharedInstance()->adaptVideoSource(_videoSource, (int)width, (int)height, 25);
+                PlatformInterface::SharedInstance()->adaptVideoSource(_videoSource, (int)width, (int)height, kMaxCaptureFramerate);
             } else {
-                PlatformInterface::SharedInstance()->adaptVideoSource(_videoSource, _videoCapturerResolution.first, _videoCapturerResolution.second, 25);
+                PlatformInterface::SharedInstance()->adaptVideoSource(_videoSource, _videoCapturerResolution.first, _videoCapturerResolution.second, kMaxCaptureFramerate);
             }
         }
     }

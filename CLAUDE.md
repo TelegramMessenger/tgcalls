@@ -676,7 +676,7 @@ dav1d at runtime.
   - `tools/cli/run-av1-tests.sh`: ten p2p scenarios. They cover both sides on AV1, an incapable callee (including
     against an offer led by AV1), both killswitches, a peer without AV1 (no pin on either side), 10.0.0, late cameras,
     a mid-call power flip and power off before the camera. Each asserts the pins, the SetLocalDescription count and
-    frames both ways; the both-sides scenario also its `video stats` lines.
+    frames both ways; the both-sides scenario also its `video stats` lines and a send rate at the 30 fps cap.
   - Host tests: `svt_av1_api_test` (`//third-party/svt-av1`), `svt_av1_encoder_test`, `av1_round_trip_test` (SVT-AV1,
     then WebRTC's AV1 packetizer and depacketizer, then dav1d), `av1_videotoolbox_decoder_test` (bit-exact against
     dav1d, macOS only), `av1_platform_factories_test`, `av1_send_codec_test`, `video_stats_log_test` (the stats line).

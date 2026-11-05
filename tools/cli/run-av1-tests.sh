@@ -24,6 +24,10 @@ pins() { # pins <side>: the side's pinned codecs in order, space-separated
     grep -o -- "video send codec pinned to [A-Za-z0-9]* ($1)" "$LOG" | awk '{print $6}' | tr '\n' ' ' | sed 's/ $//'
 }
 last_pin() { pins "$1" | awk '{print $NF}'; }
+send_fps() { # send_fps <side>: the side's best send frame rate over its "video stats" intervals, whole fps
+    grep -o -E "video stats \($1\): send [A-Za-z0-9]+ \([A-Za-z0-9]+\) [0-9]+x[0-9]+, [0-9.]+ fps" "$LOG" \
+        | sed -E 's/.* ([0-9.]+) fps$/\1/' | sort -n | tail -1 | cut -d. -f1
+}
 frames() { # frames <caller|callee>: decoded frames that side received
     local line; line=$(grep -m1 'Video frames:' "$OUT")
     if [ "$1" = caller ]; then echo "$line" | sed -E 's/.*caller received ([0-9]+).*/\1/'; else echo "$line" | sed -E 's/.*callee received ([0-9]+).*/\1/'; fi
@@ -53,6 +57,9 @@ check_ge "caller's stats: sends AV1, receives AV1 with dav1d" \
     "$(grep -c -E 'video stats \(caller\): send AV1 \(SvtAv1\) [0-9]+x[0-9]+, .*; receive AV1 \(dav1d\) [0-9]+x[0-9]+, .*; process CPU [0-9]+%' "$LOG")" 1
 check_ge "callee's stats: sends AV1, receives AV1 with dav1d" \
     "$(grep -c -E 'video stats \(callee\): send AV1 \(SvtAv1\) [0-9]+x[0-9]+, .*; receive AV1 \(dav1d\) [0-9]+x[0-9]+, .*; process CPU [0-9]+%' "$LOG")" 1
+# The fake camera runs at 30 fps and the capture interface caps a call's video at 30 (the cap was 25).
+check_ge "caller's send frame rate (fps)" "$(send_fps caller)" 28
+check_ge "callee's send frame rate (fps)" "$(send_fps callee)" 28
 both_frames
 
 run av1-incapable-callee --version 11.0.0 --video --custom-params2 '{"video_av1_test_device_incapable":true}'

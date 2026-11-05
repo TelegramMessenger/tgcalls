@@ -2,6 +2,7 @@
 
 #include "VideoCaptureInterface.h"
 #include "VideoCapturerInterface.h"
+#include "platform/PlatformInterface.h"
 
 #include "api/video/video_frame.h"
 #include "api/video/video_sink_interface.h"
@@ -28,7 +29,10 @@ class FakePlatformVideoSource : public rtc::AdaptedVideoTrackSource {
 public:
     static rtc::scoped_refptr<FakePlatformVideoSource> Create();
 
+    // Through the video adapter, as DarwinVideoTrackSource's frames go: the format request (adaptVideoSource) and the
+    // encoder's sink wants decide the frame rate and size that reach the call.
     void PushFrame(const webrtc::VideoFrame &frame);
+    void OnOutputFormatRequest(int width, int height, int fps);
 
     SourceState state() const override { return kLive; }
     bool remote() const override { return false; }
@@ -48,7 +52,8 @@ class FakeVideoCapturer : public VideoCapturerInterface {
 public:
     FakeVideoCapturer(rtc::scoped_refptr<FakePlatformVideoSource> source,
                       std::string deviceId,
-                      std::function<void(VideoState)> stateUpdated);
+                      std::function<void(VideoState)> stateUpdated,
+                      std::function<void(PlatformCaptureInfo)> captureInfoUpdated = nullptr);
     ~FakeVideoCapturer() override;
 
     void setState(VideoState state) override;
@@ -63,6 +68,7 @@ private:
 
     rtc::scoped_refptr<FakePlatformVideoSource> _source;
     std::function<void(VideoState)> _stateUpdated;
+    std::function<void(PlatformCaptureInfo)> _captureInfoUpdated;
     uint8_t _uTint = 128;
     uint8_t _vTint = 128;
 
