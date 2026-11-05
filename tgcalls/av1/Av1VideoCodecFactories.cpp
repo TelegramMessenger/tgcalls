@@ -8,6 +8,8 @@
 #include "api/video_codecs/sdp_video_format.h"
 #include "media/base/media_constants.h"
 #include "modules/video_coding/codecs/av1/dav1d_decoder.h"
+#include "modules/video_coding/include/video_error_codes.h"
+#include "rtc_base/logging.h"
 
 #include "av1/SvtAv1Encoder.h"
 
@@ -212,6 +214,58 @@ private:
     std::string _levelHex;
 };
 
+class FailingAv1Encoder final : public webrtc::VideoEncoder {
+public:
+    int32_t InitEncode(const webrtc::VideoCodec *, const Settings &) override {
+        RTC_LOG(LS_WARNING) << "Av1: test encoder fails to initialise";
+        return WEBRTC_VIDEO_CODEC_ERROR;
+    }
+    int32_t RegisterEncodeCompleteCallback(webrtc::EncodedImageCallback *) override {
+        return WEBRTC_VIDEO_CODEC_OK;
+    }
+    int32_t Release() override {
+        return WEBRTC_VIDEO_CODEC_OK;
+    }
+    int32_t Encode(const webrtc::VideoFrame &, const std::vector<webrtc::VideoFrameType> *) override {
+        return WEBRTC_VIDEO_CODEC_UNINITIALIZED;
+    }
+    void SetRates(const RateControlParameters &) override {
+    }
+    EncoderInfo GetEncoderInfo() const override {
+        EncoderInfo info;
+        info.implementation_name = "Av1TestFailing";
+        return info;
+    }
+};
+
+class FailingAv1EncoderFactory : public webrtc::VideoEncoderFactory {
+public:
+    explicit FailingAv1EncoderFactory(std::unique_ptr<webrtc::VideoEncoderFactory> inner) : _inner(std::move(inner)) {}
+
+    std::vector<webrtc::SdpVideoFormat> GetSupportedFormats() const override {
+        return _inner->GetSupportedFormats();
+    }
+    std::vector<webrtc::SdpVideoFormat> GetImplementations() const override {
+        return _inner->GetImplementations();
+    }
+    CodecSupport QueryCodecSupport(const webrtc::SdpVideoFormat &format,
+                                   absl::optional<std::string> scalabilityMode) const override {
+        return _inner->QueryCodecSupport(format, scalabilityMode);
+    }
+    std::unique_ptr<webrtc::VideoEncoder> CreateVideoEncoder(const webrtc::SdpVideoFormat &format) override {
+        if (IsAv1(format)) {
+            return std::make_unique<FailingAv1Encoder>();
+        }
+        return _inner->CreateVideoEncoder(format);
+    }
+    std::unique_ptr<EncoderSelectorInterface> GetEncoderSelector() const override {
+        return _inner->GetEncoderSelector();
+    }
+
+private:
+    std::unique_ptr<webrtc::VideoEncoderFactory> _inner;
+};
+
 class H264LevelDecoderFactory : public webrtc::VideoDecoderFactory {
 public:
     H264LevelDecoderFactory(std::unique_ptr<webrtc::VideoDecoderFactory> inner, std::string levelHex)
@@ -279,6 +333,11 @@ std::unique_ptr<webrtc::VideoEncoderFactory> WrapEncoderFactoryWithH264LevelForT
 std::unique_ptr<webrtc::VideoDecoderFactory> WrapDecoderFactoryWithH264LevelForTesting(
     std::unique_ptr<webrtc::VideoDecoderFactory> inner, std::string levelHex) {
     return std::make_unique<H264LevelDecoderFactory>(std::move(inner), std::move(levelHex));
+}
+
+std::unique_ptr<webrtc::VideoEncoderFactory> WrapEncoderFactoryWithFailingAv1ForTesting(
+    std::unique_ptr<webrtc::VideoEncoderFactory> inner) {
+    return std::make_unique<FailingAv1EncoderFactory>(std::move(inner));
 }
 #endif
 

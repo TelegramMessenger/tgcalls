@@ -63,6 +63,7 @@
 #include "v2/CustomParameters.h"
 #include "v2/VideoStatsLog.h"
 #if TGCALLS_ENABLE_AV1
+#include "av1/Av1EncoderFallback.h"
 #include "av1/Av1SendCodec.h"
 #include "av1/Av1VideoCodecFactories.h"
 #endif
@@ -564,6 +565,10 @@ public:
             peerConnectionFactoryDependencies.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactory();
         }
 #if TGCALLS_ALLOW_TEST_KNOBS
+        if (_av1Settings.offerAv1 && _av1Settings.testEncoderFails) {
+            RTC_LOG(LS_INFO) << "InstanceV2ReferenceImpl: test knob: the AV1 encoder fails (" << sideName() << ")";
+            peerConnectionFactoryDependencies.video_encoder_factory = WrapEncoderFactoryWithFailingAv1ForTesting(std::move(peerConnectionFactoryDependencies.video_encoder_factory));
+        }
         // CLI-only: this side lists H264 at another level, as two devices may.
         const auto h264Level = _customParameters.find("video_test_h264_level");
         if (h264Level != _customParameters.end() && h264Level->second.is_string()) {
@@ -572,6 +577,20 @@ public:
             peerConnectionFactoryDependencies.video_decoder_factory = WrapDecoderFactoryWithH264LevelForTesting(std::move(peerConnectionFactoryDependencies.video_decoder_factory), h264Level->second.string_value());
         }
 #endif
+        if (_av1Settings.offerAv1) {
+            // A broken AV1 encoder is replaced by the codec this side would pin next, not WebRTC's VP8, and stops the
+            // AV1 pins (onAv1EncoderFailed).
+            const auto weak = std::weak_ptr<InstanceV2ReferenceImplInternal>(shared_from_this());
+            const auto threads = _threads;
+            _av1EncoderFallback = std::make_shared<Av1EncoderFallback>([weak, threads] {
+                threads->getMediaThread()->PostTask([weak] {
+                    if (const auto strong = weak.lock()) {
+                        strong->onAv1EncoderFailed();
+                    }
+                });
+            });
+            peerConnectionFactoryDependencies.video_encoder_factory = WrapEncoderFactoryWithAv1Fallback(std::move(peerConnectionFactoryDependencies.video_encoder_factory), _av1EncoderFallback);
+        }
 #else
         peerConnectionFactoryDependencies.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory(true);
         peerConnectionFactoryDependencies.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactory();
@@ -1898,7 +1917,10 @@ public:
             return;
         }
         const std::vector<webrtc::RtpCodec> available(parameters.codecs.begin(), parameters.codecs.end());
-        if (!_videoSendCodecOverride.empty()) {
+        updateAv1EncoderFallback(available);
+        if (!_videoSendCodecOverride.empty() && _av1EncoderFailed && absl::EqualsIgnoreCase(_videoSendCodecOverride, cricket::kAv1CodecName)) {
+            RTC_LOG(LS_WARNING) << "InstanceV2ReferenceImpl: video send codec override AV1 ignored: the AV1 encoder failed (" << sideName() << ")";
+        } else if (!_videoSendCodecOverride.empty()) {
             const auto candidates = VideoSendCodecOverrideCandidates(available, _videoSendCodecOverride);
             if (candidates.empty()) {
                 std::string negotiated;
@@ -1929,7 +1951,32 @@ public:
     }
 
     bool av1SendAllowed() const {
-        return _av1Settings.sendAv1 && _av1Settings.deviceMaySendAv1 && _av1SendAllowedByPower;
+        return _av1Settings.sendAv1 && _av1Settings.deviceMaySendAv1 && _av1SendAllowedByPower && !_av1EncoderFailed;
+    }
+
+    // What a broken AV1 encoder is replaced by: the first codec the pin would choose without AV1 (H.265, else H.264,
+    // else the rest), as negotiated; nothing when AV1 was not negotiated.
+    void updateAv1EncoderFallback(const std::vector<webrtc::RtpCodec> &available) {
+        if (!_av1EncoderFallback) {
+            return;
+        }
+        const auto candidates = VideoSendCodecCandidates(available, false);
+        if (candidates.empty()) {
+            _av1EncoderFallback->setFallbackFormat(std::nullopt);
+        } else {
+            _av1EncoderFallback->setFallbackFormat(webrtc::SdpVideoFormat(candidates.front().name, candidates.front().parameters));
+        }
+    }
+
+    // The AV1 encoder failed to be created, to start or to encode (Av1EncoderFallback): WebRTC has switched to the
+    // fallback; AV1 is not pinned again in this call, and the pin moves to what the fallback named.
+    void onAv1EncoderFailed() {
+        if (_av1EncoderFailed) {
+            return;
+        }
+        _av1EncoderFailed = true;
+        RTC_LOG(LS_WARNING) << "InstanceV2ReferenceImpl: the AV1 encoder failed (" << sideName() << "); AV1 is not sent again in this call";
+        applyVideoSendCodecPin();
     }
 
     // One attempt: a fresh transaction, since SetParameters ends the previous one, accepted or not.
@@ -2282,6 +2329,8 @@ private:
     // The debug codec override (empty: none), and the codec sent when it was first applied.
     std::string _videoSendCodecOverride;
     std::optional<webrtc::RtpCodec> _videoSendCodecBeforeOverride;
+    std::shared_ptr<Av1EncoderFallback> _av1EncoderFallback;
+    bool _av1EncoderFailed = false;
 #endif
     int _videoSendMaxBitrateKbps = 0;
     bool _videoSendIsScreenCapture = false;

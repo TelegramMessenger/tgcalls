@@ -44,6 +44,10 @@ std::unique_ptr<webrtc::VideoEncoderFactory> WrapEncoderFactoryWithH264LevelForT
     std::unique_ptr<webrtc::VideoEncoderFactory> inner, std::string levelHex);
 std::unique_ptr<webrtc::VideoDecoderFactory> WrapDecoderFactoryWithH264LevelForTesting(
     std::unique_ptr<webrtc::VideoDecoderFactory> inner, std::string levelHex);
+// CLI only (custom parameter video_av1_test_encoder_fails): `inner` with an AV1 encoder that fails InitEncode, as
+// SVT-AV1 does at a preset its build lacks.
+std::unique_ptr<webrtc::VideoEncoderFactory> WrapEncoderFactoryWithFailingAv1ForTesting(
+    std::unique_ptr<webrtc::VideoEncoderFactory> inner);
 #endif
 
 } // namespace tgcalls

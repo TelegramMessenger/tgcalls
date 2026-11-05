@@ -648,8 +648,9 @@ dav1d at runtime.
   - `video_av1_send_any_device` (default false): true lets a device the chip gate excludes send AV1.
   - CLI-only, read under `TGCALLS_ALLOW_TEST_KNOBS`: `video_av1_test_device_incapable` (this side behaves as an older
     device), `video_av1_test_offer_av1_first` (AV1 leads the camera's codec preferences, as a peer's stock list may)
-    and `video_test_h264_level` (this side's factories list H264 at that level byte, e.g. `"29"`, as a device whose
-    H264 level differs from its peer's does; `WrapEncoderFactoryWithH264LevelForTesting`).
+    `video_test_h264_level` (this side's factories list H264 at that level byte, e.g. `"29"`, as a device whose
+    H264 level differs from its peer's does; `WrapEncoderFactoryWithH264LevelForTesting`) and
+    `video_av1_test_encoder_fails` (this side's AV1 encoder fails `InitEncode`; `WrapEncoderFactoryWithFailingAv1ForTesting`).
 - **The power input:** `Instance::setVideoSendAv1AllowedByPower(bool)`, a no-op for every other engine. This engine
   keeps the value and re-pins at once; set before the camera's first round, it decides that round's pin. The app
   computes it with `Av1SendPowerPolicy` (TelegramVoip), which `PresentationCall` feeds from Low Power Mode, the thermal
@@ -673,6 +674,14 @@ dav1d at runtime.
   `max_bitrate_bps` (0: the default 1200 × 1024), also for a camera added later; it is a cap, so raising it shows only
   as far as the bandwidth estimate goes. `getVideoStatsLine()` returns the latest `video stats` line, from any thread.
   All apply at once, without a renegotiation; every other engine ignores them.
+- **A failing AV1 encoder** (not created, `InitEncode` failed, `Encode` failed: SVT-AV1 at a preset its RTC build lacks
+  did on device) is replaced by the codec this side would pin next, never WebRTC's default VP8. The engine wraps its
+  encoder factory last (`WrapEncoderFactoryWithAv1Fallback`, `av1/Av1EncoderFallback`): AV1 encoders report their
+  failures, and the factory's encoder selector answers WebRTC's `OnEncoderBroken` for a broken AV1 encoder with the
+  first of `VideoSendCodecCandidates(available, false)` (H.265, else H.264), refreshed at every pin. Without a selector
+  WebRTC's `RequestEncoderSwitch` picks VP8. The engine then stops sending AV1 for the call (`onAv1EncoderFailed`:
+  `the AV1 encoder failed (<side>)` in the log) and pins that codec; a debug override to AV1 is ignored from then on.
+  Any other broken encoder keeps WebRTC's own choice (the inner factory's selector, else VP8).
 - **Pins and the H.264 level.** WebRTC matches a pinned codec against the sender's own codecs and against the negotiated
   ones. A device's own H.264 `profile-level-id` and the one negotiated with a peer at another level differ (an iPhone
   and a simulator: `640c1f` / `640c29`), so with exact matching no H.264 pin could pass both checks ("Attempted to use
@@ -698,16 +707,18 @@ dav1d at runtime.
     Power Mode switches AV1 off). The encoder names are WebRTC's (`SvtAv1`, `VideoToolbox`); the decoders' too
     (`dav1d`, `VideoToolboxAV1`).
 - **Tests:**
-  - `tools/cli/run-av1-tests.sh`: thirteen p2p scenarios. They cover both sides on AV1, an incapable callee (including
+  - `tools/cli/run-av1-tests.sh`: fourteen p2p scenarios. They cover both sides on AV1, an incapable callee (including
     against an offer led by AV1), both killswitches, a peer without AV1 (no pin on either side), 10.0.0, late cameras,
     a mid-call power flip and power off before the camera. Each asserts the pins, the SetLocalDescription count and
     frames both ways; the both-sides scenario also its `video stats` lines and a send rate at the 30 fps cap. Two
     more drive the debug controls: H264 at 300 kbps mid-call and back (AV1 negotiated), and VP8 and back against a
     peer without AV1 (the pin removed). A thirteenth forces H264 on both sides with the callee's H264 at another level
-    (`video_test_h264_level`).
+    (`video_test_h264_level`). A fourteenth fails the caller's AV1 encoder (`video_av1_test_encoder_fails`): the caller
+    must go on with H264, never VP8.
   - Host tests: `svt_av1_api_test` (`//third-party/svt-av1`), `svt_av1_encoder_test`, `av1_round_trip_test` (SVT-AV1,
     then WebRTC's AV1 packetizer and depacketizer, then dav1d), `av1_videotoolbox_decoder_test` (bit-exact against
-    dav1d, macOS only), `av1_platform_factories_test`, `av1_send_codec_test`, `video_stats_log_test` (the stats line).
+    dav1d, macOS only), `av1_platform_factories_test`, `av1_send_codec_test`, `video_stats_log_test` (the stats line), `av1_encoder_fallback_test` (the selector and the
+    failure reports).
 
 ## Further Context
 

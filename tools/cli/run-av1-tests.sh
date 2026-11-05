@@ -161,6 +161,17 @@ if [ "${AV1_TESTS_STAGE:-}" != "engine-only" ]; then
     check "caller's last stats line sends" "$(grep -o 'video stats (caller): send [A-Za-z0-9]*' "$LOG" | tail -1 | awk '{print $NF}')" "H264"
     check "callee's last stats line sends" "$(grep -o 'video stats (callee): send [A-Za-z0-9]*' "$LOG" | tail -1 | awk '{print $NF}')" "H264"
     both_frames
+
+    # An AV1 encoder that fails to start (SVT-AV1 at a preset its build lacks did on device): this side goes on with
+    # the codec it would pin next (H264 here, the fake platform has no H.265), never WebRTC's default VP8.
+    run av1-encoder-fails --version 11.0.0 --video --duration 12 --custom-params '{"video_av1_test_encoder_fails":true}'
+    check "the caller's AV1 encoder failed" "$(count 'test encoder fails to initialise' "$LOG")" "1"
+    check_ge "the caller heard of it" "$(count 'the AV1 encoder failed (caller)' "$LOG")" 1
+    check "caller's last pin" "$(last_pin caller)" "H264"
+    check "caller's stats lines sending VP8" "$(grep -c 'video stats (caller): send VP8' "$LOG")" "0"
+    check "caller's last stats line sends" "$(grep -o 'video stats (caller): send [A-Za-z0-9]*' "$LOG" | tail -1 | awk '{print $NF}')" "H264"
+    check "callee's last pin" "$(last_pin callee)" "AV1"
+    both_frames
 fi
 
 echo

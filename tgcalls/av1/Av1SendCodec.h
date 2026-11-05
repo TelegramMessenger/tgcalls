@@ -22,7 +22,7 @@ struct Av1CallSettings {
     bool offerAv1 = true;
     bool sendAv1 = true;
     bool deviceMaySendAv1 = false;
-    bool testOfferAv1First = false;
+    bool testOfferAv1First = false; bool testEncoderFails = false;
 };
 
 Av1CallSettings Av1CallSettingsFromCustomParameters(const std::map<std::string, json11::Json> &customParameters,

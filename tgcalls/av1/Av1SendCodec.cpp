@@ -40,6 +40,7 @@ Av1CallSettings Av1CallSettingsFromCustomParameters(const std::map<std::string, 
         settings.deviceMaySendAv1 = false;
     }
     settings.testOfferAv1First = getCustomParameterBool(customParameters, "video_av1_test_offer_av1_first");
+    settings.testEncoderFails = getCustomParameterBool(customParameters, "video_av1_test_encoder_fails");
 #endif
     return settings;
 }
