@@ -647,7 +647,9 @@ dav1d at runtime.
   - `video_av1_send` (default true): false never sends AV1, but still offers and decodes it.
   - `video_av1_send_any_device` (default false): true lets a device the chip gate excludes send AV1.
   - CLI-only, read under `TGCALLS_ALLOW_TEST_KNOBS`: `video_av1_test_device_incapable` (this side behaves as an older
-    device) and `video_av1_test_offer_av1_first` (AV1 leads the camera's codec preferences, as a peer's stock list may).
+    device), `video_av1_test_offer_av1_first` (AV1 leads the camera's codec preferences, as a peer's stock list may)
+    and `video_test_h264_level` (this side's factories list H264 at that level byte, e.g. `"29"`, as a device whose
+    H264 level differs from its peer's does; `WrapEncoderFactoryWithH264LevelForTesting`).
 - **The power input:** `Instance::setVideoSendAv1AllowedByPower(bool)`, a no-op for every other engine. This engine
   keeps the value and re-pins at once; set before the camera's first round, it decides that round's pin. The app
   computes it with `Av1SendPowerPolicy` (TelegramVoip), which `PresentationCall` feeds from Low Power Mode, the thermal
@@ -671,6 +673,12 @@ dav1d at runtime.
   `max_bitrate_bps` (0: the default 1200 × 1024), also for a camera added later; it is a cap, so raising it shows only
   as far as the bandwidth estimate goes. `getVideoStatsLine()` returns the latest `video stats` line, from any thread.
   All apply at once, without a renegotiation; every other engine ignores them.
+- **Pins and the H.264 level.** WebRTC matches a pinned codec against the sender's own codecs and against the negotiated
+  ones. A device's own H.264 `profile-level-id` and the one negotiated with a peer at another level differ (an iPhone
+  and a simulator: `640c1f` / `640c29`), so with exact matching no H.264 pin could pass both checks ("Attempted to use
+  an unsupported codec for layer 0"): the debug override failed, and the power fallback skipped H.264 for software VP8
+  against a peer without H.265. The vendored WebRTC carries upstream's level-insensitive matching as a backport
+  (telegram-ios `submodules/TgVoipWebrtc/CLAUDE.md`, the seams table); `av1-debug-h264-levels` pins it.
 - **Log lines:**
   - `InstanceV2ReferenceImpl: AV1 offered, encoding allowed: <0|1> (<caller|callee>)` or `AV1 not offered (<side>)`,
     once per call.
@@ -690,12 +698,13 @@ dav1d at runtime.
     Power Mode switches AV1 off). The encoder names are WebRTC's (`SvtAv1`, `VideoToolbox`); the decoders' too
     (`dav1d`, `VideoToolboxAV1`).
 - **Tests:**
-  - `tools/cli/run-av1-tests.sh`: twelve p2p scenarios. They cover both sides on AV1, an incapable callee (including
+  - `tools/cli/run-av1-tests.sh`: thirteen p2p scenarios. They cover both sides on AV1, an incapable callee (including
     against an offer led by AV1), both killswitches, a peer without AV1 (no pin on either side), 10.0.0, late cameras,
     a mid-call power flip and power off before the camera. Each asserts the pins, the SetLocalDescription count and
     frames both ways; the both-sides scenario also its `video stats` lines and a send rate at the 30 fps cap. Two
     more drive the debug controls: H264 at 300 kbps mid-call and back (AV1 negotiated), and VP8 and back against a
-    peer without AV1 (the pin removed).
+    peer without AV1 (the pin removed). A thirteenth forces H264 on both sides with the callee's H264 at another level
+    (`video_test_h264_level`).
   - Host tests: `svt_av1_api_test` (`//third-party/svt-av1`), `svt_av1_encoder_test`, `av1_round_trip_test` (SVT-AV1,
     then WebRTC's AV1 packetizer and depacketizer, then dav1d), `av1_videotoolbox_decoder_test` (bit-exact against
     dav1d, macOS only), `av1_platform_factories_test`, `av1_send_codec_test`, `video_stats_log_test` (the stats line).

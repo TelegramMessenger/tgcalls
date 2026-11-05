@@ -149,6 +149,18 @@ if [ "${AV1_TESTS_STAGE:-}" != "engine-only" ]; then
     check "pin removed" "$(count 'video send codec pin removed (callee)' "$LOG")" "1"
     check "callee's last stats line sends" "$(grep -o 'video stats (callee): send [A-Za-z0-9]*' "$LOG" | tail -1 | awk '{print $NF}')" "H264"
     check "SetLocalDescription calls" "$(count 'Calling SetLocalDescription' "$LOG")" "2"
+
+    # Two devices with different H264 levels (the callee lists 4.1, the caller 3.1), as an iPhone and a simulator do:
+    # forcing H264 must pin on both sides, although a negotiated H264 then differs in level from the sender's own.
+    run av1-debug-h264-levels --version 11.0.0 --video --duration 12 --custom-params2 '{"video_test_h264_level":"29"}' \
+        --video-codec-override caller:3000:H264 --video-codec-override callee:3000:H264
+    check "the callee's H264 level differs" "$(count 'test knob: H264 level 29 (callee)' "$LOG")" "1"
+    check "failed H264 pins" "$(count 'pinning the video send codec to H264 failed' "$LOG")" "0"
+    check "caller's last pin" "$(last_pin caller)" "H264"
+    check "callee's last pin" "$(last_pin callee)" "H264"
+    check "caller's last stats line sends" "$(grep -o 'video stats (caller): send [A-Za-z0-9]*' "$LOG" | tail -1 | awk '{print $NF}')" "H264"
+    check "callee's last stats line sends" "$(grep -o 'video stats (callee): send [A-Za-z0-9]*' "$LOG" | tail -1 | awk '{print $NF}')" "H264"
+    both_frames
 fi
 
 echo

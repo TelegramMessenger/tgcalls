@@ -64,6 +64,7 @@
 #include "v2/VideoStatsLog.h"
 #if TGCALLS_ENABLE_AV1
 #include "av1/Av1SendCodec.h"
+#include "av1/Av1VideoCodecFactories.h"
 #endif
 #ifdef WEBRTC_IOS
 #include "platform/darwin/iOS/tgcalls_audio_device_module_ios.h"
@@ -562,6 +563,15 @@ public:
             peerConnectionFactoryDependencies.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory(true);
             peerConnectionFactoryDependencies.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactory();
         }
+#if TGCALLS_ALLOW_TEST_KNOBS
+        // CLI-only: this side lists H264 at another level, as two devices may.
+        const auto h264Level = _customParameters.find("video_test_h264_level");
+        if (h264Level != _customParameters.end() && h264Level->second.is_string()) {
+            RTC_LOG(LS_INFO) << "InstanceV2ReferenceImpl: test knob: H264 level " << h264Level->second.string_value() << " (" << sideName() << ")";
+            peerConnectionFactoryDependencies.video_encoder_factory = WrapEncoderFactoryWithH264LevelForTesting(std::move(peerConnectionFactoryDependencies.video_encoder_factory), h264Level->second.string_value());
+            peerConnectionFactoryDependencies.video_decoder_factory = WrapDecoderFactoryWithH264LevelForTesting(std::move(peerConnectionFactoryDependencies.video_decoder_factory), h264Level->second.string_value());
+        }
+#endif
 #else
         peerConnectionFactoryDependencies.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory(true);
         peerConnectionFactoryDependencies.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactory();

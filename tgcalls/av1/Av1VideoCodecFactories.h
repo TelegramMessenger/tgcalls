@@ -2,6 +2,7 @@
 #define TGCALLS_AV1_AV1VIDEOCODECFACTORIES_H
 
 #include <memory>
+#include <string>
 
 #include "api/video_codecs/sdp_video_format.h"
 #include "api/video_codecs/video_decoder_factory.h"
@@ -34,6 +35,16 @@ std::unique_ptr<webrtc::VideoDecoderFactory> WrapDecoderFactoryWithDav1d(std::un
 // the encoder's list, match it by exact parameter equality (MatchCodecPreference). An encoder listing "AV1" or "H265"
 // with the defaults against a decoder listing them bare drops both from every offer and answer.
 std::unique_ptr<webrtc::VideoDecoderFactory> WrapDecoderFactoryWithSdpDefaults(std::unique_ptr<webrtc::VideoDecoderFactory> inner);
+
+#if TGCALLS_ALLOW_TEST_KNOBS
+// CLI only (custom parameter video_test_h264_level): `inner`'s H264 formats listed at the level `levelHex` (the last
+// byte of profile-level-id, e.g. "29" for 4.1), as a device whose H264 level differs from its peer's does; `inner` is
+// handed its own format back. Both factories of a side take the same level.
+std::unique_ptr<webrtc::VideoEncoderFactory> WrapEncoderFactoryWithH264LevelForTesting(
+    std::unique_ptr<webrtc::VideoEncoderFactory> inner, std::string levelHex);
+std::unique_ptr<webrtc::VideoDecoderFactory> WrapDecoderFactoryWithH264LevelForTesting(
+    std::unique_ptr<webrtc::VideoDecoderFactory> inner, std::string levelHex);
+#endif
 
 } // namespace tgcalls
 

@@ -151,6 +151,96 @@ private:
     std::unique_ptr<webrtc::VideoDecoderFactory> _inner;
 };
 
+#if TGCALLS_ALLOW_TEST_KNOBS
+webrtc::SdpVideoFormat WithH264Level(webrtc::SdpVideoFormat format, const std::string &levelHex) {
+    if (absl::EqualsIgnoreCase(format.name, cricket::kH264CodecName)) {
+        auto it = format.parameters.find(cricket::kH264FmtpProfileLevelId);
+        if (it != format.parameters.end() && it->second.size() == 6 && levelHex.size() == 2) {
+            it->second = it->second.substr(0, 4) + levelHex;
+        }
+    }
+    return format;
+}
+
+std::vector<webrtc::SdpVideoFormat> WithH264Level(std::vector<webrtc::SdpVideoFormat> formats, const std::string &levelHex) {
+    for (auto &format : formats) {
+        format = WithH264Level(std::move(format), levelHex);
+    }
+    return formats;
+}
+
+webrtc::SdpVideoFormat InnerH264LevelFormat(const std::vector<webrtc::SdpVideoFormat> &innerFormats,
+                                            const webrtc::SdpVideoFormat &format, const std::string &levelHex) {
+    for (const auto &innerFormat : innerFormats) {
+        if (absl::EqualsIgnoreCase(innerFormat.name, format.name) &&
+            WithH264Level(innerFormat, levelHex).parameters == format.parameters) {
+            return innerFormat;
+        }
+    }
+    return format;
+}
+
+class H264LevelEncoderFactory : public webrtc::VideoEncoderFactory {
+public:
+    H264LevelEncoderFactory(std::unique_ptr<webrtc::VideoEncoderFactory> inner, std::string levelHex)
+        : _inner(std::move(inner)), _levelHex(std::move(levelHex)) {}
+
+    std::vector<webrtc::SdpVideoFormat> GetSupportedFormats() const override {
+        return WithH264Level(_inner->GetSupportedFormats(), _levelHex);
+    }
+
+    std::vector<webrtc::SdpVideoFormat> GetImplementations() const override {
+        return WithH264Level(_inner->GetImplementations(), _levelHex);
+    }
+
+    CodecSupport QueryCodecSupport(const webrtc::SdpVideoFormat &format,
+                                   absl::optional<std::string> scalabilityMode) const override {
+        return _inner->QueryCodecSupport(InnerH264LevelFormat(_inner->GetSupportedFormats(), format, _levelHex),
+                                         scalabilityMode);
+    }
+
+    std::unique_ptr<webrtc::VideoEncoder> CreateVideoEncoder(const webrtc::SdpVideoFormat &format) override {
+        return _inner->CreateVideoEncoder(InnerH264LevelFormat(_inner->GetSupportedFormats(), format, _levelHex));
+    }
+
+    std::unique_ptr<EncoderSelectorInterface> GetEncoderSelector() const override {
+        return _inner->GetEncoderSelector();
+    }
+
+private:
+    std::unique_ptr<webrtc::VideoEncoderFactory> _inner;
+    std::string _levelHex;
+};
+
+class H264LevelDecoderFactory : public webrtc::VideoDecoderFactory {
+public:
+    H264LevelDecoderFactory(std::unique_ptr<webrtc::VideoDecoderFactory> inner, std::string levelHex)
+        : _inner(std::move(inner)), _levelHex(std::move(levelHex)) {}
+
+    std::vector<webrtc::SdpVideoFormat> GetSupportedFormats() const override {
+        return WithH264Level(_inner->GetSupportedFormats(), _levelHex);
+    }
+
+    CodecSupport QueryCodecSupport(const webrtc::SdpVideoFormat &format, bool referenceScaling) const override {
+        return _inner->QueryCodecSupport(InnerH264LevelFormat(_inner->GetSupportedFormats(), format, _levelHex),
+                                         referenceScaling);
+    }
+
+    std::unique_ptr<webrtc::VideoDecoder> Create(const webrtc::Environment &env,
+                                                 const webrtc::SdpVideoFormat &format) override {
+        return _inner->Create(env, InnerH264LevelFormat(_inner->GetSupportedFormats(), format, _levelHex));
+    }
+
+    std::unique_ptr<webrtc::VideoDecoder> CreateVideoDecoder(const webrtc::SdpVideoFormat &format) override {
+        return _inner->CreateVideoDecoder(InnerH264LevelFormat(_inner->GetSupportedFormats(), format, _levelHex));
+    }
+
+private:
+    std::unique_ptr<webrtc::VideoDecoderFactory> _inner;
+    std::string _levelHex;
+};
+#endif
+
 } // namespace
 
 webrtc::SdpVideoFormat WithSdpDefaultParameters(webrtc::SdpVideoFormat format) {
@@ -180,8 +270,20 @@ std::unique_ptr<webrtc::VideoDecoderFactory> WrapDecoderFactoryWithDav1d(std::un
     return std::make_unique<Dav1dDecoderFactory>(std::move(inner));
 }
 
+#if TGCALLS_ALLOW_TEST_KNOBS
+std::unique_ptr<webrtc::VideoEncoderFactory> WrapEncoderFactoryWithH264LevelForTesting(
+    std::unique_ptr<webrtc::VideoEncoderFactory> inner, std::string levelHex) {
+    return std::make_unique<H264LevelEncoderFactory>(std::move(inner), std::move(levelHex));
+}
+
+std::unique_ptr<webrtc::VideoDecoderFactory> WrapDecoderFactoryWithH264LevelForTesting(
+    std::unique_ptr<webrtc::VideoDecoderFactory> inner, std::string levelHex) {
+    return std::make_unique<H264LevelDecoderFactory>(std::move(inner), std::move(levelHex));
+}
+#endif
+
 std::unique_ptr<webrtc::VideoDecoderFactory> WrapDecoderFactoryWithSdpDefaults(std::unique_ptr<webrtc::VideoDecoderFactory> inner) {
-    return std::make_unique<SdpDefaultsDecoderFactory>(std::move(inner));
+return std::make_unique<SdpDefaultsDecoderFactory>(std::move(inner));
 }
 
 } // namespace tgcalls
