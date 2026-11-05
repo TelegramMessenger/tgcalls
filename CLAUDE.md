@@ -664,14 +664,22 @@ dav1d at runtime.
     when the sender rejects one.
   - `AV1 sending paused|allowed by power (<side>)`.
   - `SvtAv1Encoder: initialized WxH, N kbps` and `Av1: encoding refused on this device`.
+  - `video stats (<side>): send <codec> (<encoder>) WxH, F fps, encode E ms/frame, B kbps (target T), qp Q,
+    keyframes K, quality limit <reason>; receive <codec> (<decoder>) WxH, …, decode D ms/frame, …, dropped N,
+    freezes N; process CPU P%`, every 5 s of a call with video, any codec (`v2/VideoStatsLog`, from
+    `PeerConnection::GetStats`). Rates are over the 5 s interval; per direction it reports the stream that advanced
+    most; `no frames` when none did; QP is left out when the codec reports none (dav1d). Process CPU is the whole
+    app's, 100% being one core, so the load of a codec shows as the difference when the codec changes mid-call (Low
+    Power Mode switches AV1 off). The encoder names are WebRTC's (`SvtAv1`, `VideoToolbox`); the decoders' too
+    (`dav1d`, `VideoToolboxAV1`).
 - **Tests:**
   - `tools/cli/run-av1-tests.sh`: ten p2p scenarios. They cover both sides on AV1, an incapable callee (including
     against an offer led by AV1), both killswitches, a peer without AV1 (no pin on either side), 10.0.0, late cameras,
     a mid-call power flip and power off before the camera. Each asserts the pins, the SetLocalDescription count and
-    frames both ways.
+    frames both ways; the both-sides scenario also its `video stats` lines.
   - Host tests: `svt_av1_api_test` (`//third-party/svt-av1`), `svt_av1_encoder_test`, `av1_round_trip_test` (SVT-AV1,
     then WebRTC's AV1 packetizer and depacketizer, then dav1d), `av1_videotoolbox_decoder_test` (bit-exact against
-    dav1d, macOS only), `av1_platform_factories_test`, `av1_send_codec_test`.
+    dav1d, macOS only), `av1_platform_factories_test`, `av1_send_codec_test`, `video_stats_log_test` (the stats line).
 
 ## Further Context
 

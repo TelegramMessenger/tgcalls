@@ -22,6 +22,7 @@ let package = Package(
                       "tgcalls/v2/MtProtoDtlsTransportTest.cpp",
                       "tgcalls/v2/SignalingSctpOptionsTest.cpp",
                       "tgcalls/v2/ContentNegotiationTest.cpp",
+                      "tgcalls/v2/VideoStatsLogTest.cpp",
                       "README.md",
                       "tgcalls/platform/android",
                       "tgcalls/platform/tdesktop",

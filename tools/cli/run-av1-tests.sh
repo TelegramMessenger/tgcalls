@@ -42,12 +42,17 @@ both_frames() {
     check_ge "frames received by the callee" "$(frames callee)" 1
 }
 
-run av1-both --version 11.0.0 --video
+# 12 s: the first "video stats" line comes 10 s in (a sample every 5 s, a line per interval).
+run av1-both --version 11.0.0 --video --duration 12
 check "caller's last pin" "$(last_pin caller)" "AV1"
 check "callee's last pin" "$(last_pin callee)" "AV1"
 check_ge "SVT-AV1 encoders initialised" "$(count 'SvtAv1Encoder: initialized' "$LOG")" 2
 check "encoding refused" "$(count 'encoding refused' "$LOG")" "0"
 check "SetLocalDescription calls" "$(count 'Calling SetLocalDescription' "$LOG")" "2"
+check_ge "caller's stats: sends AV1, receives AV1 with dav1d" \
+    "$(grep -c -E 'video stats \(caller\): send AV1 \(SvtAv1\) [0-9]+x[0-9]+, .*; receive AV1 \(dav1d\) [0-9]+x[0-9]+, .*; process CPU [0-9]+%' "$LOG")" 1
+check_ge "callee's stats: sends AV1, receives AV1 with dav1d" \
+    "$(grep -c -E 'video stats \(callee\): send AV1 \(SvtAv1\) [0-9]+x[0-9]+, .*; receive AV1 \(dav1d\) [0-9]+x[0-9]+, .*; process CPU [0-9]+%' "$LOG")" 1
 both_frames
 
 run av1-incapable-callee --version 11.0.0 --video --custom-params2 '{"video_av1_test_device_incapable":true}'

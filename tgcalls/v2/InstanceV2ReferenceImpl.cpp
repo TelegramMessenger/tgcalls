@@ -61,6 +61,7 @@
 #include "v2/ReflectorRelayPortFactory.h"
 #include "v2/MtProtoDtlsTransport.h"
 #include "v2/CustomParameters.h"
+#include "v2/VideoStatsLog.h"
 #if TGCALLS_ENABLE_AV1
 #include "av1/Av1SendCodec.h"
 #endif
@@ -379,6 +380,23 @@ struct NetworkStateLogRecord {
 
 struct NetworkBitrateLogRecord {
     int32_t bitrate = 0;
+};
+
+// How often a call logs its video stats ("video stats (<side>): ...").
+constexpr int kVideoStatsLogIntervalMs = 5000;
+
+class StatsReportCallback : public webrtc::RTCStatsCollectorCallback {
+public:
+    explicit StatsReportCallback(std::function<void(const rtc::scoped_refptr<const webrtc::RTCStatsReport> &)> onReport) :
+    _onReport(std::move(onReport)) {
+    }
+
+    void OnStatsDelivered(const rtc::scoped_refptr<const webrtc::RTCStatsReport> &report) override {
+        _onReport(report);
+    }
+
+private:
+    std::function<void(const rtc::scoped_refptr<const webrtc::RTCStatsReport> &)> _onReport;
 };
 
 } // namespace
@@ -905,6 +923,7 @@ public:
         beginSignaling();
 
         beginLogTimer(0);
+        beginVideoStatsTimer();
         _lastDisconnectedTimestamp = rtc::TimeMillis();
         beginCheckConnectionTimer();
 
@@ -994,6 +1013,46 @@ public:
 
             strong->beginLogTimer(1000);
         }, webrtc::TimeDelta::Millis(delayMs));
+    }
+
+    // Every kVideoStatsLogIntervalMs while video flows, one line per call side: per direction the codec, encoder or
+    // decoder, resolution, frame rate, encode or decode time per frame, bitrate and QP, then the process's CPU use.
+    void beginVideoStatsTimer() {
+        const auto weak = std::weak_ptr<InstanceV2ReferenceImplInternal>(shared_from_this());
+        _threads->getMediaThread()->PostDelayedTask([weak]() {
+            auto strong = weak.lock();
+            if (!strong || strong->_isStopped.load()) {
+                return;
+            }
+            strong->logVideoStats();
+            strong->beginVideoStatsTimer();
+        }, webrtc::TimeDelta::Millis(kVideoStatsLogIntervalMs));
+    }
+
+    void logVideoStats() {
+        if (!_peerConnection) {
+            return;
+        }
+        const auto weak = std::weak_ptr<InstanceV2ReferenceImplInternal>(shared_from_this());
+        const auto threads = _threads;
+        _peerConnection->GetStats(rtc::make_ref_counted<StatsReportCallback>([weak, threads](const rtc::scoped_refptr<const webrtc::RTCStatsReport> &report) {
+            if (!report) {
+                return;
+            }
+            VideoStatsSample sample = MakeVideoStatsSample(*report, rtc::TimeMillis(), ProcessCpuSeconds());
+            threads->getMediaThread()->PostTask([weak, sample = std::move(sample)]() mutable {
+                auto strong = weak.lock();
+                if (!strong || strong->_isStopped.load()) {
+                    return;
+                }
+                if (strong->_lastVideoStatsSample) {
+                    if (const auto line = FormatVideoStatsInterval(*strong->_lastVideoStatsSample, sample)) {
+                        RTC_LOG(LS_INFO) << "InstanceV2ReferenceImpl: video stats (" << strong->sideName() << "): " << *line;
+                    }
+                }
+                strong->_lastVideoStatsSample = std::move(sample);
+            });
+        }).get());
     }
 
     void beginCheckConnectionTimer() {
@@ -1789,11 +1848,11 @@ public:
         }
     }
 
-#if TGCALLS_ENABLE_AV1
     const char *sideName() const {
         return _encryptionKey.isOutgoing ? "caller" : "callee";
     }
 
+#if TGCALLS_ENABLE_AV1
     // Pins the camera sender among the codecs the last negotiation round gave it (VideoSendCodecCandidates): AV1 when
     // this side may send it, else H.265, else H.264; nothing when AV1 was not negotiated, so a peer without AV1 gets
     // today's call. Called after every completed round (a renegotiation keeps a pin whose codec is still negotiated
@@ -2099,6 +2158,7 @@ private:
     absl::optional<NetworkStateLogRecord> _currentNetworkStateLogRecord;
     std::vector<StateLogRecord<NetworkStateLogRecord>> _networkStateLogRecords;
     std::vector<StateLogRecord<NetworkBitrateLogRecord>> _networkBitrateLogRecords;
+    std::optional<VideoStatsSample> _lastVideoStatsSample;
 
     bool _didBeginNegotiation = false;
     bool _isMakingOffer = false;
