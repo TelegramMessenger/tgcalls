@@ -320,6 +320,9 @@ int main(int argc, char* argv[]) {
     // the engine while the first offer is still in flight). -1 = not used.
     int videoLateCallerMs = -1;
     int videoLateCalleeMs = -1;
+    // --video-screen-callee-ms: the callee's capture is replaced by a screen capture N ms
+    // after start (a camera switched to a screen share mid-call). -1 = not used.
+    int videoScreenCalleeMs = -1;
     // --av1-power-off-ms / --av1-power-on-ms caller|callee:MS: that side's power state stops (or again allows)
     // sending AV1 MS after the instances are created (Instance::setVideoSendAv1AllowedByPower), on the camera
     // schedule. Repeatable.
@@ -390,6 +393,8 @@ int main(int argc, char* argv[]) {
             videoScreencast = true;
         } else if (std::string(argv[i]) == "--video-late-caller-ms" && i + 1 < argc) {
             videoLateCallerMs = std::atoi(argv[++i]);
+        } else if (std::string(argv[i]) == "--video-screen-callee-ms" && i + 1 < argc) {
+            videoScreenCalleeMs = std::atoi(argv[++i]);
         } else if (std::string(argv[i]) == "--video-late-callee-ms" && i + 1 < argc) {
             videoLateCalleeMs = std::atoi(argv[++i]);
         } else if ((std::string(argv[i]) == "--av1-power-off-ms" || std::string(argv[i]) == "--av1-power-on-ms") && i + 1 < argc) {
@@ -612,11 +617,16 @@ int main(int argc, char* argv[]) {
     // This is the shape that exposed the 18/19 start-glare renegotiation loop.
     std::shared_ptr<tgcalls::VideoCaptureInterface> callerVideoCapture;
     std::shared_ptr<tgcalls::VideoCaptureInterface> calleeVideoCapture;
+    std::shared_ptr<tgcalls::VideoCaptureInterface> calleeScreenCapture;
     const bool videoLateMs = videoLateCallerMs >= 0 || videoLateCalleeMs >= 0;
-    if (enableVideo || videoLate || videoLateMs) {
+    if (enableVideo || videoLate || videoLateMs || videoScreenCalleeMs >= 0) {
         auto threads = tgcalls::StaticThreads::getThreads();
         callerVideoCapture = tgcalls::VideoCaptureInterface::Create(threads, "caller", videoScreencast);
         calleeVideoCapture = tgcalls::VideoCaptureInterface::Create(threads, "callee", videoScreencast);
+        if (videoScreenCalleeMs >= 0) {
+            calleeScreenCapture = tgcalls::VideoCaptureInterface::Create(threads, "callee-screen", true);
+            logMsg("Main", "the callee's capture becomes a screen capture %d ms after start", videoScreenCalleeMs);
+        }
         if (videoLate) {
             logMsg("Main", "video capture will be attached mid-call (callee at 3s, caller at 5s)");
         } else if (videoLateMs) {
@@ -771,10 +781,11 @@ int main(int argc, char* argv[]) {
     // --video-late: the camera switched on mid-call, the app's setVideoCapture
     // path, the callee first, so the callee has to offer its own new channel.
     const bool videoLateFixed = videoLate && !videoLateMs && duration > 5;
-    if (videoLateMs || videoLateFixed || unmuteMidCall || !av1PowerEvents.empty() || !videoSendDebugEvents.empty()) {
+    if (videoLateMs || videoLateFixed || unmuteMidCall || calleeScreenCapture || !av1PowerEvents.empty() || !videoSendDebugEvents.empty()) {
         // Mid-call events in time order: a side's camera reaching the engine a
-        // fixed time after start, the unmute, and AV1 paused or allowed by power.
-        enum class Event { CallerCamera, CalleeCamera, Unmute, CallerAv1PowerOff, CallerAv1PowerOn, CalleeAv1PowerOff, CalleeAv1PowerOn, VideoSendDebug };
+        // fixed time after start, the callee's switch to a screen capture, the unmute,
+        // and AV1 paused or allowed by power.
+        enum class Event { CallerCamera, CalleeCamera, CalleeScreen, Unmute, CallerAv1PowerOff, CallerAv1PowerOn, CalleeAv1PowerOff, CalleeAv1PowerOn, VideoSendDebug };
         std::vector<std::pair<int, Event>> events; // (ms, event)
         size_t nextVideoSendDebugEvent = 0;
         std::stable_sort(videoSendDebugEvents.begin(), videoSendDebugEvents.end(), [](const VideoSendDebugEvent &lhs, const VideoSendDebugEvent &rhs) {
@@ -791,6 +802,7 @@ int main(int argc, char* argv[]) {
         }
         if (videoLateCallerMs >= 0) events.push_back({videoLateCallerMs, Event::CallerCamera});
         if (videoLateCalleeMs >= 0) events.push_back({videoLateCalleeMs, Event::CalleeCamera});
+        if (calleeScreenCapture) events.push_back({videoScreenCalleeMs, Event::CalleeScreen});
         if (videoLateFixed) {
             events.push_back({3000, Event::CalleeCamera});
             events.push_back({5000, Event::CallerCamera});
@@ -814,6 +826,11 @@ int main(int argc, char* argv[]) {
                 case Event::CalleeCamera:
                     logMsg("Main", "attaching the callee's video capture at %d ms", event.first);
                     calleeInstance->setVideoCapture(calleeVideoCapture);
+                    break;
+                case Event::CalleeScreen:
+                    logMsg("Main", "switching the callee to a screen capture at %d ms", event.first);
+                    RTC_LOG(LS_INFO) << "tgcalls_cli: switching the callee to a screen capture";
+                    calleeInstance->setVideoCapture(calleeScreenCapture);
                     break;
                 case Event::Unmute:
                     logMsg("Main", "unmuting at %d ms", event.first);

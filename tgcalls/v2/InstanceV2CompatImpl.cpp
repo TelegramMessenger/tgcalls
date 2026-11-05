@@ -1169,6 +1169,7 @@ public:
         // (the re-sent offer), whatever the mute state is now: a callee unmuted
         // between its first offer and a glare stayed silent for the call.
         applyOutgoingAudioMuteState();
+        reapplyOutgoingVideoEncodingIfReset();
         processPendingRemoteNegotiation();
         flushPendingRenegotiation();
     }
@@ -1812,25 +1813,62 @@ public:
         }
     }
 
+    struct OutgoingVideoEncoding {
+        absl::optional<int> maxBitrateBps;
+        absl::optional<double> maxFramerate;
+        absl::optional<double> scaleResolutionDownBy;
+    };
+
+    static OutgoingVideoEncoding outgoingVideoEncoding(bool isScreenCapture) {
+        OutgoingVideoEncoding result;
+        if (isScreenCapture) {
+            const auto screencast = iosScreencastLayerParameters(1)[0];
+            result.maxBitrateBps = screencast.maxBitrateBps;
+            result.maxFramerate = screencast.maxFramerate;
+            result.scaleResolutionDownBy = screencast.scaleResolutionDownBy;
+        } else {
+            result.maxBitrateBps = 1200 * 1024;
+        }
+        return result;
+    }
+
     // The outgoing video encoding for the track kind now on the transceiver: a
     // reused transceiver carries the previous track's values, so a camera after a
     // screen share gets the camera's back.
     void applyOutgoingVideoEncoding(bool isScreenCapture) {
+        _outgoingVideoIsScreenCapture = isScreenCapture;
         webrtc::RtpParameters parameters = _outgoingVideoTransceiver->sender()->GetParameters();
         if (parameters.encodings.empty()) {
             parameters.encodings.push_back(webrtc::RtpEncodingParameters());
         }
-        if (isScreenCapture) {
-            const auto screencast = iosScreencastLayerParameters(1)[0];
-            parameters.encodings[0].max_bitrate_bps = screencast.maxBitrateBps;
-            parameters.encodings[0].max_framerate = screencast.maxFramerate;
-            parameters.encodings[0].scale_resolution_down_by = screencast.scaleResolutionDownBy;
-        } else {
-            parameters.encodings[0].max_bitrate_bps = 1200 * 1024;
-            parameters.encodings[0].max_framerate = absl::nullopt;
-            parameters.encodings[0].scale_resolution_down_by = absl::nullopt;
-        }
+        const auto encoding = outgoingVideoEncoding(isScreenCapture);
+        parameters.encodings[0].max_bitrate_bps = encoding.maxBitrateBps;
+        parameters.encodings[0].max_framerate = encoding.maxFramerate;
+        parameters.encodings[0].scale_resolution_down_by = encoding.scaleResolutionDownBy;
         _outgoingVideoTransceiver->sender()->SetParameters(parameters);
+    }
+
+    // A rollback restores the video sender's encodings as they were at its first
+    // SetLocalDescription, and the next one applies them to the new SSRC, as for the
+    // audio sender (onNegotiationStepCompleted): a camera switched to a screen share
+    // while its first offer was pending went out with the camera's encoding.
+    void reapplyOutgoingVideoEncodingIfReset() {
+        if (!_outgoingVideoTransceiver || !_outgoingVideoTrack) {
+            return;
+        }
+        const webrtc::RtpParameters parameters = _outgoingVideoTransceiver->sender()->GetParameters();
+        if (parameters.encodings.empty()) {
+            return;
+        }
+        const auto &current = parameters.encodings[0];
+        const auto expected = outgoingVideoEncoding(_outgoingVideoIsScreenCapture);
+        if (current.max_bitrate_bps == expected.maxBitrateBps && current.max_framerate == expected.maxFramerate && current.scale_resolution_down_by == expected.scaleResolutionDownBy) {
+            return;
+        }
+        RTC_LOG(LS_INFO) << "InstanceV2CompatImpl: a negotiation step reset the outgoing video encoding (max "
+            << current.max_bitrate_bps.value_or(-1) << " bps, " << (_outgoingVideoIsScreenCapture ? "the screen capture" : "the camera")
+            << " has " << expected.maxBitrateBps.value_or(-1) << "); applying it again";
+        applyOutgoingVideoEncoding(_outgoingVideoIsScreenCapture);
     }
 
     void setRequestedVideoAspect(float aspect) {
@@ -2133,6 +2171,8 @@ private:
 
     webrtc::scoped_refptr<webrtc::VideoTrackInterface> _outgoingVideoTrack;
     webrtc::scoped_refptr<webrtc::RtpTransceiverInterface> _outgoingVideoTransceiver;
+    // The kind of track the outgoing video encoding was last applied for.
+    bool _outgoingVideoIsScreenCapture = false;
 
     std::map<std::string, webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>> _incomingVideoTransceivers;
 

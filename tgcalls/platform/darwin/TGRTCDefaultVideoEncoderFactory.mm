@@ -31,6 +31,7 @@
     bool _preferHardwareH264;
     bool _preferX264;
     bool _highestH264Level;
+    bool _screenContent;
 }
 
 @end
@@ -44,11 +45,16 @@
 }
 
 - (instancetype)initWithPreferHardwareH264:(bool)preferHardwareH264 preferX264:(bool)preferX264 highestH264Level:(bool)highestH264Level {
+    return [self initWithPreferHardwareH264:preferHardwareH264 preferX264:preferX264 highestH264Level:highestH264Level screenContent:false];
+}
+
+- (instancetype)initWithPreferHardwareH264:(bool)preferHardwareH264 preferX264:(bool)preferX264 highestH264Level:(bool)highestH264Level screenContent:(bool)screenContent {
     self = [super init];
     if (self != nil) {
         _preferHardwareH264 = preferHardwareH264;
         _preferX264 = preferX264;
         _highestH264Level = highestH264Level;
+        _screenContent = screenContent;
     }
     return self;
 }
@@ -125,7 +131,7 @@ static RTCVideoCodecInfo *highestLevelH264CodecInfo() {
 - (id<RTCVideoEncoder>)createEncoder:(RTCVideoCodecInfo *)info {
   if ([info.name isEqualToString:kRTCVideoCodecH264Name]) {
       if (_preferHardwareH264) {
-          return [[TGRTCVideoEncoderH264 alloc] initWithCodecInfo:info];
+          return [[TGRTCVideoEncoderH264 alloc] initWithCodecInfo:info screenContent:_screenContent];
       } else {
           
           webrtc::SdpVideoFormat videoFormat(info.name.UTF8String);

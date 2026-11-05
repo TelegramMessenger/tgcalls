@@ -47,7 +47,10 @@
 #include "group/GroupJoinPayloadInternal.h"
 #include "group/GroupFrameTransformer.h"
 #include "group/GroupAudioCapturePostProcessor.h"
+#include "group/GroupExternalAudio.h"
+#include "group/ScreencastSendParameters.h"
 #include "modules/rtp_rtcp/source/rtp_packet_received.h"
+#include "rtc_base/strings/string_builder.h"
 #include "api/field_trials_view.h"
 #include "FieldTrialsConfig.h"
 
@@ -77,6 +80,23 @@ absl::string_view mapIceCandidateTypeToInternal(const std::string &type) {
     return type;
 }
 
+// The profile-level-id of the H264 entry (payload type 104, mungeVideoCodecsInOffer) of a local m-line,
+// or fallback when it has none.
+std::string offeredH264ProfileLevelId(const cricket::MediaContentDescription *localMedia, std::string const &fallback) {
+    if (!localMedia) {
+        return fallback;
+    }
+    for (const auto &codec : localMedia->codecs()) {
+        if (codec.id == 104 && absl::EqualsIgnoreCase(codec.name, cricket::kH264CodecName)) {
+            std::string profileLevelId;
+            if (codec.GetParam(cricket::kH264FmtpProfileLevelId, &profileLevelId) && !profileLevelId.empty()) {
+                return profileLevelId;
+            }
+        }
+    }
+    return fallback;
+}
+
 // Field trials for this engine's PeerConnectionFactory.
 //
 // Video packets whose SSRC no m-section signals must be dropped, never turned
@@ -97,16 +117,30 @@ absl::string_view mapIceCandidateTypeToInternal(const std::string &type) {
 // to make this engine's behaviour depend on whether a CustomImpl call had run
 // earlier in the process. Everything else still resolves through tgcalls'
 // shared FieldTrialBasedConfig (the global trial string), exactly as before.
+//
+// An iOS in-app screen capture's connection also answers iosScreencastFieldTrial's keys (its periodic
+// bandwidth probes stop near the cap); being this factory's own view, it changes no other connection.
 class GRFieldTrials final : public webrtc::FieldTrialsView {
 public:
     static constexpr absl::string_view kDiscardUnknownSsrcVideo = "WebRTC-Video-DiscardPacketsWithUnknownSsrc";
+
+    explicit GRFieldTrials(bool iosInAppScreencast) : _iosInAppScreencast(iosInAppScreencast) {}
 
     std::string Lookup(absl::string_view key) const override {
         if (key == kDiscardUnknownSsrcVideo) {
             return "Enabled";
         }
+        if (_iosInAppScreencast) {
+            std::string screencastValue = iosScreencastFieldTrial(std::string(key));
+            if (!screencastValue.empty()) {
+                return screencastValue;
+            }
+        }
         return fieldTrialsBasedConfig.Lookup(key);
     }
+
+private:
+    bool _iosInAppScreencast = false;
 };
 
 // --- PeerConnection observer adapter ---
@@ -543,6 +577,7 @@ public:
         , _disableAudioInput(descriptor.disableAudioInput)
         , _enableSystemMute(descriptor.ios_enableSystemMute)
         , _videoContentType(descriptor.videoContentType)
+        , _iosInAppScreencast(descriptor.iosInAppScreencast && descriptor.videoContentType != VideoContentType::None)
         , _videoCodecPreferences(std::move(descriptor.videoCodecPreferences))
         , _getVideoSource(std::move(descriptor.getVideoSource))
         , _dataChannelMessageReceived(std::move(descriptor.dataChannelMessageReceived))
@@ -552,6 +587,14 @@ public:
     {
         if (_e2eEncryptDecrypt) {
             _myAudioLevelAndSpeech = std::make_shared<AudioLevelAndSpeechHolder>();
+        }
+
+        if (_videoContentType == VideoContentType::Screencast) {
+            // A screencast connection has no microphone: its audio is the app audio from
+            // addExternalAudioSamples, recorded by a FakeAudioDeviceModule (createAudioDeviceModule),
+            // and it sends from the start, as CustomImpl's does (it unmutes itself in start()).
+            _isMuted = false;
+            _externalAudioRecorder = std::make_shared<ExternalAudioRecorder>(&_externalAudioSamples, &_externalAudioSamplesMutex);
         }
 
         _myAudioLevel = std::make_shared<GRMyAudioLevelHolder>();
@@ -591,10 +634,12 @@ public:
     // RegisterAudioCallback. Without that registration, the PeerConnection's
     // audio output sink is never wired into NeedMorePlayData and playout stays
     // silent (Finding 3 in the real-call audio investigation). Falls back to
-    // raw `_createAudioDeviceModule` (then Init + wrapAudioDeviceModule) and,
-    // ultimately, to the platform-default ADM. AudioDeviceDataObserver and the
-    // screencast `_externalAudioRecorder` branches from CustomImpl have no
-    // counterpart here and are intentionally omitted.
+    // raw `_createAudioDeviceModule` (then Init + wrapAudioDeviceModule), then, for
+    // a screencast, to a FakeAudioDeviceModule recording the app audio
+    // (`_externalAudioRecorder`, as CustomImpl; the iOS wrapper leaves both hooks
+    // unset for a screencast so this branch is reached) and, ultimately, to the
+    // platform-default ADM. CustomImpl's AudioDeviceDataObserver branch has no
+    // counterpart here.
     webrtc::scoped_refptr<WrappedAudioDeviceModule> createAudioDeviceModule(webrtc::TaskQueueFactory *taskQueueFactory) {
         auto onMutedSpeechActivityDetected = _onMutedSpeechActivityDetected;
 #ifdef WEBRTC_IOS
@@ -636,6 +681,13 @@ public:
             if (const auto result = check(_createAudioDeviceModule(taskQueueFactory))) {
                 return result;
             }
+        } else if (_externalAudioRecorder) {
+            FakeAudioDeviceModule::Options options;
+            options.num_channels = 1;
+            if (const auto result = check(FakeAudioDeviceModule::Creator(nullptr, _externalAudioRecorder, options)(taskQueueFactory))) {
+                RTC_LOG(LS_INFO) << "GroupRef: screencast audio from addExternalAudioSamples";
+                return result;
+            }
         }
         return check(create(webrtc::AudioDeviceModule::kPlatformDefaultAudio));
     }
@@ -656,7 +708,7 @@ public:
 
         // 2. Create PeerConnectionFactory.
         webrtc::PeerConnectionFactoryDependencies deps;
-        deps.trials = std::make_unique<GRFieldTrials>();
+        deps.trials = std::make_unique<GRFieldTrials>(_iosInAppScreencast);
         deps.network_thread = _threads->getNetworkThread();
         deps.signaling_thread = _threads->getMediaThread();
         deps.worker_thread = _threads->getWorkerThread();
@@ -669,7 +721,9 @@ public:
         // local audio level, which the outgoing encryptor stamps into every Opus
         // frame's trailer — with encryption on, that trailer is how a CustomImpl
         // peer learns we are speaking (it sets takeAudioLevelFromNetwork = false).
-        if (_audioLevelsUpdated) {
+        // Not for a screencast: its audio is the app's (music, video), which noise
+        // suppression would mangle, and CustomImpl installs no such processor there.
+        if (_audioLevelsUpdated && _videoContentType != VideoContentType::Screencast) {
             builder.SetCapturePostProcessing(std::make_unique<AudioCapturePostProcessor>(
                 [myAudioLevel = _myAudioLevel](GroupLevelValue const &level) {
                     if (myAudioLevel) {
@@ -684,7 +738,10 @@ public:
         deps.audio_encoder_factory = webrtc::CreateAudioEncoderFactory<webrtc::AudioEncoderOpus>();
         deps.audio_decoder_factory = webrtc::CreateAudioDecoderFactory<webrtc::AudioDecoderOpus>();
 
-        deps.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory(false, false);
+        // As CustomImpl: preferHardwareEncoding selects the in-app screen capture's encoder
+        // (DarwinInterface: VideoToolbox H264 at level 5.2, screen-content rate control), also
+        // for a main connection that sends the screen as its camera video.
+        deps.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory(_iosInAppScreencast, _videoContentType == VideoContentType::Screencast || _iosInAppScreencast);
         deps.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactory();
 
         webrtc::EnableMedia(deps);
@@ -731,6 +788,12 @@ public:
         config.bundle_policy = webrtc::PeerConnectionInterface::kBundlePolicyMaxBundle;
         config.rtcp_mux_policy = webrtc::PeerConnectionInterface::RtcpMuxPolicy::kRtcpMuxPolicyRequire;
         config.continual_gathering_policy = webrtc::PeerConnectionInterface::ContinualGatheringPolicy::GATHER_CONTINUALLY;
+        if (_iosInAppScreencast) {
+            // Periodic bandwidth probes while the screen capture sends below its estimate, stopping near
+            // the cap (GRFieldTrials): see iosScreencastFieldTrial.
+            config.media_config.video.periodic_alr_bandwidth_probing = true;
+            RTC_LOG(LS_INFO) << "GroupRef: in-app screen capture, periodic bandwidth probing on, skipped within 10% of the cap";
+        }
         config.audio_jitter_buffer_fast_accelerate = true;
         // Every audio SSRC is received through an m-line that signals it, and
         // unknown SSRCs are learned from the packets the demuxer drops (the tap
@@ -808,9 +871,24 @@ public:
         }
         _peerConnection = pcOrError.value();
 
-        // 3.5. Pre-allocate video simulcast SSRCs if video is configured.
+        if (_iosInAppScreencast) {
+            // CustomImpl's bitrate preferences for the in-app screen capture (adjustBitratePreferences):
+            // the 2 Mbit/s video cap plus the audio headroom.
+            webrtc::BitrateSettings bitrateSettings;
+            bitrateSettings.min_bitrate_bps = _minOutgoingVideoBitrateKbit * 1024;
+            bitrateSettings.start_bitrate_bps = std::max(_minOutgoingVideoBitrateKbit * 1024, 400 * 1000);
+            bitrateSettings.max_bitrate_bps = std::max(_minOutgoingVideoBitrateKbit * 1024, iosScreencastTotalMaxBitrateBps());
+            const auto bitrateResult = _peerConnection->SetBitrate(bitrateSettings);
+            RTC_LOG(LS_INFO) << "GroupRef: in-app screen capture encoding, max " << *bitrateSettings.max_bitrate_bps << " bps"
+                << (bitrateResult.ok() ? "" : std::string(", SetBitrate failed: ") + bitrateResult.message());
+            scheduleScreencastEncodingCheck();
+        }
+
+        // 3.5. Pre-allocate video simulcast SSRCs if video is configured: three
+        // layers, two for a screencast (as CustomImpl).
         if (_videoContentType != VideoContentType::None) {
-            for (int i = 0; i < 3; i++) {
+            const int layerCount = _videoContentType == VideoContentType::Screencast ? 2 : 3;
+            for (int i = 0; i < layerCount; i++) {
                 SimulcastLayer layer;
                 layer.ssrc = rtc::CreateRandomId();
                 layer.fidSsrc = rtc::CreateRandomId();
@@ -828,6 +906,13 @@ public:
 
         // 5. Add outgoing audio transceiver.
         cricket::AudioOptions audioOpts;
+        if (_videoContentType == VideoContentType::Screencast) {
+            // App audio, not a microphone: no voice processing (as CustomImpl).
+            audioOpts.echo_cancellation = false;
+            audioOpts.noise_suppression = false;
+            audioOpts.auto_gain_control = false;
+            audioOpts.highpass_filter = false;
+        }
         auto audioSource = _peerConnectionFactory->CreateAudioSource(audioOpts);
         auto audioTrack = _peerConnectionFactory->CreateAudioTrack("audio0", audioSource.get());
 
@@ -1048,6 +1133,9 @@ public:
             _joinCompletion(payload);
             _joinCompletion = nullptr;
         }
+
+        // The local description gave the sender its simulcast encodings.
+        applyScreencastEncodingIfNeeded();
     }
 
     void setJoinResponsePayload(std::string const &payload) {
@@ -1299,11 +1387,21 @@ public:
             } else if (localMedia->type() == cricket::MEDIA_TYPE_VIDEO) {
                 auto videoContent = std::make_unique<cricket::VideoContentDescription>();
 
-                // H264 codec: PT 104 (primary).
+                // Determine if this is our outgoing video or an incoming recvonly.
+                bool isOutgoing = (_outgoingVideoTransceiver &&
+                                   _outgoingVideoTransceiver->mid().has_value() &&
+                                   _outgoingVideoTransceiver->mid().value() == mid);
+
+                // H264 codec: PT 104 (primary). Our outgoing m-line answers with the profile it
+                // offered: an answer naming another H264 profile negotiates no H264 at all, and the
+                // in-app screen capture's encoder offers constrained high at level 5.2 only.
                 cricket::VideoCodec h264 = cricket::CreateVideoCodec(104, "H264");
                 h264.SetParam("level-asymmetry-allowed", "1");
                 h264.SetParam("packetization-mode", "1");
-                h264.SetParam("profile-level-id", "42e01f");
+                h264.SetParam("profile-level-id", isOutgoing ? offeredH264ProfileLevelId(localMedia, "42e01f") : "42e01f");
+                if (isOutgoing && _iosInAppScreencast) {
+                    RTC_LOG(LS_INFO) << "GroupRef: Screencast video codec: H264, profile-level-id: " << offeredH264ProfileLevelId(localMedia, "none");
+                }
                 h264.AddFeedbackParam(cricket::FeedbackParam("nack"));
                 h264.AddFeedbackParam(cricket::FeedbackParam("nack", "pli"));
                 h264.AddFeedbackParam(cricket::FeedbackParam("ccm", "fir"));
@@ -1317,11 +1415,6 @@ public:
                 videoContent->AddCodec(h264);
                 videoContent->AddCodec(rtx);
                 videoContent->set_rtcp_mux(true);
-
-                // Determine if this is our outgoing video or an incoming recvonly.
-                bool isOutgoing = (_outgoingVideoTransceiver &&
-                                   _outgoingVideoTransceiver->mid().has_value() &&
-                                   _outgoingVideoTransceiver->mid().value() == mid);
 
                 // RTP header extensions: copy from the local offer's video m-line.
                 // Exclude MID from ALL video m-lines. The SFU forwards raw RTP
@@ -1484,6 +1577,7 @@ public:
     void stop(std::function<void()> completion) {
         _isPollingAudioLevels = false;
         _isLoggingStats = false;
+        _isScreencastEncodingCheckStopped = true;
         if (_videoCapture) {
             _videoCapture->setOutput(nullptr);
         }
@@ -1540,10 +1634,97 @@ public:
         // Just attach track — transceiver was already added in start(),
         // and SSRCs were munged into the initial offer.
         _outgoingVideoTransceiver->sender()->SetTrack(videoTrack.get());
+        applyScreencastEncodingIfNeeded();
     }
+    // The outgoing track's frame size before adaptation, or (0, 0) while no frame has arrived.
+    std::pair<int, int> currentOutgoingVideoFrameSize() const {
+        if (!_outgoingVideoTrack || !_outgoingVideoTrack->GetSource()) {
+            return std::make_pair(0, 0);
+        }
+        webrtc::VideoTrackSourceInterface::Stats stats;
+        if (!_outgoingVideoTrack->GetSource()->GetStats(&stats)) {
+            return std::make_pair(0, 0);
+        }
+        return std::make_pair(stats.input_width, stats.input_height);
+    }
+
+    // The in-app screen capture's encodings (iosScreencastLayerParameters for the frame size: top layer
+    // at most 1 Mpx and 2 Mbit/s, low layer 240p, every layer up to 60 fps), applied whenever the
+    // sender's differ: after every negotiation step and once a second, since folding or rotating the
+    // phone changes the frame size. CustomImpl does the same through its send channel
+    // (adjustVideoSendParams); the encodings exist only once a local description assigned the SSRCs.
+    void applyScreencastEncodingIfNeeded() {
+        if (!_iosInAppScreencast || !_outgoingVideoTransceiver) {
+            return;
+        }
+        auto sender = _outgoingVideoTransceiver->sender();
+        webrtc::RtpParameters parameters = sender->GetParameters();
+        if (parameters.encodings.empty()) {
+            return;
+        }
+        const auto frameSize = currentOutgoingVideoFrameSize();
+        const auto layers = iosScreencastLayerParameters((int)parameters.encodings.size(), frameSize.first, frameSize.second);
+        bool changed = false;
+        for (size_t i = 0; i < parameters.encodings.size() && i < layers.size(); i++) {
+            auto &encoding = parameters.encodings[i];
+            const auto &layer = layers[i];
+            const absl::optional<int> minBitrateBps = layer.minBitrateBps > 0 ? absl::optional<int>(layer.minBitrateBps) : encoding.min_bitrate_bps;
+            if (encoding.min_bitrate_bps != minBitrateBps
+                || encoding.max_bitrate_bps != layer.maxBitrateBps
+                || encoding.max_framerate != (double)layer.maxFramerate
+                || encoding.scale_resolution_down_by != layer.scaleResolutionDownBy) {
+                changed = true;
+                encoding.min_bitrate_bps = minBitrateBps;
+                encoding.max_bitrate_bps = layer.maxBitrateBps;
+                encoding.max_framerate = (double)layer.maxFramerate;
+                encoding.scale_resolution_down_by = layer.scaleResolutionDownBy;
+            }
+        }
+        if (!changed) {
+            return;
+        }
+        const auto result = sender->SetParameters(parameters);
+        const auto applied = sender->GetParameters();
+        rtc::StringBuilder description;
+        for (size_t i = 0; i < applied.encodings.size(); i++) {
+            const auto &encoding = applied.encodings[i];
+            description << " {" << i << ": max " << encoding.max_bitrate_bps.value_or(-1)
+                << ", min " << encoding.min_bitrate_bps.value_or(-1)
+                << ", scale " << encoding.scale_resolution_down_by.value_or(-1.0)
+                << ", fps " << encoding.max_framerate.value_or(-1.0)
+                << ", active " << (encoding.active ? 1 : 0) << "}";
+        }
+        RTC_LOG(LS_INFO) << "GroupRef: Screencast send parameters for " << frameSize.first << "x" << frameSize.second
+            << (result.ok() ? "" : std::string(" rejected: ") + result.message()) << ", applied:" << description.str();
+    }
+
+    void scheduleScreencastEncodingCheck() {
+        if (!_iosInAppScreencast || _isScreencastEncodingCheckScheduled || _isScreencastEncodingCheckStopped) {
+            return;
+        }
+        _isScreencastEncodingCheckScheduled = true;
+        const auto weak = std::weak_ptr<GroupInstanceReferenceInternal>(shared_from_this());
+        _threads->getMediaThread()->PostDelayedTask([weak]() {
+            auto strong = weak.lock();
+            if (!strong) {
+                return;
+            }
+            strong->_isScreencastEncodingCheckScheduled = false;
+            if (!strong->_peerConnection || strong->_isScreencastEncodingCheckStopped) {
+                return;
+            }
+            strong->applyScreencastEncodingIfNeeded();
+            strong->scheduleScreencastEncodingCheck();
+        }, webrtc::TimeDelta::Millis(1000));
+    }
+
     void setAudioOutputDevice(std::string) {}
     void setAudioInputDevice(std::string) {}
-    void addExternalAudioSamples(std::vector<uint8_t>&&) {}
+    void addExternalAudioSamples(std::vector<uint8_t> &&samples) {
+        if (_externalAudioRecorder) {
+            appendGroupExternalAudioSamples(_externalAudioSamples, _externalAudioSamplesMutex, samples);
+        }
+    }
     void addOutgoingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>) {}
     void addIncomingVideoOutput(std::string const &endpointId, std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
         auto& entry = _videoSinkProxies[endpointId];
@@ -2129,6 +2310,7 @@ private:
                             << " pending=" << _pendingRenegotiation << ")";
         wirePendingVideoSinks();
         wireRemoteAudioLevelSinks();
+        applyScreencastEncodingIfNeeded();
 
         _isRenegotiating = false;
         if (_pendingRenegotiation) {
@@ -2525,6 +2707,15 @@ private:
 
     // Video configuration from descriptor.
     VideoContentType _videoContentType = VideoContentType::None;
+    // See GroupInstanceDescriptor::iosInAppScreencast. On this engine also a main connection
+    // (Generic) whose camera video is the screen (the app's debug "screen share as camera").
+    bool _iosInAppScreencast = false;
+    bool _isScreencastEncodingCheckScheduled = false;
+    bool _isScreencastEncodingCheckStopped = false;
+    // A screencast's app audio (addExternalAudioSamples) and its recorder.
+    std::vector<float> _externalAudioSamples;
+    webrtc::Mutex _externalAudioSamplesMutex;
+    std::shared_ptr<ExternalAudioRecorder> _externalAudioRecorder;
     std::vector<VideoCodecName> _videoCodecPreferences;
     std::function<webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface>()> _getVideoSource;
     std::function<void(std::string const &)> _dataChannelMessageReceived;

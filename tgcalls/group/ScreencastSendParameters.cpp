@@ -11,7 +11,7 @@ namespace {
 
 // H264 level_idc of level 5.2 (0x34).
 constexpr long kScreencastH264Level = 52;
-constexpr int kScreencastMaxBitrateBps = 3000000;
+constexpr int kScreencastMaxBitrateBps = 2000000;
 constexpr int kScreencastAudioHeadroomBps = 32000;
 constexpr int kScreencastMaxFramerate = 60;
 // See iosScreencastLayerParameters.
@@ -60,6 +60,13 @@ std::vector<ScreencastLayerParameters> iosScreencastLayerParameters(int layerCou
 
 int iosScreencastTotalMaxBitrateBps() {
     return kScreencastMaxBitrateBps + kScreencastAudioHeadroomBps;
+}
+
+std::string iosScreencastFieldTrial(std::string const &key) {
+    if (key == "WebRTC-Bwe-ProbingConfiguration") {
+        return "skip_if_est_larger_than_fraction_of_max:0.9";
+    }
+    return std::string();
 }
 
 std::string iosScreencastH264ProfileLevelId(std::string const &profileLevelId) {

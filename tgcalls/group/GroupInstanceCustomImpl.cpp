@@ -14,6 +14,7 @@
 #include "group/GroupFrameTransformer.h"
 #include "group/GroupAudioCapturePostProcessor.h"
 #include "group/ScreencastSendParameters.h"
+#include "group/GroupExternalAudio.h"
 
 #include "api/audio_codecs/audio_decoder_factory_template.h"
 #include "api/audio_codecs/audio_encoder_factory_template.h"
@@ -710,58 +711,6 @@ private:
 private:
     std::vector<float> *_externalAudioSamples = nullptr;
     webrtc::Mutex *_externalAudioSamplesMutex = nullptr;
-};
-
-class ExternalAudioRecorder : public FakeAudioDeviceModule::Recorder {
-public:
-    ExternalAudioRecorder(std::vector<float> *externalAudioSamples, webrtc::Mutex *externalAudioSamplesMutex) :
-    _externalAudioSamples(externalAudioSamples),
-    _externalAudioSamplesMutex(externalAudioSamplesMutex) {
-        _samples.resize(480);
-    }
-
-    virtual ~ExternalAudioRecorder() {
-    }
-
-    virtual AudioFrame Record() override {
-        AudioFrame result;
-
-        _externalAudioSamplesMutex->Lock();
-        if (!_externalAudioSamples->empty() && _externalAudioSamples->size() >= 480) {
-            size_t takenSamples = std::min(_samples.size(), _externalAudioSamples->size());
-            webrtc::FloatS16ToS16(_externalAudioSamples->data(), takenSamples, _samples.data());
-
-            result.num_samples = takenSamples;
-
-            if (takenSamples != 0) {
-                _externalAudioSamples->erase(_externalAudioSamples->begin(), _externalAudioSamples->begin() + takenSamples);
-            }
-        } else {
-            result.num_samples = 0;
-        }
-        _externalAudioSamplesMutex->Unlock();
-
-        result.audio_samples = _samples.data();
-        result.bytes_per_sample = 2;
-        result.num_channels = 1;
-        result.samples_per_sec = 48000;
-        result.elapsed_time_ms = 0;
-        result.ntp_time_ms = 0;
-
-        return result;
-    }
-
-    virtual int32_t WaitForUs() override {
-        _externalAudioSamplesMutex->Lock();
-        _externalAudioSamplesMutex->Unlock();
-
-        return 1000;
-    }
-
-private:
-    std::vector<float> *_externalAudioSamples = nullptr;
-    webrtc::Mutex *_externalAudioSamplesMutex = nullptr;
-    std::vector<int16_t> _samples;
 };
 
 class MyAudioLevelHolder {
@@ -1619,7 +1568,15 @@ public:
             videoOptions.is_screencast = true;
             #endif
         }
-        _outgoingVideoChannel = _channelManager->CreateVideoChannel(_call.get(), cricket::MediaConfig(), "1", false, GroupNetworkManager::getDefaulCryptoOptions(), videoOptions, _videoBitrateAllocatorFactory.get());
+        cricket::MediaConfig mediaConfig;
+        if (_iosInAppScreencast) {
+            // Periodic bandwidth probes while the screen capture sends below its estimate (see
+            // iosScreencastFieldTrial). This engine's field trials are the process's, so they also
+            // run at the cap.
+            mediaConfig.video.periodic_alr_bandwidth_probing = true;
+            RTC_LOG(LS_INFO) << "Screencast: periodic bandwidth probing on";
+        }
+        _outgoingVideoChannel = _channelManager->CreateVideoChannel(_call.get(), mediaConfig, "1", false, GroupNetworkManager::getDefaulCryptoOptions(), videoOptions, _videoBitrateAllocatorFactory.get());
         _threads->getNetworkThread()->BlockingCall([&]() {
             _outgoingVideoChannel->SetRtpTransport(_rtpTransport);
         });
@@ -1734,7 +1691,7 @@ public:
         }
 
 #ifdef WEBRTC_IOS
-        // The iOS screencast (in-app capture): top or only layer capped at 3 Mbit/s,
+        // The iOS screencast (in-app capture): top or only layer capped at 2 Mbit/s,
         // every layer up to 60 fps; see ScreencastSendParameters.h.
         if (_iosInAppScreencast) {
             // Layer sizes follow the frames (folding, rotation): see updateScreencastLayerSizesIfNeeded.
@@ -2942,20 +2899,7 @@ public:
     }
 
     void addExternalAudioSamples(std::vector<uint8_t> &&samples) {
-        if (samples.size() % 2 != 0) {
-            return;
-        }
-        _externalAudioSamplesMutex.Lock();
-
-        size_t previousSize = _externalAudioSamples.size();
-        _externalAudioSamples.resize(_externalAudioSamples.size() + samples.size() / 2);
-        webrtc::S16ToFloatS16((const int16_t *)samples.data(), samples.size() / 2, _externalAudioSamples.data() + previousSize);
-
-        if (_externalAudioSamples.size() > 2 * 48000) {
-            _externalAudioSamples.erase(_externalAudioSamples.begin(), _externalAudioSamples.begin() + (_externalAudioSamples.size() - 2 * 48000));
-        }
-
-        _externalAudioSamplesMutex.Unlock();
+        appendGroupExternalAudioSamples(_externalAudioSamples, _externalAudioSamplesMutex, samples);
     }
 
     void setJoinResponsePayload(std::string const &payload) {

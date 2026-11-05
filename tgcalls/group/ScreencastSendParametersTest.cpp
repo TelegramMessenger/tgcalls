@@ -35,13 +35,13 @@ void TestSingleLayerIsCappedAtThreeMegabitsAndOneMegapixel() {
     auto layers = iosScreencastLayerParameters(1);
     CHECK_TRUE(layers.size() == 1);
     if (layers.size() == 1) {
-        CHECK_TRUE(layerEquals(layers[0], 0, 3000000, 1.0, 60));
+        CHECK_TRUE(layerEquals(layers[0], 0, 2000000, 1.0, 60));
     }
     // An unfolded iPhone Duo screen (2004x2850, 5.7 Mpx) is brought down to 1 Mpx.
     layers = iosScreencastLayerParameters(1, 2004, 2850);
     CHECK_TRUE(layers.size() == 1);
     if (layers.size() == 1) {
-        CHECK_TRUE(layerEquals(layers[0], 0, 3000000, 2.389854, 60));
+        CHECK_TRUE(layerEquals(layers[0], 0, 2000000, 2.389854, 60));
     }
     // A frame already at most 1 Mpx is not scaled.
     layers = iosScreencastLayerParameters(1, 836, 1192);
@@ -56,7 +56,7 @@ void TestTwoLayersAreTwoFortyPAndOneMegapixel() {
     if (layers.size() == 2) {
         // 240 lines on the short side.
         CHECK_TRUE(layerEquals(layers[0], 50000, 100000, 2004.0 / 240.0, 60));
-        CHECK_TRUE(layerEquals(layers[1], 200000, 3000000, 2.389854, 60));
+        CHECK_TRUE(layerEquals(layers[1], 200000, 2000000, 2.389854, 60));
     }
     layers = iosScreencastLayerParameters(2, 836, 1192);
     if (layers.size() == 2) {
@@ -78,7 +78,7 @@ void TestTwoLayersAreTwoFortyPAndOneMegapixel() {
     layers = iosScreencastLayerParameters(2);
     if (layers.size() == 2) {
         CHECK_TRUE(layerEquals(layers[0], 50000, 100000, 2.0, 60));
-        CHECK_TRUE(layerEquals(layers[1], 200000, 3000000, 1.0, 60));
+        CHECK_TRUE(layerEquals(layers[1], 200000, 2000000, 1.0, 60));
     }
 }
 
@@ -88,18 +88,18 @@ void TestThreeLayersAreTwoFortyFourEightyAndOneMegapixel() {
     if (layers.size() == 3) {
         CHECK_TRUE(layerEquals(layers[0], 50000, 100000, 2004.0 / 240.0, 60));
         CHECK_TRUE(layerEquals(layers[1], 150000, 200000, 2004.0 / 480.0, 60));
-        CHECK_TRUE(layerEquals(layers[2], 300000, 3000000, 2.389854, 60));
+        CHECK_TRUE(layerEquals(layers[2], 300000, 2000000, 2.389854, 60));
     }
     layers = iosScreencastLayerParameters(3);
     if (layers.size() == 3) {
         CHECK_TRUE(layerEquals(layers[0], 50000, 100000, 4.0, 60));
         CHECK_TRUE(layerEquals(layers[1], 150000, 200000, 2.0, 60));
-        CHECK_TRUE(layerEquals(layers[2], 300000, 3000000, 1.0, 60));
+        CHECK_TRUE(layerEquals(layers[2], 300000, 2000000, 1.0, 60));
     }
 }
 
 void TestTotalLeavesAudioHeadroom() {
-    CHECK_TRUE(iosScreencastTotalMaxBitrateBps() == 3032000);
+    CHECK_TRUE(iosScreencastTotalMaxBitrateBps() == 2032000);
 }
 
 void TestH264ProfileLevelIdIsRaisedToLevel52() {

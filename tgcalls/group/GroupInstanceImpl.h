@@ -153,7 +153,9 @@ struct GroupInstanceDescriptor {
     bool ios_enableSystemMute{false};
     VideoContentType videoContentType{VideoContentType::None};
     // A screencast captured in-app on iOS (ScreenCaptureKit): hardware H264 at level 5.2, up to 60 fps,
-    // 3 Mbit/s. Otherwise (the ReplayKit broadcast, other platforms) a screencast encodes as before.
+    // 2 Mbit/s. Otherwise (the ReplayKit broadcast, other platforms) a screencast encodes as before.
+    // GroupInstanceReferenceImpl also honours it on a Generic (main) connection, whose camera video is
+    // then the screen capture (the iOS app's debug "screen share as camera"); CustomImpl ignores it there.
     bool iosInAppScreencast{false};
     bool initialEnableNoiseSuppression{false};
     std::vector<VideoCodecName> videoCodecPreferences;

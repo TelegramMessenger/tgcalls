@@ -227,11 +227,17 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
   sides' captures are created as screen captures (`isScreenCapture`, what the iOS screencast
   capturer is). Every private-call engine must then show `Video frames` both ways: 7/8/9/12/13 on
   their separate screencast channel, 10/11, 14 and 18/19 on the camera's transceiver with the
-  screencast encoding (`group/ScreencastSendParameters.h`: `target_bps: 3000000` in the encoder
+  screencast encoding (`group/ScreencastSendParameters.h`: `target_bps: 2000000` in the encoder
   stats where the camera reads 1228800). The screen is encoded as video, at the frame size handed over
   (the iOS app brings it to at most 1 Mpx; the CLI's 1280x720 stays): `content_type: kRealtimeVideo`
   for every version, 13.0.0 included. Those changes are iOS-only (`kIosPrivateCallScreencast`);
   the CLI builds them through `TGCALLS_ALLOW_TEST_KNOBS`, so the check exercises them on the host.
+- `--video-screen-callee-ms N` — p2p/reflector: N ms after start the callee's capture is replaced by a
+  screen capture (`setVideoCapture` with a second capture, `isScreenCapture`): a camera switched to a
+  screen share mid-call; alone, a screen share that starts mid-call. With the callee's own camera
+  (`--video` or `--video-late-callee-ms`) it reuses that transceiver, which is how 14.0.0's re-apply of
+  the video encoding after a glare rollback is reproduced (`submodules/TgVoipWebrtc/CLAUDE.md`,
+  InstanceV2CompatImpl).
 - `--av1-power-off-ms` / `--av1-power-on-ms` `caller|callee:MS` — p2p/reflector: that side's power state pauses (or
   allows again) sending AV1 MS after the instances are created (`Instance::setVideoSendAv1AllowedByPower`), on the
   camera schedule; repeatable. Writes `tgcalls_cli: AV1 paused|allowed by power on the <side>` into the `--log-file`.

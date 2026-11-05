@@ -30,6 +30,10 @@ RTC_OBJC_EXPORT
  *  entries. Used by the iOS screencast, which encodes screen-sized frames at 60 fps. */
 - (instancetype)initWithPreferHardwareH264:(bool)preferHardwareH264 preferX264:(bool)preferX264 highestH264Level:(bool)highestH264Level;
 
+/** screenContent: the hardware H264 encoders it creates use screen-content rate control
+ *  (TGRTCVideoEncoderH264's initWithCodecInfo:screenContent:). */
+- (instancetype)initWithPreferHardwareH264:(bool)preferHardwareH264 preferX264:(bool)preferX264 highestH264Level:(bool)highestH264Level screenContent:(bool)screenContent;
+
 + (NSArray<RTCVideoCodecInfo *> *)supportedCodecs;
 
 @end
