@@ -38,6 +38,11 @@ std::vector<webrtc::RtpCodec> VideoSendCodecCandidates(const std::vector<webrtc:
 // with the negotiated codec, so one can be rejected (a peer's H.264 or H.265 level, say). After a rejection it goes on
 // to the next candidate only while the sender still sends AV1 (`sendsAv1`): a device told to leave AV1 must leave it,
 // and one already off AV1 keeps its codec rather than falling further. Returns the codec pinned, if any.
+// The debug override's candidates: every negotiated codec named `codecName` (case-insensitive), in negotiated order;
+// empty when it was not negotiated, for an empty name, and for RTX, RED and FEC.
+std::vector<webrtc::RtpCodec> VideoSendCodecOverrideCandidates(const std::vector<webrtc::RtpCodec> &available,
+                                                               const std::string &codecName);
+
 std::optional<webrtc::RtpCodec> PinVideoSendCodec(const std::vector<webrtc::RtpCodec> &candidates,
                                                   const std::function<bool(const webrtc::RtpCodec &)> &tryPin,
                                                   const std::function<bool()> &sendsAv1);

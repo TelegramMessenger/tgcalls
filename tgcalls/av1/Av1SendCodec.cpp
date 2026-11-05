@@ -69,6 +69,20 @@ std::vector<webrtc::RtpCodec> VideoSendCodecCandidates(const std::vector<webrtc:
     return candidates;
 }
 
+std::vector<webrtc::RtpCodec> VideoSendCodecOverrideCandidates(const std::vector<webrtc::RtpCodec> &available,
+                                                               const std::string &codecName) {
+    std::vector<webrtc::RtpCodec> candidates;
+    if (codecName.empty()) {
+        return candidates;
+    }
+    for (const auto &codec : available) {
+        if (absl::EqualsIgnoreCase(codec.name, codecName) && !IsResilienceCodec(codec)) {
+            candidates.push_back(codec);
+        }
+    }
+    return candidates;
+}
+
 std::optional<webrtc::RtpCodec> PinVideoSendCodec(const std::vector<webrtc::RtpCodec> &candidates,
                                                   const std::function<bool(const webrtc::RtpCodec &)> &tryPin,
                                                   const std::function<bool()> &sendsAv1) {

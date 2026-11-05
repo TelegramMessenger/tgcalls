@@ -124,6 +124,31 @@ if [ "${AV1_TESTS_STAGE:-}" != "engine-only" ]; then
     check "caller pinned AV1" "$(count 'pinned to AV1 (caller)' "$LOG")" "0"
     check "caller's first pin" "$(pins caller | awk '{print $1}')" "H264"
     check_ge "frames received by the callee" "$(frames callee)" 1
+
+    # The debug controls (the call screen's video debug overlay): the caller forces H264 at 300 kbps mid-call, then
+    # goes back to automatic. No renegotiation either way.
+    run av1-debug-switch --version 11.0.0 --video --duration 18 \
+        --video-codec-override caller:3000:H264 --video-max-bitrate caller:3000:300 \
+        --video-codec-override caller:12000:auto --video-max-bitrate caller:12000:0
+    check "caller's pins" "$(pins caller | tr ' ' '\n' | uniq | tr '\n' ' ' | sed 's/ $//')" "AV1 H264 AV1"
+    check "override set" "$(count 'video send codec override: H264 (caller)' "$LOG")" "1"
+    check "override cleared" "$(count 'video send codec override cleared (caller)' "$LOG")" "1"
+    check "max bitrate set" "$(count 'video send max bitrate: 300 kbps (caller)' "$LOG")" "1"
+    check "max bitrate back to the default" "$(count 'video send max bitrate: default (caller)' "$LOG")" "1"
+    check_ge "caller's stats: H264 at a target of 300 kbps or less" \
+        "$(grep -c -E 'video stats \(caller\): send H264 \([A-Za-z0-9]+\) .*\(target ([0-9]{1,2}|[12][0-9]{2}|300)\)' "$LOG")" 1
+    check "caller's last stats line sends" "$(grep -o 'video stats (caller): send [A-Za-z0-9]*' "$LOG" | tail -1 | awk '{print $NF}')" "AV1"
+    check "SetLocalDescription calls" "$(count 'Calling SetLocalDescription' "$LOG")" "2"
+    check_ge "frames received by the callee" "$(frames callee)" 200
+
+    # Against a peer without AV1 nothing is pinned automatically, so clearing the override removes its pin.
+    run av1-debug-switch-no-av1 --version 11.0.0 --video --duration 17 --custom-params '{"video_av1":false}' \
+        --video-codec-override callee:3000:VP8 --video-codec-override callee:12000:auto
+    check "callee's pins (back to the codec sent before, then unpinned)" "$(pins callee)" "VP8 H264"
+    check "callee's first stats line sends" "$(grep -o 'video stats (callee): send [A-Za-z0-9]*' "$LOG" | head -1 | awk '{print $NF}')" "VP8"
+    check "pin removed" "$(count 'video send codec pin removed (callee)' "$LOG")" "1"
+    check "callee's last stats line sends" "$(grep -o 'video stats (callee): send [A-Za-z0-9]*' "$LOG" | tail -1 | awk '{print $NF}')" "H264"
+    check "SetLocalDescription calls" "$(count 'Calling SetLocalDescription' "$LOG")" "2"
 fi
 
 echo

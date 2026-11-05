@@ -329,6 +329,17 @@ int main(int argc, char* argv[]) {
         bool allowed;
     };
     std::vector<Av1PowerEvent> av1PowerEvents;
+    // --video-codec-override caller|callee:MS:CODEC (CODEC "auto" clears it) and --video-max-bitrate
+    // caller|callee:MS:KBPS (0: the engine's own): that side's debug controls MS after the instances are created
+    // (Instance::setVideoSendCodecOverride / setVideoSendMaxBitrateKbps). Repeatable.
+    struct VideoSendDebugEvent {
+        int ms;
+        bool caller;
+        bool isCodec;
+        std::string codec;
+        int kbps;
+    };
+    std::vector<VideoSendDebugEvent> videoSendDebugEvents;
     bool earlyVideoRequest = false;
     bool videoSinkChurn = false;
     bool videoRerequest = false;
@@ -391,6 +402,24 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
             av1PowerEvents.push_back({std::atoi(value.c_str() + colon + 1), side == "caller", allowed});
+        } else if ((std::string(argv[i]) == "--video-codec-override" || std::string(argv[i]) == "--video-max-bitrate") && i + 1 < argc) {
+            const bool isCodec = std::string(argv[i]) == "--video-codec-override";
+            const std::string value = argv[++i];
+            const auto first = value.find(':');
+            const auto second = first == std::string::npos ? std::string::npos : value.find(':', first + 1);
+            const std::string side = first == std::string::npos ? std::string() : value.substr(0, first);
+            if ((side != "caller" && side != "callee") || second == std::string::npos) {
+                fprintf(stderr, "%s takes caller|callee:MS:%s, got %s\n", argv[i - 1], isCodec ? "CODEC" : "KBPS", value.c_str());
+                return 1;
+            }
+            VideoSendDebugEvent event;
+            event.ms = std::atoi(value.substr(first + 1, second - first - 1).c_str());
+            event.caller = side == "caller";
+            event.isCodec = isCodec;
+            const std::string argument = value.substr(second + 1);
+            event.codec = isCodec && argument != "auto" ? argument : std::string();
+            event.kbps = isCodec ? 0 : std::atoi(argument.c_str());
+            videoSendDebugEvents.push_back(event);
         } else if (std::string(argv[i]) == "--early-video-request") {
             earlyVideoRequest = true;
         } else if (std::string(argv[i]) == "--e2e") {
@@ -742,11 +771,18 @@ int main(int argc, char* argv[]) {
     // --video-late: the camera switched on mid-call, the app's setVideoCapture
     // path, the callee first, so the callee has to offer its own new channel.
     const bool videoLateFixed = videoLate && !videoLateMs && duration > 5;
-    if (videoLateMs || videoLateFixed || unmuteMidCall || !av1PowerEvents.empty()) {
+    if (videoLateMs || videoLateFixed || unmuteMidCall || !av1PowerEvents.empty() || !videoSendDebugEvents.empty()) {
         // Mid-call events in time order: a side's camera reaching the engine a
         // fixed time after start, the unmute, and AV1 paused or allowed by power.
-        enum class Event { CallerCamera, CalleeCamera, Unmute, CallerAv1PowerOff, CallerAv1PowerOn, CalleeAv1PowerOff, CalleeAv1PowerOn };
+        enum class Event { CallerCamera, CalleeCamera, Unmute, CallerAv1PowerOff, CallerAv1PowerOn, CalleeAv1PowerOff, CalleeAv1PowerOn, VideoSendDebug };
         std::vector<std::pair<int, Event>> events; // (ms, event)
+        size_t nextVideoSendDebugEvent = 0;
+        std::stable_sort(videoSendDebugEvents.begin(), videoSendDebugEvents.end(), [](const VideoSendDebugEvent &lhs, const VideoSendDebugEvent &rhs) {
+            return lhs.ms < rhs.ms;
+        });
+        for (const auto &debugEvent : videoSendDebugEvents) {
+            events.push_back({debugEvent.ms, Event::VideoSendDebug});
+        }
         for (const auto &power : av1PowerEvents) {
             const Event event = power.caller
                 ? (power.allowed ? Event::CallerAv1PowerOn : Event::CallerAv1PowerOff)
@@ -760,7 +796,10 @@ int main(int argc, char* argv[]) {
             events.push_back({5000, Event::CallerCamera});
         }
         if (unmuteMidCall) events.push_back({unmuteAfterSeconds * 1000, Event::Unmute});
-        std::sort(events.begin(), events.end());
+        // By time, then by kind as before; debug events, the last kind, keep their order among themselves.
+        std::stable_sort(events.begin(), events.end(), [](const std::pair<int, Event> &lhs, const std::pair<int, Event> &rhs) {
+            return lhs.first != rhs.first ? lhs.first < rhs.first : lhs.second < rhs.second;
+        });
         int elapsedMs = 0;
         for (const auto &event : events) {
             if (event.first > elapsedMs) {
@@ -795,6 +834,22 @@ int main(int argc, char* argv[]) {
                     logMsg("Main", "AV1 %s by power on the %s at %d ms", allowed ? "allowed" : "paused", caller ? "caller" : "callee", event.first);
                     RTC_LOG(LS_INFO) << "tgcalls_cli: AV1 " << (allowed ? "allowed" : "paused") << " by power on the " << (caller ? "caller" : "callee");
                     (caller ? callerInstance : calleeInstance)->setVideoSendAv1AllowedByPower(allowed);
+                    break;
+                }
+                case Event::VideoSendDebug: {
+                    // Debug events keep their command-line order among themselves (stable sorts on time).
+                    const auto &debugEvent = videoSendDebugEvents[nextVideoSendDebugEvent++];
+                    const char *sideName = debugEvent.caller ? "caller" : "callee";
+                    auto &instance = debugEvent.caller ? callerInstance : calleeInstance;
+                    if (debugEvent.isCodec) {
+                        logMsg("Main", "video codec override on the %s at %d ms: %s", sideName, event.first, debugEvent.codec.empty() ? "auto" : debugEvent.codec.c_str());
+                        RTC_LOG(LS_INFO) << "tgcalls_cli: video codec override on the " << sideName << ": " << (debugEvent.codec.empty() ? "auto" : debugEvent.codec);
+                        instance->setVideoSendCodecOverride(debugEvent.codec);
+                    } else {
+                        logMsg("Main", "video max bitrate on the %s at %d ms: %d kbps", sideName, event.first, debugEvent.kbps);
+                        RTC_LOG(LS_INFO) << "tgcalls_cli: video max bitrate on the " << sideName << ": " << debugEvent.kbps << " kbps";
+                        instance->setVideoSendMaxBitrateKbps(debugEvent.kbps);
+                    }
                     break;
                 }
             }

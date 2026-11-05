@@ -68,6 +68,7 @@
 #ifdef WEBRTC_IOS
 #include "platform/darwin/iOS/tgcalls_audio_device_module_ios.h"
 #endif
+#include <mutex>
 #include <random>
 #include <sstream>
 #include <map>
@@ -385,6 +386,9 @@ struct NetworkBitrateLogRecord {
 // How often a call logs its video stats ("video stats (<side>): ...").
 constexpr int kVideoStatsLogIntervalMs = 5000;
 
+// The camera sender's bitrate cap unless the debug control sets one.
+constexpr int kDefaultVideoSendMaxBitrateBps = 1200 * 1024;
+
 class StatsReportCallback : public webrtc::RTCStatsCollectorCallback {
 public:
     explicit StatsReportCallback(std::function<void(const rtc::scoped_refptr<const webrtc::RTCStatsReport> &)> onReport) :
@@ -401,11 +405,19 @@ private:
 
 } // namespace
 
+// The latest "video stats" line, written on the media thread and read from any (getVideoStatsLine).
+struct VideoStatsLineStore {
+    std::mutex mutex;
+    std::string line;
+};
+
 class InstanceV2ReferenceImplInternal : public std::enable_shared_from_this<InstanceV2ReferenceImplInternal> {
 public:
-    InstanceV2ReferenceImplInternal(Descriptor &&descriptor, std::shared_ptr<Threads> threads) :
+    InstanceV2ReferenceImplInternal(Descriptor &&descriptor, std::shared_ptr<Threads> threads,
+                                    std::shared_ptr<VideoStatsLineStore> videoStatsLine) :
     _signalingProtocolVersion(signalingProtocolVersion(descriptor.version)),
     _threads(threads),
+    _videoStatsLine(std::move(videoStatsLine)),
     _rtcServers(descriptor.rtcServers),
     _proxy(std::move(descriptor.proxy)),
     _enableP2P(descriptor.config.enableP2P),
@@ -1048,6 +1060,10 @@ public:
                 if (strong->_lastVideoStatsSample) {
                     if (const auto line = FormatVideoStatsInterval(*strong->_lastVideoStatsSample, sample)) {
                         RTC_LOG(LS_INFO) << "InstanceV2ReferenceImpl: video stats (" << strong->sideName() << "): " << *line;
+                        if (strong->_videoStatsLine) {
+                            std::lock_guard<std::mutex> lock(strong->_videoStatsLine->mutex);
+                            strong->_videoStatsLine->line = *line;
+                        }
                     }
                 }
                 strong->_lastVideoStatsSample = std::move(sample);
@@ -1820,14 +1836,13 @@ public:
                         if (parameters.encodings.empty()) {
                             parameters.encodings.push_back(webrtc::RtpEncodingParameters());
                         }
+                        _videoSendIsScreenCapture = isScreenCapture;
                         if (isScreenCapture) {
                             const auto screencast = iosScreencastLayerParameters(1)[0];
-                            parameters.encodings[0].max_bitrate_bps = screencast.maxBitrateBps;
                             parameters.encodings[0].max_framerate = screencast.maxFramerate;
                             parameters.encodings[0].scale_resolution_down_by = screencast.scaleResolutionDownBy;
-                        } else {
-                            parameters.encodings[0].max_bitrate_bps = 1200 * 1024;
                         }
+                        parameters.encodings[0].max_bitrate_bps = videoSendMaxBitrateBps();
                         _outgoingVideoTransceiver->sender()->SetParameters(parameters);
 
                         _outgoingVideoTrack->set_enabled(true);
@@ -1860,8 +1875,11 @@ public:
     // is pinned: a codec pinned then from the capabilities would reach the first send stream with the init parameters,
     // and against a peer without it the whole parameter set, max_bitrate_bps included, would be rejected there.
     // Without AV1 offered nothing is pinned either.
+    //
+    // The debug override (setVideoSendCodecOverride) replaces the candidates with every negotiated variant of its
+    // codec, in a call with or without AV1.
     void applyVideoSendCodecPin() {
-        if (!_av1Settings.offerAv1 || !_outgoingVideoTransceiver) {
+        if (!_outgoingVideoTransceiver || (_videoSendCodecOverride.empty() && !_av1Settings.offerAv1)) {
             return;
         }
         const auto sender = _outgoingVideoTransceiver->sender();
@@ -1870,30 +1888,150 @@ public:
             return;
         }
         const std::vector<webrtc::RtpCodec> available(parameters.codecs.begin(), parameters.codecs.end());
-        const bool av1Allowed = _av1Settings.sendAv1 && _av1Settings.deviceMaySendAv1 && _av1SendAllowedByPower;
-        PinVideoSendCodec(VideoSendCodecCandidates(available, av1Allowed), [&](const webrtc::RtpCodec &codec) {
-            // A fresh transaction for every attempt: SetParameters ends the previous one, accepted or not.
-            webrtc::RtpParameters attempt = sender->GetParameters();
-            if (attempt.encodings.empty()) {
-                return false;
+        if (!_videoSendCodecOverride.empty()) {
+            const auto candidates = VideoSendCodecOverrideCandidates(available, _videoSendCodecOverride);
+            if (candidates.empty()) {
+                std::string negotiated;
+                for (const auto &codec : available) {
+                    negotiated += (negotiated.empty() ? "" : ", ") + codec.name;
+                }
+                RTC_LOG(LS_WARNING) << "InstanceV2ReferenceImpl: video send codec override " << _videoSendCodecOverride << " is not negotiated (negotiated: " << negotiated << ") (" << sideName() << ")";
+                return;
             }
-            for (auto &encoding : attempt.encodings) {
-                encoding.codec = codec;
+            if (!_videoSendCodecBeforeOverride) {
+                // GetParameters lists the codec being sent first.
+                _videoSendCodecBeforeOverride = parameters.codecs.front();
             }
-            const auto result = sender->SetParameters(attempt);
-            if (!result.ok()) {
-                RTC_LOG(LS_ERROR) << "InstanceV2ReferenceImpl: pinning the video send codec to " << codec.name << " failed: " << result.message() << " (" << sideName() << ")";
-                return false;
-            }
-            RTC_LOG(LS_INFO) << "InstanceV2ReferenceImpl: video send codec pinned to " << codec.name << " (" << sideName() << ")";
-            return true;
+            PinVideoSendCodec(candidates, [&](const webrtc::RtpCodec &codec) {
+                return pinVideoSendCodec(codec);
+            }, [] {
+                return true;
+            });
+            return;
+        }
+        PinVideoSendCodec(VideoSendCodecCandidates(available, av1SendAllowed()), [&](const webrtc::RtpCodec &codec) {
+            return pinVideoSendCodec(codec);
         }, [&] {
             // GetParameters lists the codec being sent first.
             const auto current = sender->GetParameters();
             return !current.codecs.empty() && absl::EqualsIgnoreCase(current.codecs.front().name, cricket::kAv1CodecName);
         });
     }
+
+    bool av1SendAllowed() const {
+        return _av1Settings.sendAv1 && _av1Settings.deviceMaySendAv1 && _av1SendAllowedByPower;
+    }
+
+    // One attempt: a fresh transaction, since SetParameters ends the previous one, accepted or not.
+    bool pinVideoSendCodec(const webrtc::RtpCodec &codec) {
+        const auto sender = _outgoingVideoTransceiver->sender();
+        webrtc::RtpParameters attempt = sender->GetParameters();
+        if (attempt.encodings.empty()) {
+            return false;
+        }
+        for (auto &encoding : attempt.encodings) {
+            encoding.codec = codec;
+        }
+        const auto result = sender->SetParameters(attempt);
+        if (!result.ok()) {
+            RTC_LOG(LS_ERROR) << "InstanceV2ReferenceImpl: pinning the video send codec to " << codec.name << " failed: " << result.message() << " (" << sideName() << ")";
+            return false;
+        }
+        RTC_LOG(LS_INFO) << "InstanceV2ReferenceImpl: video send codec pinned to " << codec.name << " (" << sideName() << ")";
+        return true;
+    }
+
+    // Back to the engine's own choice. Where it pins (AV1 negotiated) that pin replaces the override's. Elsewhere the
+    // codec sent before the override is pinned again and the pin then dropped: dropping a pin alone (codec nullopt)
+    // keeps WebRTC sending the pinned codec until the next negotiation (webrtc_video_engine.cc, SetRtpSendParameters),
+    // and without a pin the next negotiation chooses as it would have.
+    void clearVideoSendCodecOverride() {
+        const auto before = _videoSendCodecBeforeOverride;
+        _videoSendCodecBeforeOverride.reset();
+        if (!_outgoingVideoTransceiver) {
+            return;
+        }
+        const auto sender = _outgoingVideoTransceiver->sender();
+        const webrtc::RtpParameters parameters = sender->GetParameters();
+        if (parameters.encodings.empty() || parameters.codecs.empty()) {
+            return;
+        }
+        const std::vector<webrtc::RtpCodec> available(parameters.codecs.begin(), parameters.codecs.end());
+        if (_av1Settings.offerAv1 && !VideoSendCodecCandidates(available, av1SendAllowed()).empty()) {
+            applyVideoSendCodecPin();
+            return;
+        }
+        if (before) {
+            pinVideoSendCodec(*before);
+        }
+        webrtc::RtpParameters unpinned = sender->GetParameters();
+        for (auto &encoding : unpinned.encodings) {
+            encoding.codec = absl::nullopt;
+        }
+        const auto result = sender->SetParameters(unpinned);
+        if (!result.ok()) {
+            RTC_LOG(LS_ERROR) << "InstanceV2ReferenceImpl: removing the video send codec pin failed: " << result.message() << " (" << sideName() << ")";
+            return;
+        }
+        RTC_LOG(LS_INFO) << "InstanceV2ReferenceImpl: video send codec pin removed (" << sideName() << ")";
+    }
 #endif
+
+    // Debug control: at once, SetParameters on the sender; before the camera exists only the value is kept.
+    void setVideoSendCodecOverride(const std::string &codecName) {
+#if TGCALLS_ENABLE_AV1
+        if (_videoSendCodecOverride == codecName) {
+            return;
+        }
+        _videoSendCodecOverride = codecName;
+        if (codecName.empty()) {
+            RTC_LOG(LS_INFO) << "InstanceV2ReferenceImpl: video send codec override cleared (" << sideName() << ")";
+            clearVideoSendCodecOverride();
+        } else {
+            RTC_LOG(LS_INFO) << "InstanceV2ReferenceImpl: video send codec override: " << codecName << " (" << sideName() << ")";
+            applyVideoSendCodecPin();
+        }
+#else
+        (void)codecName;
+#endif
+    }
+
+    // The debug cap, else the default: a screen capture's (ScreencastSendParameters) or the camera's.
+    int videoSendMaxBitrateBps() const {
+        if (_videoSendMaxBitrateKbps > 0) {
+            return _videoSendMaxBitrateKbps * 1000;
+        }
+        return _videoSendIsScreenCapture ? iosScreencastLayerParameters(1)[0].maxBitrateBps : kDefaultVideoSendMaxBitrateBps;
+    }
+
+    // Debug control: the camera sender's bitrate cap, at once; 0 restores the default.
+    void setVideoSendMaxBitrateKbps(int kbps) {
+        const int value = std::max(0, kbps);
+        if (_videoSendMaxBitrateKbps == value) {
+            return;
+        }
+        _videoSendMaxBitrateKbps = value;
+        if (value > 0) {
+            RTC_LOG(LS_INFO) << "InstanceV2ReferenceImpl: video send max bitrate: " << value << " kbps (" << sideName() << ")";
+        } else {
+            RTC_LOG(LS_INFO) << "InstanceV2ReferenceImpl: video send max bitrate: default (" << sideName() << ")";
+        }
+        if (!_outgoingVideoTransceiver) {
+            return;
+        }
+        const auto sender = _outgoingVideoTransceiver->sender();
+        webrtc::RtpParameters parameters = sender->GetParameters();
+        if (parameters.encodings.empty()) {
+            return;
+        }
+        for (auto &encoding : parameters.encodings) {
+            encoding.max_bitrate_bps = videoSendMaxBitrateBps();
+        }
+        const auto result = sender->SetParameters(parameters);
+        if (!result.ok()) {
+            RTC_LOG(LS_ERROR) << "InstanceV2ReferenceImpl: setting the video send max bitrate failed: " << result.message() << " (" << sideName() << ")";
+        }
+    }
 
     // Re-pins at once: SetParameters on the sender, no renegotiation. Before the camera's first negotiation round
     // only the value is kept, and that round's pin reads it.
@@ -2125,12 +2263,18 @@ private:
 private:
     SignalingProtocolVersion _signalingProtocolVersion;
     std::shared_ptr<Threads> _threads;
+    std::shared_ptr<VideoStatsLineStore> _videoStatsLine;
     std::vector<RtcServer> _rtcServers;
     std::map<std::string, json11::Json> _customParameters;
 #if TGCALLS_ENABLE_AV1
     Av1CallSettings _av1Settings;
     bool _av1SendAllowedByPower = true;
+    // The debug codec override (empty: none), and the codec sent when it was first applied.
+    std::string _videoSendCodecOverride;
+    std::optional<webrtc::RtpCodec> _videoSendCodecBeforeOverride;
 #endif
+    int _videoSendMaxBitrateKbps = 0;
+    bool _videoSendIsScreenCapture = false;
     std::unique_ptr<Proxy> _proxy;
     bool _enableP2P = false;
     EncryptionKey _encryptionKey;
@@ -2229,8 +2373,9 @@ InstanceV2ReferenceImpl::InstanceV2ReferenceImpl(Descriptor &&descriptor) {
     }
 
     _threads = StaticThreads::getThreads();
-    _internal.reset(new ThreadLocalObject<InstanceV2ReferenceImplInternal>(_threads->getMediaThread(), [descriptor = std::move(descriptor), threads = _threads]() mutable {
-        return std::make_shared<InstanceV2ReferenceImplInternal>(std::move(descriptor), threads);
+    _videoStatsLine = std::make_shared<VideoStatsLineStore>();
+    _internal.reset(new ThreadLocalObject<InstanceV2ReferenceImplInternal>(_threads->getMediaThread(), [descriptor = std::move(descriptor), threads = _threads, videoStatsLine = _videoStatsLine]() mutable {
+        return std::make_shared<InstanceV2ReferenceImplInternal>(std::move(descriptor), threads, videoStatsLine);
     }));
     _internal->perform([](InstanceV2ReferenceImplInternal *internal) {
         internal->start();
@@ -2299,6 +2444,26 @@ void InstanceV2ReferenceImpl::setVideoSendAv1AllowedByPower(bool allowed) {
     _internal->perform([allowed](InstanceV2ReferenceImplInternal *internal) {
         internal->setVideoSendAv1AllowedByPower(allowed);
     });
+}
+
+void InstanceV2ReferenceImpl::setVideoSendCodecOverride(std::string const &codecName) {
+    _internal->perform([codecName](InstanceV2ReferenceImplInternal *internal) {
+        internal->setVideoSendCodecOverride(codecName);
+    });
+}
+
+void InstanceV2ReferenceImpl::setVideoSendMaxBitrateKbps(int kbps) {
+    _internal->perform([kbps](InstanceV2ReferenceImplInternal *internal) {
+        internal->setVideoSendMaxBitrateKbps(kbps);
+    });
+}
+
+std::string InstanceV2ReferenceImpl::getVideoStatsLine() {
+    if (!_videoStatsLine) {
+        return std::string();
+    }
+    std::lock_guard<std::mutex> lock(_videoStatsLine->mutex);
+    return _videoStatsLine->line;
 }
 
 void InstanceV2ReferenceImpl::setInputVolume(float level) {

@@ -7,6 +7,8 @@
 
 namespace tgcalls {
 
+struct VideoStatsLineStore;
+
 class LogSinkImpl;
 
 class Manager;
@@ -38,6 +40,9 @@ public:
 	void setAudioOutputDuckingEnabled(bool enabled) override;
     void setIsLowBatteryLevel(bool isLowBatteryLevel) override;
     void setVideoSendAv1AllowedByPower(bool allowed) override;
+    void setVideoSendCodecOverride(std::string const &codecName) override;
+    void setVideoSendMaxBitrateKbps(int kbps) override;
+    std::string getVideoStatsLine() override;
     static std::vector<std::string> GetVersions();
     static int GetConnectionMaxLayer();
 	std::string getLastError() override;
@@ -53,6 +58,7 @@ private:
     std::shared_ptr<Threads> _threads;
 	std::unique_ptr<ThreadLocalObject<InstanceV2ReferenceImplInternal>> _internal;
 	std::unique_ptr<LogSinkImpl> _logSink;
+    std::shared_ptr<VideoStatsLineStore> _videoStatsLine;
 
 };
 

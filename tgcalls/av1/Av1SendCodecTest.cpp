@@ -129,6 +129,31 @@ void TestRejectedPinKeepsANonAv1Codec() {
     CHECK_TRUE(tried == Names({"H265"}));
 }
 
+std::vector<std::string> OverrideCandidates(const std::vector<webrtc::RtpCodec> &available, const std::string &name) {
+    std::vector<std::string> names;
+    for (const auto &codec : tgcalls::VideoSendCodecOverrideCandidates(available, name)) {
+        names.push_back(codec.name);
+    }
+    return names;
+}
+
+void TestOverrideTakesEveryVariantOfTheNamedCodec() {
+    // The debug override: the named codec alone, every negotiated variant of it (H264 has one per profile), whatever
+    // the AV1 gates say; the name is matched as SDP matches it, case-insensitively.
+    const std::vector<webrtc::RtpCodec> available = {Codec("AV1"), Codec("H264"), Codec("rtx"), Codec("H264"), Codec("VP8")};
+    CHECK_TRUE(OverrideCandidates(available, "H264") == Names({"H264", "H264"}));
+    CHECK_TRUE(OverrideCandidates(available, "h264") == Names({"H264", "H264"}));
+    CHECK_TRUE(OverrideCandidates(available, "AV1") == Names({"AV1"}));
+    CHECK_TRUE(OverrideCandidates(available, "VP8") == Names({"VP8"}));
+}
+
+void TestOverrideOfACodecNotNegotiatedIsEmpty() {
+    CHECK_TRUE(OverrideCandidates({Codec("AV1"), Codec("H264")}, "VP9").empty());
+    CHECK_TRUE(OverrideCandidates({Codec("AV1"), Codec("H264")}, "").empty());
+    // Never a resilience codec: it is not a codec a sender can be pinned to.
+    CHECK_TRUE(OverrideCandidates({Codec("H264"), Codec("rtx")}, "rtx").empty());
+}
+
 } // namespace
 
 int main() {
@@ -142,6 +167,8 @@ int main() {
     TestSkipsRtxRedFec();
     TestRejectedPinFallsBackWhileOnAv1();
     TestRejectedPinKeepsANonAv1Codec();
+    TestOverrideTakesEveryVariantOfTheNamedCodec();
+    TestOverrideOfACodecNotNegotiatedIsEmpty();
     if (failures != 0) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;

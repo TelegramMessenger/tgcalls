@@ -236,6 +236,10 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
   allows again) sending AV1 MS after the instances are created (`Instance::setVideoSendAv1AllowedByPower`), on the
   camera schedule; repeatable. Writes `tgcalls_cli: AV1 paused|allowed by power on the <side>` into the `--log-file`.
   `run-av1-tests.sh` uses it (see "AV1 in InstanceV2ReferenceImpl").
+- `--video-codec-override caller|callee:MS:CODEC` (`auto` clears it) / `--video-max-bitrate caller|callee:MS:KBPS`
+  (0: the default) — p2p/reflector: that side's debug controls MS after the instances are created
+  (`Instance::setVideoSendCodecOverride` / `setVideoSendMaxBitrateKbps`), on the camera schedule; repeatable, kept in
+  command-line order at equal times. Writes `tgcalls_cli: video codec override|video max bitrate on the <side>: …`.
 - `--video-sink-churn` — with `--video`, once frames flow each participant replaces every incoming video sink five times, one second apart (`addIncomingVideoOutput` with a fresh sink, old sink released) — what the app does on a quality switch, where the tile's view owns the sink. An engine that keeps a raw pointer to a dead sink segfaults in `rtc::VideoBroadcaster::OnFrame`; validation then counts frames on the NEW sinks only. Known limitation: in mixed groups the pairs receiving from a ReferenceImpl SENDER fail this (0 frames after the last replacement) because the host reference sender throttles to ~1–3 fps after the first seconds regardless of sinks (41–65 frames in 30 s vs ~750 from CustomImpl senders; `_minOutgoingVideoBitrateKbit` is never applied there) — use it with reference-only or CustomImpl-only groups, or with reference RECEIVERS of CustomImpl senders.
 - `--video-rerequest` — with `--video`, once frames flow each participant's SFU downlink gets a
   150 ms delay, then five rounds of `setRequestedVideoChannels({})` followed a second later by the
@@ -657,12 +661,25 @@ dav1d at runtime.
   encoder: SVT's `RES_CHANGE_EVENT` needs 8-aligned sizes and cannot grow past the first size. Never call
   `svt_av1_enc_get_packet` after a failed `svt_av1_enc_send_picture`: in low delay it blocks forever. QP is on SVT's
   0–63 scale (scaler thresholds 30/52).
+- **Debug controls** (the app's call-screen overlay behind Debug Settings, any 10.0.0/11.0.0 call, with or without AV1):
+  `Instance::setVideoSendCodecOverride(name)` pins the camera sender to every negotiated variant of the named codec
+  (`VideoSendCodecOverrideCandidates`), over the power and chip gates (forcing AV1 on a device the gate refuses reaches
+  `RefusingAv1Encoder`, and WebRTC then falls back to VP8); a codec not negotiated is logged and changes nothing. An
+  empty name hands the choice back: where the engine pins (AV1 negotiated) its pin replaces the override's; elsewhere
+  the codec sent before the override is pinned again and the pin then dropped, because dropping a pin alone keeps
+  WebRTC on the pinned codec until the next negotiation. `setVideoSendMaxBitrateKbps(kbps)` sets the sender's
+  `max_bitrate_bps` (0: the default 1200 × 1024), also for a camera added later; it is a cap, so raising it shows only
+  as far as the bandwidth estimate goes. `getVideoStatsLine()` returns the latest `video stats` line, from any thread.
+  All apply at once, without a renegotiation; every other engine ignores them.
 - **Log lines:**
   - `InstanceV2ReferenceImpl: AV1 offered, encoding allowed: <0|1> (<caller|callee>)` or `AV1 not offered (<side>)`,
     once per call.
   - `video send codec pinned to <codec> (<side>)` for each pin, and `pinning the video send codec to <codec> failed: …`
     when the sender rejects one.
   - `AV1 sending paused|allowed by power (<side>)`.
+  - `video send codec override: <codec> (<side>)`, `… override cleared (<side>)`, `… override <codec> is not
+    negotiated (negotiated: …) (<side>)`, `video send codec pin removed (<side>)` and `video send max bitrate: N kbps|default
+    (<side>)`.
   - `SvtAv1Encoder: initialized WxH, N kbps` and `Av1: encoding refused on this device`.
   - `video stats (<side>): send <codec> (<encoder>) WxH, F fps, encode E ms/frame, B kbps (target T), qp Q,
     keyframes K, quality limit <reason>; receive <codec> (<decoder>) WxH, …, decode D ms/frame, …, dropped N,
@@ -673,10 +690,12 @@ dav1d at runtime.
     Power Mode switches AV1 off). The encoder names are WebRTC's (`SvtAv1`, `VideoToolbox`); the decoders' too
     (`dav1d`, `VideoToolboxAV1`).
 - **Tests:**
-  - `tools/cli/run-av1-tests.sh`: ten p2p scenarios. They cover both sides on AV1, an incapable callee (including
+  - `tools/cli/run-av1-tests.sh`: twelve p2p scenarios. They cover both sides on AV1, an incapable callee (including
     against an offer led by AV1), both killswitches, a peer without AV1 (no pin on either side), 10.0.0, late cameras,
     a mid-call power flip and power off before the camera. Each asserts the pins, the SetLocalDescription count and
-    frames both ways; the both-sides scenario also its `video stats` lines and a send rate at the 30 fps cap.
+    frames both ways; the both-sides scenario also its `video stats` lines and a send rate at the 30 fps cap. Two
+    more drive the debug controls: H264 at 300 kbps mid-call and back (AV1 negotiated), and VP8 and back against a
+    peer without AV1 (the pin removed).
   - Host tests: `svt_av1_api_test` (`//third-party/svt-av1`), `svt_av1_encoder_test`, `av1_round_trip_test` (SVT-AV1,
     then WebRTC's AV1 packetizer and depacketizer, then dav1d), `av1_videotoolbox_decoder_test` (bit-exact against
     dav1d, macOS only), `av1_platform_factories_test`, `av1_send_codec_test`, `video_stats_log_test` (the stats line).
