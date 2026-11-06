@@ -286,7 +286,7 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
   and `First audio RTP packet sent to pacer` must come after that line. The unmute shares one
   schedule with the camera attachments (`--video-late`, `--video-late-caller-ms` /
   `--video-late-callee-ms`), which is how a glare is made to roll a muted side's first offer back
-  (13.0.0 → 14.0.0 with `--delay 0-1200`, caller camera swept over 1000–4000 ms). Added for `InstanceV2CompatImpl`'s mute,
+  (13.0.0 → compat:13.0.0 with `--delay 0-1200`, caller camera swept over 1000–4000 ms). Added for `InstanceV2CompatImpl`'s mute,
   which used to keep the send stream running (see `submodules/TgVoipWebrtc/CLAUDE.md`).
 - Every group run also prints `Audio levels heard: X/Y pairs` (every peer must report a real level
   for every unmuted sender — a participant who is audible but never reaches the level reports is
@@ -440,9 +440,10 @@ DTLS, wire bytes identical to 13.0.0 (`mtproto(RTP)`, `mtproto(0xdcdcdcdc ||
 SCTP)`). Default off. Design record:
 telegram-ios `docs/superpowers/specs/2026-09-16-tgcalls-mtproto-dtls-slot-design.md`.
 
-14.0.0 needs it for more than an A/B: it talks to 13.0.0, which already honours
-the flag, and before 2026-10-11 a 14.0.0 <-> 13.0.0 call under the flag paired
-DTLS with mtproto and failed (`Bad incoming data hash`, no media).
+14.0.0 needs it for more than an A/B: its peer is an `InstanceV2Impl` (8.0.0, or
+13.0.0 under `network_kcp_experiment`), which honours the flag in
+`NativeNetworkingImpl`. A one-sided flag pairs DTLS with mtproto and fails
+(`Bad incoming data hash`, no media).
 
 **Shape.** Two settings that MUST travel together, both from one boolean:
 
