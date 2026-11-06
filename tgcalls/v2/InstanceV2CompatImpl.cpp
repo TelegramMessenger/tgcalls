@@ -62,6 +62,7 @@
 #include "v2/ReflectorRelayPortFactory.h"
 #include "v2/MtProtoDtlsTransport.h"
 #include "v2/CustomParameters.h"
+#include "v2/CompatSignalingFraming.h"
 #ifdef WEBRTC_IOS
 #include "platform/darwin/iOS/tgcalls_audio_device_module_ios.h"
 #endif
@@ -77,31 +78,8 @@
 namespace tgcalls {
 namespace {
 
-// How signaling is framed on the wire, chosen by the call version exactly as
-// InstanceV2Impl chooses it: the peer may be a client of any age that runs
-// InstanceV2Impl under the same version, and cannot be changed.
-//   V1 (7.0.0): encryptRawPacket, no compression, no SCTP.
-//   V2 (8.0.0, 9.0.0): EncryptedConnection's own reliable messages (seq, acks,
-//       resends), no compression, no SCTP. 9.0.0 was V3 until 2023-04.
-//   V3 (12.0.0, 13.0.0, and 14.0.0, this engine's own): gzip, encryptRawPacket,
-//       over SCTP unless the server sets network_signaling_nosctp.
-// Unlike InstanceV2Impl's map, an unknown version is V3, not V2: 14.0.0 must
-// keep the framing it has always had.
-enum class SignalingProtocolVersion {
-    V1,
-    V2,
-    V3
-};
-
-SignalingProtocolVersion signalingProtocolVersion(std::string const &version) {
-    if (version == "7.0.0") {
-        return SignalingProtocolVersion::V1;
-    } else if (version == "8.0.0" || version == "9.0.0") {
-        return SignalingProtocolVersion::V2;
-    } else {
-        return SignalingProtocolVersion::V3;
-    }
-}
+// The wire framing is chosen by v2/CompatSignalingFraming.h.
+using SignalingProtocolVersion = CompatSignalingFraming;
 
 static VideoCaptureInterfaceObject *GetVideoCaptureAssumingSameThread(VideoCaptureInterface *videoCapture) {
     return videoCapture
@@ -388,12 +366,7 @@ public:
             }
         }
 
-        _signalingProtocolVersion = signalingProtocolVersion(descriptor.version);
-        // As InstanceV2Impl: the server can move any version to V3, and the peer
-        // gets the same custom parameters.
-        if (getCustomParameterBool(_customParameters, "network_kcp_experiment")) {
-            _signalingProtocolVersion = SignalingProtocolVersion::V3;
-        }
+        _signalingProtocolVersion = compatSignalingFraming(descriptor.version, getCustomParameterBool(_customParameters, "network_kcp_experiment"));
 
         webrtc::field_trial::InitFieldTrialsFromString(
             "WebRTC-DataChannel-Dcsctp/Enabled/"
