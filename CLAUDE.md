@@ -430,9 +430,10 @@ refuses the second — dropping a dual-stack peer's relay paths from two to one.
 misattribution is *already* today's behaviour on the peer-reflexive path, flag or not.) Only
 "stop stamping the resolved IP on the inbound address, so both sides key on hostname" actually
 removes the collapse, and it uniquely also fixes the pre-existing one — but it touches the
-always-on path and needs its own window. Also note the flag flips the TCP path's collision policy
-from destructive-replace to refuse, and that under `network_standalone_reflectors` the original bug
-does not exist while the collapse still does.
+always-on path and needs its own window. `ReflectorPort::CreateConnection` refuses a connection
+whose key already exists whether the flag is on or off (with it off it used to replace the existing
+connection, destroying it even when selected). Under `network_standalone_reflectors` the original
+bug does not exist while the collapse still does.
 
 **Readout for that flag is relay-remote connections receiving binding responses** — *not* "prflx
 count goes to zero", which the audit specified and which is wrong: peer-reflexive pairs are still
