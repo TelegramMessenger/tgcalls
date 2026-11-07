@@ -59,7 +59,9 @@
 #include "v2/ExternalSignalingConnection.h"
 #include "v2/SignalingSctpConnection.h"
 #include "v2/ReflectorRelayPortFactory.h"
+#if !defined(SWIFT_PACKAGE)
 #include "v2/MtProtoDtlsTransport.h"
+#endif
 #include "v2/CustomParameters.h"
 #include "v2/VideoStatsLog.h"
 #if TGCALLS_ENABLE_AV1
@@ -602,6 +604,7 @@ public:
 
         _peerConnectionFactory = webrtc::CreateModularPeerConnectionFactory(std::move(peerConnectionFactoryDependencies));
 
+#if !defined(SWIFT_PACKAGE)
         _useMtProto = getCustomParameterBool(_customParameters, "network_use_mtproto");
         if (_useMtProto) {
             // Half one of two that MUST travel together (the other is the
@@ -614,6 +617,8 @@ public:
             factoryOptions.external_transport_security = true;
             _peerConnectionFactory->SetOptions(factoryOptions);
         }
+
+#endif
 
         webrtc::PeerConnectionDependencies peerConnectionDependencies(nullptr);
 
@@ -882,10 +887,12 @@ public:
             }
         }
 
+#if !defined(SWIFT_PACKAGE)
         if (_useMtProto) {
             // Half two: see the factory option above.
             peerConnectionDependencies.dtls_transport_factory = std::make_unique<MtProtoDtlsTransportFactory>(_encryptionKey);
         }
+#endif
 
         auto peerConnectionOrError = _peerConnectionFactory->CreatePeerConnectionOrError(peerConnectionConfiguration, std::move(peerConnectionDependencies));
         if (peerConnectionOrError.ok()) {

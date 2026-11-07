@@ -1,6 +1,7 @@
 #import <TgVoipWebrtc/OngoingCallThreadLocalContext.h>
 
 #import "MediaUtils.h"
+#include "BroadcastAudio/BroadcastAudioCoreBridge.h"
 
 #import "Instance.h"
 #import "InstanceImpl.h"
@@ -1351,6 +1352,7 @@ private:
 }
 
 @interface GroupCallThreadLocalContext () {
+    BroadcastAudioCoreRef _broadcastAudioCore;
     id<OngoingCallThreadLocalContextQueueWebrtc> _queue;
 
     std::unique_ptr<tgcalls::GroupInstanceInterface> _instance;
@@ -1369,6 +1371,16 @@ private:
 
 
 @implementation GroupCallThreadLocalContext
+
+- (BroadcastAudioCoreRef)broadcastAudioCore {
+    return _broadcastAudioCore;
+}
+
+- (void)dealloc {
+    if (_broadcastAudioCore) {
+        BroadcastAudioCoreRelease(_broadcastAudioCore);
+    }
+}
 
 - (instancetype _Nonnull)initWithQueue:(id<OngoingCallThreadLocalContextQueueWebrtc> _Nonnull)queue
     networkStateUpdated:(void (^ _Nonnull)(GroupCallNetworkState))networkStateUpdated
@@ -1475,6 +1487,7 @@ encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, boo
 
 
         __weak GroupCallThreadLocalContext *weakSelf = self;
+        _broadcastAudioCore = BroadcastAudioCoreCreate();
         _instance.reset(new tgcalls::GroupInstanceCustomImpl((tgcalls::GroupInstanceDescriptor){
             .threads = tgcalls::StaticThreads::getThreads(),
             .config = config,
@@ -1598,7 +1611,10 @@ encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, boo
 //            },
 //            .e2eEncryptDecrypt = mappedEncryptionKey,
             .e2eEncryptDecrypt = mappedEncryptDecrypt,
-            .isConference = isConference
+            .isConference = isConference,
+            .onPlayoutFrame = [core = BroadcastAudioCoreShared(_broadcastAudioCore)](int16_t *samples, size_t count, size_t channels, uint32_t rate) {
+                core->render(samples, count, channels, rate);
+            }
         }));
     }
     return self;

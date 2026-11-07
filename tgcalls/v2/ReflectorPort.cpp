@@ -552,14 +552,8 @@ cricket::Connection* ReflectorPort::CreateConnection(const cricket::Candidate& r
         updated_remote_candidate.set_address(updated_address);
     }
 
-    if (resolve_remote_candidate_ip_) {
-        // Once the IP is resolved, this key can collide with a peer-reflexive
-        // connection already created for the same path by the inbound path (which
-        // has always resolved). AddOrReplaceConnection would DESTROY that live
-        // connection - firing OnSelectedConnectionDestroyed if it was selected.
-        if (GetConnection(updated_remote_candidate.address()) != nullptr) {
-            return nullptr;
-        }
+    if (GetConnection(updated_remote_candidate.address()) != nullptr) {
+        return nullptr;
     }
 
     cricket::ProxyConnection* conn = new cricket::ProxyConnection(NewWeakPtr(), 0, updated_remote_candidate);

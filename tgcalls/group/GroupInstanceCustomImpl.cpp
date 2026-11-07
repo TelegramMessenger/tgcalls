@@ -31,6 +31,7 @@
 #include "media/base/rtp_utils.h"
 #include "api/call/audio_sink.h"
 #include "modules/audio_processing/audio_buffer.h"
+#include "modules/audio_device/include/audio_device_data_observer.h"
 #include "absl/strings/match.h"
 #include "rtc_base/strings/string_builder.h"
 #include "modules/audio_processing/agc2/vad_wrapper.h"
@@ -923,6 +924,9 @@ public:
 
             std::vector<uint32_t> allSsrcs;
             for (const auto &group : description.ssrcGroups) {
+                if (group.ssrcs.empty()) {
+                    continue;
+                }
                 for (auto ssrc : group.ssrcs) {
                     if (std::find(allSsrcs.begin(), allSsrcs.end(), ssrc) == allSsrcs.end()) {
                         allSsrcs.push_back(ssrc);
@@ -941,7 +945,7 @@ public:
             videoRecvStreamParams.ssrcs = allSsrcs;
 
             if (_mainVideoSsrc == 0) {
-                if (description.ssrcGroups.size() == 1) {
+                if (description.ssrcGroups.size() == 1 && !description.ssrcGroups[0].ssrcs.empty()) {
                     _mainVideoSsrc = description.ssrcGroups[0].ssrcs[0];
                 }
             }
@@ -1088,6 +1092,44 @@ private:
 
 };
 
+// Hands every 10 ms playout frame to GroupInstanceDescriptor::onPlayoutFrame,
+// which may mix into it in place: Telegram-Mac's app-side broadcast player
+// renders through it. Attached only when the descriptor sets the hook; iOS
+// attaches its player below the shared audio device instead and never sets it.
+class PlayoutFrameObserver : public webrtc::AudioDeviceDataObserver {
+public:
+    explicit PlayoutFrameObserver(std::function<void(int16_t *, size_t, size_t, uint32_t)> onPlayoutFrame) :
+    _onPlayoutFrame(std::move(onPlayoutFrame)) {
+    }
+
+    virtual void OnCaptureData(const void* audio_samples,
+                               const size_t num_samples,
+                               const size_t bytes_per_sample,
+                               const size_t num_channels,
+                               const uint32_t samples_per_sec) override {
+    }
+
+    virtual void OnRenderData(const void* audio_samples,
+                              const size_t num_samples,
+                              const size_t bytes_per_sample,
+                              const size_t num_channels,
+                              const uint32_t samples_per_sec) override {
+        if (bytes_per_sample != num_channels * 2) {
+            return;
+        }
+        if (samples_per_sec % 100 != 0) {
+            return;
+        }
+        if (num_samples != samples_per_sec / 100) {
+            return;
+        }
+        _onPlayoutFrame((int16_t *)audio_samples, num_samples, num_channels, samples_per_sec);
+    }
+
+private:
+    const std::function<void(int16_t *, size_t, size_t, uint32_t)> _onPlayoutFrame;
+};
+
 class CustomNetEqFactory: public webrtc::NetEqFactory {
 public:
     virtual ~CustomNetEqFactory() = default;
@@ -1179,6 +1221,7 @@ public:
     _audioLevelsUpdated(descriptor.audioLevelsUpdated),
     _activitiesUpdated(descriptor.ssrcActivityUpdated),
     _onAudioFrame(descriptor.onAudioFrame),
+    _onPlayoutFrame(std::move(descriptor.onPlayoutFrame)),
     _requestMediaChannelDescriptions(descriptor.requestMediaChannelDescriptions),
     _dataChannelMessageReceived(descriptor.dataChannelMessageReceived),
     _videoCapture(descriptor.videoCapture),
@@ -3382,6 +3425,13 @@ public:
 private:
     webrtc::scoped_refptr<WrappedAudioDeviceModule> createAudioDeviceModule() {
         auto onMutedSpeechActivityDetected = _onMutedSpeechActivityDetected;
+        const auto onPlayoutFrame = _onPlayoutFrame;
+        const auto withPlayoutObserver = [&](webrtc::scoped_refptr<webrtc::AudioDeviceModule> module) -> webrtc::scoped_refptr<webrtc::AudioDeviceModule> {
+            if (!onPlayoutFrame) {
+                return module;
+            }
+            return webrtc::CreateAudioDeviceWithDataObserver(module, std::make_unique<PlayoutFrameObserver>(onPlayoutFrame));
+        };
 #ifdef WEBRTC_IOS
         bool disableRecording = _disableAudioInput;
         bool enableSystemMute = _enableSystemMute;
@@ -3408,8 +3458,9 @@ private:
                 return nullptr;
             }
 
-            if (result->Init() == 0) {
-                return PlatformInterface::SharedInstance()->wrapAudioDeviceModule(result);
+            const auto module = withPlayoutObserver(result);
+            if (module->Init() == 0) {
+                return PlatformInterface::SharedInstance()->wrapAudioDeviceModule(module);
             } else {
                 return nullptr;
             }
@@ -3417,7 +3468,7 @@ private:
         if (_createWrappedAudioDeviceModule) {
             auto result = _createWrappedAudioDeviceModule(&_webrtcEnvironment.task_queue_factory());
             if (result) {
-                return rtc::make_ref_counted<DefaultWrappedAudioDeviceModule>(result);
+                return rtc::make_ref_counted<DefaultWrappedAudioDeviceModule>(withPlayoutObserver(result));
             }
         }
         if (_createAudioDeviceModule) {
@@ -3444,6 +3495,7 @@ private:
     std::function<void(GroupLevelsUpdate const &)> _audioLevelsUpdated;
     std::function<void(GroupActivitiesUpdate const &)> _activitiesUpdated;
     std::function<void(uint32_t, const AudioFrame &)> _onAudioFrame;
+    std::function<void(int16_t *, size_t, size_t, uint32_t)> _onPlayoutFrame;
     std::function<std::shared_ptr<RequestMediaChannelDescriptionTask>(std::vector<uint32_t> const &, std::function<void(std::vector<MediaChannelDescription> &&)>)> _requestMediaChannelDescriptions;
     std::function<void(std::string const &)> _dataChannelMessageReceived;
     std::shared_ptr<VideoCaptureInterface> _videoCapture;
