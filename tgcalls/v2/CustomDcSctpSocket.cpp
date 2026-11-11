@@ -976,6 +976,20 @@ TimeDelta CustomDcSctpSocket::OnCookieTimerExpiry() {
   RTC_DCHECK(state_ == State::kCookieEchoed);
 
   if (t1_cookie_->is_running()) {
+    // TGCALLS: data sent before the association was up travelled in the
+    // packet with the COOKIE ECHO, so it was lost with it. Upstream leaves it
+    // to T3-rtx, which TransmissionControlBlock skips while T1-cookie runs: it
+    // went out only after the COOKIE ACK and a backed-off T3, 1.25 s after the
+    // first send with the signaling timers (400 ms, 750 ms cap). Mark it for
+    // retransmission so it goes with this COOKIE ECHO again. A connection that
+    // sends nothing before the association has nothing outstanding here.
+    const size_t unackedBytes = tcb_->retransmission_queue().unacked_bytes();
+    if (unackedBytes > 0) {
+      RTC_LOG(LS_INFO) << log_prefix() << "T1-cookie expired with "
+                       << unackedBytes
+                       << " unacked bytes, resending them with the COOKIE ECHO";
+      tcb_->retransmission_queue().HandleT3RtxTimerExpiry();
+    }
     tcb_->SendBufferedPackets(callbacks_.Now());
   } else {
     InternalClose(ErrorKind::kTooManyRetries, "No COOKIE_ACK received");

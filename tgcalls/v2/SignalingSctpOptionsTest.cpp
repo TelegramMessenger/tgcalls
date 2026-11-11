@@ -30,7 +30,28 @@ SignalingSctpConnection::Options optionsFromJson(std::string const &json) {
 }
 
 bool isDefault(SignalingSctpConnection::Options const &options) {
-    return options.t1InitTimeoutMs == 400 && options.t1CookieTimeoutMs == 400 && options.maxBackoffMs == 750;
+    return options.t1InitTimeoutMs == 400 && options.t1CookieTimeoutMs == 400 && options.maxBackoffMs == 750 && !options.sendBeforeConnected && !options.fastPath;
+}
+
+// Off unless the server sends an explicit true, independently of the other key.
+void TestFastPathIsOffUnlessTrue() {
+    CHECK_TRUE(!optionsFromJson("{}").fastPath);
+    CHECK_TRUE(optionsFromJson(R"({"network_sctp_fast_path": true})").fastPath);
+    CHECK_TRUE(!optionsFromJson(R"({"network_sctp_fast_path": true})").sendBeforeConnected);
+    CHECK_TRUE(!optionsFromJson(R"({"network_sctp_send_before_connected": true})").fastPath);
+    CHECK_TRUE(!optionsFromJson(R"({"network_sctp_fast_path": 1})").fastPath);
+    CHECK_TRUE(!optionsFromJson(R"({"network_sctp_fast_path": "true"})").fastPath);
+    CHECK_TRUE(!SignalingSctpConnection::Options().fastPath);
+}
+
+// Off unless the server sends an explicit true: an A/B arm turns it on.
+void TestSendBeforeConnectedIsOffUnlessTrue() {
+    CHECK_TRUE(!optionsFromJson("{}").sendBeforeConnected);
+    CHECK_TRUE(optionsFromJson(R"({"network_sctp_send_before_connected": true})").sendBeforeConnected);
+    CHECK_TRUE(!optionsFromJson(R"({"network_sctp_send_before_connected": false})").sendBeforeConnected);
+    CHECK_TRUE(!optionsFromJson(R"({"network_sctp_send_before_connected": 1})").sendBeforeConnected);
+    CHECK_TRUE(!optionsFromJson(R"({"network_sctp_send_before_connected": "true"})").sendBeforeConnected);
+    CHECK_TRUE(!SignalingSctpConnection::Options().sendBeforeConnected);
 }
 
 void TestAbsentKeysKeepTheDefaults() {
@@ -102,6 +123,8 @@ int main() {
     TestFractionsTruncate();
     TestTheRangeIsCapped();
     TestNumbersBeyondIntKeepTheDefault();
+    TestSendBeforeConnectedIsOffUnlessTrue();
+    TestFastPathIsOffUnlessTrue();
 
     if (g_failures != 0) {
         std::printf("%d failure(s)\n", g_failures);

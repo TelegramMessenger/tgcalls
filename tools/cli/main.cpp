@@ -195,10 +195,15 @@ private:
 // SignalingBridge
 // ---------------------------------------------------------------------------
 
-struct SignalingBridge {
+struct SignalingBridge : std::enable_shared_from_this<SignalingBridge> {
     std::mutex mutex;
     std::shared_ptr<tgcalls::Instance> caller;
     std::shared_ptr<tgcalls::Instance> callee;
+    // Packets for a side main() has not wired yet. The caller starts emitting
+    // while the callee is still being created, so its first INIT can be due
+    // before `callee` is set; main() hands these over once both are wired.
+    std::vector<std::vector<uint8_t>> pendingToCaller;
+    std::vector<std::vector<uint8_t>> pendingToCallee;
 
     // Network simulation
     double dropRate = 0.0;
@@ -206,8 +211,11 @@ struct SignalingBridge {
     int delayMaxMs = 0;
     std::mt19937 rng{std::random_device{}()};
 
-    void deliver(const char* fromRole, const std::vector<uint8_t>& data,
-                 std::shared_ptr<tgcalls::Instance>& target) {
+    // Called with `mutex` held. The target side is looked up when the packet
+    // arrives, not when it is emitted: a packet emitted before the wiring used
+    // to find no target and vanish without a log line, which cost the call an
+    // SCTP INIT retransmission (0.4 s) in some runs.
+    void deliver(const char* fromRole, const std::vector<uint8_t>& data, bool toCallee) {
         if (dropRate > 0.0) {
             std::uniform_real_distribution<double> dropDist(0.0, 1.0);
             if (dropDist(rng) < dropRate) {
@@ -221,18 +229,30 @@ struct SignalingBridge {
             if (delayMs > 0) {
                 logMsg(fromRole, "signaling delayed %dms (%zu bytes)", delayMs, data.size());
                 auto dataCopy = data;
-                auto targetWeak = std::weak_ptr<tgcalls::Instance>(target);
-                std::thread([dataCopy, targetWeak, delayMs]() {
+                auto weakSelf = weak_from_this();
+                std::thread([dataCopy, weakSelf, toCallee, delayMs]() {
                     std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
-                    if (auto t = targetWeak.lock()) {
-                        t->receiveSignalingData(dataCopy);
+                    if (auto self = weakSelf.lock()) {
+                        std::shared_ptr<tgcalls::Instance> target;
+                        {
+                            std::lock_guard<std::mutex> lock(self->mutex);
+                            target = toCallee ? self->callee : self->caller;
+                            if (!target) {
+                                (toCallee ? self->pendingToCallee : self->pendingToCaller).push_back(dataCopy);
+                                return;
+                            }
+                        }
+                        target->receiveSignalingData(dataCopy);
                     }
                 }).detach();
                 return;
             }
         }
+        auto &target = toCallee ? callee : caller;
         if (target) {
             target->receiveSignalingData(data);
+        } else {
+            (toCallee ? pendingToCallee : pendingToCaller).push_back(data);
         }
     }
 };
@@ -685,7 +705,7 @@ int main(int argc, char* argv[]) {
         .signalingDataEmitted = [bridge](const std::vector<uint8_t>& data) {
             logMsg("Caller", "signaling data emitted (%zu bytes)", data.size());
             std::lock_guard<std::mutex> lock(bridge->mutex);
-            bridge->deliver("Caller", data, bridge->callee);
+            bridge->deliver("Caller", data, /*toCallee=*/true);
         },
         .createAudioDeviceModule = tgcalls::FakeAudioDeviceModule::Creator(
             callerRenderer, callerRecorder,
@@ -727,7 +747,7 @@ int main(int argc, char* argv[]) {
         .signalingDataEmitted = [bridge](const std::vector<uint8_t>& data) {
             logMsg("Callee", "signaling data emitted (%zu bytes)", data.size());
             std::lock_guard<std::mutex> lock(bridge->mutex);
-            bridge->deliver("Callee", data, bridge->caller);
+            bridge->deliver("Callee", data, /*toCallee=*/false);
         },
         .createAudioDeviceModule = tgcalls::FakeAudioDeviceModule::Creator(
             calleeRenderer, calleeRecorder,
@@ -752,11 +772,24 @@ int main(int argc, char* argv[]) {
     }
     logMsg("Callee", "created (version %s)", version2.c_str());
 
-    // Wire bridge
+    // Wire bridge, then hand over what arrived for a side before it was wired.
+    std::vector<std::vector<uint8_t>> earlyToCaller;
+    std::vector<std::vector<uint8_t>> earlyToCallee;
     {
         std::lock_guard<std::mutex> lock(bridge->mutex);
         bridge->caller = callerInstance;
         bridge->callee = calleeInstance;
+        earlyToCaller.swap(bridge->pendingToCaller);
+        earlyToCallee.swap(bridge->pendingToCallee);
+    }
+    for (const auto &data : earlyToCallee) {
+        calleeInstance->receiveSignalingData(data);
+    }
+    for (const auto &data : earlyToCaller) {
+        callerInstance->receiveSignalingData(data);
+    }
+    if (!earlyToCaller.empty() || !earlyToCallee.empty()) {
+        logMsg("Main", "handed over %zu early signaling packet(s) to the caller, %zu to the callee", earlyToCaller.size(), earlyToCallee.size());
     }
 
     if (callerVideoCapture) {

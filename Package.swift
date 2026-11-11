@@ -27,6 +27,7 @@ let package = Package(
                       "LICENSE",
                       "tgcalls/v2/MtProtoDtlsTransportTest.cpp",
                       "tgcalls/v2/SignalingSctpOptionsTest.cpp",
+                      "tgcalls/v2/SignalingFastPathTest.cpp",
                       "tgcalls/v2/CompatSignalingFramingTest.cpp",
                       "tgcalls/v2/ContentNegotiationTest.cpp",
                       "tgcalls/v2/VideoStatsLogTest.cpp",

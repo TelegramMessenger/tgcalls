@@ -367,10 +367,12 @@ touching relay/ICE code or drawing a conclusion from a relay-backend A/B. The lo
   packets on UDP** (`SetResolvedIP` is gated on `PROTO_TCP` at `ReflectorPort.cpp:541`, while
   `HandleIncomingPacket:765` applies it unconditionally). Measured: 749 signalled relay
   connections sent 15,985 STUN pings and received **0** responses; every response lands on a
-  peer-reflexive twin. **This affects production (13.0.0).** Do not read the prflx connections as
-  a reflector advantage — 93% of them duplicate an already-signalled address.
-- **`InstanceV2ReferenceImpl` and 18.0.0/19.0.0 are test-only**, so their defects are
-  *measurement* defects, not user-facing ones. Rank arm-asymmetric ones first.
+  peer-reflexive twin. **It affects every engine on `ReflectorPort`, 11.0.0 included**, wherever
+  `network_reflector_resolve_remote_candidate_ip` is off (it is on by default, below). Do not read
+  the prflx connections as a reflector advantage — 93% of them duplicate an already-signalled address.
+- **11.0.0 (`InstanceV2ReferenceImpl`) is the production default call version; 13.0.0, 14.0.0 and
+  18.0.0/19.0.0 run in optional A/B arms.** An 11.0.0 defect reaches every call. A defect in an
+  arm's engine skews that arm's measurement, so there rank arm-asymmetric ones first.
 - **Two arms are not measurable against each other today** — `packet_overhead_bytes` reads 8 vs
   28 and the route line's remote `turn:` reads 0 vs 1 for structural reasons unrelated to call
   quality. (The `"network": []` problem is FIXED — see below.) Never key an A/B metric on
@@ -456,7 +458,7 @@ transceiver recipe (for 11.0.0; 14.0.0's one-way transceivers are the 13.0.0 pro
 model, which it must speak, not this recipe); `AddTrack` in `InstanceV2CompatImpl` (it would be actively wrong there: the 13.0.0 protocol
 keeps each direction on its own m-line, and `created_by_addtrack` would let PeerConnection attach
 our send transceiver to the peer's channel); a Swift `return []`
-credential filter; and re-anchoring `stop()`'s `baseTimestamp` (production 13.0.0 shares the
+credential filter; and re-anchoring `stop()`'s `baseTimestamp` (13.0.0 shares the
 construct and emits no version key to key the discontinuity on).
 
 
@@ -581,7 +583,10 @@ log sample (`getlogstgcalls/analysis/FINDINGS-android.md`), fixed here and pinne
   objc_library) restores the pre-2026-09-17 immediate offer so the CLI can reproduce the chain
   (`android-late-cam`, `android-glare` in the test script: 500 ms fixed signaling delay, caller
   camera at 2.6 s, callee camera at 2.8 s — the SCTP handshake puts the first offer at the callee
-  at ~2.5 s). **`android-late-cam` fails about one run in five on its own** (14 of 72 parallel
+  at ~2.5 s; `android-glare-early-data` runs it with `network_sctp_send_before_connected`, which
+  brings the offer to ~1.5 s, at 1.6/1.8 s, and `android-glare-fast-path` adds
+  `network_sctp_fast_path` (offer at ~0.5 s, cameras at 0.6/0.8 s). All assert their `answering with setup:passive` line,
+  so a handshake change that moves the window fails the scenario instead of emptying it). **`android-late-cam` fails about one run in five on its own** (14 of 72 parallel
   runs, 2026-10-22, before and after the change above alike), so one red run there is not a
   regression. When the SCTP handshake hands the callee the first offer and its replacement
   together, the callee is still applying the first, ignores the replacement as glare and

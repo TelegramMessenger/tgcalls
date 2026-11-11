@@ -14,7 +14,10 @@ In-process test harness for tgcalls. See the root `CLAUDE.md` for build instruct
 
 ## Architecture (P2P/Reflector)
 - Two `tgcalls::Instance` objects (caller + callee) created via `Meta::Create(version, ...)`
-- Signaling bridged via `SignalingBridge` with configurable drop rate and delay
+- Signaling bridged via `SignalingBridge` with configurable drop rate and delay. It looks the target side up when a
+  packet arrives, not when it is emitted, and holds packets for a side `main()` has not wired yet: the caller emits its
+  first SCTP INIT while the callee is still being created, and a lost INIT costs a 0.4 s retransmission. A random
+  `--delay` range reorders packets; a fixed one mostly keeps their order.
 - Group participant logs (`/tmp/tgcalls_group_p<id>_<pid>.log`) are written at stop and unlinked after validation; set `TGCALLS_CLI_KEEP_LOGS=1` to keep them (added 2026-09-17).
 - `--video` in p2p/reflector mode attaches a `tgcalls::VideoCaptureInterface::Create(threads, ...)` to BOTH descriptors (`descriptor.videoCapture`, the iOS join-time path: camera already on when the call is created). Added 2026-09-17 to reproduce the 18/19 start-glare renegotiation loop; a healthy video call shows 2 `Calling SetLocalDescription` in the `--log-file` for 11.0.0 (one per side since the 2026-10-12 one-round negotiation; 4 for 18/19), no `SetLocalDescription failed`, one `Creating data channel`. Combine with `--delay 100-300` for field-like signaling latency.
 - `run-parity-tests.sh` (2026-10-27): `InstanceV2CompatImpl` under a legacy version against `InstanceV2Impl` under the same version, "no worse than V ↔ V" as numbers. Eight scenarios (delay, mid-call cameras, mute, 30% signaling loss) × three pairings (V-V, CompatImpl caller, CompatImpl callee), 528 calls, ~6 min; `parity_report.py` prints failure counts with a one-sided Fisher p where CompatImpl is worse, and p50/p90 of connection and first audio/video per side. Default version 8.0.0; `-c 14.0.0` runs CompatImpl's ends as `14.0.0` (the pairing the server serves) instead of `compat:8.0.0`.
