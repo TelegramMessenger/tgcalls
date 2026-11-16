@@ -12,9 +12,6 @@
 #include <string>
 #include <map>
 
-struct AVFrame;
-struct AVCodecContext;
-
 namespace tgcalls {
 
 enum class VideoState;
@@ -335,17 +332,24 @@ public:
     
 	virtual std::unique_ptr<webrtc::VideoEncoderFactory> makeVideoEncoderFactory(bool preferHardwareEncoding = false, bool isScreencast = false) = 0;
 	virtual std::unique_ptr<webrtc::VideoDecoderFactory> makeVideoDecoderFactory() = 0;
+	// AV1 reaches only the engines that ask for these (InstanceV2ReferenceImpl). The defaults keep a platform without
+	// AV1; a platform that has it lists AV1 last, and encodes it only when `allowAv1Encoding`.
+	virtual std::unique_ptr<webrtc::VideoEncoderFactory> makeVideoEncoderFactoryWithAv1(bool preferHardwareEncoding, bool allowAv1Encoding) {
+		return makeVideoEncoderFactory(preferHardwareEncoding, false);
+	}
+	virtual std::unique_ptr<webrtc::VideoDecoderFactory> makeVideoDecoderFactoryWithAv1() {
+		return makeVideoDecoderFactory();
+	}
+	// Whether this device's chip may encode AV1 in software in real time.
+	virtual bool canEncodeAv1Realtime() {
+		return false;
+	}
 	virtual bool supportsEncoding(const std::string &codecName) = 0;
 	virtual webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> makeVideoSource(rtc::Thread *signalingThread, rtc::Thread *workerThread) = 0;
     virtual void adaptVideoSource(webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> videoSource, int width, int height, int fps) = 0;
 	virtual std::unique_ptr<VideoCapturerInterface> makeVideoCapturer(webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, std::string deviceId, std::function<void(VideoState)> stateUpdated, std::function<void(PlatformCaptureInfo)> captureInfoUpdated, std::shared_ptr<PlatformContext> platformContext, std::pair<int, int> &outResolution) = 0;
     virtual webrtc::scoped_refptr<WrappedAudioDeviceModule> wrapAudioDeviceModule(webrtc::scoped_refptr<webrtc::AudioDeviceModule> module) {
         return rtc::make_ref_counted<DefaultWrappedAudioDeviceModule>(module);
-    }
-    virtual void setupVideoDecoding(AVCodecContext *codecContext) {
-    }
-    virtual webrtc::scoped_refptr<webrtc::VideoFrameBuffer> createPlatformFrameFromData(AVFrame const *frame) {
-        return nullptr;
     }
 
 public:

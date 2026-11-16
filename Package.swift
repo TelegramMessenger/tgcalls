@@ -26,6 +26,10 @@ let package = Package(
                       "tgcalls/v2/MtProtoDtlsTransport.cpp",
                       "LICENSE",
                       "tgcalls/v2/MtProtoDtlsTransportTest.cpp",
+                      "tgcalls/v2/SignalingSctpOptionsTest.cpp",
+                      "tgcalls/v2/CompatSignalingFramingTest.cpp",
+                      "tgcalls/v2/ContentNegotiationTest.cpp",
+                      "tgcalls/v2/VideoStatsLogTest.cpp",
                       "README.md",
                       "tgcalls/platform/android",
                       "tgcalls/platform/tdesktop",
@@ -43,8 +47,17 @@ let package = Package(
                       "tgcalls/platform/darwin/VideoCameraCapturer.h",
                       "tgcalls/platform/darwin/CustomExternalCapturer.mm",
                       "tgcalls/platform/darwin/CustomExternalCapturer.h",
-                      "tgcalls/group/StreamingAudioRendererTest.cpp",
+                      "tgcalls/group/ScreencastSendParametersTest.cpp",
                       "tgcalls/group/GroupFrameTransformerTest.cpp",
+                      "tgcalls/group/GroupExternalAudioTest.cpp",
+                      "tgcalls/group/ScreencastProbingTest.cpp",
+                      // AV1 needs SVT-AV1 and dav1d, which this build does not have yet (Bazel defines
+                      // TGCALLS_ENABLE_AV1; this build does not).
+                      "tgcalls/av1",
+                      "tgcalls/platform/darwin/Av1VideoToolboxDecoder.cpp",
+                      "tgcalls/platform/darwin/Av1VideoToolboxDecoder.h",
+                      "tgcalls/platform/darwin/TGRTCVideoDecoderAV1.mm",
+                      "tgcalls/platform/darwin/TGRTCVideoDecoderAV1.h",
                       "tgcalls/legacy/InstanceImplLegacy.h",
                       "tgcalls/legacy/InstanceImplLegacy.cpp"
                      ],
@@ -65,7 +78,6 @@ let package = Package(
                 .headerSearchPath("SharedHeaders/webrtc/sdk/objc/components/renderer/opengl"),
                 .headerSearchPath("SharedHeaders/openssl/include"),
                 .headerSearchPath("SharedHeaders/libopus/include"),
-                .headerSearchPath("SharedHeaders/ffmpeg/include"),
                 .headerSearchPath("SharedHeaders/rnoise"),
 
                 

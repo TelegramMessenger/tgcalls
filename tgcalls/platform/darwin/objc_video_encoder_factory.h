@@ -24,7 +24,10 @@ namespace webrtc {
 
 class CustomObjCVideoEncoderFactory : public VideoEncoderFactory {
  public:
-  explicit CustomObjCVideoEncoderFactory(id<RTC_OBJC_TYPE(RTCVideoEncoderFactory)>);
+  // trustsRateController: the ObjC encoders it makes (VideoToolbox) report a trusted rate
+  // controller, so WebRTC's frame dropper stays off and VideoToolbox's own rate control
+  // absorbs bursts (the in-app iOS screencast). Wrapped native encoders are unaffected.
+  explicit CustomObjCVideoEncoderFactory(id<RTC_OBJC_TYPE(RTCVideoEncoderFactory)>, bool trustsRateController = false);
   ~CustomObjCVideoEncoderFactory() override;
 
   id<RTC_OBJC_TYPE(RTCVideoEncoderFactory)> wrapped_encoder_factory() const;
@@ -37,6 +40,7 @@ class CustomObjCVideoEncoderFactory : public VideoEncoderFactory {
 
  private:
   id<RTC_OBJC_TYPE(RTCVideoEncoderFactory)> encoder_factory_;
+  bool trusts_rate_controller_ = false;
 };
     
     

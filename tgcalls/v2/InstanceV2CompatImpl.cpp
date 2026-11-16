@@ -7,6 +7,7 @@
 #include "v2/Signaling.h"
 #include "v2/SignalingTranslator.h"
 #include "v2/ContentNegotiation.h"
+#include "group/ScreencastSendParameters.h"
 
 #include "CodecSelectHelper.h"
 
@@ -61,6 +62,7 @@
 #include "v2/ReflectorRelayPortFactory.h"
 #include "v2/MtProtoDtlsTransport.h"
 #include "v2/CustomParameters.h"
+#include "v2/CompatSignalingFraming.h"
 #ifdef WEBRTC_IOS
 #include "platform/darwin/iOS/tgcalls_audio_device_module_ios.h"
 #endif
@@ -75,6 +77,9 @@
 
 namespace tgcalls {
 namespace {
+
+// The wire framing is chosen by v2/CompatSignalingFraming.h.
+using SignalingProtocolVersion = CompatSignalingFraming;
 
 static VideoCaptureInterfaceObject *GetVideoCaptureAssumingSameThread(VideoCaptureInterface *videoCapture) {
     return videoCapture
@@ -361,6 +366,8 @@ public:
             }
         }
 
+        _signalingProtocolVersion = compatSignalingFraming(descriptor.version, getCustomParameterBool(_customParameters, "network_kcp_experiment"));
+
         webrtc::field_trial::InitFieldTrialsFromString(
             "WebRTC-DataChannel-Dcsctp/Enabled/"
             "WebRTC-Audio-iOS-Holding/Enabled/"
@@ -393,25 +400,47 @@ public:
 
         RTC_DCHECK(_threads->getMediaThread()->IsCurrent());
 
-        // Always use SCTP signaling connection (V3 protocol)
-        _signalingConnection = std::make_unique<SignalingSctpConnection>(
-            _threads,
-            [threads = _threads, weak](const std::vector<uint8_t> &data) {
-                threads->getMediaThread()->PostTask([weak, data] {
-                    const auto strong = weak.lock();
-                    if (!strong) {
-                        return;
-                    }
+        // Carried as InstanceV2Impl carries it: V3 over SCTP with the server's
+        // timer overrides, or bare when the server sets network_signaling_nosctp
+        // (both ends get the same custom parameters, and a 13.0.0 peer under
+        // nosctp never answers an SCTP INIT); V1 and V2 always bare.
+        if (_signalingProtocolVersion == SignalingProtocolVersion::V3 && !getCustomParameterBool(_customParameters, "network_signaling_nosctp")) {
+            _signalingConnection = std::make_unique<SignalingSctpConnection>(
+                _threads,
+                [threads = _threads, weak](const std::vector<uint8_t> &data) {
+                    threads->getMediaThread()->PostTask([weak, data] {
+                        const auto strong = weak.lock();
+                        if (!strong) {
+                            return;
+                        }
 
-                    strong->onSignalingData(data);
-                });
-            },
-            [signalingDataEmitted = _signalingDataEmitted](const std::vector<uint8_t> &data) {
-                signalingDataEmitted(data);
-            },
-            _encryptionKey.isOutgoing,
-            SignalingSctpConnection::Options::fromCustomParameters(_customParameters)
-        );
+                        strong->onSignalingData(data);
+                    });
+                },
+                [signalingDataEmitted = _signalingDataEmitted](const std::vector<uint8_t> &data) {
+                    signalingDataEmitted(data);
+                },
+                _encryptionKey.isOutgoing,
+                SignalingSctpConnection::Options::fromCustomParameters(_customParameters)
+            );
+        }
+        if (!_signalingConnection) {
+            _signalingConnection = std::make_unique<ExternalSignalingConnection>(
+                [threads = _threads, weak](const std::vector<uint8_t> &data) {
+                    threads->getMediaThread()->PostTask([weak, data] {
+                        const auto strong = weak.lock();
+                        if (!strong) {
+                            return;
+                        }
+
+                        strong->onSignalingData(data);
+                    });
+                },
+                [signalingDataEmitted = _signalingDataEmitted](const std::vector<uint8_t> &data) {
+                    signalingDataEmitted(data);
+                }
+            );
+        }
 
         _signalingConnection->start();
 
@@ -742,7 +771,7 @@ public:
                 parameters.encodings[0].max_bitrate_bps = 32 * 1024;
                 _outgoingAudioTransceiver->sender()->SetParameters(parameters);
 
-                _outgoingAudioTrack->set_enabled(true);
+                applyOutgoingAudioMuteState();
             }
         }
 
@@ -801,19 +830,49 @@ public:
         RTC_LOG(LS_INFO) << "sendSignalingMessage: " << std::string(data.begin(), data.end());
 
         if (_signalingConnection && _signalingEncryptedConnection) {
-            // Always V3 protocol: gzip + encryptRawPacket
-            std::vector<uint8_t> packetData;
-            if (const auto compressedData = gzipData(data)) {
-                packetData = std::move(compressedData.value());
-            } else {
-                RTC_LOG(LS_ERROR) << "Could not gzip signaling message";
-                return;
-            }
+            switch (_signalingProtocolVersion) {
+                case SignalingProtocolVersion::V1:
+                case SignalingProtocolVersion::V3: {
+                    std::vector<uint8_t> packetData;
+                    if (_signalingProtocolVersion == SignalingProtocolVersion::V3) {
+                        if (const auto compressedData = gzipData(data)) {
+                            packetData = std::move(compressedData.value());
+                        } else {
+                            RTC_LOG(LS_ERROR) << "Could not gzip signaling message";
+                            return;
+                        }
+                    } else {
+                        packetData = data;
+                    }
 
-            if (const auto message = _signalingEncryptedConnection->encryptRawPacket(rtc::CopyOnWriteBuffer(packetData.data(), packetData.size()))) {
-                _signalingConnection->send(std::vector<uint8_t>(message.value().data(), message.value().data() + message.value().size()));
-            } else {
-                RTC_LOG(LS_ERROR) << "Could not encrypt signaling message";
+                    if (const auto message = _signalingEncryptedConnection->encryptRawPacket(rtc::CopyOnWriteBuffer(packetData.data(), packetData.size()))) {
+                        _signalingConnection->send(std::vector<uint8_t>(message.value().data(), message.value().data() + message.value().size()));
+                    } else {
+                        RTC_LOG(LS_ERROR) << "Could not encrypt signaling message";
+                    }
+                    break;
+                }
+                case SignalingProtocolVersion::V2: {
+                    // Acknowledged and resent by EncryptedConnection itself (no
+                    // SCTP here); acks and resends leave through
+                    // sendPendingSignalingServiceData.
+                    rtc::CopyOnWriteBuffer message;
+                    message.AppendData(data.data(), data.size());
+
+                    commitSendSignalingMessage(_signalingEncryptedConnection->prepareForSendingRawMessage(message, true));
+                    // EncryptedConnection arms its resend timer only from a packet
+                    // sent while an earlier message still waits for its ack, so a
+                    // message sent with nothing queued has no timer: if its packet
+                    // is lost, it goes again only when something else is sent.
+                    // InstanceV2Impl never meets this, because it answers
+                    // synchronously, ahead of the ack packet for the offer it
+                    // answers, and that packet arms the timer. Our answers come
+                    // later, from the PeerConnection's callbacks, after the ack:
+                    // a lost answer stayed lost for the rest of the call. A service
+                    // packet now arms the timer (and resends nothing yet).
+                    commitSendSignalingMessage(_signalingEncryptedConnection->prepareForSendingService(0));
+                    break;
+                }
             }
         } else {
             RTC_LOG(LS_ERROR) << "sendSignalingMessage encryption not available";
@@ -1078,11 +1137,18 @@ public:
     // After every SetLocalDescription/SetRemoteDescription: remote messages first,
     // then any offer of our own.
     void onNegotiationStepCompleted() {
+        // A rollback restores the audio sender's encodings as they were at its
+        // first SetLocalDescription, and the next one applies them to a new SSRC
+        // (the re-sent offer), whatever the mute state is now: a callee unmuted
+        // between its first offer and a glare stayed silent for the call.
+        applyOutgoingAudioMuteState();
+        reapplyOutgoingVideoEncodingIfReset();
         processPendingRemoteNegotiation();
         flushPendingRenegotiation();
     }
 
-    void scheduleCallerOfferHoldRelease() {
+    // Ends an offer hold: flushPendingRenegotiation re-checks it after `delayMs`.
+    void scheduleOfferHoldRelease(int64_t delayMs) {
         const auto weak = std::weak_ptr<InstanceV2CompatImplInternal>(shared_from_this());
         _threads->getMediaThread()->PostDelayedTask([weak]() {
             const auto strong = weak.lock();
@@ -1093,7 +1159,7 @@ public:
                 return;
             }
             strong->flushPendingRenegotiation();
-        }, webrtc::TimeDelta::Millis(kCallerOfferHoldMs + 1));
+        }, webrtc::TimeDelta::Millis(delayMs));
     }
 
     void requestRenegotiation() {
@@ -1146,6 +1212,18 @@ public:
         if (_encryptionKey.isOutgoing && !_hasAppliedRemoteOffer && _firstRemoteAnswerTimestamp != 0 && rtc::TimeMillis() < _firstRemoteAnswerTimestamp + kCallerOfferHoldMs) {
             return;
         }
+        // Likewise right after every answer of ours, under 8.0.0's framing. A
+        // 13.0.0-protocol callee keeps its own changes (a camera turned on, say)
+        // while its offer waits for our answer, and offers them the moment that
+        // answer lands; an offer of ours sent right behind the answer crosses it,
+        // and the callee drops its offer for good. Its offer reaches us one round
+        // trip after our answer (0.2-0.3 s in the CLI), so a short hold lets it in
+        // first. 8.0.0 resends a lost message only after 3-5 s, so changes pile up
+        // behind a lost answer of ours and this is common there; InstanceV2Impl
+        // offers at once and its caller loses the callee's change the same way.
+        if (_encryptionKey.isOutgoing && _signalingProtocolVersion == SignalingProtocolVersion::V2 && _lastAnswerSentTimestamp != 0 && rtc::TimeMillis() < _lastAnswerSentTimestamp + kPostAnswerOfferHoldMs) {
+            return;
+        }
 
         bool needsOffer = _pendingRenegotiation;
         // Bounded: a description that keeps failing would otherwise make this an
@@ -1189,6 +1267,8 @@ public:
             message.data = _signalingTranslator.makeOffer(description);
         } else {
             message.data = _signalingTranslator.makeAnswer(description);
+            _lastAnswerSentTimestamp = rtc::TimeMillis();
+            scheduleOfferHoldRelease(kPostAnswerOfferHoldMs + 1);
         }
         sendSignalingMessage(message);
     }
@@ -1209,11 +1289,28 @@ public:
 
     void onSignalingData(const std::vector<uint8_t> &data) {
         if (_signalingEncryptedConnection) {
-            // Always V3 protocol: decryptRawPacket
-            if (const auto message = _signalingEncryptedConnection->decryptRawPacket(rtc::CopyOnWriteBuffer(data.data(), data.size()))) {
-                processSignalingMessage(message.value());
-            } else {
-                RTC_LOG(LS_ERROR) << "receiveSignalingData could not decrypt signaling data";
+            switch (_signalingProtocolVersion) {
+                case SignalingProtocolVersion::V1:
+                case SignalingProtocolVersion::V3: {
+                    if (const auto message = _signalingEncryptedConnection->decryptRawPacket(rtc::CopyOnWriteBuffer(data.data(), data.size()))) {
+                        processSignalingMessage(message.value());
+                    } else {
+                        RTC_LOG(LS_ERROR) << "receiveSignalingData could not decrypt signaling data";
+                    }
+                    break;
+                }
+                case SignalingProtocolVersion::V2: {
+                    // One packet carries the message it was sent for plus any
+                    // earlier ones still unacknowledged, in order.
+                    if (const auto packet = _signalingEncryptedConnection->handleIncomingRawPacket((const char *)data.data(), data.size())) {
+                        processSignalingMessage(packet.value().main.message);
+
+                        for (const auto &additional : packet.value().additional) {
+                            processSignalingMessage(additional.message);
+                        }
+                    }
+                    break;
+                }
             }
         } else {
             RTC_LOG(LS_ERROR) << "receiveSignalingData encryption not available";
@@ -1399,7 +1496,7 @@ public:
                         strong->_consecutiveNegotiationFailures = 0;
                         if (strong->_firstRemoteAnswerTimestamp == 0) {
                             strong->_firstRemoteAnswerTimestamp = rtc::TimeMillis();
-                            strong->scheduleCallerOfferHoldRelease();
+                            strong->scheduleOfferHoldRelease(kCallerOfferHoldMs + 1);
                         }
                     }
                 } else if (!isOffer) {
@@ -1610,10 +1707,15 @@ public:
         // so camera toggles do not add m-lines.
         _outgoingVideoTrack = nullptr;
 
+        // On iOS a screen capture goes out on the same transceiver as the camera
+        // (the 13.0.0 protocol's screencast channel is not implemented here); only
+        // its encoding differs (applyOutgoingVideoEncoding).
         webrtc::scoped_refptr<webrtc::VideoTrackInterface> videoTrack;
+        bool isScreenCapture = false;
         auto videoCaptureImpl = GetVideoCaptureAssumingSameThread(videoCapture.get());
-        if (videoCaptureImpl && !videoCaptureImpl->isScreenCapture()) {
+        if (videoCaptureImpl && (!videoCaptureImpl->isScreenCapture() || kIosPrivateCallScreencast)) {
             _videoCapture = videoCapture;
+            isScreenCapture = videoCaptureImpl->isScreenCapture();
             videoTrack = _peerConnectionFactory->CreateVideoTrack(videoCaptureImpl->source(), "1");
         }
 
@@ -1625,6 +1727,7 @@ public:
         } else if (_outgoingVideoTransceiver) {
             if (_outgoingVideoTransceiver->sender()->SetTrack(videoTrack.get())) {
                 _outgoingVideoTransceiver->SetDirectionWithError(webrtc::RtpTransceiverDirection::kSendOnly);
+                applyOutgoingVideoEncoding(isScreenCapture);
                 _outgoingVideoTrack = videoTrack;
                 _outgoingVideoTrack->set_enabled(true);
             }
@@ -1669,12 +1772,7 @@ public:
 
                 _outgoingVideoTransceiver->SetCodecPreferences(codecCapabilities);
 
-                webrtc::RtpParameters parameters = _outgoingVideoTransceiver->sender()->GetParameters();
-                if (parameters.encodings.empty()) {
-                    parameters.encodings.push_back(webrtc::RtpEncodingParameters());
-                }
-                parameters.encodings[0].max_bitrate_bps = 1200 * 1024;
-                _outgoingVideoTransceiver->sender()->SetParameters(parameters);
+                applyOutgoingVideoEncoding(isScreenCapture);
 
                 _outgoingVideoTrack->set_enabled(true);
             }
@@ -1688,6 +1786,64 @@ public:
         }
     }
 
+    struct OutgoingVideoEncoding {
+        absl::optional<int> maxBitrateBps;
+        absl::optional<double> maxFramerate;
+        absl::optional<double> scaleResolutionDownBy;
+    };
+
+    static OutgoingVideoEncoding outgoingVideoEncoding(bool isScreenCapture) {
+        OutgoingVideoEncoding result;
+        if (isScreenCapture) {
+            const auto screencast = iosScreencastLayerParameters(1)[0];
+            result.maxBitrateBps = screencast.maxBitrateBps;
+            result.maxFramerate = screencast.maxFramerate;
+            result.scaleResolutionDownBy = screencast.scaleResolutionDownBy;
+        } else {
+            result.maxBitrateBps = 1200 * 1024;
+        }
+        return result;
+    }
+
+    // The outgoing video encoding for the track kind now on the transceiver: a
+    // reused transceiver carries the previous track's values, so a camera after a
+    // screen share gets the camera's back.
+    void applyOutgoingVideoEncoding(bool isScreenCapture) {
+        _outgoingVideoIsScreenCapture = isScreenCapture;
+        webrtc::RtpParameters parameters = _outgoingVideoTransceiver->sender()->GetParameters();
+        if (parameters.encodings.empty()) {
+            parameters.encodings.push_back(webrtc::RtpEncodingParameters());
+        }
+        const auto encoding = outgoingVideoEncoding(isScreenCapture);
+        parameters.encodings[0].max_bitrate_bps = encoding.maxBitrateBps;
+        parameters.encodings[0].max_framerate = encoding.maxFramerate;
+        parameters.encodings[0].scale_resolution_down_by = encoding.scaleResolutionDownBy;
+        _outgoingVideoTransceiver->sender()->SetParameters(parameters);
+    }
+
+    // A rollback restores the video sender's encodings as they were at its first
+    // SetLocalDescription, and the next one applies them to the new SSRC, as for the
+    // audio sender (onNegotiationStepCompleted): a camera switched to a screen share
+    // while its first offer was pending went out with the camera's encoding.
+    void reapplyOutgoingVideoEncodingIfReset() {
+        if (!_outgoingVideoTransceiver || !_outgoingVideoTrack) {
+            return;
+        }
+        const webrtc::RtpParameters parameters = _outgoingVideoTransceiver->sender()->GetParameters();
+        if (parameters.encodings.empty()) {
+            return;
+        }
+        const auto &current = parameters.encodings[0];
+        const auto expected = outgoingVideoEncoding(_outgoingVideoIsScreenCapture);
+        if (current.max_bitrate_bps == expected.maxBitrateBps && current.max_framerate == expected.maxFramerate && current.scale_resolution_down_by == expected.scaleResolutionDownBy) {
+            return;
+        }
+        RTC_LOG(LS_INFO) << "InstanceV2CompatImpl: a negotiation step reset the outgoing video encoding (max "
+            << current.max_bitrate_bps.value_or(-1) << " bps, " << (_outgoingVideoIsScreenCapture ? "the screen capture" : "the camera")
+            << " has " << expected.maxBitrateBps.value_or(-1) << "); applying it again";
+        applyOutgoingVideoEncoding(_outgoingVideoIsScreenCapture);
+    }
+
     void setRequestedVideoAspect(float aspect) {
     }
 
@@ -1698,11 +1854,45 @@ public:
         if (_isMicrophoneMuted != muteMicrophone) {
             _isMicrophoneMuted = muteMicrophone;
 
-            if (_outgoingAudioTrack) {
-                _outgoingAudioTrack->set_enabled(!_isMicrophoneMuted);
-            }
+            applyOutgoingAudioMuteState();
 
             sendMediaState();
+        }
+    }
+
+    // Mute stops the outgoing audio stream, as 13.0.0's does (its
+    // OutgoingAudioChannel::setIsMuted disables the channel and its send stream).
+    // A disabled track alone only reaches ChannelSend::SetInputMute, which zeroes
+    // the samples but keeps encoding and sending a full Opus stream. What starts
+    // and stops the AudioSendStream is the sender's encodings[0].active
+    // (WebRtcAudioSendStream::UpdateSendState), with no renegotiation; before the
+    // first negotiation it lands in the sender's init parameters, so a call that
+    // starts muted never starts the stream. The same fix GroupInstanceReferenceImpl
+    // got on 2026-09-15, without its ADM microphone mute, which 13.0.0's 1:1 path
+    // does not apply either.
+    void applyOutgoingAudioMuteState() {
+        const bool isSending = !_isMicrophoneMuted;
+        if (_outgoingAudioTrack) {
+            _outgoingAudioTrack->set_enabled(isSending);
+        }
+        if (!_outgoingAudioTransceiver) {
+            return;
+        }
+        auto sender = _outgoingAudioTransceiver->sender();
+        webrtc::RtpParameters parameters = sender->GetParameters();
+        if (parameters.encodings.empty()) {
+            RTC_LOG(LS_WARNING) << "InstanceV2CompatImpl: outgoing audio sender has no encodings, cannot apply the mute state";
+            return;
+        }
+        if (parameters.encodings[0].active == isSending) {
+            return;
+        }
+        parameters.encodings[0].active = isSending;
+        const auto error = sender->SetParameters(parameters);
+        if (error.ok()) {
+            RTC_LOG(LS_INFO) << "InstanceV2CompatImpl: outgoing audio active=" << isSending;
+        } else {
+            RTC_LOG(LS_WARNING) << "InstanceV2CompatImpl: failed to set outgoing audio active=" << isSending << ": " << error.message();
         }
     }
 
@@ -1902,6 +2092,7 @@ private:
     std::function<webrtc::scoped_refptr<WrappedAudioDeviceModule>(webrtc::TaskQueueFactory*)> _createWrappedAudioDeviceModule;
     FilePath _statsLogPath;
 
+    SignalingProtocolVersion _signalingProtocolVersion = SignalingProtocolVersion::V3;
     std::unique_ptr<SignalingConnection> _signalingConnection;
     std::unique_ptr<EncryptedConnection> _signalingEncryptedConnection;
 
@@ -1942,6 +2133,8 @@ private:
     bool _hasAppliedRemoteOffer = false;
     int64_t _firstRemoteAnswerTimestamp = 0;
     static constexpr int64_t kCallerOfferHoldMs = 10000;
+    int64_t _lastAnswerSentTimestamp = 0;
+    static constexpr int64_t kPostAnswerOfferHoldMs = 1000;
     bool _isPerformingConfiguration = false;
     bool _useMtProto = false;
 
@@ -1951,6 +2144,8 @@ private:
 
     webrtc::scoped_refptr<webrtc::VideoTrackInterface> _outgoingVideoTrack;
     webrtc::scoped_refptr<webrtc::RtpTransceiverInterface> _outgoingVideoTransceiver;
+    // The kind of track the outgoing video encoding was last applied for.
+    bool _outgoingVideoIsScreenCapture = false;
 
     std::map<std::string, webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>> _incomingVideoTransceivers;
 

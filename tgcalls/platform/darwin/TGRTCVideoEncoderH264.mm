@@ -325,6 +325,7 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
 
 @implementation TGRTCVideoEncoderH264 {
   RTCVideoCodecInfo *_codecInfo;
+  bool _screenContent;
   std::unique_ptr<webrtc::BitrateAdjuster> _bitrateAdjuster;
   uint32_t _targetBitrateBps;
   uint32_t _encoderBitrateBps;
@@ -351,8 +352,13 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
 // conditions, 0.95 seems to give us better overall bitrate over long periods
 // of time.
 - (instancetype)initWithCodecInfo:(RTCVideoCodecInfo *)codecInfo {
+  return [self initWithCodecInfo:codecInfo screenContent:false];
+}
+
+- (instancetype)initWithCodecInfo:(RTCVideoCodecInfo *)codecInfo screenContent:(bool)screenContent {
   if (self = [super init]) {
     _codecInfo = codecInfo;
+    _screenContent = screenContent;
     _bitrateAdjuster.reset(new webrtc::BitrateAdjuster(.5, .95));
     _packetizationMode = RTCH264PacketizationModeNonInterleaved;
     _profile_level_id =
@@ -701,6 +707,17 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
                        kVTCompressionPropertyKey_ProfileLevel,
                        ExtractProfile(*_profile_level_id));
   SetVTSessionProperty(_compressionSession, kVTCompressionPropertyKey_AllowFrameReordering, false);
+  if (_screenContent) {
+    // See initWithCodecInfo:screenContent:.
+    if (@available(iOS 15.0, macOS 12.0, *)) {
+      const int32_t minimumQp = 20;
+      CFNumberRef value = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &minimumQp);
+      OSStatus status = VTSessionSetProperty(_compressionSession, kVTCompressionPropertyKey_MinAllowedFrameQP, value);
+      CFRelease(value);
+      RTC_LOG(LS_INFO) << "TGRTCVideoEncoderH264: screen content, no data rate limits, minimum frame QP " << minimumQp
+          << (status == noErr ? "" : " (not supported: " + std::to_string(status) + ")");
+    }
+  }
   [self setEncoderBitrateBps:_targetBitrateBps frameRate:_encoderFrameRate];
   // TODO(tkchin): Look at entropy mode and colorspace matrices.
   // TODO(tkchin): Investigate to see if there's any way to make this work.
@@ -745,6 +762,13 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
     if (_maxAllowedFrameRate > 0) {
       SetVTSessionProperty(
           _compressionSession, kVTCompressionPropertyKey_ExpectedFrameRate, frameRate);
+    }
+
+    if (_screenContent) {
+      // No data rate limits for a screen capture: see initWithCodecInfo:screenContent:.
+      _encoderBitrateBps = bitrateBps;
+      _encoderFrameRate = frameRate;
+      return;
     }
 
     // TODO(tkchin): Add a helper method to set array value.

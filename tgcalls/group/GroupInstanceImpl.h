@@ -61,38 +61,13 @@ struct GroupActivitiesUpdate {
 };
 
 
-class BroadcastPartTask {
-public:
-    virtual ~BroadcastPartTask() = default;
-
-    virtual void cancel() = 0;
-};
-
-struct BroadcastPart {
-    struct VideoParams {
-    };
-
-    enum class Status {
-        Success,
-        NotReady,
-        ResyncNeeded
-    };
-
-    int64_t timestampMilliseconds = 0;
-    double responseTimestamp = 0;
-    Status status = Status::NotReady;
-    std::vector<uint8_t> data;
-};
-
 enum class GroupConnectionMode {
     GroupConnectionModeNone,
-    GroupConnectionModeRtc,
-    GroupConnectionModeBroadcast
+    GroupConnectionModeRtc
 };
 
 struct GroupNetworkState {
     bool isConnected = false;
-    bool isTransitioningFromBroadcastToRtc = false;
     GroupConnectionMode connectionMode = GroupConnectionMode::GroupConnectionModeRtc;
 };
 
@@ -172,14 +147,16 @@ struct GroupInstanceDescriptor {
     std::function<webrtc::scoped_refptr<WrappedAudioDeviceModule>(webrtc::TaskQueueFactory*)> createWrappedAudioDeviceModule;
     std::shared_ptr<VideoCaptureInterface> videoCapture; // deprecated
     std::function<webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface>()> getVideoSource;
-    std::function<std::shared_ptr<BroadcastPartTask>(std::function<void(int64_t)>)> requestCurrentTime;
-    std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, std::function<void(BroadcastPart &&)>)> requestAudioBroadcastPart;
-    std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, int32_t, VideoChannelDescription::Quality, std::function<void(BroadcastPart &&)>)> requestVideoBroadcastPart;
     int outgoingAudioBitrateKbit{32};
     bool disableOutgoingAudioProcessing{false};
     bool disableAudioInput{false};
     bool ios_enableSystemMute{false};
     VideoContentType videoContentType{VideoContentType::None};
+    // A screencast captured in-app on iOS (ScreenCaptureKit): hardware H264 at level 5.2, up to 60 fps,
+    // 2 Mbit/s. Otherwise (the ReplayKit broadcast, other platforms) a screencast encodes as before.
+    // GroupInstanceReferenceImpl also honours it on a Generic (main) connection, whose camera video is
+    // then the screen capture (the iOS app's debug "screen share as camera"); CustomImpl ignores it there.
+    bool iosInAppScreencast{false};
     bool initialEnableNoiseSuppression{false};
     std::vector<VideoCodecName> videoCodecPreferences;
     std::function<std::shared_ptr<RequestMediaChannelDescriptionTask>(std::vector<uint32_t> const &, std::function<void(std::vector<MediaChannelDescription> &&)>)> requestMediaChannelDescriptions;
@@ -204,7 +181,7 @@ public:
 
     virtual void stop(std::function<void()> completion) = 0;
 
-    virtual void setConnectionMode(GroupConnectionMode connectionMode, bool keepBroadcastIfWasEnabled, bool isUnifiedBroadcast) = 0;
+    virtual void setConnectionMode(GroupConnectionMode connectionMode) = 0;
 
     virtual void emitJoinPayload(std::function<void(GroupJoinPayload const &)> completion) = 0;
     virtual void setJoinResponsePayload(std::string const &payload) = 0;

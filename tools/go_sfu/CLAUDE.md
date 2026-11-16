@@ -110,3 +110,62 @@ Per-client network simulation with independent ingress (from client) and egress 
 ### Key Files
 - `submodules/TgVoipWebrtc/tgcalls/tools/go_sfu/network_sim.go` — `NetworkSimulator` (token bucket, delay, jitter, drop)
 - `submodules/TgVoipWebrtc/tgcalls/tools/go_sfu/participant.go` — `ingressSim`, `egressSim` on each `Participant`
+
+## Broadcast server
+
+The SFU also emulates Telegram's **broadcast server** (2026-11-01): what a broadcast listener (an RTMP stream's, or
+a large chat's listener that gets 1-second parts instead of WebRTC) is answered when it asks for parts, the server
+time or a stream's newest part. The old engine's baseline was recorded against it, and telegram-ios's
+`Tests/BroadcastRunner` drives it now (see `tools/cli/CLAUDE.md`, "The broadcast testbench"). Files: `broadcast_server.go` (rules, link, events, stats), `broadcast_audio.go` (listener audio from
+live RTP), `broadcast_ogg.go` (the Ogg Opus part writer), `broadcast_fixtures.go` (video and unified parts),
+`broadcast_libopus.go` (cgo libopus), `broadcast_exports.go` (`GoSfu_Broadcast*`). Formats are what the old engine's part
+decoders read (they left tgcalls with broadcast; a test-only copy is in telegram-ios's
+`submodules/TgVoipWebrtc/BroadcastMedia/Tests/EngineReference`); telegram-ios's
+`//Tests/BroadcastRunner:broadcast_part_format_test` decodes the server's parts with them.
+
+- **Rules**: parts are 1000 ms on the Unix-millisecond grid. A part `[T, T+1000)` is available from
+  `T + 1000 + availabilityDelayMs` (default 300; the real server's delay is unknown, device parity calibrates it):
+  earlier is NotReady, off the grid or older than the retained window (30 s) is ResyncNeeded. A request is decided when
+  it reaches the server. Scripted events per client: `notready-burst@S` (2 s of NotReady), `resync@S`,
+  `join-missing@S` (once each), timed from `GoSfu_BroadcastAddClient` on the precise clock.
+- **Link**: each client's responses go through `DebugNetworkShaper`'s model (telegram-ios
+  `submodules/TelegramCore/Sources/Network/DebugNetworkShaper.swift`) with its profiles: a response's bytes start one
+  round trip after the request, or when the link is done with the responses before it, at the profile's bandwidth.
+  `GoSfu_BroadcastFetch` blocks for that time. Not the packet `NetworkSimulator`: parts are whole responses. The
+  response timestamp it returns is the answer's time (when the request was decided), not the delivery's: the app's
+  `responseTimestamp` is MTProto's message time, the server's clock when it answered, and the engine re-anchors a
+  resync at it (until the Plan 1 review it was the delivery time, seconds late on a backlogged 3g link).
+- **Listener audio**: the group engine sends 60 ms Opus frames, which cannot be cut into 1-second parts, so every
+  speaker's audio RTP (tapped in `processIncomingRTP`) is decoded with libopus onto a 48 kHz timeline taken from its
+  RTP timestamps (anchored at the first packet's arrival), and each part's 20 ms slots are re-encoded per channel
+  (fresh encoder per part, 32 kbit/s). A part is cached once built. Channels: speakers in join order, at most 8 (the
+  old decoder ends a part with more); a leaver keeps its channel, empty, until the next part; a second nobody spoke in
+  is a part with one silent channel listing none (NotReady there would stall the old engine for good). Empty slots
+  carry a CELT silence frame (`F8 FF FE`), not a zero-length frame (libopus conceals that as a loss).
+- **Ogg Opus layout**: family 255, one uncoupled stream per channel; `TG_META` (channel → ssrc), `ACTIVE_MASK` and
+  `ENDPOINTS` (video channels) as OpusTags comments. **The head's mapping table undoes a reorder**: FFmpeg's libopus
+  wrapper (`libavcodec/libopusdec.c`, what tgcalls decodes with) reorders 3-8 channels from Vorbis to FFmpeg order
+  whatever the family, and the old client's channel index is that decoder's output order, so stream `c` is placed at
+  `mapping[ff_vorbis_channel_layout_offsets[N-1][c]]`. FFmpeg's native opus decoder (the one Homebrew's `ffmpeg`
+  uses) does not reorder, so a part looks swapped there and right in tgcalls; a new decoder of these parts has to
+  reproduce the libopus wrapper's order.
+- **Video and unified parts** come from fixture slices (`testdata/broadcast/`, made by `make-broadcast-fixtures.sh`
+  with Homebrew `ffmpeg`, committed so builds never run it): 10 s of `testsrc2` at 320x180, 640x360, 1280x720 (H.264
+  baseline, 150/500/1500 kbit/s), one 1 s GOP per file, AAC 1000 Hz tone in the `unified_*` ones, a 16-bit frame
+  counter burned into the top 16 rows. Part T shows slice `broadcastFixtureSliceAt(T / 1000)` behind the video-part
+  header (signature `0xa12e810d`, TL string `"mp4"`, one event: endpoint, rotation 0). **The slices are not shown in
+  loop order**: a counter alone tells media time only modulo 10 s, and with `(T / 1000) % 10` (until the Plan 1 review)
+  every listener further behind live read as 10 s less (the old engine's tiles after the step-down: 3–8 s instead of
+  13–18 s). The order is `s_n = s_(n-1) + 1 + d_(n mod 81) (mod 10)`, `d` the de Bruijn sequence B(9, 2): every step
+  changes slice and three consecutive parts locate a part modulo 162 s. The CLI's `broadcast_signals` builds the same
+  order (`fixtureSliceAt`, `locateFixturePart`), and the runner's `broadcast_part_format_test` decodes parts of both
+  halves of the period to prove the two agree. Video channel `c + 1` is the endpoint of the
+  participant on audio channel `c` of the same second. Unified parts name endpoint `""` (a stream's player shows
+  them as `"unified"` whatever the part names). Fixtures rather than the speakers' live H.264: stable part sizes
+  per quality (the quality-selection comparison is otherwise the senders' bandwidth-estimation noise), whole GOPs, and
+  a readable media time. (Live layer 2 does occur on the host: a 30 s two-participant video run produced 720p SSRCs.)
+- **libopus under Bazel only**: `broadcast_libopus.go` builds with the go tag `tgcalls_vendored_opus` and
+  `cdeps = ["//third-party/opus:opus"]` (the library webrtc links, one copy in the CLI); `go test` builds without the
+  tag (`broadcast_libopus_none.go`) and injects a fake codec. Tests: `go test ./...` here, and telegram-ios's
+  `//Tests/BroadcastRunner:broadcast_part_format_test` and `:harness_test` under Bazel.
+

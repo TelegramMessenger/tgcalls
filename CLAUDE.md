@@ -178,7 +178,7 @@ Located at `submodules/TgVoipWebrtc/tgcalls/tools/cli/`. Runs tgcalls instances 
 ./bazel-bin/submodules/TgVoipWebrtc/tgcalls/tools/cli/tgcalls_cli --mode group-churn --participants 2 --reference-participants 1 --video --duration 10
 ```
 
-`--mode` is required (`p2p`, `reflector`, `group`, or `group-churn`) unless `--reflector-list` is used (implies reflector mode). Exit code 0 = success. Exit code 1 = failure.
+`--mode` is required (`p2p`, `reflector`, `group` or `group-churn`) unless `--reflector-list` is used (implies reflector mode). Exit code 0 = success. Exit code 1 = failure.
 
 For p2p/reflector: success = call established, stats logs non-empty, BWE non-zero for both sides.
 For group (audio): success = all N participants report `isConnected = true` AND all participants receive remote audio (non-zero SSRC with level > 0.05 via `audioLevelsUpdated`). Remote 440Hz sine tone typically arrives at ~0.126 level.
@@ -191,14 +191,19 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
 - `--reflector-list addr,addr,...` — comma-separated list, one picked at random
 - `--version VER` — caller tgcalls protocol version (default: `13.0.0`)
 - `--version2 VER` — callee tgcalls protocol version (default: same as `--version`). Enables cross-version interop testing.
+  Either may be `compat:<version>` (2026-10-27): `InstanceV2CompatImpl` constructed under that call
+  version, which the version registry cannot give (it maps 7.0.0–13.0.0 to `InstanceV2Impl`), so
+  `--version compat:8.0.0 --version2 8.0.0` is CompatImpl against an unchanged 8.0.0 peer.
 - `--wasm-core PATH` — CLI-only override: run the caller's pump core from a module file instead of the version-derived default (`NONE` forces native). Mainly for variant modules; version `19.0.0` already uses the module embedded in the binary. Exists only because the CLI target defines `TGCALLS_ALLOW_EXTERNAL_WASM_CORE` — the app has no such loader.
 - `--wasm-core2 PATH` — same for the callee (defaults to `--wasm-core`; `NONE` forces native)
 - `--custom-params JSON` — sets the caller's engine `customParameters` as a JSON object (merged
   with the `wasm_core_path` entry the CLI synthesises from `--wasm-core`). This is how to
   exercise the default-off flags without a server-side rollout: e.g.
-  `network_disable_stun_when_unconfigured`, `network_reflector_resolve_remote_candidate_ip`,
-  `network_reference_immediate_capture_renegotiation` (and `network_reference_use_addtrack`,
-  default ON since 2026-10-12, as `false` to compare against the old two-round shape).
+  `network_disable_stun_when_unconfigured`,
+  `network_reference_immediate_capture_renegotiation` (and the default-ON ones as `false` to
+  compare against the old behaviour: `network_reference_use_addtrack`, ON since 2026-10-12, the old
+  two-round shape; `network_reflector_resolve_remote_candidate_ip`, ON since 2026-10-27, the
+  reflector keying defect).
 - `--custom-params2 JSON` — same for the callee. Independent of `--custom-params` — unlike
   `--wasm-core2` there is no fallback to the caller's value — so `--custom-params2` **alone**
   gives the callee different engine parameters than the caller, enabling a within-call A/B on
@@ -218,6 +223,29 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
   callee received M` (a `FakeVideoSink` on each side); every p2p run prints `Remote media state:
   caller=N callee=M updates`. Neither is a pass criterion (exit code is unchanged); read them, since
   "exit 0" never proved two-way media. Added 2026-10-11 for the 14.0.0 rewrite.
+- `--video-screencast` — p2p/reflector, with `--video`, `--video-late` or `--video-late-*-ms`: both
+  sides' captures are created as screen captures (`isScreenCapture`, what the iOS screencast
+  capturer is). Every private-call engine must then show `Video frames` both ways: 7/8/9/12/13 on
+  their separate screencast channel, 10/11, 14 and 18/19 on the camera's transceiver with the
+  screencast encoding (`group/ScreencastSendParameters.h`: `target_bps: 2000000` in the encoder
+  stats where the camera reads 1228800). The screen is encoded as video, at the frame size handed over
+  (the iOS app brings it to at most 1 Mpx; the CLI's 1280x720 stays): `content_type: kRealtimeVideo`
+  for every version, 13.0.0 included. Those changes are iOS-only (`kIosPrivateCallScreencast`);
+  the CLI builds them through `TGCALLS_ALLOW_TEST_KNOBS`, so the check exercises them on the host.
+- `--video-screen-callee-ms N` — p2p/reflector: N ms after start the callee's capture is replaced by a
+  screen capture (`setVideoCapture` with a second capture, `isScreenCapture`): a camera switched to a
+  screen share mid-call; alone, a screen share that starts mid-call. With the callee's own camera
+  (`--video` or `--video-late-callee-ms`) it reuses that transceiver, which is how 14.0.0's re-apply of
+  the video encoding after a glare rollback is reproduced (`submodules/TgVoipWebrtc/CLAUDE.md`,
+  InstanceV2CompatImpl).
+- `--av1-power-off-ms` / `--av1-power-on-ms` `caller|callee:MS` — p2p/reflector: that side's power state pauses (or
+  allows again) sending AV1 MS after the instances are created (`Instance::setVideoSendAv1AllowedByPower`), on the
+  camera schedule; repeatable. Writes `tgcalls_cli: AV1 paused|allowed by power on the <side>` into the `--log-file`.
+  `run-av1-tests.sh` uses it (see "AV1 in InstanceV2ReferenceImpl").
+- `--video-codec-override caller|callee:MS:CODEC` (`auto` clears it) / `--video-max-bitrate caller|callee:MS:KBPS`
+  (0: the default) — p2p/reflector: that side's debug controls MS after the instances are created
+  (`Instance::setVideoSendCodecOverride` / `setVideoSendMaxBitrateKbps`), on the camera schedule; repeatable, kept in
+  command-line order at equal times. Writes `tgcalls_cli: video codec override|video max bitrate on the <side>: …`.
 - `--video-sink-churn` — with `--video`, once frames flow each participant replaces every incoming video sink five times, one second apart (`addIncomingVideoOutput` with a fresh sink, old sink released) — what the app does on a quality switch, where the tile's view owns the sink. An engine that keeps a raw pointer to a dead sink segfaults in `rtc::VideoBroadcaster::OnFrame`; validation then counts frames on the NEW sinks only. Known limitation: in mixed groups the pairs receiving from a ReferenceImpl SENDER fail this (0 frames after the last replacement) because the host reference sender throttles to ~1–3 fps after the first seconds regardless of sinks (41–65 frames in 30 s vs ~750 from CustomImpl senders; `_minOutgoingVideoBitrateKbit` is never applied there) — use it with reference-only or CustomImpl-only groups, or with reference RECEIVERS of CustomImpl senders.
 - `--video-rerequest` — with `--video`, once frames flow each participant's SFU downlink gets a
   150 ms delay, then five rounds of `setRequestedVideoChannels({})` followed a second later by the
@@ -274,6 +302,15 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
   and the same late unmute with NO prior renegotiation
   (`--participants 1 --reference-participants 1 --mute-participants 0 --unmute-after 8`) also passes
   either way — which is what pins the cause to the renegotiation rather than to the lateness.
+- `--mute-participants` / `--unmute-after` in p2p/reflector mode (2026-10-27): index 0 is the
+  caller, 1 the callee; the side is muted right after creation and, with `--unmute-after N` (N below
+  `--duration`), unmuted at N s, which also writes a `tgcalls_cli: unmuting the muted side(s)` line
+  into the `--log-file`. Nothing is validated; read the log: a muted side's `AudioSendStream::Start`
+  and `First audio RTP packet sent to pacer` must come after that line. The unmute shares one
+  schedule with the camera attachments (`--video-late`, `--video-late-caller-ms` /
+  `--video-late-callee-ms`), which is how a glare is made to roll a muted side's first offer back
+  (13.0.0 → compat:13.0.0 with `--delay 0-1200`, caller camera swept over 1000–4000 ms). Added for `InstanceV2CompatImpl`'s mute,
+  which used to keep the send stream running (see `submodules/TgVoipWebrtc/CLAUDE.md`).
 - Every group run also prints `Audio levels heard: X/Y pairs` (every peer must report a real level
   for every unmuted sender — a participant who is audible but never reaches the level reports is
   the "never shown as speaking" defect) and `Unsignaled audio: N stream(s) (must be 0)` (the engine
@@ -289,6 +326,10 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
 - **P2P**: Direct loopback, `enableP2P=true`, no servers configured
 - **Reflector**: Routes through a Telegram UDP reflector, `enableP2P=false`, configures `RtcServer` with `login="reflector"` and random peer tags (16 bytes, byte 0 = `0x00` for caller, `0x01` for callee)
 - **Group**: In-process SFU with N participants using `GroupInstanceCustomImpl` and/or `GroupInstanceReferenceImpl`. The SFU is implemented in Go using Pion's low-level ICE/DTLS/SRTP/SCTP APIs (not PeerConnection), linked into the same process via CGo c-archive. Each participant gets a full ICE + DTLS + SRTP + SCTP transport stack over localhost UDP. Audio RTP is selectively forwarded between all participants. With `--video`, H264 video with 3-layer simulcast is enabled. Mixed-implementation groups (CustomImpl + ReferenceImpl) are supported via `--reference-participants`.
+- **Broadcast**: tgcalls no longer plays broadcast (the app-side player replaced it). The broadcast testbench stays: the
+  Go SFU's emulated broadcast server (`tools/go_sfu/CLAUDE.md`, "Broadcast server"), the measuring libraries and the
+  old engine's recorded baseline, `tools/cli/broadcast-baseline/`, which telegram-ios's `Tests/BroadcastRunner` is held
+  to (`tools/cli/CLAUDE.md`, "The broadcast testbench").
 - **Group Churn**: Stress test for participant join/leave dynamics. Creates a base group of N participants, then rapidly cycles an additional participant in and out `--churn-cycles` times (default 100). After churn, validates that the base group is healthy: all connected, all receiving audio, and if `--video` is enabled, all receiving video. Alternates between CustomImpl and ReferenceImpl for the cycling participant. The `--duration` controls the stabilization wait after churn completes.
 
 ## Project Structure
@@ -365,13 +406,22 @@ state at all, forever).
 
 | flag | reaches | effect |
 |---|---|---|
-| `network_reflector_resolve_remote_candidate_ip` | `NativeNetworkingImpl` → `InstanceV2Impl` → versions 7/8/9/12/13; also 11/14/18/19 | default off; signalled relay connections can receive binding responses |
+| `network_reflector_resolve_remote_candidate_ip` | `NativeNetworkingImpl` → `InstanceV2Impl` → versions 7/8/9/12/13; also 11/14/18/19 | **default ON since 2026-10-27** (`getCustomParameterBoolDefaultTrue`; the server's explicit `false` turns it off); signalled relay connections can receive binding responses. The legacy `InstanceImpl` (2.7.7, 5.0.0) hardcodes it off |
 | `network_disable_stun_when_unconfigured` | 11/14/18/19 | default off; stops sending unparseable STUN to reflectors |
 | `network_reference_use_addtrack` | 11.0.0 | **default ON since 2026-10-12** (see "One-round negotiation" below); `false` restores the two-round shape |
 
 Exercise them with the CLI's `--custom-params '<json>'` (caller) / `--custom-params2` (callee).
 
-**Before enabling `network_reflector_resolve_remote_candidate_ip`** — the connection key collapses
+**`network_reflector_resolve_remote_candidate_ip` is on by default since 2026-10-27.** Checked
+against a local stand-in reflector (this network blocks UDP to Telegram's), 4–8 CLI calls per arm
+on 11, 13, 14, 18 and 19: with the flag off, signalled reflector connections got 0 binding
+responses (92 and 120 pings on 11 and 13) and every call came up on a prflx twin; with it on (now
+also with no key at all), every signalled connection got its response and was selected first. An
+explicit `false` restores the old behaviour, and a mixed call (one side on) connects as before.
+The collapse below was not exercised (one reflector port per side) and is the thing to watch in
+the field.
+
+**The side effect** — the connection key collapses
 per *candidate*, not per *peer*, and one peer publishes several: `OngoingCallContext.swift` emits
 the v4 and v6 entries of one reflector with the **same `reflectorId` and port**, and there is one
 relay port per network with a fresh random tag. `SocketAddress::operator<` stops comparing
@@ -380,9 +430,10 @@ refuses the second — dropping a dual-stack peer's relay paths from two to one.
 misattribution is *already* today's behaviour on the peer-reflexive path, flag or not.) Only
 "stop stamping the resolved IP on the inbound address, so both sides key on hostname" actually
 removes the collapse, and it uniquely also fixes the pre-existing one — but it touches the
-always-on path and needs its own window. Also note the flag flips the TCP path's collision policy
-from destructive-replace to refuse, and that under `network_standalone_reflectors` the original bug
-does not exist while the collapse still does.
+always-on path and needs its own window. `ReflectorPort::CreateConnection` refuses a connection
+whose key already exists whether the flag is on or off (with it off it used to replace the existing
+connection, destroying it even when selected). Under `network_standalone_reflectors` the original
+bug does not exist while the collapse still does.
 
 **Readout for that flag is relay-remote connections receiving binding responses** — *not* "prflx
 count goes to zero", which the audit specified and which is wrong: peer-reflexive pairs are still
@@ -417,9 +468,10 @@ DTLS, wire bytes identical to 13.0.0 (`mtproto(RTP)`, `mtproto(0xdcdcdcdc ||
 SCTP)`). Default off. Design record:
 telegram-ios `docs/superpowers/specs/2026-09-16-tgcalls-mtproto-dtls-slot-design.md`.
 
-14.0.0 needs it for more than an A/B: it talks to 13.0.0, which already honours
-the flag, and before 2026-10-11 a 14.0.0 <-> 13.0.0 call under the flag paired
-DTLS with mtproto and failed (`Bad incoming data hash`, no media).
+14.0.0 needs it for more than an A/B: its peer is an `InstanceV2Impl` (8.0.0, or
+13.0.0 under `network_kcp_experiment`), which honours the flag in
+`NativeNetworkingImpl`. A one-sided flag pairs DTLS with mtproto and fails
+(`Bad incoming data hash`, no media).
 
 **Shape.** Two settings that MUST travel together, both from one boolean:
 
@@ -543,6 +595,138 @@ log sample (`getlogstgcalls/analysis/FINDINGS-android.md`), fixed here and pinne
 Not fixable inside a PeerConnection: once both `DtlsTransport`s hold a role and a stream
 (`SetDtlsRole` refuses to change it while `dtls_` exists), no ICE restart recovers a
 client-vs-client handshake; only the prevention above does.
+
+## AV1 in InstanceV2ReferenceImpl (10.0.0, 11.0.0)
+
+Only `InstanceV2ReferenceImpl` offers AV1. It encodes with SVT-AV1 (`tgcalls/av1/SvtAv1Encoder`) and decodes with
+VideoToolbox where the chip decodes AV1 in hardware (`platform/darwin/Av1VideoToolboxDecoder`, `TGRTCVideoDecoderAV1`),
+else with WebRTC's dav1d decoder. The decoder is chosen once, at creation; there is no fallback from VideoToolbox to
+dav1d at runtime.
+
+- **The factories are opt-in.** `PlatformInterface::makeVideoEncoderFactoryWithAv1(preferHardware, allowAv1Encoding)`,
+  `makeVideoDecoderFactoryWithAv1()` and `canEncodeAv1Realtime()` are non-pure with AV1-free defaults; only the Darwin
+  and fake platforms override them, under `TGCALLS_ENABLE_AV1`. Every other engine, and Android, desktop and UWP, keep
+  their factories. `DarwinInterface::supportsEncoding(AV1)` stays false.
+- **AV1 is appended last** (`av1/Av1VideoCodecFactories`), so the codecs before it keep their payload types.
+- **Both AV1 factories, encoder and decoder, list every format with the SDP parser's fmtp defaults**
+  (`WithSdpDefaultParameters`, mirroring `BackfillCodecParameters` in `pc/webrtc_sdp.cc`: VP9 `profile-id`, H264
+  `packetization-mode`, AV1 `profile` / `level-idx` / `tier`, H265 `level-id` / `tx-mode`). Two exact-equality
+  comparisons depend on it:
+  - A pin needs exact parameter equality between the sender's own codec list and the negotiated codec
+    (`Codec::MatchesRtpCodec`), and a negotiated codec comes from a parsed description with the defaults filled in. A
+    bare `AV1`, or Darwin's bare `H265`, can never be pinned ("Attempted to use an unsupported codec for layer 0").
+  - A two-way video line's codec list takes the **decoder's** parameters (`NegotiateCodecs(recv, send)` in
+    `pc/media_session.cc` keeps "ours"), and the camera's codec preferences, built from the encoder's list, match it by
+    exact equality (`MatchCodecPreference`). An encoder side with the defaults against a decoder side without them drops
+    AV1, H265 and VP9 from every offer and answer.
+
+  So the encoder wrapper adds them, and the decoder side gets `WrapDecoderFactoryWithSdpDefaults`, on Darwin around the
+  ObjC factory (which lists bare formats). The fake platform is composed the same way, its dav1d wrapper listing a bare
+  `AV1`, so the CLI runs Darwin's shape. The wire is unchanged, since the peer's parser fills the same values, and so are
+  offer/answer intersections, whose sameness checks apply the defaults. Each inner factory is handed its own format
+  back. Tests in `av1_platform_factories_test`: `TestSdpDefaultsMatchTheParser` ties the defaults to the parser, and
+  `TestAv1EncoderAndDecoderFormatsAgree` checks that the two sides agree.
+- **Every device lists AV1 for sending; the pin decides what is sent.** A sendrecv m-line carries the intersection of
+  send and receive codecs (`pc/media_session.cc`), so a device that may only receive AV1 still lists it as a send codec.
+  After every completed negotiation round (our answer applied in `kStable`, or the peer's answer applied),
+  `applyVideoSendCodecPin()` sets `encodings[0].codec` through `SetParameters`, with no renegotiation
+  (`VideoSendCodecCandidates`, `PinVideoSendCodec`):
+  - When this side may send AV1, the candidate is AV1 alone. If that pin is rejected, the default codec stays.
+  - Otherwise the candidates are H265, then H264, then the rest, never RTX, RED or FEC. A rejected pin moves on to the
+    next candidate only while the sender still sends AV1. A sender already off AV1 keeps its codec.
+  - When AV1 was not negotiated, or this side does not offer it, nothing is pinned: a peer without AV1 gets today's
+    call, the default codec.
+
+  A renegotiation keeps a pin whose codec is still negotiated and clears one that is not (`SetSenderParameters` in
+  `webrtc_video_engine.cc`).
+- **Nothing is pinned before the first round.** A codec set then goes into the sender's init parameters, which `SetSsrc`
+  applies wholesale, and against a peer without that codec the whole set is rejected, `max_bitrate_bps` included, with
+  the error ignored. The first frames can therefore come from the default codec's encoder for a few milliseconds before
+  the pin lands.
+- **The refusing encoder is the backstop.** A side not allowed to encode AV1 gets `CreateRefusingAv1Encoder()`, whose
+  `InitEncode` fails, so WebRTC switches encoders (`RequestEncoderSwitch`) if AV1 is ever its default (an offer that
+  leads with AV1).
+- **Who may send AV1:** `video_av1_send`, the power input, and the chip gate (`av1/Av1DeviceGate`) or
+  `video_av1_send_any_device`. The gate reads `hw.cpufamily` against a deny-list: the Apple families before A18/M4
+  (which LLVM's `getHostCPUName` maps to `apple-a17`, `apple-m3` and older) and every Intel family. An unknown family
+  counts as capable. An x86 build never encodes AV1, on an Intel Mac or under Rosetta.
+- **`customParameters` keys** (`av1/Av1SendCodec`):
+  - `video_av1` (default true): false keeps AV1 out of the call's factories, so it is neither offered nor decoded.
+  - `video_av1_send` (default true): false never sends AV1, but still offers and decodes it.
+  - `video_av1_send_any_device` (default false): true lets a device the chip gate excludes send AV1.
+  - CLI-only, read under `TGCALLS_ALLOW_TEST_KNOBS`: `video_av1_test_device_incapable` (this side behaves as an older
+    device), `video_av1_test_offer_av1_first` (AV1 leads the camera's codec preferences, as a peer's stock list may)
+    `video_test_h264_level` (this side's factories list H264 at that level byte, e.g. `"29"`, as a device whose
+    H264 level differs from its peer's does; `WrapEncoderFactoryWithH264LevelForTesting`) and
+    `video_av1_test_encoder_fails` (this side's AV1 encoder fails `InitEncode`; `WrapEncoderFactoryWithFailingAv1ForTesting`).
+- **The power input:** `Instance::setVideoSendAv1AllowedByPower(bool)`, a no-op for every other engine. This engine
+  keeps the value and re-pins at once; set before the camera's first round, it decides that round's pin. The app
+  computes it with `Av1SendPowerPolicy` (TelegramVoip), which `PresentationCall` feeds from Low Power Mode, the thermal
+  state and the battery level. `OngoingCallContext` keeps the latest value and replays it when the native context is
+  created: the native context exists only once the audio session is active, which is later than the first value. AV1 sending stops at once in Low Power Mode, below 20% battery, or at a serious or
+  critical thermal state. It returns only when all three are clear, with the battery at 25% or more (or unknown), and
+  30 s after the switch away. Charging is not read.
+- **The encoder** runs SVT-AV1 in its RTC mode: low delay, CBR, `enc_mode` 11, `level_of_parallelism` 3, no periodic
+  keyframes, full range. A keyframe on request carries the sequence header. Rate changes go through SVT's events without
+  a restart, and frame-rate changes only when the rate moves by more than 10%. A new resolution re-initialises the
+  encoder: SVT's `RES_CHANGE_EVENT` needs 8-aligned sizes and cannot grow past the first size. Never call
+  `svt_av1_enc_get_packet` after a failed `svt_av1_enc_send_picture`: in low delay it blocks forever. QP is on SVT's
+  0–63 scale (scaler thresholds 30/52).
+- **Debug controls** (the app's call-screen overlay behind Debug Settings, any 10.0.0/11.0.0 call, with or without AV1):
+  `Instance::setVideoSendCodecOverride(name)` pins the camera sender to every negotiated variant of the named codec
+  (`VideoSendCodecOverrideCandidates`), over the power and chip gates (forcing AV1 on a device the gate refuses reaches
+  `RefusingAv1Encoder`, and WebRTC then falls back to VP8); a codec not negotiated is logged and changes nothing. An
+  empty name hands the choice back: where the engine pins (AV1 negotiated) its pin replaces the override's; elsewhere
+  the codec sent before the override is pinned again and the pin then dropped, because dropping a pin alone keeps
+  WebRTC on the pinned codec until the next negotiation. `setVideoSendMaxBitrateKbps(kbps)` sets the sender's
+  `max_bitrate_bps` (0: the default 1200 × 1024), also for a camera added later; it is a cap, so raising it shows only
+  as far as the bandwidth estimate goes. `getVideoStatsLine()` returns the latest `video stats` line, from any thread.
+  All apply at once, without a renegotiation; every other engine ignores them.
+- **A failing AV1 encoder** (not created, `InitEncode` failed, `Encode` failed: SVT-AV1 at a preset its RTC build lacks
+  did on device) is replaced by the codec this side would pin next, never WebRTC's default VP8. The engine wraps its
+  encoder factory last (`WrapEncoderFactoryWithAv1Fallback`, `av1/Av1EncoderFallback`): AV1 encoders report their
+  failures, and the factory's encoder selector answers WebRTC's `OnEncoderBroken` for a broken AV1 encoder with the
+  first of `VideoSendCodecCandidates(available, false)` (H.265, else H.264), refreshed at every pin. Without a selector
+  WebRTC's `RequestEncoderSwitch` picks VP8. The engine then stops sending AV1 for the call (`onAv1EncoderFailed`:
+  `the AV1 encoder failed (<side>)` in the log) and pins that codec; a debug override to AV1 is ignored from then on.
+  Any other broken encoder keeps WebRTC's own choice (the inner factory's selector, else VP8).
+- **Pins and the H.264 level.** WebRTC matches a pinned codec against the sender's own codecs and against the negotiated
+  ones. A device's own H.264 `profile-level-id` and the one negotiated with a peer at another level differ (an iPhone
+  and a simulator: `640c1f` / `640c29`), so with exact matching no H.264 pin could pass both checks ("Attempted to use
+  an unsupported codec for layer 0"): the debug override failed, and the power fallback skipped H.264 for software VP8
+  against a peer without H.265. The vendored WebRTC carries upstream's level-insensitive matching as a backport
+  (telegram-ios `submodules/TgVoipWebrtc/CLAUDE.md`, the seams table); `av1-debug-h264-levels` pins it.
+- **Log lines:**
+  - `InstanceV2ReferenceImpl: AV1 offered, encoding allowed: <0|1> (<caller|callee>)` or `AV1 not offered (<side>)`,
+    once per call.
+  - `video send codec pinned to <codec> (<side>)` for each pin, and `pinning the video send codec to <codec> failed: …`
+    when the sender rejects one.
+  - `AV1 sending paused|allowed by power (<side>)`.
+  - `video send codec override: <codec> (<side>)`, `… override cleared (<side>)`, `… override <codec> is not
+    negotiated (negotiated: …) (<side>)`, `video send codec pin removed (<side>)` and `video send max bitrate: N kbps|default
+    (<side>)`.
+  - `SvtAv1Encoder: initialized WxH, N kbps` and `Av1: encoding refused on this device`.
+  - `video stats (<side>): send <codec> (<encoder>) WxH, F fps, encode E ms/frame, B kbps (target T), qp Q,
+    keyframes K, quality limit <reason>; receive <codec> (<decoder>) WxH, …, decode D ms/frame, …, dropped N,
+    freezes N; process CPU P%`, every 5 s of a call with video, any codec (`v2/VideoStatsLog`, from
+    `PeerConnection::GetStats`). Rates are over the 5 s interval; per direction it reports the stream that advanced
+    most; `no frames` when none did; QP is left out when the codec reports none (dav1d). Process CPU is the whole
+    app's, 100% being one core, so the load of a codec shows as the difference when the codec changes mid-call (Low
+    Power Mode switches AV1 off). The encoder names are WebRTC's (`SvtAv1`, `VideoToolbox`); the decoders' too
+    (`dav1d`, `VideoToolboxAV1`).
+- **Tests:**
+  - `tools/cli/run-av1-tests.sh`: fourteen p2p scenarios. They cover both sides on AV1, an incapable callee (including
+    against an offer led by AV1), both killswitches, a peer without AV1 (no pin on either side), 10.0.0, late cameras,
+    a mid-call power flip and power off before the camera. Each asserts the pins, the SetLocalDescription count and
+    frames both ways; the both-sides scenario also its `video stats` lines and a send rate at the 30 fps cap. Two
+    more drive the debug controls: H264 at 300 kbps mid-call and back (AV1 negotiated), and VP8 and back against a
+    peer without AV1 (the pin removed). A thirteenth forces H264 on both sides with the callee's H264 at another level
+    (`video_test_h264_level`). A fourteenth fails the caller's AV1 encoder (`video_av1_test_encoder_fails`): the caller
+    must go on with H264, never VP8.
+  - Host tests: `svt_av1_api_test` (`//third-party/svt-av1`), `svt_av1_encoder_test`, `av1_round_trip_test` (SVT-AV1,
+    then WebRTC's AV1 packetizer and depacketizer, then dav1d), `av1_videotoolbox_decoder_test` (bit-exact against
+    dav1d, macOS only), `av1_platform_factories_test`, `av1_send_codec_test`, `video_stats_log_test` (the stats line), `av1_encoder_fallback_test` (the selector and the
+    failure reports).
 
 ## Further Context
 

@@ -16,10 +16,12 @@
 #include "DarwinVideoSource.h"
 #include "objc_video_encoder_factory.h"
 #include "objc_video_decoder_factory.h"
+#if TGCALLS_ENABLE_AV1
+#include "av1/Av1DeviceGate.h"
+#include "av1/Av1VideoCodecFactories.h"
+#endif
 #include "sdk/objc/native/src/objc_frame_buffer.h"
 #import "sdk/objc/components/video_frame_buffer/RTCCVPixelBuffer.h"
-
-#import "DarwinFFMpeg.h"
 
 #ifdef WEBRTC_IOS
 #include "platform/darwin/iOS/RTCAudioSession.h"
@@ -67,6 +69,20 @@ void DarwinInterface::configurePlatformAudio(int numChanels) {
 }
 
 std::unique_ptr<webrtc::VideoEncoderFactory> DarwinInterface::makeVideoEncoderFactory(bool preferHardwareEncoding, bool isScreencast) {
+#ifdef WEBRTC_IOS
+    if (isScreencast && preferHardwareEncoding) {
+        // The in-app screencast (GroupInstanceDescriptor::iosInAppScreencast) encodes
+        // screen-sized frames at up to 60 fps: VideoToolbox H264 at the highest level, so
+        // the level never clamps the frame rate. A ReplayKit screencast asks for software
+        // H264 (preferHardwareEncoding false) and gets the factory below, as before.
+        // VideoToolbox's rate control is trusted: WebRTC's frame dropper would otherwise drop
+        // frames on every scroll burst. Screen-content rate control: no data rate limits, which
+        // starve VideoToolbox to a fifth of its bitrate at QP 44-51 (TGRTCVideoEncoderH264.h).
+        auto nativeFactory = std::make_unique<webrtc::CustomObjCVideoEncoderFactory>([[TGRTCDefaultVideoEncoderFactory alloc] initWithPreferHardwareH264:true preferX264:false highestH264Level:true screenContent:true], true);
+        auto nativeHardwareFactory = std::make_unique<webrtc::CustomObjCVideoEncoderFactory>([[TGRTCDefaultVideoEncoderFactory alloc] initWithPreferHardwareH264:true preferX264:false highestH264Level:true screenContent:true], true);
+        return std::make_unique<webrtc::SimulcastVideoEncoderFactory>(std::move(nativeFactory), std::move(nativeHardwareFactory));
+    }
+#endif
     auto nativeFactory = std::make_unique<webrtc::CustomObjCVideoEncoderFactory>([[TGRTCDefaultVideoEncoderFactory alloc] initWithPreferHardwareH264:preferHardwareEncoding preferX264:false]);
     if (!preferHardwareEncoding) {
         auto nativeHardwareFactory = std::make_unique<webrtc::CustomObjCVideoEncoderFactory>([[TGRTCDefaultVideoEncoderFactory alloc] initWithPreferHardwareH264:!isScreencast preferX264:false]);
@@ -78,6 +94,21 @@ std::unique_ptr<webrtc::VideoEncoderFactory> DarwinInterface::makeVideoEncoderFa
 std::unique_ptr<webrtc::VideoDecoderFactory> DarwinInterface::makeVideoDecoderFactory() {
     return CustomObjCToNativeVideoDecoderFactory([[TGRTCDefaultVideoDecoderFactory alloc] init]);
 }
+
+#if TGCALLS_ENABLE_AV1
+std::unique_ptr<webrtc::VideoEncoderFactory> DarwinInterface::makeVideoEncoderFactoryWithAv1(bool preferHardwareEncoding, bool allowAv1Encoding) {
+    return WrapEncoderFactoryWithAv1(makeVideoEncoderFactory(preferHardwareEncoding, false), allowAv1Encoding);
+}
+
+std::unique_ptr<webrtc::VideoDecoderFactory> DarwinInterface::makeVideoDecoderFactoryWithAv1() {
+    // The encoder side lists its formats with the SDP defaults, so the decoder side must too (WrapDecoderFactoryWithSdpDefaults).
+    return WrapDecoderFactoryWithSdpDefaults(CustomObjCToNativeVideoDecoderFactory([[TGRTCDefaultVideoDecoderFactory alloc] initWithAv1:true]));
+}
+
+bool DarwinInterface::canEncodeAv1Realtime() {
+    return CurrentCpuCanEncodeAv1Realtime();
+}
+#endif
 
 bool DarwinInterface::supportsEncoding(const std::string &codecName) {
     if (false) {
@@ -131,14 +162,6 @@ webrtc::scoped_refptr<WrappedAudioDeviceModule> DarwinInterface::wrapAudioDevice
 #else
     return rtc::make_ref_counted<AudioDeviceModuleMacos>(module);
 #endif
-}
-
-void DarwinInterface::setupVideoDecoding(AVCodecContext *codecContext) {
-    return setupDarwinVideoDecoding(codecContext);
-}
-
-webrtc::scoped_refptr<webrtc::VideoFrameBuffer> DarwinInterface::createPlatformFrameFromData(AVFrame const *frame) {
-    return createDarwinPlatformFrameFromData(frame);
 }
 
 std::unique_ptr<PlatformInterface> CreatePlatformInterface() {

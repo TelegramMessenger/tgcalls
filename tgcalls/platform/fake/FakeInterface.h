@@ -15,6 +15,12 @@ class FakeInterface : public PlatformInterface {
  public:
   std::unique_ptr<webrtc::VideoEncoderFactory> makeVideoEncoderFactory(bool preferHardwareEncoding, bool isScreencast) override;
   std::unique_ptr<webrtc::VideoDecoderFactory> makeVideoDecoderFactory() override;
+#if TGCALLS_ENABLE_AV1
+  std::unique_ptr<webrtc::VideoEncoderFactory> makeVideoEncoderFactoryWithAv1(bool preferHardwareEncoding, bool allowAv1Encoding) override;
+  std::unique_ptr<webrtc::VideoDecoderFactory> makeVideoDecoderFactoryWithAv1() override;
+  // The CLI decides "not capable" per call with the video_av1_test_device_incapable knob.
+  bool canEncodeAv1Realtime() override { return true; }
+#endif
   bool supportsEncoding(const std::string &codecName) override;
   webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> makeVideoSource(rtc::Thread *signalingThread,
                                                                         rtc::Thread *workerThread) override;

@@ -200,6 +200,22 @@ public:
     }
 
     virtual void setIsLowBatteryLevel(bool isLowBatteryLevel) = 0;
+    // Whether the device's power state (Low Power Mode, battery, thermal state) lets this side send AV1. Only
+    // InstanceV2ReferenceImpl sends AV1; every other engine ignores it.
+    virtual void setVideoSendAv1AllowedByPower(bool allowed) {
+    }
+    // Debug controls for the camera sender, applied at once and without a renegotiation: the codec forced to
+    // `codecName` among the negotiated ones ("AV1", "H265", "H264", "VP9", "VP8"; empty: the engine's own choice) and
+    // the bitrate cap in kbps (0: the engine's own). Only InstanceV2ReferenceImpl implements them.
+    virtual void setVideoSendCodecOverride(std::string const &codecName) {
+    }
+    virtual void setVideoSendMaxBitrateKbps(int kbps) {
+    }
+    // The latest "video stats" line (InstanceV2ReferenceImpl; empty elsewhere and before the first one), for a debug
+    // readout. Any thread.
+    virtual std::string getVideoStatsLine() {
+        return std::string();
+    }
 
 	virtual std::string getLastError() = 0;
 	virtual std::string getDebugInfo() = 0;

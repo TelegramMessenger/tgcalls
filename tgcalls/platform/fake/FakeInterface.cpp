@@ -18,6 +18,10 @@
 #include "media/base/media_constants.h"
 //#include "api/video_track_source_proxy.h"
 
+#if TGCALLS_ENABLE_AV1
+#include "av1/Av1VideoCodecFactories.h"
+#endif
+
 namespace tgcalls {
 
 namespace {
@@ -144,6 +148,17 @@ std::unique_ptr<webrtc::VideoDecoderFactory> FakeInterface::makeVideoDecoderFact
   return std::make_unique<IosOrderVideoDecoderFactory>(std::move(factory));
 }
 
+#if TGCALLS_ENABLE_AV1
+std::unique_ptr<webrtc::VideoEncoderFactory> FakeInterface::makeVideoEncoderFactoryWithAv1(bool preferHardwareEncoding, bool allowAv1Encoding) {
+  return WrapEncoderFactoryWithAv1(makeVideoEncoderFactory(preferHardwareEncoding, false), allowAv1Encoding);
+}
+
+std::unique_ptr<webrtc::VideoDecoderFactory> FakeInterface::makeVideoDecoderFactoryWithAv1() {
+  // Composed as on Darwin: a decoder factory listing AV1 bare, with the SDP defaults added on top.
+  return WrapDecoderFactoryWithSdpDefaults(WrapDecoderFactoryWithDav1d(makeVideoDecoderFactory()));
+}
+#endif
+
 webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> FakeInterface::makeVideoSource(rtc::Thread *signalingThread,
                                                                                      rtc::Thread *workerThread) {
   return FakePlatformVideoSource::Create();
@@ -156,6 +171,10 @@ bool FakeInterface::supportsEncoding(const std::string &codecName) {
 
 void FakeInterface::adaptVideoSource(webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> videoSource, int width,
                                      int height, int fps) {
+  // The only source this platform hands out is a FakePlatformVideoSource (makeVideoSource).
+  if (videoSource) {
+    static_cast<FakePlatformVideoSource *>(videoSource.get())->OnOutputFormatRequest(width, height, fps);
+  }
 }
 
 std::unique_ptr<VideoCapturerInterface> FakeInterface::makeVideoCapturer(
@@ -168,7 +187,8 @@ std::unique_ptr<VideoCapturerInterface> FakeInterface::makeVideoCapturer(
   auto fakeSource = rtc::scoped_refptr<FakePlatformVideoSource>(
       static_cast<FakePlatformVideoSource *>(source.get()));
   outResolution = std::make_pair(1280, 720);
-  return std::make_unique<FakeVideoCapturer>(std::move(fakeSource), std::move(deviceId), std::move(stateUpdated));
+  return std::make_unique<FakeVideoCapturer>(std::move(fakeSource), std::move(deviceId), std::move(stateUpdated),
+                                             std::move(captureInfoUpdated));
 }
 
 std::unique_ptr<PlatformInterface> CreatePlatformInterface() {

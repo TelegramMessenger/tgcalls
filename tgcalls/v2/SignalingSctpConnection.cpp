@@ -17,9 +17,14 @@
 
 namespace tgcalls {
 
+// RFC 4960's RTO.Max. A longer handshake timer is never meaningful, and a
+// seconds-for-milliseconds slip (1500000) would hold the first INIT
+// retransmission for 25 minutes; dcsctp caps a timer at one day.
 static constexpr int kMaxSignalingSctpTimerMs = 60000;
 
 static void applySignalingSctpTimerOverride(std::map<std::string, json11::Json> const &customParameters, std::string const &name, int &timerMs) {
+    // A value outside 1...kMaxSignalingSctpTimerMs keeps the default: the
+    // factory would run dcsctp's own 1000/1000/3000 ms for one <= 0.
     const int value = getCustomParameterInt(customParameters, name);
     if (value > 0 && value <= kMaxSignalingSctpTimerMs) {
         timerMs = value;
@@ -33,8 +38,6 @@ SignalingSctpConnection::Options SignalingSctpConnection::Options::fromCustomPar
     applySignalingSctpTimerOverride(customParameters, "network_sctp_max_backoff_ms", options.maxBackoffMs);
     return options;
 }
-
-
 
 // Factory that creates CustomDcSctpSocket (with the t1 timer backoff cap fix)
 // instead of the stock DcSctpSocket, with optional timer overrides for the
@@ -151,6 +154,8 @@ SignalingSctpConnection::SignalingSctpConnection(std::shared_ptr<Threads> thread
 _threads(threads),
 _emitData(emitData),
 _onIncomingData(onIncomingData) {
+    RTC_LOG(LS_INFO) << "SignalingSctpConnection: " << (isInitiator ? "initiator" : "responder") << ", t1_init " << options.t1InitTimeoutMs << " ms, t1_cookie " << options.t1CookieTimeoutMs << " ms, max backoff " << options.maxBackoffMs << " ms";
+
     _threads->getNetworkThread()->BlockingCall([&]() {
         _packetTransport = std::make_unique<SignalingPacketTransport>(threads, emitData, /*writable=*/isInitiator);
 

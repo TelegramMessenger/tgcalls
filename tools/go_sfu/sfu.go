@@ -123,6 +123,10 @@ type SFU struct {
 	// participant sends nothing" check. Own lock: incremented under s.mu.RLock.
 	audioRTPCountMu sync.Mutex
 	audioRTPCount   map[uint32]int64
+	// Listener audio of the emulated broadcast server: every speaker's audio RTP, decoded onto a timeline.
+	broadcastAudio *broadcastAudio
+	// The emulated broadcast server: part, time and stream-channel answers per listener.
+	broadcast *broadcastServer
 	loggerFactory  logging.LoggerFactory
 	log           logging.LeveledLogger
 	ctx           context.Context
@@ -133,7 +137,7 @@ func NewSFU() *SFU {
 	lf := logging.NewDefaultLoggerFactory()
 	lf.DefaultLogLevel = logging.LogLevelDebug
 	ctx, cancel := context.WithCancel(context.Background())
-	return &SFU{
+	sfu := &SFU{
 		participants:  make(map[int]*Participant),
 		ssrcRegistry:  make(map[uint32]ssrcInfo),
 		videoSSRCs:     make(map[int][]SimulcastLayer),
@@ -142,11 +146,14 @@ func NewSFU() *SFU {
 		maxActiveLayer: make(map[int]int),
 		twccGenerators: make(map[int]*TransportCCGenerator),
 		audioRTPCount:  make(map[uint32]int64),
+		broadcastAudio: newBroadcastAudio(defaultBroadcastTranscoder(), broadcastDefaultRetainMs),
 		loggerFactory:  lf,
 		log:           lf.NewLogger("sfu"),
 		ctx:           ctx,
 		cancel:        cancel,
 	}
+	sfu.broadcast = newBroadcastServer(sfu.broadcastAudio)
+	return sfu
 }
 
 // Join processes a participant's join payload and returns the SFU's join response JSON.
@@ -229,6 +236,7 @@ func (s *SFU) Join(participantID int, joinPayloadJSON string, iceControlling boo
 	// 9. Register participant and all SSRCs.
 	s.mu.Lock()
 	s.participants[participantID] = p
+	s.broadcastAudio.participantJoined(participantID)
 	s.ssrcRegistry[audioSSRC] = ssrcInfo{participantID: participantID, kind: "audio", layer: -1}
 	if len(videoLayers) > 0 {
 		s.videoSSRCs[participantID] = videoLayers
@@ -420,6 +428,8 @@ func (s *SFU) processIncomingRTP(from *Participant, pkt []byte, ssrc uint32, str
 		s.audioRTPCountMu.Lock()
 		s.audioRTPCount[ssrc]++
 		s.audioRTPCountMu.Unlock()
+
+		s.broadcastAudio.addPacket(ssrc, from.ID, time.Now().UnixMilli(), pkt)
 
 		// Audio: forward to all other participants unconditionally.
 		s.mu.RLock()
@@ -1020,6 +1030,7 @@ func (s *SFU) Leave(participantID int) error {
 
 	// Remove from participants map.
 	delete(s.participants, participantID)
+	s.broadcastAudio.participantLeft(participantID, time.Now().UnixMilli())
 
 	// Remove all SSRCs owned by this participant.
 	for ssrc, info := range s.ssrcRegistry {
@@ -1260,6 +1271,121 @@ func GoSfu_SetNetworkParams(handle C.int, participantID C.int, direction C.int, 
 //export GoSfu_Free
 func GoSfu_Free(ptr *C.char) {
 	C.free(unsafe.Pointer(ptr))
+}
+
+// GoSfu_TestBuildOpusPart is a test hook: it builds one listener-audio part from packets the caller encoded.
+// packets is flattened slot-major (50 slots × n channels); packetOffsets has 50·n + 1 entries and an empty range is
+// an empty frame. endpointsJSON maps channel indexes to video endpoints ({"0":"ep-a"}). The result is freed with
+// GoSfu_Free; nil (and *outLen 0) on error.
+//
+//export GoSfu_TestBuildOpusPart
+func GoSfu_TestBuildOpusPart(ssrcs *C.uint, n C.int, endpointsJSON *C.char, packets *C.uchar, packetOffsets *C.int, outLen *C.int) *C.char {
+	*outLen = 0
+	channels := int(n)
+	if channels <= 0 {
+		return nil
+	}
+	meta := audioPartMeta{VideoEndpoints: map[int]string{}}
+	for _, ssrc := range unsafe.Slice(ssrcs, channels) {
+		meta.SSRCs = append(meta.SSRCs, uint32(ssrc))
+	}
+	var endpoints map[string]string
+	if err := json.Unmarshal([]byte(C.GoString(endpointsJSON)), &endpoints); err != nil {
+		return nil
+	}
+	for key, endpoint := range endpoints {
+		var channel int
+		if _, err := fmt.Sscanf(key, "%d", &channel); err != nil {
+			return nil
+		}
+		meta.VideoEndpoints[channel] = endpoint
+	}
+	offsets := unsafe.Slice(packetOffsets, broadcastSlotsPerPart*channels+1)
+	all := C.GoBytes(unsafe.Pointer(packets), offsets[len(offsets)-1])
+	slots := make([][][]byte, broadcastSlotsPerPart)
+	for s := range slots {
+		slots[s] = make([][]byte, channels)
+		for c := 0; c < channels; c++ {
+			i := s*channels + c
+			if start, end := int(offsets[i]), int(offsets[i+1]); end > start {
+				slots[s][c] = all[start:end]
+			}
+		}
+	}
+	part, err := buildOpusPart(meta, slots)
+	if err != nil {
+		fmt.Printf("[GoSfu] TestBuildOpusPart: %v\n", err)
+		return nil
+	}
+	*outLen = C.int(len(part))
+	return (*C.char)(C.CBytes(part))
+}
+
+// GoSfu_TestFixturePart is a test hook: a video (kind 1) or unified (kind 2) part from the fixture slices in
+// fixtureDir. The result is freed with GoSfu_Free; nil (and *outLen 0) on error.
+//
+//export GoSfu_TestFixturePart
+func GoSfu_TestFixturePart(fixtureDir *C.char, kind C.int, endpoint *C.char, quality C.int, tsMs C.longlong, outLen *C.int) *C.char {
+	*outLen = 0
+	fixtures, err := loadBroadcastFixtures(C.GoString(fixtureDir))
+	if err != nil {
+		fmt.Printf("[GoSfu] TestFixturePart: %v\n", err)
+		return nil
+	}
+	var part []byte
+	switch int(kind) {
+	case 1:
+		part = fixtures.videoPart(C.GoString(endpoint), int(quality), int64(tsMs))
+	case 2:
+		part = fixtures.unifiedPart(int(quality), int64(tsMs))
+	default:
+		return nil
+	}
+	*outLen = C.int(len(part))
+	return (*C.char)(C.CBytes(part))
+}
+
+// GoSfu_TestBroadcastAudioPart is a test hook: it feeds `count` audio RTP packets (flattened, packetOffsets has
+// count + 1 entries) with their arrival times, senders and SSRCs to a fresh listener-audio builder, then builds the
+// part at tsMs. Participants join in order of their first packet. endpointsJSON maps participant ids to video
+// endpoints ({"0":"ep-a"}). The result is freed with GoSfu_Free; nil (and *outLen 0) on error.
+//
+//export GoSfu_TestBroadcastAudioPart
+func GoSfu_TestBroadcastAudioPart(packets *C.uchar, packetOffsets *C.int, arrivalsMs *C.longlong, participants *C.int, ssrcs *C.uint, count C.int, tsMs C.longlong, endpointsJSON *C.char, outLen *C.int) *C.char {
+	*outLen = 0
+	n := int(count)
+	if n <= 0 {
+		return nil
+	}
+	offsets := unsafe.Slice(packetOffsets, n+1)
+	all := C.GoBytes(unsafe.Pointer(packets), offsets[n])
+	arrivals := unsafe.Slice(arrivalsMs, n)
+	senders := unsafe.Slice(participants, n)
+	packetSSRCs := unsafe.Slice(ssrcs, n)
+	var endpoints map[string]string
+	if err := json.Unmarshal([]byte(C.GoString(endpointsJSON)), &endpoints); err != nil {
+		return nil
+	}
+	videoEndpoints := map[int]string{}
+	for key, endpoint := range endpoints {
+		var participant int
+		if _, err := fmt.Sscanf(key, "%d", &participant); err != nil {
+			return nil
+		}
+		videoEndpoints[participant] = endpoint
+	}
+	audio := newBroadcastAudio(defaultBroadcastTranscoder(), broadcastDefaultRetainMs)
+	for i := 0; i < n; i++ {
+		audio.participantJoined(int(senders[i]))
+		audio.addPacket(uint32(packetSSRCs[i]), int(senders[i]), int64(arrivals[i]), all[offsets[i]:offsets[i+1]])
+	}
+	part, err := audio.part(int64(tsMs), videoEndpoints)
+	if err != nil {
+		fmt.Printf("[GoSfu] TestBroadcastAudioPart: %v\n", err)
+		return nil
+	}
+	*outLen = C.int(len(part))
+	return (*C.char)(C.CBytes(part))
 }
 
 //export GoSfu_Shutdown

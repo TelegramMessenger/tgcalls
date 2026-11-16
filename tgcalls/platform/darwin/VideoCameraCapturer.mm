@@ -146,10 +146,22 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
         }
         
         NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
+        // Start from the orientation the device has now. Only a change posts a notification, so a device already held
+        // in landscape when the camera starts (iPhone Duo's inner screen reads upright with the body in landscape) kept
+        // sending portrait-tagged frames until it was moved. Notifications are generated from here, on the main
+        // thread, so the orientation is known at once when this is the first client; `stopCapture` ends them.
+        [[UIDevice currentDevice] beginGeneratingDeviceOrientationNotifications];
+        UIDeviceOrientation currentDeviceOrientation = [UIDevice currentDevice].orientation;
+        if (UIDeviceOrientationIsPortrait(currentDeviceOrientation) || UIDeviceOrientationIsLandscape(currentDeviceOrientation)) {
+            _orientation = currentDeviceOrientation;
+        } else {
+            // Not known yet (or flat): the first change notification brings it. The status bar orientation is the
+            // interface's, measured against the screen rather than the device, and only a stand-in.
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-        _orientation = deviceOrientation([[UIApplication sharedApplication] statusBarOrientation]);
+            _orientation = deviceOrientation([[UIApplication sharedApplication] statusBarOrientation]);
 #pragma clang diagnostic pop
+        }
         _rotation = RTCVideoRotation_90;
         
         switch (_orientation) {
@@ -327,10 +339,6 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
       dispatchAsyncOnType:RTCDispatcherTypeCaptureSession
    block:^{
       RTCLogInfo("startCaptureWithDevice %@ @ %ld fps", format, (long)fps);
-      
-      dispatch_async(dispatch_get_main_queue(), ^{
-          [[UIDevice currentDevice] beginGeneratingDeviceOrientationNotifications];
-      });
       
       _currentDevice = device;
       
