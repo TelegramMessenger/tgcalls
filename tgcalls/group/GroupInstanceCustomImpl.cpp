@@ -1403,6 +1403,7 @@ public:
 
         _threads->getNetworkThread()->BlockingCall([this]() {
             _rtpTransport->UnsubscribeSentPacket(this);
+            *_isRtcpPacketReceivedSubscribed = false;
         });
 
         _channelManager = nullptr;
@@ -1606,8 +1607,10 @@ public:
             _rtpTransport->SubscribeSentPacket(this, [this](const rtc::SentPacket &packet) {
                 this->OnSentPacket_w(packet);
             });
-            _rtpTransport->SubscribeRtcpPacketReceived(this, [this](rtc::CopyOnWriteBuffer *packet, int64_t timestamp) {
-                this->OnRtcpPacketReceived_n(packet, timestamp);
+            _rtpTransport->SubscribeRtcpPacketReceived(this, [this, isSubscribed = _isRtcpPacketReceivedSubscribed](rtc::CopyOnWriteBuffer *packet, int64_t timestamp) {
+                if (*isSubscribed) {
+                    this->OnRtcpPacketReceived_n(packet, timestamp);
+                }
             });
         });
 
@@ -3694,6 +3697,7 @@ private:
     webrtc::Environment _webrtcEnvironment;
     std::unique_ptr<webrtc::NetEqFactory> _netEqFactory;
     std::unique_ptr<webrtc::Call> _call;
+    std::shared_ptr<bool> _isRtcpPacketReceivedSubscribed = std::make_shared<bool>(true);
     webrtc::LocalAudioSinkAdapter _audioSource;
     std::shared_ptr<AudioDeviceDataObserverShared> _audioDeviceDataObserverShared;
     webrtc::scoped_refptr<WrappedAudioDeviceModule> _audioDeviceModule;
