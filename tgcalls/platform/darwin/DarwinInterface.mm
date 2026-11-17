@@ -1,4 +1,8 @@
 #include "DarwinInterface.h"
+#if defined(WEBRTC_MAC) && __has_include("CallsRemoteVideo.hpp")
+#include "CallsRemoteVideo.hpp"
+#define TG_CALLS_REMOTE_VIDEO 1
+#endif
 
 #include "VideoCapturerInterfaceImpl.h"
 #include "sdk/objc/native/src/objc_video_track_source.h"
@@ -76,6 +80,11 @@ std::unique_ptr<webrtc::VideoEncoderFactory> DarwinInterface::makeVideoEncoderFa
 }
 
 std::unique_ptr<webrtc::VideoDecoderFactory> DarwinInterface::makeVideoDecoderFactory() {
+#if TG_CALLS_REMOTE_VIDEO
+    if (calls::video::enabled()) {
+        return calls::video::wrapFactory(CustomObjCToNativeVideoDecoderFactory([[TGRTCDefaultVideoDecoderFactory alloc] init]), true);
+    }
+#endif
     return CustomObjCToNativeVideoDecoderFactory([[TGRTCDefaultVideoDecoderFactory alloc] init]);
 }
 

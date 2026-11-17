@@ -1,3 +1,6 @@
+#if defined(WEBRTC_MAC) && __has_include("CallsRemoteAudio.hpp")
+#include "CallsRemoteAudio.hpp"
+#endif
 #include "v2/InstanceV2CompatImpl.h"
 
 #include "LogSinkImpl.h"
@@ -433,6 +436,11 @@ public:
 
         peerConnectionFactoryDependencies.audio_encoder_factory = webrtc::CreateAudioEncoderFactory<webrtc::AudioEncoderOpus>();
         peerConnectionFactoryDependencies.audio_decoder_factory = webrtc::CreateAudioDecoderFactory<webrtc::AudioDecoderOpus>();
+#if defined(WEBRTC_MAC) && __has_include("CallsRemoteAudio.hpp")
+        const bool sandboxAudio = calls::audio::enabled();
+        peerConnectionFactoryDependencies.audio_decoder_factory = calls::audio::wrapFactory(peerConnectionFactoryDependencies.audio_decoder_factory, sandboxAudio);
+        if (sandboxAudio) peerConnectionFactoryDependencies.audio_mixer = calls::audio::makeMixer();
+#endif
 
         peerConnectionFactoryDependencies.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory(true);
         peerConnectionFactoryDependencies.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactory();

@@ -12,11 +12,12 @@ let package = Package(
             targets: ["TgVoipWebrtc"]),
     ],
     dependencies: [
+        .package(name: "CallsMediaIsolation", path: "../../packages/CallsMediaIsolation"),
     ],
     targets: [
         .target(
             name: "TgVoipWebrtc",
-            dependencies: [],
+            dependencies: [.product(name: "CallsRemoteVideoClient", package: "CallsMediaIsolation")],
             path: ".",
             exclude: ["Tests",
                       "tools",

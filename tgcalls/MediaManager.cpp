@@ -1,3 +1,6 @@
+#if defined(WEBRTC_MAC) && __has_include("CallsRemoteAudio.hpp")
+#include "CallsRemoteAudio.hpp"
+#endif
 #include "MediaManager.h"
 
 #include "Instance.h"
@@ -318,6 +321,11 @@ _enableHighBitrateVideo(enableHighBitrateVideo) {
     
     peerConnectionFactoryDeps.audio_encoder_factory = webrtc::CreateAudioEncoderFactory<webrtc::AudioEncoderOpus>();
     peerConnectionFactoryDeps.audio_decoder_factory = webrtc::CreateAudioDecoderFactory<webrtc::AudioDecoderOpus>();
+#if defined(WEBRTC_MAC) && __has_include("CallsRemoteAudio.hpp")
+    const bool sandboxAudio = calls::audio::enabled();
+    peerConnectionFactoryDeps.audio_decoder_factory = calls::audio::wrapFactory(peerConnectionFactoryDeps.audio_decoder_factory, sandboxAudio);
+    if (sandboxAudio) peerConnectionFactoryDeps.audio_mixer = calls::audio::makeMixer();
+#endif
 
     peerConnectionFactoryDeps.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory();
     peerConnectionFactoryDeps.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactory();
