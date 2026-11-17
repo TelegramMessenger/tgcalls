@@ -52,6 +52,7 @@
 #ifdef WEBRTC_IOS
 #include "platform/darwin/iOS/tgcalls_audio_device_module_ios.h"
 #endif
+#include <mutex>
 #include <random>
 #include <sstream>
 
@@ -700,6 +701,7 @@ public:
     }
 
     virtual void OnFrame(const webrtc::VideoFrame& frame) override {
+        std::lock_guard<std::mutex> lock(_sinksMutex);
         //_lastFrame = frame;
         for (int i = (int)(_sinks.size()) - 1; i >= 0; i--) {
             auto strong = _sinks[i].lock();
@@ -712,6 +714,7 @@ public:
     }
 
     virtual void OnDiscardedFrame() override {
+        std::lock_guard<std::mutex> lock(_sinksMutex);
         for (int i = (int)(_sinks.size()) - 1; i >= 0; i--) {
             auto strong = _sinks[i].lock();
             if (!strong) {
@@ -723,6 +726,7 @@ public:
     }
 
     void addSink(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> impl) {
+        std::lock_guard<std::mutex> lock(_sinksMutex);
         _sinks.push_back(impl);
         if (_lastFrame) {
             auto strong = impl.lock();
@@ -733,6 +737,7 @@ public:
     }
 
 private:
+    std::mutex _sinksMutex;
     std::vector<std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>> _sinks;
     absl::optional<webrtc::VideoFrame> _lastFrame;
 };
