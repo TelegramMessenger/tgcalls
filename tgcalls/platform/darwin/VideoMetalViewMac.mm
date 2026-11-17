@@ -261,7 +261,9 @@ private:
 
 
 - (void)configure {
-    NSAssert([VideoMetalView isMetalAvailable], @"Metal not availiable on this device");
+    if (![VideoMetalView isMetalAvailable]) {
+        return;
+    }
     self.wantsLayer = YES;
     self.layerContentsRedrawPolicy = NSViewLayerContentsRedrawOnSetNeedsDisplay;
     _metalView = [VideoMetalView createMetalView:self.bounds];
