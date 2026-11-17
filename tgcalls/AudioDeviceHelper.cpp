@@ -85,6 +85,10 @@ void SetAudioOutputDeviceById(webrtc::AudioDeviceModule *adm, const std::string 
 	if (adm->Playing()) {
 		adm->StopPlayout();
 	}
+	const auto recording = adm->Recording();
+	if (recording) {
+		adm->StopRecording();
+	}
 	auto specific = false;
 	const auto finish = [&] {
 		if (!specific) {
@@ -96,6 +100,9 @@ void SetAudioOutputDeviceById(webrtc::AudioDeviceModule *adm, const std::string 
 		}
 		if (adm->InitPlayout() == 0) {
 			adm->StartPlayout();
+		}
+		if (recording && adm->InitRecording() == 0) {
+			adm->StartRecording();
 		}
 	};
 	if (id == "default" || id.empty()) {
