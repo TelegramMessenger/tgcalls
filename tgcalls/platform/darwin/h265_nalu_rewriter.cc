@@ -251,8 +251,18 @@ bool H265CMSampleBufferToAnnexBBuffer(
     // Read the length of the next packet of data. Must convert from big endian
     // to host endian.
     RTC_DCHECK_GE(bytes_remaining, (size_t)nalu_header_size);
+    if (bytes_remaining < (size_t)nalu_header_size) {
+      RTC_LOG(LS_ERROR) << "Truncated NALU length in the encoded frame.";
+      CFRelease(contiguous_buffer);
+      return false;
+    }
     uint32_t* uint32_data_ptr = reinterpret_cast<uint32_t*>(data_ptr);
     uint32_t packet_size = CFSwapInt32BigToHost(*uint32_data_ptr);
+    if (packet_size > bytes_remaining - nalu_header_size) {
+      RTC_LOG(LS_ERROR) << "NALU length exceeds the encoded frame.";
+      CFRelease(contiguous_buffer);
+      return false;
+    }
     // Update buffer.
     annexb_buffer->AppendData(kAnnexBHeaderBytes, sizeof(kAnnexBHeaderBytes));
     annexb_buffer->AppendData(data_ptr + nalu_header_size, packet_size);
