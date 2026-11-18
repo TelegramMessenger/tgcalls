@@ -97,6 +97,9 @@ let package = Package(
                 .define("WEBRTC_OPUS_VARIABLE_COMPLEXITY", to: "0", nil),
                 .define("WEBRTC_USE_H264", to: "", nil),
 
+            ],
+            linkerSettings: [
+                .linkedFramework("ScreenCaptureKit"),
             ]),
     ],
     cxxLanguageStandard: .cxx20
