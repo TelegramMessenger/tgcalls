@@ -72,6 +72,7 @@ let package = Package(
                 
                 .define("WEBRTC_POSIX", to: "1", nil),
                 .define("WEBRTC_MAC", to: "1", nil),
+                .define("TGCALLS_USE_SCREENCAPTUREKIT", to: "1", nil),
                 //NDEBUG FLAG MUST BE THE SAME AS WEBRTC BUILT OTHERWISE IT WILL CRASH SOMEWHERE , USE _DEBUG FOR DEBUG, NDEBUG FOR RELEASE
                 .define("NDEBUG", to: "1", nil),
                 .define("RTC_ENABLE_VP9", to: "1", nil),

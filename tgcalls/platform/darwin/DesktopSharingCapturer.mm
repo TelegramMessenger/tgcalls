@@ -16,6 +16,9 @@
 #include "DarwinVideoSource.h"
 
 #import "helpers/RTCDispatcher+Private.h"
+#ifdef TGCALLS_USE_SCREENCAPTUREKIT
+#import "tgcalls/platform/darwin/ScreenCaptureKitCapturer.h"
+#endif
 #import <QuartzCore/QuartzCore.h>
 
 static RTCVideoFrame *customToObjCVideoFrame(const webrtc::VideoFrame &frame, RTCVideoRotation &rotation) {
@@ -61,6 +64,9 @@ private:
     absl::optional<tgcalls::DesktopCaptureSourceHelper> renderer;
     std::shared_ptr<RendererAdapterImpl> _sink;
     BOOL _isPaused;
+#ifdef TGCALLS_USE_SCREENCAPTUREKIT
+    id _screenCaptureKitCapturer;
+#endif
 }
 - (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)trackSource captureSource:(tgcalls::DesktopCaptureSource)captureSource {
     self = [super init];
@@ -74,6 +80,18 @@ private:
 	        /*.fps = */25,
 	        /*.captureMouse = */true,
         };
+#ifdef TGCALLS_USE_SCREENCAPTUREKIT
+        if (@available(macOS 12.3, *)) {
+            if ([ScreenCaptureKitCapturer isEnabled]) {
+                _screenCaptureKitCapturer = [[ScreenCaptureKitCapturer alloc] initWithSource:captureSource data:data frameReceived:^(RTC_OBJC_TYPE(RTCVideoFrame) *frame) {
+                    getObjCVideoSource(trackSource)->OnCapturedFrame(frame);
+                }];
+            }
+        }
+        if (_screenCaptureKitCapturer != nil) {
+            return self;
+        }
+#endif
         renderer.emplace(captureSource, data);
         renderer->setOutput(_sink);
     }
@@ -81,17 +99,49 @@ private:
 }
 
 -(void)setOnFatalError:(std::function<void ()>)error {
+#ifdef TGCALLS_USE_SCREENCAPTUREKIT
+    if (@available(macOS 12.3, *)) {
+        if (_screenCaptureKitCapturer != nil) {
+            [(ScreenCaptureKitCapturer *)_screenCaptureKitCapturer setOnFatalError:error];
+            return;
+        }
+    }
+#endif
     renderer->setOnFatalError(error);
 }
 -(void)setOnPause:(std::function<void (bool)>)pause {
+#ifdef TGCALLS_USE_SCREENCAPTUREKIT
+    if (@available(macOS 12.3, *)) {
+        if (_screenCaptureKitCapturer != nil) {
+            [(ScreenCaptureKitCapturer *)_screenCaptureKitCapturer setOnPause:pause];
+            return;
+        }
+    }
+#endif
     renderer->setOnPause(pause);
 }
 
 -(void)start {
+#ifdef TGCALLS_USE_SCREENCAPTUREKIT
+    if (@available(macOS 12.3, *)) {
+        if (_screenCaptureKitCapturer != nil) {
+            [(ScreenCaptureKitCapturer *)_screenCaptureKitCapturer start];
+            return;
+        }
+    }
+#endif
     renderer->start();
 }
 
 -(void)stop {
+#ifdef TGCALLS_USE_SCREENCAPTUREKIT
+    if (@available(macOS 12.3, *)) {
+        if (_screenCaptureKitCapturer != nil) {
+            [(ScreenCaptureKitCapturer *)_screenCaptureKitCapturer stop];
+            return;
+        }
+    }
+#endif
     renderer->stop();
 }
 
@@ -100,9 +150,9 @@ private:
     _isPaused = !isEnabled;
     if (updated) {
         if (isEnabled) {
-            renderer->start();
+            [self start];
         } else {
-            renderer->stop();
+            [self stop];
         }
     }
 }
@@ -111,6 +161,14 @@ private:
 }
 
 - (void)setUncroppedSink:(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame> >)sink {
+#ifdef TGCALLS_USE_SCREENCAPTUREKIT
+    if (@available(macOS 12.3, *)) {
+        if (_screenCaptureKitCapturer != nil) {
+            [(ScreenCaptureKitCapturer *)_screenCaptureKitCapturer setSecondaryOutput:sink];
+            return;
+        }
+    }
+#endif
     renderer->setSecondaryOutput(sink);
 }
 
