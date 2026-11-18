@@ -25,6 +25,7 @@
 #include "api/video/nv12_buffer.h"
 
 #include "VideoCaptureView.h"
+#include "CameraFrameRotation.h"
 
 namespace {
 
@@ -36,19 +37,73 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const webrtc::scoped_
     return static_cast<tgcalls::DarwinVideoTrackSource *>(proxy_source->internal());
 }
 
-static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation) {
+static_assert((int)tgcalls::CameraDeviceOrientation::Unknown == UIDeviceOrientationUnknown, "");
+static_assert((int)tgcalls::CameraDeviceOrientation::Portrait == UIDeviceOrientationPortrait, "");
+static_assert((int)tgcalls::CameraDeviceOrientation::PortraitUpsideDown == UIDeviceOrientationPortraitUpsideDown, "");
+static_assert((int)tgcalls::CameraDeviceOrientation::LandscapeLeft == UIDeviceOrientationLandscapeLeft, "");
+static_assert((int)tgcalls::CameraDeviceOrientation::LandscapeRight == UIDeviceOrientationLandscapeRight, "");
+static_assert((int)tgcalls::CameraDeviceOrientation::FaceUp == UIDeviceOrientationFaceUp, "");
+static_assert((int)tgcalls::CameraDeviceOrientation::FaceDown == UIDeviceOrientationFaceDown, "");
+static_assert((int)tgcalls::CameraInterfaceOrientation::Unknown == UIInterfaceOrientationUnknown, "");
+static_assert((int)tgcalls::CameraInterfaceOrientation::Portrait == UIInterfaceOrientationPortrait, "");
+static_assert((int)tgcalls::CameraInterfaceOrientation::PortraitUpsideDown == UIInterfaceOrientationPortraitUpsideDown, "");
+static_assert((int)tgcalls::CameraInterfaceOrientation::LandscapeLeft == UIInterfaceOrientationLandscapeLeft, "");
+static_assert((int)tgcalls::CameraInterfaceOrientation::LandscapeRight == UIInterfaceOrientationLandscapeRight, "");
+
+static tgcalls::CameraDeviceOrientation cameraDeviceOrientation(UIDeviceOrientation orientation) {
     switch (orientation) {
-        case UIInterfaceOrientationPortrait:
-            return UIDeviceOrientationPortrait;
-        case UIInterfaceOrientationPortraitUpsideDown:
-            return UIDeviceOrientationPortraitUpsideDown;
-        case UIInterfaceOrientationLandscapeLeft:
-            return UIDeviceOrientationLandscapeRight;
-        case UIInterfaceOrientationLandscapeRight:
-            return UIDeviceOrientationLandscapeLeft;
+        case UIDeviceOrientationPortrait:
+        case UIDeviceOrientationPortraitUpsideDown:
+        case UIDeviceOrientationLandscapeLeft:
+        case UIDeviceOrientationLandscapeRight:
+        case UIDeviceOrientationFaceUp:
+        case UIDeviceOrientationFaceDown:
+            return (tgcalls::CameraDeviceOrientation)orientation;
         default:
-            return UIDeviceOrientationPortrait;
+            return tgcalls::CameraDeviceOrientation::Unknown;
     }
+}
+
+// The interface orientation of the app's window scene, the foreground-active one first. The status bar orientation
+// that stood in for it before returns unknown on iOS 27, which made every stand-in portrait. Unknown for a scene on
+// another screen than the main one: a window's interface orientation is measured against its own screen, and only the
+// main screen's portrait is the device body's portrait. iPhone Duo's inner screen, the one that is not main while
+// unfolded, reads upright in portrait with the body in landscape-left, so its interface orientation would tag the
+// frames a quarter or half turn off; it keeps the portrait stand-in it had. Main thread only.
+static UIInterfaceOrientation currentInterfaceOrientation() {
+    NSCAssert([NSThread isMainThread], @"currentInterfaceOrientation must be called on the main thread.");
+    UIWindowScene *selectedScene = nil;
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if (![scene isKindOfClass:[UIWindowScene class]]) {
+            continue;
+        }
+        if (selectedScene == nil || scene.activationState == UISceneActivationStateForegroundActive) {
+            selectedScene = (UIWindowScene *)scene;
+        }
+        if (scene.activationState == UISceneActivationStateForegroundActive) {
+            break;
+        }
+    }
+    if (selectedScene != nil) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        UIScreen *mainScreen = [UIScreen mainScreen];
+#pragma clang diagnostic pop
+        if (selectedScene.screen != mainScreen) {
+            return UIInterfaceOrientationUnknown;
+        }
+        if (@available(iOS 16.0, *)) {
+            return selectedScene.effectiveGeometry.interfaceOrientation;
+        }
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        return selectedScene.interfaceOrientation;
+#pragma clang diagnostic pop
+    }
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    return [[UIApplication sharedApplication] statusBarOrientation];
+#pragma clang diagnostic pop
 }
 
 }
@@ -149,41 +204,18 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
         // Start from the orientation the device has now. Only a change posts a notification, so a device already held
         // in landscape when the camera starts (iPhone Duo's inner screen reads upright with the body in landscape) kept
         // sending portrait-tagged frames until it was moved. Notifications are generated from here, on the main
-        // thread, so the orientation is known at once when this is the first client; `stopCapture` ends them.
+        // thread; `stopCapture` ends them. When this is the first client the orientation can still be unknown here
+        // (on the simulator it is, and arrives with the first notification), and a device lying flat or tilted far
+        // back reports face up and nothing else while it stays so. The interface orientation stands in for both
+        // (`initialCameraDeviceOrientation`): measured against the screen rather than the device, it is the device's
+        // own on the main screen (iPhone, iPad), and unknown, so portrait, elsewhere (`currentInterfaceOrientation`).
         [[UIDevice currentDevice] beginGeneratingDeviceOrientationNotifications];
         UIDeviceOrientation currentDeviceOrientation = [UIDevice currentDevice].orientation;
-        if (UIDeviceOrientationIsPortrait(currentDeviceOrientation) || UIDeviceOrientationIsLandscape(currentDeviceOrientation)) {
-            _orientation = currentDeviceOrientation;
-        } else {
-            // Not known yet (or flat): the first change notification brings it. The status bar orientation is the
-            // interface's, measured against the screen rather than the device, and only a stand-in.
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-            _orientation = deviceOrientation([[UIApplication sharedApplication] statusBarOrientation]);
-#pragma clang diagnostic pop
-        }
-        _rotation = RTCVideoRotation_90;
-        
-        switch (_orientation) {
-            case UIDeviceOrientationPortrait:
-                _rotation = RTCVideoRotation_90;
-                break;
-            case UIDeviceOrientationPortraitUpsideDown:
-                _rotation = RTCVideoRotation_270;
-                break;
-            case UIDeviceOrientationLandscapeLeft:
-                _rotation = useFrontCamera ? RTCVideoRotation_180 : RTCVideoRotation_0;
-                break;
-            case UIDeviceOrientationLandscapeRight:
-                _rotation = useFrontCamera ? RTCVideoRotation_0 : RTCVideoRotation_180;
-                break;
-            case UIDeviceOrientationFaceUp:
-            case UIDeviceOrientationFaceDown:
-            case UIDeviceOrientationUnknown:
-                // Ignore.
-                break;
-        }
-        
+        UIInterfaceOrientation interfaceOrientation = currentInterfaceOrientation();
+        _orientation = (UIDeviceOrientation)tgcalls::initialCameraDeviceOrientation(cameraDeviceOrientation(currentDeviceOrientation), (tgcalls::CameraInterfaceOrientation)interfaceOrientation);
+        _rotation = (RTCVideoRotation)tgcalls::cameraFrameRotation(cameraDeviceOrientation(_orientation), useFrontCamera, RTCVideoRotation_90);
+        RTC_LOG(LS_INFO) << "VideoCameraCapturer: starting with rotation " << (int)_rotation << " (device orientation " << (int)currentDeviceOrientation << ", interface orientation " << (int)interfaceOrientation << ", front camera " << useFrontCamera << ")";
+
         if (_rotationUpdated) {
             int angle = 0;
             switch (_rotation) {
@@ -535,27 +567,9 @@ static UIDeviceOrientation deviceOrientation(UIInterfaceOrientation orientation)
     }
     int deviceRelativeVideoRotation = usingFrontCamera ? RTCVideoRotation_90 : RTCVideoRotation_90;
     if (!_rotationLock) {
-        RTCVideoRotation updatedRotation = _rotation;
-        switch (_orientation) {
-            case UIDeviceOrientationPortrait:
-                updatedRotation = RTCVideoRotation_90;
-                break;
-            case UIDeviceOrientationPortraitUpsideDown:
-                updatedRotation = RTCVideoRotation_270;
-                break;
-            case UIDeviceOrientationLandscapeLeft:
-                updatedRotation = usingFrontCamera ? RTCVideoRotation_180 : RTCVideoRotation_0;
-                break;
-            case UIDeviceOrientationLandscapeRight:
-                updatedRotation = usingFrontCamera ? RTCVideoRotation_0 : RTCVideoRotation_180;
-                break;
-            case UIDeviceOrientationFaceUp:
-            case UIDeviceOrientationFaceDown:
-            case UIDeviceOrientationUnknown:
-                // Ignore.
-                break;
-        }
+        RTCVideoRotation updatedRotation = (RTCVideoRotation)tgcalls::cameraFrameRotation(cameraDeviceOrientation(_orientation), usingFrontCamera, _rotation);
         if (_rotation != updatedRotation) {
+            RTC_LOG(LS_INFO) << "VideoCameraCapturer: rotation " << (int)_rotation << " -> " << (int)updatedRotation << " (device orientation " << (int)_orientation << ", front camera " << usingFrontCamera << ")";
             _rotation = updatedRotation;
             if (_rotationUpdated) {
                 int angle = 0;
