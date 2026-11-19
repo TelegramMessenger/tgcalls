@@ -12,9 +12,6 @@
 #include <string>
 #include <map>
 
-struct AVFrame;
-struct AVCodecContext;
-
 namespace tgcalls {
 
 enum class VideoState;
@@ -341,11 +338,6 @@ public:
 	virtual std::unique_ptr<VideoCapturerInterface> makeVideoCapturer(webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, std::string deviceId, std::function<void(VideoState)> stateUpdated, std::function<void(PlatformCaptureInfo)> captureInfoUpdated, std::shared_ptr<PlatformContext> platformContext, std::pair<int, int> &outResolution) = 0;
     virtual webrtc::scoped_refptr<WrappedAudioDeviceModule> wrapAudioDeviceModule(webrtc::scoped_refptr<webrtc::AudioDeviceModule> module) {
         return rtc::make_ref_counted<DefaultWrappedAudioDeviceModule>(module);
-    }
-    virtual void setupVideoDecoding(AVCodecContext *codecContext) {
-    }
-    virtual webrtc::scoped_refptr<webrtc::VideoFrameBuffer> createPlatformFrameFromData(AVFrame const *frame) {
-        return nullptr;
     }
 
 public:

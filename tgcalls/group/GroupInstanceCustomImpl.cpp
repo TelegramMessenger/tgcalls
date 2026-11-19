@@ -32,6 +32,7 @@
 #include "media/base/rtp_utils.h"
 #include "api/call/audio_sink.h"
 #include "modules/audio_processing/audio_buffer.h"
+#include "modules/audio_device/include/audio_device_data_observer.h"
 #include "absl/strings/match.h"
 #include "modules/audio_processing/agc2/vad_wrapper.h"
 #include "pc/channel.h"
@@ -40,7 +41,6 @@
 #include "modules/audio_coding/neteq/default_neteq_factory.h"
 #include "modules/audio_coding/include/audio_coding_module.h"
 #include "common_audio/include/audio_util.h"
-#include "modules/audio_device/include/audio_device_data_observer.h"
 #include "modules/rtp_rtcp/source/rtp_util.h"
 #include "api/environment/environment_factory.h"
 #include "api/peer_connection_interface.h"
@@ -55,12 +55,8 @@
 #include "platform/PlatformInterface.h"
 #include "LogSinkImpl.h"
 #include "CodecSelectHelper.h"
-#include "AudioStreamingPart.h"
-#include "VideoStreamingPart.h"
 #include "AudioDeviceHelper.h"
 #include "FakeAudioDeviceModule.h"
-#include "StreamingMediaContext.h"
-#include "StreamingAudioRenderer.h"
 #ifdef WEBRTC_IOS
 #include "platform/darwin/iOS/tgcalls_audio_device_module_ios.h"
 #endif
@@ -1148,73 +1144,10 @@ private:
 
 };
 
-class RequestedBroadcastPart {
+class PlayoutFrameObserver : public webrtc::AudioDeviceDataObserver {
 public:
-    int64_t timestamp = 0;
-    std::shared_ptr<BroadcastPartTask> task;
-
-    explicit RequestedBroadcastPart(int64_t timestamp_, std::shared_ptr<BroadcastPartTask> task_) :
-        timestamp(timestamp_), task(task_) {
-    }
-};
-
-struct DecodedBroadcastPart {
-    struct DecodedBroadcastPartChannel {
-        uint32_t ssrc = 0;
-        std::vector<int16_t> pcmData;
-    };
-
-    DecodedBroadcastPart(int numSamples_, std::vector<DecodedBroadcastPartChannel> &&_channels) :
-        numSamples(numSamples_), channels(std::move(_channels)) {
-    }
-
-    int numSamples = 0;
-    std::vector<DecodedBroadcastPartChannel> channels;
-};
-
-class AudioDeviceDataObserverShared {
-public:
-    explicit AudioDeviceDataObserverShared(std::function<void(int16_t *, size_t, size_t, uint32_t)> onPlayoutFrame) :
+    explicit PlayoutFrameObserver(std::function<void(int16_t *, size_t, size_t, uint32_t)> onPlayoutFrame) :
     _onPlayoutFrame(std::move(onPlayoutFrame)) {
-    }
-
-    ~AudioDeviceDataObserverShared() {
-    }
-
-    void setStreamingContext(std::shared_ptr<StreamingMediaContext> streamingContext) {
-        _mutex.Lock();
-        _streamingContext = streamingContext;
-        _mutex.Unlock();
-    }
-
-    void mixAudio(int16_t *audio_samples, const size_t num_samples, const size_t num_channels, const uint32_t samples_per_sec) {
-        _mutex.Lock();
-        const auto context = _streamingContext;
-        _mutex.Unlock();
-
-        if (context) {
-            _renderer.render([&context](int16_t *samples, size_t numSamples, size_t numChannels, uint32_t sampleRate) {
-                context->getAudio(samples, numSamples, numChannels, sampleRate);
-            }, audio_samples, num_samples, num_channels, samples_per_sec);
-        } else if (_onPlayoutFrame) {
-            _onPlayoutFrame(audio_samples, num_samples, num_channels, samples_per_sec);
-        }
-    }
-
-private:
-    const std::function<void(int16_t *, size_t, size_t, uint32_t)> _onPlayoutFrame;
-    webrtc::Mutex _mutex;
-    StreamingAudioRenderer _renderer;
-    std::shared_ptr<StreamingMediaContext> _streamingContext;
-};
-
-class AudioDeviceDataObserverImpl : public webrtc::AudioDeviceDataObserver {
-public:
-    AudioDeviceDataObserverImpl(std::shared_ptr<AudioDeviceDataObserverShared> shared) :
-    _shared(shared) {
-    }
-
-    virtual ~AudioDeviceDataObserverImpl() {
     }
 
     virtual void OnCaptureData(const void* audio_samples,
@@ -1238,14 +1171,11 @@ public:
         if (num_samples != samples_per_sec / 100) {
             return;
         }
-
-        if (_shared) {
-            _shared->mixAudio((int16_t *)audio_samples, num_samples, num_channels, samples_per_sec);
-        }
+        _onPlayoutFrame((int16_t *)audio_samples, num_samples, num_channels, samples_per_sec);
     }
 
 private:
-    std::shared_ptr<AudioDeviceDataObserverShared> _shared;
+    const std::function<void(int16_t *, size_t, size_t, uint32_t)> _onPlayoutFrame;
 };
 
 class CustomNetEqFactory: public webrtc::NetEqFactory {
@@ -1342,9 +1272,6 @@ public:
     _onPlayoutFrame(std::move(descriptor.onPlayoutFrame)),
     _requestMediaChannelDescriptions(descriptor.requestMediaChannelDescriptions),
     _dataChannelMessageReceived(descriptor.dataChannelMessageReceived),
-    _requestCurrentTime(descriptor.requestCurrentTime),
-    _requestAudioBroadcastPart(descriptor.requestAudioBroadcastPart),
-    _requestVideoBroadcastPart(descriptor.requestVideoBroadcastPart),
     _videoCapture(descriptor.videoCapture),
     _videoCaptureSink(new VideoSinkImpl("VideoCapture")),
     _getVideoSource(descriptor.getVideoSource),
@@ -1512,8 +1439,6 @@ public:
     #endif
         }
 
-        _audioDeviceDataObserverShared = std::make_shared<AudioDeviceDataObserverShared>(std::move(_onPlayoutFrame));
-
         _threads->getWorkerThread()->BlockingCall([this, isMuted = _isMuted]() mutable {
             _audioDeviceModule = createAudioDeviceModule();
             if (!_audioDeviceModule) {
@@ -1644,7 +1569,6 @@ public:
             createOutgoingAudioChannel();
         }*/
 
-        beginNetworkStatusTimer(0);
         beginLogTimer(0);
         //beginAudioChannelCleanupTimer(0);
 
@@ -2283,31 +2207,6 @@ public:
         }, webrtc::TimeDelta::Millis(delayMs));
     }
 
-    void beginNetworkStatusTimer(int delayMs) {
-        const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
-        _threads->getMediaThread()->PostDelayedTask([weak]() {
-            auto strong = weak.lock();
-            if (!strong) {
-                return;
-            }
-
-            if (strong->_connectionMode == GroupConnectionMode::GroupConnectionModeBroadcast || strong->_broadcastEnabledUntilRtcIsConnectedAtTimestamp) {
-                strong->updateBroadcastNetworkStatus();
-            }
-
-            strong->beginNetworkStatusTimer(500);
-        }, webrtc::TimeDelta::Millis(delayMs));
-    }
-
-    void updateBroadcastNetworkStatus() {
-        bool isBroadcastConnected = true;
-
-        if (isBroadcastConnected != _isBroadcastConnected) {
-            _isBroadcastConnected = isBroadcastConnected;
-            updateIsConnected();
-        }
-    }
-
     void configureVideoParams() {
         if (!_sharedVideoInformation) {
             return;
@@ -2487,50 +2386,27 @@ public:
 
         RTC_LOG(LS_INFO) << formatTimestampMillis(rtc::TimeMillis()) << ": " << "setIsRtcConnected: " << _isRtcConnected;
 
-        if (_broadcastEnabledUntilRtcIsConnectedAtTimestamp) {
-            _broadcastEnabledUntilRtcIsConnectedAtTimestamp = absl::nullopt;
-
-            if (_streamingContext) {
-                _streamingContext.reset();
-                _audioDeviceDataObserverShared->setStreamingContext(nullptr);
-            }
-        }
-
         updateIsConnected();
     }
 
     void updateIsConnected() {
         bool isEffectivelyConnected = false;
-        bool isTransitioningFromBroadcastToRtc = false;
         switch (_connectionMode) {
             case GroupConnectionMode::GroupConnectionModeNone: {
                 isEffectivelyConnected = false;
-                if (_broadcastEnabledUntilRtcIsConnectedAtTimestamp && _isBroadcastConnected) {
-                    isEffectivelyConnected = true;
-                    isTransitioningFromBroadcastToRtc = true;
-                }
                 break;
             }
             case GroupConnectionMode::GroupConnectionModeRtc: {
                 isEffectivelyConnected = _isRtcConnected;
-                if (_broadcastEnabledUntilRtcIsConnectedAtTimestamp && _isBroadcastConnected) {
-                    isEffectivelyConnected = true;
-                    isTransitioningFromBroadcastToRtc = true;
-                }
-                break;
-            }
-            case GroupConnectionMode::GroupConnectionModeBroadcast: {
-                isEffectivelyConnected = _isBroadcastConnected;
                 break;
             }
         }
 
         GroupNetworkState effectiveNetworkState;
         effectiveNetworkState.isConnected = isEffectivelyConnected;
-        effectiveNetworkState.isTransitioningFromBroadcastToRtc = isTransitioningFromBroadcastToRtc;
         effectiveNetworkState.connectionMode = _connectionMode;
 
-        if (_effectiveNetworkState.isConnected != effectiveNetworkState.isConnected || _effectiveNetworkState.isTransitioningFromBroadcastToRtc != effectiveNetworkState.isTransitioningFromBroadcastToRtc) {
+        if (_effectiveNetworkState.isConnected != effectiveNetworkState.isConnected) {
             _effectiveNetworkState = effectiveNetworkState;
 
             if (_networkStateUpdated) {
@@ -2853,12 +2729,11 @@ public:
         });
     }
 
-    void setConnectionMode(GroupConnectionMode connectionMode, bool keepBroadcastIfWasEnabled, bool isUnifiedBroadcast) {
+    void setConnectionMode(GroupConnectionMode connectionMode) {
         if (_connectionMode != connectionMode || connectionMode == GroupConnectionMode::GroupConnectionModeNone) {
             GroupConnectionMode previousMode = _connectionMode;
             _connectionMode = connectionMode;
-            _isUnifiedBroadcast = isUnifiedBroadcast;
-            onConnectionModeUpdated(previousMode, keepBroadcastIfWasEnabled);
+            onConnectionModeUpdated(previousMode);
             
             GroupNetworkState effectiveNetworkState = _effectiveNetworkState;
             effectiveNetworkState.connectionMode = _connectionMode;
@@ -2873,22 +2748,13 @@ public:
         }
     }
 
-    void onConnectionModeUpdated(GroupConnectionMode previousMode, bool keepBroadcastIfWasEnabled) {
+    void onConnectionModeUpdated(GroupConnectionMode previousMode) {
         RTC_CHECK(_connectionMode != previousMode || _connectionMode == GroupConnectionMode::GroupConnectionModeNone);
 
         if (previousMode == GroupConnectionMode::GroupConnectionModeRtc) {
             _networkManager->perform([](GroupNetworkManager *networkManager) {
                 networkManager->stop();
             });
-        } else if (previousMode == GroupConnectionMode::GroupConnectionModeBroadcast) {
-            if (keepBroadcastIfWasEnabled) {
-                _broadcastEnabledUntilRtcIsConnectedAtTimestamp = rtc::TimeMillis();
-            } else {
-                if (_streamingContext) {
-                    _streamingContext.reset();
-                    _audioDeviceDataObserverShared->setStreamingContext(nullptr);
-                }
-            }
         }
 
         if (_connectionMode == GroupConnectionMode::GroupConnectionModeNone) {
@@ -2912,54 +2778,6 @@ public:
                 _networkManager->perform([](GroupNetworkManager *networkManager) {
                     networkManager->start();
                 });
-                break;
-            }
-            case GroupConnectionMode::GroupConnectionModeBroadcast: {
-                _isBroadcastConnected = false;
-
-                if (!_streamingContext) {
-                    StreamingMediaContext::StreamingMediaContextArguments arguments;
-                    const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
-                    arguments.threads = _threads;
-                    arguments.isUnifiedBroadcast = _isUnifiedBroadcast;
-                    arguments.requestCurrentTime = _requestCurrentTime;
-                    arguments.requestAudioBroadcastPart = _requestAudioBroadcastPart;
-                    arguments.requestVideoBroadcastPart = _requestVideoBroadcastPart;
-                    arguments.updateAudioLevel = [weak, threads = _threads](uint32_t ssrc, float level, bool isSpeech) {
-                        assert(threads->getMediaThread()->IsCurrent());
-
-                        auto strong = weak.lock();
-                        if (!strong) {
-                            return;
-                        }
-
-                        InternalGroupLevelValue updated;
-                        updated.value.level = level;
-                        updated.value.voice = isSpeech;
-                        updated.timestamp = rtc::TimeMillis();
-                        strong->_audioLevels.insert(std::make_pair(ChannelId(ssrc), std::move(updated)));
-                    };
-                    _streamingContext = std::make_shared<StreamingMediaContext>(std::move(arguments));
-
-                    for (const auto &it : _pendingVideoSinks) {
-                        for (const auto &sink : it.second) {
-                            _streamingContext->addVideoSink(it.first.endpointId, sink);
-                        }
-                    }
-
-                    for (const auto &it : _volumeBySsrc) {
-                        _streamingContext->setVolume(it.first, it.second);
-                    }
-
-                    std::vector<StreamingMediaContext::VideoChannel> streamingVideoChannels;
-                    for (const auto &it : _pendingRequestedVideo) {
-                        streamingVideoChannels.emplace_back(it.maxQuality, it.endpointId);
-                    }
-                    _streamingContext->setActiveVideoChannels(streamingVideoChannels);
-
-                    _audioDeviceDataObserverShared->setStreamingContext(_streamingContext);
-                }
-
                 break;
             }
             default: {
@@ -3283,10 +3101,6 @@ public:
             } else {
                 _pendingVideoSinks[VideoChannelId(endpointId)].push_back(sink);
             }
-
-            if (_streamingContext) {
-                _streamingContext->addVideoSink(endpointId, sink);
-            }
         }
     }
 
@@ -3500,21 +3314,9 @@ public:
         if (it != _incomingAudioChannels.end()) {
             it->second->setVolume(volume);
         }
-
-        if (_streamingContext) {
-            _streamingContext->setVolume(ssrc, volume);
-        }
     }
 
     void setRequestedVideoChannels(std::vector<VideoChannelDescription> &&requestedVideoChannels) {
-        if (_streamingContext) {
-            std::vector<StreamingMediaContext::VideoChannel> streamingVideoChannels;
-            for (const auto &it : requestedVideoChannels) {
-                streamingVideoChannels.emplace_back(it.maxQuality, it.endpointId);
-            }
-            _streamingContext->setActiveVideoChannels(streamingVideoChannels);
-        }
-
         if (!_sharedVideoInformation) {
             _pendingRequestedVideo = std::move(requestedVideoChannels);
             return;
@@ -3599,8 +3401,14 @@ public:
 
 private:
     webrtc::scoped_refptr<WrappedAudioDeviceModule> createAudioDeviceModule() {
-        auto audioDeviceDataObserverShared = _audioDeviceDataObserverShared;
         auto onMutedSpeechActivityDetected = _onMutedSpeechActivityDetected;
+        const auto onPlayoutFrame = _onPlayoutFrame;
+        const auto withPlayoutObserver = [&](webrtc::scoped_refptr<webrtc::AudioDeviceModule> module) -> webrtc::scoped_refptr<webrtc::AudioDeviceModule> {
+            if (!onPlayoutFrame) {
+                return module;
+            }
+            return webrtc::CreateAudioDeviceWithDataObserver(module, std::make_unique<PlayoutFrameObserver>(onPlayoutFrame));
+        };
 #ifdef WEBRTC_IOS
         bool disableRecording = _disableAudioInput;
         bool enableSystemMute = _enableSystemMute;
@@ -3627,9 +3435,7 @@ private:
                 return nullptr;
             }
 
-            auto audioDeviceObserver = std::make_unique<AudioDeviceDataObserverImpl>(audioDeviceDataObserverShared);
-            auto module = webrtc::CreateAudioDeviceWithDataObserver(result, std::move(audioDeviceObserver));
-
+            const auto module = withPlayoutObserver(result);
             if (module->Init() == 0) {
                 return PlatformInterface::SharedInstance()->wrapAudioDeviceModule(module);
             } else {
@@ -3639,13 +3445,10 @@ private:
         if (_createWrappedAudioDeviceModule) {
             auto result = _createWrappedAudioDeviceModule(&_webrtcEnvironment.task_queue_factory());
             if (result) {
-                if (audioDeviceDataObserverShared) {
-                    auto audioDeviceObserver = std::make_unique<AudioDeviceDataObserverImpl>(audioDeviceDataObserverShared);
-                    auto moduleWithObserver = webrtc::CreateAudioDeviceWithDataObserver(result, std::move(audioDeviceObserver));
-                    return rtc::make_ref_counted<DefaultWrappedAudioDeviceModule>(moduleWithObserver);
-                } else {
+                if (!onPlayoutFrame) {
                     return result;
                 }
+                return rtc::make_ref_counted<DefaultWrappedAudioDeviceModule>(withPlayoutObserver(result));
             }
         }
         if (_createAudioDeviceModule) {
@@ -3665,7 +3468,6 @@ private:
 private:
     std::shared_ptr<Threads> _threads;
     GroupConnectionMode _connectionMode = GroupConnectionMode::GroupConnectionModeNone;
-    bool _isUnifiedBroadcast = false;
 
     std::string _statsLogPath;
     std::function<void(GroupNetworkState)> _networkStateUpdated;
@@ -3676,9 +3478,6 @@ private:
     std::function<void(int16_t *, size_t, size_t, uint32_t)> _onPlayoutFrame;
     std::function<std::shared_ptr<RequestMediaChannelDescriptionTask>(std::vector<uint32_t> const &, std::function<void(std::vector<MediaChannelDescription> &&)>)> _requestMediaChannelDescriptions;
     std::function<void(std::string const &)> _dataChannelMessageReceived;
-    std::function<std::shared_ptr<BroadcastPartTask>(std::function<void(int64_t)>)> _requestCurrentTime;
-    std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, std::function<void(BroadcastPart &&)>)> _requestAudioBroadcastPart;
-    std::function<std::shared_ptr<BroadcastPartTask>(int64_t, int64_t, int32_t, VideoChannelDescription::Quality, std::function<void(BroadcastPart &&)>)> _requestVideoBroadcastPart;
     std::shared_ptr<VideoCaptureInterface> _videoCapture;
     std::shared_ptr<VideoSinkImpl> _videoCaptureSink;
     std::function<webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface>()> _getVideoSource;
@@ -3707,7 +3506,6 @@ private:
     std::unique_ptr<webrtc::Call> _call;
     std::shared_ptr<bool> _isRtcpPacketReceivedSubscribed = std::make_shared<bool>(true);
     webrtc::LocalAudioSinkAdapter _audioSource;
-    std::shared_ptr<AudioDeviceDataObserverShared> _audioDeviceDataObserverShared;
     webrtc::scoped_refptr<WrappedAudioDeviceModule> _audioDeviceModule;
     std::function<webrtc::scoped_refptr<webrtc::AudioDeviceModule>(webrtc::TaskQueueFactory*)> _createAudioDeviceModule;
     std::function<webrtc::scoped_refptr<WrappedAudioDeviceModule>(webrtc::TaskQueueFactory*)> _createWrappedAudioDeviceModule;
@@ -3768,8 +3566,6 @@ private:
     bool _usesExternalAudioRecorder = false;
 
     bool _isRtcConnected = false;
-    bool _isBroadcastConnected = false;
-    absl::optional<int64_t> _broadcastEnabledUntilRtcIsConnectedAtTimestamp;
     bool _isDataChannelOpen = false;
     GroupNetworkState _effectiveNetworkState;
 
@@ -3781,7 +3577,6 @@ private:
     std::vector<StateLogRecord<NetworkStateLogRecord>> _remoteNetworkStateLogRecords;
     std::vector<StateLogRecord<NetworkBitrateLogRecord>> _networkBitrateLogRecords;
 
-    std::shared_ptr<StreamingMediaContext> _streamingContext;
 
     webrtc::scoped_refptr<webrtc::PendingTaskSafetyFlag> _workerThreadSafery;
     webrtc::scoped_refptr<webrtc::PendingTaskSafetyFlag> _networkThreadSafery;
@@ -3831,9 +3626,9 @@ void GroupInstanceCustomImpl::stop(std::function<void()> completion) {
     });
 }
 
-void GroupInstanceCustomImpl::setConnectionMode(GroupConnectionMode connectionMode, bool keepBroadcastIfWasEnabled, bool isUnifiedBroadcast) {
-    _internal->perform([connectionMode, keepBroadcastIfWasEnabled, isUnifiedBroadcast](GroupInstanceCustomInternal *internal) {
-        internal->setConnectionMode(connectionMode, keepBroadcastIfWasEnabled, isUnifiedBroadcast);
+void GroupInstanceCustomImpl::setConnectionMode(GroupConnectionMode connectionMode) {
+    _internal->perform([connectionMode](GroupInstanceCustomInternal *internal) {
+        internal->setConnectionMode(connectionMode);
     });
 }
 

@@ -44,7 +44,6 @@ let package = Package(
                       "tgcalls/platform/darwin/VideoCameraCapturer.h",
                       "tgcalls/platform/darwin/CustomExternalCapturer.mm",
                       "tgcalls/platform/darwin/CustomExternalCapturer.h",
-                      "tgcalls/group/StreamingAudioRendererTest.cpp",
                       "tgcalls/group/GroupFrameTransformerTest.cpp",
                       "tgcalls/legacy/InstanceImplLegacy.h",
                       "tgcalls/legacy/InstanceImplLegacy.cpp"

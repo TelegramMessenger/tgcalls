@@ -24,7 +24,7 @@ public:
 
     void stop(std::function<void()> completion);
     
-    void setConnectionMode(GroupConnectionMode connectionMode, bool keepBroadcastIfWasEnabled, bool isUnifiedBroadcast);
+    void setConnectionMode(GroupConnectionMode connectionMode);
 
     void emitJoinPayload(std::function<void(GroupJoinPayload const &)> completion);
     void setJoinResponsePayload(std::string const &payload);

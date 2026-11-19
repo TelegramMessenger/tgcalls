@@ -23,9 +23,12 @@
 - (void)setSize:(CGSize)size;
 
 - (std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)getSink;
-- (void)setOnFirstFrameReceived:(void (^ _Nullable)())onFirstFrameReceived;
+- (void)setOnFirstFrameReceived:(void (^ _Nullable)(float))onFirstFrameReceived;
 - (void)internalSetOnOrientationUpdated:(void (^ _Nullable)(int, CGFloat))onOrientationUpdated;
 - (void)internalSetOnIsMirroredUpdated:(void (^ _Nullable)(bool))onIsMirroredUpdated;
+
+- (void)setIsPaused:(bool)paused;
+- (void)renderToSize:(NSSize)size animated:(bool)animated;
 
 +(BOOL)isAvailable;
 

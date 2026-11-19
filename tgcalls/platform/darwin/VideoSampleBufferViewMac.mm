@@ -78,7 +78,7 @@ private:
     CGSize _currentSize;
     std::shared_ptr<VideoRendererAdapterImpl> _sink;
     
-    void (^_onFirstFrameReceived)();
+    void (^_onFirstFrameReceived)(float);
     bool _firstFrameReceivedReported;
     
     void (^_onOrientationUpdated)(int, CGFloat);
@@ -154,6 +154,7 @@ private:
 
 - (void)setVideoContentMode:(CALayerContentsGravity)mode {
     _videoContentMode = mode;
+    _sampleBufferLayer.videoGravity = [mode isEqualToString:kCAGravityResizeAspect] ? AVLayerVideoGravityResizeAspect : AVLayerVideoGravityResizeAspectFill;
 }
 
 #pragma mark - Private
@@ -161,8 +162,9 @@ private:
 - (void)configure {
     self.wantsLayer = YES;
     _sampleBufferLayer = [[AVSampleBufferDisplayLayer alloc] init];
-    self.layer = _sampleBufferLayer;
-//    [self.layer addSublayer:_sampleBufferLayer];
+    self.layer = [CALayer layer];
+    self.layer.masksToBounds = YES;
+    [self.layer addSublayer:_sampleBufferLayer];
 
     
     _videoFrameSize = CGSizeZero;
@@ -175,7 +177,10 @@ private:
     [CATransaction begin];
     [CATransaction setAnimationDuration:0];
     [CATransaction setDisableActions:true];
-    _sampleBufferLayer.frame = bounds;
+    const bool sideways = _internalOrientation % 2 != 0;
+    _sampleBufferLayer.bounds = CGRectMake(0, 0, sideways ? bounds.size.height : bounds.size.width, sideways ? bounds.size.width : bounds.size.height);
+    _sampleBufferLayer.position = CGPointMake(CGRectGetMidX(bounds), CGRectGetMidY(bounds));
+    _sampleBufferLayer.affineTransform = CGAffineTransformMakeRotation(-_internalOrientation * M_PI_2);
     [CATransaction commit];
     
     if (_didStartWaitingForLayout) {
@@ -195,20 +200,6 @@ private:
     _rotationOverride = rotationOverride;
 
     [self setNeedsLayout:YES];
-}
-
-- (RTCVideoRotation)frameRotation {
-    if (_rotationOverride) {
-        RTCVideoRotation rotation;
-        if (@available(iOS 11, *)) {
-            [_rotationOverride getValue:&rotation size:sizeof(rotation)];
-        } else {
-            [_rotationOverride getValue:&rotation];
-        }
-        return rotation;
-    }
-    
-    return _videoFrame.rotation;
 }
 
 #pragma mark - RTCVideoRenderer
@@ -305,10 +296,8 @@ bool CopyVideoFrameToNV12PixelBuffer(id<RTC_OBJC_TYPE(RTCI420Buffer)> frameBuffe
 
     CMVideoFormatDescriptionRef formatRef = nil;
     OSStatus status = CMVideoFormatDescriptionCreateForImageBuffer(kCFAllocatorDefault, pixelBufferRef, &formatRef);
-    if (status != 0) {
-        return nil;
-    }
-    if (formatRef == nil) {
+    if (status != noErr || formatRef == nil) {
+        CFRelease(pixelBufferRef);
         return nil;
     }
 
@@ -320,6 +309,7 @@ bool CopyVideoFrameToNV12PixelBuffer(id<RTC_OBJC_TYPE(RTCI420Buffer)> frameBuffe
     CMSampleBufferRef sampleBuffer = nil;
     OSStatus bufferStatus = CMSampleBufferCreateReadyWithImageBuffer(kCFAllocatorDefault, pixelBufferRef, formatRef, &timingInfo, &sampleBuffer);
 
+    CFRelease(formatRef);
     CFRelease(pixelBufferRef);
 
     if (bufferStatus != noErr) {
@@ -337,6 +327,14 @@ bool CopyVideoFrameToNV12PixelBuffer(id<RTC_OBJC_TYPE(RTCI420Buffer)> frameBuffe
     return sampleBuffer;
 }
 
+- (void)setIsPaused:(bool)paused {
+    self.enabled = !paused;
+}
+
+- (void)renderToSize:(NSSize)size animated:(bool)animated {
+    [self setFrameSize:size];
+}
+
 - (void)setSize:(CGSize)size {
     assert([NSThread isMainThread]);
 }
@@ -344,11 +342,6 @@ bool CopyVideoFrameToNV12PixelBuffer(id<RTC_OBJC_TYPE(RTCI420Buffer)> frameBuffe
 - (void)renderFrame:(nullable RTCVideoFrame *)frame {
     assert([NSThread isMainThread]);
     
-    if (!_firstFrameReceivedReported && _onFirstFrameReceived) {
-        _firstFrameReceivedReported = true;
-        _onFirstFrameReceived();
-    }
-               
     if (!self.isEnabled) {
         return;
     }
@@ -380,8 +373,11 @@ bool CopyVideoFrameToNV12PixelBuffer(id<RTC_OBJC_TYPE(RTCI420Buffer)> frameBuffe
     CMSampleBufferRef sampleBuffer = [self createSampleBufferFromBuffer:buffer];
     if (sampleBuffer) {
         [_sampleBufferLayer enqueueSampleBuffer:sampleBuffer];
-
         CFRelease(sampleBuffer);
+        if (!_firstFrameReceivedReported && _onFirstFrameReceived) {
+            _firstFrameReceivedReported = true;
+            _onFirstFrameReceived((float)_internalAspect);
+        }
     }
 }
 
@@ -391,7 +387,7 @@ bool CopyVideoFrameToNV12PixelBuffer(id<RTC_OBJC_TYPE(RTCI420Buffer)> frameBuffe
     return _sink;
 }
 
-- (void)setOnFirstFrameReceived:(void (^ _Nullable)())onFirstFrameReceived {
+- (void)setOnFirstFrameReceived:(void (^ _Nullable)(float))onFirstFrameReceived {
     _onFirstFrameReceived = [onFirstFrameReceived copy];
     _firstFrameReceivedReported = false;
 }
@@ -406,6 +402,7 @@ bool CopyVideoFrameToNV12PixelBuffer(id<RTC_OBJC_TYPE(RTCI420Buffer)> frameBuffe
         
         _internalOrientation = internalOrientation;
         _internalAspect = aspect;
+        [self setNeedsLayout:YES];
         if (_onOrientationUpdated) {
             _onOrientationUpdated(internalOrientation, aspect);
         }

@@ -23,8 +23,6 @@
 #include "sdk/objc/native/src/objc_frame_buffer.h"
 #import "sdk/objc/components/video_frame_buffer/RTCCVPixelBuffer.h"
 
-#import "DarwinFFMpeg.h"
-
 #ifdef WEBRTC_IOS
 #include "platform/darwin/iOS/RTCAudioSession.h"
 #include "platform/darwin/iOS/RTCAudioSessionConfiguration.h"
@@ -140,14 +138,6 @@ webrtc::scoped_refptr<WrappedAudioDeviceModule> DarwinInterface::wrapAudioDevice
 #else
     return rtc::make_ref_counted<AudioDeviceModuleMacos>(module);
 #endif
-}
-
-void DarwinInterface::setupVideoDecoding(AVCodecContext *codecContext) {
-    return setupDarwinVideoDecoding(codecContext);
-}
-
-webrtc::scoped_refptr<webrtc::VideoFrameBuffer> DarwinInterface::createPlatformFrameFromData(AVFrame const *frame) {
-    return createDarwinPlatformFrameFromData(frame);
 }
 
 std::unique_ptr<PlatformInterface> CreatePlatformInterface() {

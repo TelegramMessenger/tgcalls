@@ -23,7 +23,7 @@ public:
 
     void stop(std::function<void()> completion) override;
 
-    void setConnectionMode(GroupConnectionMode connectionMode, bool keepBroadcastIfWasEnabled, bool isUnifiedBroadcast) override;
+    void setConnectionMode(GroupConnectionMode connectionMode) override;
 
     void emitJoinPayload(std::function<void(GroupJoinPayload const &)> completion) override;
     void setJoinResponsePayload(std::string const &payload) override;

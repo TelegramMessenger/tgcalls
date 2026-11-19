@@ -1432,7 +1432,7 @@ public:
         return jsepAnswer;
     }
 
-    void setConnectionMode(GroupConnectionMode mode, bool, bool) {
+    void setConnectionMode(GroupConnectionMode mode) {
         // No-op: PeerConnection manages its own connection state.
     }
 
@@ -2676,9 +2676,9 @@ void GroupInstanceReferenceImpl::stop(std::function<void()> completion) {
     });
 }
 
-void GroupInstanceReferenceImpl::setConnectionMode(GroupConnectionMode mode, bool keep, bool unified) {
-    _internal->perform([mode, keep, unified](GroupInstanceReferenceInternal *unwrapped) {
-        unwrapped->setConnectionMode(mode, keep, unified);
+void GroupInstanceReferenceImpl::setConnectionMode(GroupConnectionMode mode) {
+    _internal->perform([mode](GroupInstanceReferenceInternal *unwrapped) {
+        unwrapped->setConnectionMode(mode);
     });
 }
 

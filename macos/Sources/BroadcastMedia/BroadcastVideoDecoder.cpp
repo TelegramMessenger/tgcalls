@@ -127,32 +127,38 @@ struct VideoDecoderState {
         if (context && parameters && sameCodecParameters(*parameters, *newParameters) && timeBase.num == newTimeBase.num && timeBase.den == newTimeBase.den) {
             return true;
         }
-        release();
-        creations++;
         const AVCodec *codec = avcodec_find_decoder(newParameters->codec_id);
         if (!codec) {
             return false;
         }
-        context = avcodec_alloc_context3(codec);
-        if (!context || avcodec_parameters_to_context(context, newParameters) < 0) {
-            release();
+        AVCodecContext *nextContext = avcodec_alloc_context3(codec);
+        if (!nextContext || avcodec_parameters_to_context(nextContext, newParameters) < 0) {
+            avcodec_free_context(&nextContext);
             return false;
         }
-        context->pkt_timebase = newTimeBase;
+        nextContext->pkt_timebase = newTimeBase;
         if (allowHardware) {
             AVBufferRef *device = nullptr;
             if (av_hwdevice_ctx_create(&device, AV_HWDEVICE_TYPE_VIDEOTOOLBOX, nullptr, nullptr, 0) >= 0) {
-                context->hw_device_ctx = device;
+                nextContext->hw_device_ctx = device;
             }
         }
-        context->get_format = chooseFormat;
-        if (avcodec_open2(context, codec, nullptr) < 0) {
-            release();
+        nextContext->get_format = chooseFormat;
+        if (avcodec_open2(nextContext, codec, nullptr) < 0) {
+            avcodec_free_context(&nextContext);
             return false;
         }
-        parameters = avcodec_parameters_alloc();
-        avcodec_parameters_copy(parameters, newParameters);
+        AVCodecParameters *nextParameters = avcodec_parameters_alloc();
+        if (!nextParameters || avcodec_parameters_copy(nextParameters, newParameters) < 0) {
+            avcodec_free_context(&nextContext);
+            avcodec_parameters_free(&nextParameters);
+            return false;
+        }
+        release();
+        context = nextContext;
+        parameters = nextParameters;
         timeBase = newTimeBase;
+        creations++;
         return true;
     }
 };
@@ -287,8 +293,6 @@ std::optional<VideoFrame> VideoPart::nextFrame() {
         // Starting this part (or resuming it after another part's failed setup took the codec): the codec for its
         // parameters, cleared of whatever an earlier part left in it.
         if (!decoder.prepare(state.parameters, state.timeBase)) {
-            // prepare released the codec: no part holds it now.
-            decoder.activePart = nullptr;
             return std::nullopt;
         }
         avcodec_flush_buffers(decoder.context);

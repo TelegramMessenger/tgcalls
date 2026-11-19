@@ -19,6 +19,7 @@ namespace broadcast_audio {
 namespace {
 
 constexpr size_t kCommandCapacity = 256;
+constexpr size_t kResetCommandSlots = 1;
 // Every segment in flight can come back at once (a reset), with room to spare.
 constexpr size_t kRetiredCapacity = 128;
 constexpr size_t kPlayCapacity = 16;
@@ -427,7 +428,7 @@ bool Core::enqueueSegment(int64_t timestampMs, const ChannelSamples *channels, s
     Command command;
     command.type = Command::Type::segment;
     command.segment = segment;
-    if (!_device->_commands.push(command)) {
+    if (!_device->_commands.push(command, kResetCommandSlots)) {
         delete segment;
         return false;
     }
@@ -442,7 +443,7 @@ bool Core::play(int64_t timestampMs, int64_t startUs, int32_t offsetMs) {
     command.timestampMs = timestampMs;
     command.startUs = startUs;
     command.offsetMs = offsetMs;
-    return _device->_commands.push(command);
+    return _device->_commands.push(command, kResetCommandSlots);
 }
 
 void Core::setActive(bool active) {
@@ -470,7 +471,7 @@ void Core::setVolume(uint32_t ssrc, float gain) {
     command.type = Command::Type::volume;
     command.ssrc = ssrc;
     command.gain = gain;
-    if (!_device->_commands.push(command)) {
+    if (!_device->_commands.push(command, kResetCommandSlots)) {
         // Not recorded either, so the app's next update tries again.
         RTC_LOG(LS_WARNING) << "broadcast audio: command queue full, volume for " << ssrc << " dropped";
         return;
@@ -482,9 +483,7 @@ void Core::reset() {
     collect();
     Command command;
     command.type = Command::Type::reset;
-    if (!_device->_commands.push(command)) {
-        RTC_LOG(LS_WARNING) << "broadcast audio: command queue full, reset dropped";
-    }
+    _device->_commands.push(command);
 }
 
 // The RTP path's rule for a report window: the maximum level, voice if any update had it; reported × 2, as the engine

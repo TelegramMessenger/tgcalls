@@ -15,10 +15,10 @@ class SpscQueue {
 
 public:
     // Producer. False when full.
-    bool push(T const &value) {
+    bool push(T const &value, size_t reserved = 0) {
         const size_t tail = _tail.load(std::memory_order_relaxed);
         const size_t head = _head.load(std::memory_order_acquire);
-        if (tail - head >= Capacity) {
+        if (tail - head >= Capacity - reserved) {
             return false;
         }
         _items[tail & (Capacity - 1)] = value;
