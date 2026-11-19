@@ -227,6 +227,8 @@ typedef NS_ENUM(int32_t, OngoingCallDataSavingWebrtc) {
 
 @end
 
+typedef void (^CallCaptionAudioSink)(uint32_t ssrc, NSData * _Nonnull monoFloatPCM);
+
 @interface OngoingCallThreadLocalContextWebrtc : NSObject
 
 + (void)setupLoggingFunction:(void (* _Nullable)(NSString * _Nullable))loggingFunction;
@@ -236,6 +238,8 @@ typedef NS_ENUM(int32_t, OngoingCallDataSavingWebrtc) {
 
 @property (nonatomic, copy) void (^ _Nullable stateChanged)(OngoingCallStateWebrtc, OngoingCallVideoStateWebrtc, OngoingCallRemoteVideoStateWebrtc, OngoingCallRemoteAudioStateWebrtc, OngoingCallRemoteBatteryLevelWebrtc, float);
 @property (nonatomic, copy) void (^ _Nullable signalBarsChanged)(int32_t);
+
+- (void)setCaptionAudioSink:(CallCaptionAudioSink _Nullable)sink;
 @property (nonatomic, copy) void (^ _Nullable audioLevelUpdated)(float);
 
 - (instancetype _Nonnull)initWithVersion:(NSString * _Nonnull)version queue:(id<OngoingCallThreadLocalContextQueueWebrtc> _Nonnull)queue proxy:(VoipProxyServerWebrtc * _Nullable)proxy networkType:(OngoingCallNetworkTypeWebrtc)networkType dataSaving:(OngoingCallDataSavingWebrtc)dataSaving derivedState:(NSData * _Nonnull)derivedState key:(NSData * _Nonnull)key isOutgoing:(bool)isOutgoing connections:(NSArray<OngoingCallConnectionDescriptionWebrtc *> * _Nonnull)connections maxLayer:(int32_t)maxLayer allowP2P:(BOOL)allowP2P allowTCP:(BOOL)allowTCP enableStunMarking:(BOOL)enableStunMarking logPath:(NSString * _Nonnull)logPath statsLogPath:(NSString * _Nonnull)statsLogPath sendSignalingData:(void (^ _Nonnull)(NSData * _Nonnull))sendSignalingData videoCapturer:(OngoingCallThreadLocalContextVideoCapturer * _Nullable)videoCapturer preferredVideoCodec:(NSString * _Nullable)preferredVideoCodec inputDeviceId: (NSString * _Nonnull)inputDeviceId outputDeviceId: (NSString * _Nonnull)outputDeviceId;
@@ -385,6 +389,8 @@ typedef NS_ENUM(int32_t, OngoingGroupCallRequestedVideoQuality) {
 @property (nonatomic, readonly) BroadcastAudioCoreRef _Nonnull broadcastAudioCore;
 
 @property (nonatomic, copy) void (^ _Nullable signalBarsChanged)(int32_t);
+
+- (void)setCaptionAudioSink:(CallCaptionAudioSink _Nullable)sink;
 
 - (instancetype _Nonnull)initWithQueue:(id<OngoingCallThreadLocalContextQueueWebrtc> _Nonnull)queue
     networkStateUpdated:(void (^ _Nonnull)(GroupCallNetworkState))networkStateUpdated

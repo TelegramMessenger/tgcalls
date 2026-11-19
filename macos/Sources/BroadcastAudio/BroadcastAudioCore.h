@@ -51,6 +51,15 @@ public:
     static constexpr size_t kMaxChannelsPerSegment = 32;
     static constexpr int64_t kResyncToleranceUs = 40000;
 
+    struct CaptionAudioBlock {
+        uint32_t generation = 0;
+        uint32_t ssrc = 0;
+        int16_t samples[kBlockSamples] = {};
+    };
+
+    void setCaptionsEnabled(bool enabled);
+    bool takeCaptionAudio(CaptionAudioBlock &block);
+
     explicit Core(Clock clock = defaultClockMicroseconds);
     ~Core();
 

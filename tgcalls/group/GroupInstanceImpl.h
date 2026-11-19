@@ -189,6 +189,7 @@ struct GroupInstanceDescriptor {
     std::function<std::vector<uint8_t>(std::vector<uint8_t> const &, int64_t, bool, int32_t)> e2eEncryptDecrypt;
     bool isConference{false};
     std::function<void(int16_t *, size_t, size_t, uint32_t)> onPlayoutFrame;
+    std::function<void(const int16_t *, size_t, size_t, uint32_t)> onCaptureFrame;
 };
 
 template <typename T>
