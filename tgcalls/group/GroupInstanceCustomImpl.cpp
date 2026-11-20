@@ -3287,6 +3287,18 @@ public:
         if (!_sharedVideoInformation) {
             return;
         }
+        // A channel without a single ssrc would take the endpoint's slot and keep
+        // the real channel from being created when its ssrcs arrive.
+        bool hasSsrc = false;
+        for (const auto &group : videoInformation.ssrcGroups) {
+            if (!group.ssrcs.empty()) {
+                hasSsrc = true;
+                break;
+            }
+        }
+        if (!hasSsrc) {
+            return;
+        }
         if (_incomingVideoChannels.find(VideoChannelId(videoInformation.endpointId)) != _incomingVideoChannels.end()) {
             return;
         }
