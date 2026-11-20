@@ -229,6 +229,14 @@ typedef NS_ENUM(int32_t, OngoingCallDataSavingWebrtc) {
 
 typedef void (^CallCaptionAudioSink)(uint32_t ssrc, NSData * _Nonnull monoFloatPCM);
 
+@interface OngoingCallIncomingAudio : NSObject
+
+@property (nonatomic, readonly) uint32_t ssrc;
+@property (nonatomic, readonly) int32_t sampleRate;
+@property (nonatomic, strong, readonly) NSData * _Nonnull samples;
+
+@end
+
 @interface OngoingCallThreadLocalContextWebrtc : NSObject
 
 + (void)setupLoggingFunction:(void (* _Nullable)(NSString * _Nullable))loggingFunction;
@@ -414,6 +422,8 @@ typedef NS_ENUM(int32_t, OngoingGroupCallRequestedVideoQuality) {
 - (void)addExternalAudioData:(NSData * _Nonnull)data;
 
 - (void)getStats:(void (^ _Nonnull)(OngoingGroupCallStats * _Nonnull))completion;
+
+- (void)setIncomingAudioHandler:(void (^ _Nullable)(NSArray<OngoingCallIncomingAudio *> * _Nonnull))handler;
 
 @end
 
