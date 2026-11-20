@@ -2,6 +2,8 @@
 
 #import "MediaUtils.h"
 #include "BroadcastAudio/BroadcastAudioCoreBridge.h"
+#import "CallAudioTap/CallAudioTap.h"
+#include "AudioFrame.h"
 
 #import "Instance.h"
 #import "InstanceImpl.h"
@@ -1354,6 +1356,8 @@ private:
 
 @interface GroupCallThreadLocalContext () {
     BroadcastAudioCoreRef _broadcastAudioCore;
+    std::shared_ptr<tgcalls_macos::CallAudioTapSlot> _incomingAudioSlot;
+    OngoingCallIncomingAudioPump *_incomingAudioPump;
     id<OngoingCallThreadLocalContextQueueWebrtc> _queue;
 
     std::unique_ptr<tgcalls::GroupInstanceInterface> _instance;
@@ -1489,6 +1493,8 @@ encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, boo
 
         __weak GroupCallThreadLocalContext *weakSelf = self;
         _broadcastAudioCore = BroadcastAudioCoreCreate();
+        _incomingAudioSlot = std::make_shared<tgcalls_macos::CallAudioTapSlot>();
+        std::shared_ptr<tgcalls_macos::CallAudioTapSlot> incomingAudioSlot = _incomingAudioSlot;
         _instance.reset(new tgcalls::GroupInstanceCustomImpl((tgcalls::GroupInstanceDescriptor){
             .threads = tgcalls::StaticThreads::getThreads(),
             .config = config,
@@ -1527,6 +1533,9 @@ encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, boo
                     [result addObject:@(it.value.voice)];
                 }
                 audioLevelsUpdated(result);
+            },
+            .onAudioFrame = [incomingAudioSlot](uint32_t ssrc, tgcalls::AudioFrame const &frame) {
+                incomingAudioSlot->push(ssrc, frame.audio_samples, frame.num_samples, frame.num_channels, frame.samples_per_sec);
             },
             .ssrcActivityUpdated = [activityUpdated](tgcalls::GroupActivitiesUpdate const &update) {
                 NSMutableArray *result = [[NSMutableArray alloc] init];
@@ -1898,6 +1907,16 @@ encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, boo
             completion([[OngoingGroupCallStats alloc] initWithIncomingVideoStats:incomingVideoStats]);
         });
     }
+}
+
+- (void)setIncomingAudioHandler:(void (^ _Nullable)(NSArray<OngoingCallIncomingAudio *> * _Nonnull))handler {
+    if (_incomingAudioPump == nil) {
+        if (handler == nil) {
+            return;
+        }
+        _incomingAudioPump = [[OngoingCallIncomingAudioPump alloc] initWithSlot:_incomingAudioSlot];
+    }
+    [_incomingAudioPump setHandler:handler];
 }
 
 - (void)setTone:(CallAudioTone * _Nullable)tone {
