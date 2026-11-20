@@ -118,6 +118,8 @@ public:
     SpscQueue<Segment *, kRetiredCapacity> _retired;
     SpscQueue<Level, kLevelRecordCapacity> _levelRecords;
     std::atomic<bool> _active{false};
+    SpscQueue<Core::CaptionAudioBlock, 256> _captionAudio;
+    std::atomic<uint32_t> _captionGeneration{0};
 
     bool render(int16_t *samples, size_t frames, size_t channels, uint32_t sampleRate) {
         // Taken even while inactive, so the control thread's commands (the app sets volumes on every participant
@@ -319,6 +321,7 @@ private:
         }
 
         _mixList.clear();
+        const uint32_t captionGeneration = _captionGeneration.load(std::memory_order_acquire);
         for (size_t i = 0; i < _blockSsrcCount; i++) {
             BlockSsrc const &entry = _blockSsrcs[i];
             // Levels on the block as decoded, before gain; a full queue drops the record.
@@ -328,6 +331,13 @@ private:
             record.level = value.first;
             record.voice = value.second;
             _levelRecords.push(record);
+            if ((captionGeneration & 1) != 0 && entry.ssrc != 0 && entry.gain > 0.0f) {
+                Core::CaptionAudioBlock block;
+                block.generation = captionGeneration;
+                block.ssrc = entry.ssrc;
+                std::memcpy(block.samples, entry.samples, sizeof(block.samples));
+                _captionAudio.push(block);
+            }
 
             webrtc::AudioFrame &frame = _frames[i];
             frame.UpdateFrame(0, entry.samples, Core::kBlockSamples, (int)Core::kSampleRate, webrtc::AudioFrame::SpeechType::kNormalSpeech, webrtc::AudioFrame::VADActivity::kVadActive);
@@ -507,6 +517,26 @@ std::vector<Level> Core::takeLevels() {
         level.level *= 2.0f;
     }
     return result;
+}
+
+void Core::setCaptionsEnabled(bool enabled) {
+    const uint32_t generation = _device->_captionGeneration.load(std::memory_order_relaxed);
+    if (((generation & 1) != 0) != enabled) {
+        _device->_captionGeneration.store(generation + 1, std::memory_order_release);
+    }
+}
+
+bool Core::takeCaptionAudio(CaptionAudioBlock &block) {
+    const uint32_t generation = _device->_captionGeneration.load(std::memory_order_acquire);
+    if ((generation & 1) == 0) {
+        return false;
+    }
+    while (_device->_captionAudio.pop(block)) {
+        if (block.generation == generation) {
+            return true;
+        }
+    }
+    return false;
 }
 
 int64_t Core::nowUs() const {

@@ -1146,8 +1146,12 @@ private:
 
 class PlayoutFrameObserver : public webrtc::AudioDeviceDataObserver {
 public:
-    explicit PlayoutFrameObserver(std::function<void(int16_t *, size_t, size_t, uint32_t)> onPlayoutFrame) :
-    _onPlayoutFrame(std::move(onPlayoutFrame)) {
+    PlayoutFrameObserver(
+        std::function<void(int16_t *, size_t, size_t, uint32_t)> onPlayoutFrame,
+        std::function<void(const int16_t *, size_t, size_t, uint32_t)> onCaptureFrame
+    ) :
+    _onPlayoutFrame(std::move(onPlayoutFrame)),
+    _onCaptureFrame(std::move(onCaptureFrame)) {
     }
 
     virtual void OnCaptureData(const void* audio_samples,
@@ -1155,6 +1159,9 @@ public:
                                const size_t bytes_per_sample,
                                const size_t num_channels,
                                const uint32_t samples_per_sec) override {
+        if (_onCaptureFrame && bytes_per_sample == num_channels * sizeof(int16_t)) {
+            _onCaptureFrame(static_cast<const int16_t *>(audio_samples), num_samples, num_channels, samples_per_sec);
+        }
     }
 
     virtual void OnRenderData(const void* audio_samples,
@@ -1162,6 +1169,9 @@ public:
                               const size_t bytes_per_sample,
                               const size_t num_channels,
                               const uint32_t samples_per_sec) override {
+        if (!_onPlayoutFrame) {
+            return;
+        }
         if (bytes_per_sample != num_channels * 2) {
             return;
         }
@@ -1176,6 +1186,7 @@ public:
 
 private:
     const std::function<void(int16_t *, size_t, size_t, uint32_t)> _onPlayoutFrame;
+    const std::function<void(const int16_t *, size_t, size_t, uint32_t)> _onCaptureFrame;
 };
 
 class CustomNetEqFactory: public webrtc::NetEqFactory {
@@ -1270,6 +1281,7 @@ public:
     _activitiesUpdated(descriptor.ssrcActivityUpdated),
     _onAudioFrame(descriptor.onAudioFrame),
     _onPlayoutFrame(std::move(descriptor.onPlayoutFrame)),
+    _onCaptureFrame(std::move(descriptor.onCaptureFrame)),
     _requestMediaChannelDescriptions(descriptor.requestMediaChannelDescriptions),
     _dataChannelMessageReceived(descriptor.dataChannelMessageReceived),
     _videoCapture(descriptor.videoCapture),
@@ -3403,11 +3415,12 @@ private:
     webrtc::scoped_refptr<WrappedAudioDeviceModule> createAudioDeviceModule() {
         auto onMutedSpeechActivityDetected = _onMutedSpeechActivityDetected;
         const auto onPlayoutFrame = _onPlayoutFrame;
+        const auto onCaptureFrame = _onCaptureFrame;
         const auto withPlayoutObserver = [&](webrtc::scoped_refptr<webrtc::AudioDeviceModule> module) -> webrtc::scoped_refptr<webrtc::AudioDeviceModule> {
-            if (!onPlayoutFrame) {
+            if (!onPlayoutFrame && !onCaptureFrame) {
                 return module;
             }
-            return webrtc::CreateAudioDeviceWithDataObserver(module, std::make_unique<PlayoutFrameObserver>(onPlayoutFrame));
+            return webrtc::CreateAudioDeviceWithDataObserver(module, std::make_unique<PlayoutFrameObserver>(onPlayoutFrame, onCaptureFrame));
         };
 #ifdef WEBRTC_IOS
         bool disableRecording = _disableAudioInput;
@@ -3476,6 +3489,7 @@ private:
     std::function<void(GroupActivitiesUpdate const &)> _activitiesUpdated;
     std::function<void(uint32_t, const AudioFrame &)> _onAudioFrame;
     std::function<void(int16_t *, size_t, size_t, uint32_t)> _onPlayoutFrame;
+    std::function<void(const int16_t *, size_t, size_t, uint32_t)> _onCaptureFrame;
     std::function<std::shared_ptr<RequestMediaChannelDescriptionTask>(std::vector<uint32_t> const &, std::function<void(std::vector<MediaChannelDescription> &&)>)> _requestMediaChannelDescriptions;
     std::function<void(std::string const &)> _dataChannelMessageReceived;
     std::shared_ptr<VideoCaptureInterface> _videoCapture;
