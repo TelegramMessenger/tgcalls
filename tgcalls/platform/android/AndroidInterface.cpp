@@ -159,7 +159,7 @@ std::unique_ptr<VideoCapturerInterface> AndroidInterface::makeVideoCapturer(
     std::shared_ptr<PlatformContext> platformContext,
     std::pair<int, int> &outResolution
 ) {
-    return std::make_unique<VideoCapturerInterfaceImpl>(getJavaVideoSource(source), deviceId, stateUpdated, platformContext);
+    return std::make_unique<VideoCapturerInterfaceImpl>(rtc::scoped_refptr<webrtc::JavaVideoTrackSourceInterface>(getJavaVideoSource(source)), deviceId, stateUpdated, platformContext);
 }
 
 std::unique_ptr<rtc::NetworkMonitorFactory> AndroidInterface::createNetworkMonitorFactory() {
