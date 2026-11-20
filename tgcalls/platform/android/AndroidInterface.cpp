@@ -15,38 +15,91 @@
 #include "sdk/android/native_api/video/video_source.h"
 #include "api/video_codecs/builtin_video_encoder_factory.h"
 #include "api/video_codecs/builtin_video_decoder_factory.h"
-#include "api/video_track_source_proxy.h"
+#include "pc/video_track_source_proxy.h"
+#include "sdk/android/src/jni/android_network_monitor.h"
+#include "AndroidContext.h"
+#include "media/engine/simulcast_encoder_adapter.h"
 
 
 namespace tgcalls {
 
-void AndroidInterface::configurePlatformAudio() {
+void AndroidInterface::configurePlatformAudio(int numChannels) {
 
 }
 
-std::unique_ptr<webrtc::VideoEncoderFactory> AndroidInterface::makeVideoEncoderFactory() {
+class SimulcastVideoEncoderFactory : public webrtc::VideoEncoderFactory {
+public:
+
+    std::unique_ptr<webrtc::VideoEncoderFactory> main_factory;
+    std::unique_ptr<webrtc::SimulcastEncoderAdapter> simulcast_adapter;
+
+    SimulcastVideoEncoderFactory(
+        std::unique_ptr<webrtc::VideoEncoderFactory> main_factory
+    ): main_factory(std::move(main_factory)) {}
+
+    std::vector<webrtc::SdpVideoFormat> GetSupportedFormats() const override {
+        return main_factory->GetSupportedFormats();
+    }
+
+    std::vector<webrtc::SdpVideoFormat> GetImplementations() const override {
+        return main_factory->GetImplementations();
+    }
+
+    std::unique_ptr<EncoderSelectorInterface> GetEncoderSelector() const override {
+        return main_factory->GetEncoderSelector();
+    }
+
+    std::unique_ptr<webrtc::VideoEncoder> CreateVideoEncoder(const webrtc::SdpVideoFormat& format) override {
+        return std::make_unique<webrtc::SimulcastEncoderAdapter>(main_factory.get(), format);
+    }
+
+    CodecSupport QueryCodecSupport(
+            const webrtc::SdpVideoFormat& format,
+            absl::optional<std::string> scalability_mode) const override {
+        return main_factory->QueryCodecSupport(format, scalability_mode);
+    }
+};
+
+std::unique_ptr<webrtc::VideoEncoderFactory> AndroidInterface::makeVideoEncoderFactory(bool preferHardwareEncoding, bool isScreencast) {
     JNIEnv *env = webrtc::AttachCurrentThreadIfNeeded();
+
+    webrtc::ScopedJavaLocalRef<jclass> video_capturer_class =
+            webrtc::GetClass(env, "org/telegram/messenger/voip/VideoCapturerDevice");
+    jmethodID video_capturer_shared_egl_method = env->GetStaticMethodID(
+            video_capturer_class.obj(), "getSharedEGLContext", "()Lorg/webrtc/EglBase$Context;");
+    jobject eglContext = env->CallStaticObjectMethod(video_capturer_class.obj(),
+                                                     video_capturer_shared_egl_method);
+
     webrtc::ScopedJavaLocalRef<jclass> factory_class =
             webrtc::GetClass(env, "org/webrtc/DefaultVideoEncoderFactory");
     jmethodID factory_constructor = env->GetMethodID(
             factory_class.obj(), "<init>", "(Lorg/webrtc/EglBase$Context;ZZ)V");
     webrtc::ScopedJavaLocalRef<jobject> factory_object(
             env, env->NewObject(factory_class.obj(), factory_constructor,
-                                nullptr /* shared_context */,
+                                eglContext /* shared_context */,
                                 false /* enable_intel_vp8_encoder */,
                                 true /* enable_h264_high_profile */));
-    return webrtc::JavaToNativeVideoEncoderFactory(env, factory_object.obj());
+
+    return std::make_unique<SimulcastVideoEncoderFactory>(webrtc::JavaToNativeVideoEncoderFactory(env, factory_object.obj()));
 }
 
 std::unique_ptr<webrtc::VideoDecoderFactory> AndroidInterface::makeVideoDecoderFactory() {
     JNIEnv *env = webrtc::AttachCurrentThreadIfNeeded();
+
+    webrtc::ScopedJavaLocalRef<jclass> video_capturer_class =
+            webrtc::GetClass(env, "org/telegram/messenger/voip/VideoCapturerDevice");
+    jmethodID video_capturer_shared_egl_method = env->GetStaticMethodID(
+            video_capturer_class.obj(), "getSharedEGLContext", "()Lorg/webrtc/EglBase$Context;");
+    jobject eglContext = env->CallStaticObjectMethod(video_capturer_class.obj(),
+                                                     video_capturer_shared_egl_method);
+
     webrtc::ScopedJavaLocalRef<jclass> factory_class =
             webrtc::GetClass(env, "org/webrtc/DefaultVideoDecoderFactory");
     jmethodID factory_constructor = env->GetMethodID(
             factory_class.obj(), "<init>", "(Lorg/webrtc/EglBase$Context;)V");
     webrtc::ScopedJavaLocalRef<jobject> factory_object(
             env, env->NewObject(factory_class.obj(), factory_constructor,
-                                nullptr /* shared_context */));
+                                eglContext /* shared_context */));
     return webrtc::JavaToNativeVideoDecoderFactory(env, factory_object.obj());
 }
 
@@ -54,22 +107,37 @@ void AndroidInterface::adaptVideoSource(rtc::scoped_refptr<webrtc::VideoTrackSou
 
 }
 
+// Every source handed out here is a VideoTrackSourceProxy around a Java source,
+// so a capturer finds its own Java source from the proxy it is given.
+static webrtc::JavaVideoTrackSourceInterface *getJavaVideoSource(const webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> &source) {
+    auto proxy = static_cast<webrtc::VideoTrackSourceProxy *>(source.get());
+    return static_cast<webrtc::JavaVideoTrackSourceInterface *>(proxy->internal());
+}
+
 rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> AndroidInterface::makeVideoSource(rtc::Thread *signalingThread, rtc::Thread *workerThread) {
     JNIEnv *env = webrtc::AttachCurrentThreadIfNeeded();
-    _source = webrtc::CreateJavaVideoSource(env, signalingThread, false, false);
-    return webrtc::VideoTrackSourceProxy::Create(signalingThread, workerThread, _source);
+    webrtc::scoped_refptr<webrtc::JavaVideoTrackSourceInterface> source = webrtc::CreateJavaVideoSource(env, signalingThread, false, false);
+    return webrtc::VideoTrackSourceProxy::Create(signalingThread, workerThread, source);
 }
 
 bool AndroidInterface::supportsEncoding(const std::string &codecName) {
     if (hardwareVideoEncoderFactory == nullptr) {
         JNIEnv *env = webrtc::AttachCurrentThreadIfNeeded();
+
+        webrtc::ScopedJavaLocalRef<jclass> video_capturer_class =
+                webrtc::GetClass(env, "org/telegram/messenger/voip/VideoCapturerDevice");
+        jmethodID video_capturer_shared_egl_method = env->GetStaticMethodID(
+                video_capturer_class.obj(), "getSharedEGLContext", "()Lorg/webrtc/EglBase$Context;");
+        jobject eglContext = env->CallStaticObjectMethod(video_capturer_class.obj(),
+                video_capturer_shared_egl_method);
+
         webrtc::ScopedJavaLocalRef<jclass> factory_class =
                 webrtc::GetClass(env, "org/webrtc/HardwareVideoEncoderFactory");
         jmethodID factory_constructor = env->GetMethodID(
                 factory_class.obj(), "<init>", "(Lorg/webrtc/EglBase$Context;ZZ)V");
         webrtc::ScopedJavaLocalRef<jobject> factory_object(
                 env, env->NewObject(factory_class.obj(), factory_constructor,
-                                    nullptr,
+                                    eglContext,
                                     false,
                                     true));
         hardwareVideoEncoderFactory = webrtc::JavaToNativeVideoEncoderFactory(env, factory_object.obj());
@@ -83,10 +151,20 @@ bool AndroidInterface::supportsEncoding(const std::string &codecName) {
     return codecName == cricket::kVp8CodecName;
 }
 
-std::unique_ptr<VideoCapturerInterface> AndroidInterface::makeVideoCapturer(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, std::string deviceId, std::function<void(VideoState)> stateUpdated, std::shared_ptr<PlatformContext> platformContext) {
-    return std::make_unique<VideoCapturerInterfaceImpl>(_source, deviceId, stateUpdated, platformContext);
+std::unique_ptr<VideoCapturerInterface> AndroidInterface::makeVideoCapturer(
+    rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source,
+    std::string deviceId,
+    std::function<void(VideoState)> stateUpdated,
+    std::function<void(PlatformCaptureInfo)> captureInfoUpdated,
+    std::shared_ptr<PlatformContext> platformContext,
+    std::pair<int, int> &outResolution
+) {
+    return std::make_unique<VideoCapturerInterfaceImpl>(getJavaVideoSource(source), deviceId, stateUpdated, platformContext);
 }
 
+std::unique_ptr<rtc::NetworkMonitorFactory> AndroidInterface::createNetworkMonitorFactory() {
+    return std::make_unique<webrtc::jni::AndroidNetworkMonitorFactory>();
+}
 
 std::unique_ptr<PlatformInterface> CreatePlatformInterface() {
 	return std::make_unique<AndroidInterface>();
