@@ -3458,7 +3458,7 @@ private:
         if (_createWrappedAudioDeviceModule) {
             auto result = _createWrappedAudioDeviceModule(&_webrtcEnvironment.task_queue_factory());
             if (result) {
-                if (!onPlayoutFrame) {
+                if (!onPlayoutFrame && !onCaptureFrame) {
                     return result;
                 }
                 return rtc::make_ref_counted<DefaultWrappedAudioDeviceModule>(withPlayoutObserver(result));
