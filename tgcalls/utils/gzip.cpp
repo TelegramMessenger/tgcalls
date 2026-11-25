@@ -23,7 +23,7 @@ bool isGzip(std::vector<uint8_t> const &data) {
     }
 }
 
-absl::optional<std::vector<uint8_t>> gzipData(std::vector<uint8_t> const &data) {
+std::optional<std::vector<uint8_t>> gzipData(std::vector<uint8_t> const &data) {
     z_stream stream;
     stream.zalloc = Z_NULL;
     stream.zfree = Z_NULL;
@@ -55,9 +55,9 @@ absl::optional<std::vector<uint8_t>> gzipData(std::vector<uint8_t> const &data) 
     return output;
 }
 
-absl::optional<std::vector<uint8_t>> gunzipData(std::vector<uint8_t> const &data, size_t sizeLimit) {
+std::optional<std::vector<uint8_t>> gunzipData(std::vector<uint8_t> const &data, size_t sizeLimit) {
     if (!isGzip(data)) {
-        return absl::nullopt;
+        return std::nullopt;
     }
 
     z_stream stream;
@@ -75,7 +75,7 @@ absl::optional<std::vector<uint8_t>> gunzipData(std::vector<uint8_t> const &data
         while (status == Z_OK) {
             if (sizeLimit > 0 && stream.total_out > sizeLimit) {
                 inflateEnd(&stream);
-                return absl::nullopt;
+                return std::nullopt;
             }
 
             if (stream.total_out >= output.size()) {
@@ -93,7 +93,7 @@ absl::optional<std::vector<uint8_t>> gunzipData(std::vector<uint8_t> const &data
     }
 
     if (sizeLimit > 0 && output.size() > sizeLimit) {
-        return absl::nullopt;
+        return std::nullopt;
     }
 
     return output;

@@ -18,7 +18,10 @@
 #include "objc_video_decoder_factory.h"
 #if TGCALLS_ENABLE_AV1
 #include "av1/Av1DeviceGate.h"
+#include "av1/Av1TopLayerFactory.h"
 #include "av1/Av1VideoCodecFactories.h"
+#include "CustomSimulcastEncoderAdapter.h"
+#include "api/environment/deprecated_global_field_trials.h"
 #endif
 #include "sdk/objc/native/src/objc_frame_buffer.h"
 #import "sdk/objc/components/video_frame_buffer/RTCCVPixelBuffer.h"
@@ -61,7 +64,7 @@ static DarwinVideoTrackSource *getObjCVideoSource(const webrtc::scoped_refptr<we
     return results;
 }
 
-std::unique_ptr<rtc::NetworkMonitorFactory> DarwinInterface::createNetworkMonitorFactory() {
+std::unique_ptr<webrtc::NetworkMonitorFactory> DarwinInterface::createNetworkMonitorFactory() {
     return webrtc::CreateNetworkMonitorFactory();
 }
 
@@ -108,13 +111,30 @@ std::unique_ptr<webrtc::VideoDecoderFactory> DarwinInterface::makeVideoDecoderFa
 bool DarwinInterface::canEncodeAv1Realtime() {
     return CurrentCpuCanEncodeAv1Realtime();
 }
+
+std::unique_ptr<webrtc::VideoEncoderFactory> DarwinInterface::makeScreencastVideoEncoderFactoryWithAv1TopLayer(bool preferHardwareEncoding, std::shared_ptr<Av1TopLayerSwitch> av1TopLayer) {
+#ifdef WEBRTC_IOS
+    if (preferHardwareEncoding) {
+        // The in-app screencast's encoders (makeVideoEncoderFactory) with an AV1 top layer: the AV1 path keeps an H264
+        // factory of its own, the same VideoToolbox configuration, for the adapter's lower streams and the top stream's
+        // fallback.
+        std::shared_ptr<webrtc::VideoEncoderFactory> h264 = std::make_shared<webrtc::CustomObjCVideoEncoderFactory>([[TGRTCDefaultVideoEncoderFactory alloc] initWithPreferHardwareH264:true preferX264:false highestH264Level:true screenContent:true], true);
+        Av1TopLayerPlatform platform;
+        platform.makeSimulcastEncoder = [h264](const webrtc::Environment &env, const webrtc::SdpVideoFormat &format, std::function<std::unique_ptr<webrtc::VideoEncoder>()> streamEncoder, bool everyStream) -> std::unique_ptr<webrtc::VideoEncoder> {
+            return std::make_unique<webrtc::CustomSimulcastEncoderAdapter>(env, h264.get(), h264.get(), format, std::move(streamEncoder), everyStream);
+        };
+        return WrapScreencastEncoderFactoryWithAv1TopLayer(makeVideoEncoderFactory(preferHardwareEncoding, true), std::move(platform), std::move(av1TopLayer));
+    }
+#endif
+    return makeVideoEncoderFactory(preferHardwareEncoding, true);
+}
 #endif
 
 bool DarwinInterface::supportsEncoding(const std::string &codecName) {
     if (false) {
     }
 #ifndef WEBRTC_DISABLE_H265
-    else if (codecName == cricket::kH265CodecName) {
+    else if (codecName == webrtc::kH265CodecName) {
 #ifdef WEBRTC_IOS
 		if (@available(iOS 11.0, *)) {
 			return [[AVAssetExportSession allExportPresets] containsObject:AVAssetExportPresetHEVCHighestQuality];
@@ -129,22 +149,22 @@ bool DarwinInterface::supportsEncoding(const std::string &codecName) {
 #endif // WEBRTC_IOS || WEBRTC_MAC
     }
 #endif
-    else if (codecName == cricket::kH264CodecName) {
+    else if (codecName == webrtc::kH264CodecName) {
 #ifdef __x86_64__
         return YES;
 #else
         return NO;
 #endif
-    } else if (codecName == cricket::kVp8CodecName) {
+    } else if (codecName == webrtc::kVp8CodecName) {
         return true;
-    } else if (codecName == cricket::kVp9CodecName) {
+    } else if (codecName == webrtc::kVp9CodecName) {
         return true;
     }
     return false;
 }
 
-webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> DarwinInterface::makeVideoSource(rtc::Thread *signalingThread, rtc::Thread *workerThread) {
-    webrtc::scoped_refptr<tgcalls::DarwinVideoTrackSource> objCVideoTrackSource(new rtc::RefCountedObject<tgcalls::DarwinVideoTrackSource>());
+webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> DarwinInterface::makeVideoSource(webrtc::Thread *signalingThread, webrtc::Thread *workerThread) {
+    webrtc::scoped_refptr<tgcalls::DarwinVideoTrackSource> objCVideoTrackSource(new webrtc::RefCountedObject<tgcalls::DarwinVideoTrackSource>());
     return webrtc::VideoTrackSourceProxy::Create(signalingThread, workerThread, objCVideoTrackSource);
 }
 
@@ -158,9 +178,9 @@ std::unique_ptr<VideoCapturerInterface> DarwinInterface::makeVideoCapturer(webrt
 
 webrtc::scoped_refptr<WrappedAudioDeviceModule> DarwinInterface::wrapAudioDeviceModule(webrtc::scoped_refptr<webrtc::AudioDeviceModule> module) {
 #ifdef WEBRTC_IOS
-    return rtc::make_ref_counted<AudioDeviceModuleIOS>(module);
+    return webrtc::make_ref_counted<AudioDeviceModuleIOS>(module);
 #else
-    return rtc::make_ref_counted<AudioDeviceModuleMacos>(module);
+    return webrtc::make_ref_counted<AudioDeviceModuleMacos>(module);
 #endif
 }
 

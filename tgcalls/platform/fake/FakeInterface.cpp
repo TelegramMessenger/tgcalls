@@ -1,7 +1,9 @@
 #include "FakeInterface.h"
 #include "FakeVideoCapturer.h"
 
+#include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -16,10 +18,13 @@
 #include "api/video_codecs/video_encoder.h"
 #include "api/video_codecs/video_encoder_factory.h"
 #include "media/base/media_constants.h"
+#include "modules/video_coding/include/video_error_codes.h"
 //#include "api/video_track_source_proxy.h"
 
 #if TGCALLS_ENABLE_AV1
 #include "av1/Av1VideoCodecFactories.h"
+#include "av1/Av1TopLayerFactory.h"
+#include "platform/darwin/CustomSimulcastEncoderAdapter.h"
 #endif
 
 namespace tgcalls {
@@ -50,13 +55,13 @@ std::vector<webrtc::SdpVideoFormat> iosLikeFormatOrder(std::vector<webrtc::SdpVi
   std::vector<webrtc::SdpVideoFormat> vp8;
   std::vector<webrtc::SdpVideoFormat> vp9;
   for (const auto& format : formats) {
-    if (absl::EqualsIgnoreCase(format.name, cricket::kH264CodecName)) {
-      auto mode = format.parameters.find(cricket::kH264FmtpPacketizationMode);
+    if (absl::EqualsIgnoreCase(format.name, webrtc::kH264CodecName)) {
+      auto mode = format.parameters.find(webrtc::kH264FmtpPacketizationMode);
       if (mode != format.parameters.end() && mode->second != "1") continue;
       h264.push_back(format);
-    } else if (absl::EqualsIgnoreCase(format.name, cricket::kVp8CodecName)) {
+    } else if (absl::EqualsIgnoreCase(format.name, webrtc::kVp8CodecName)) {
       vp8.push_back(format);
-    } else if (absl::EqualsIgnoreCase(format.name, cricket::kVp9CodecName)) {
+    } else if (absl::EqualsIgnoreCase(format.name, webrtc::kVp9CodecName)) {
       auto profile = format.parameters.find("profile-id");
       if (profile != format.parameters.end() && profile->second != "0") continue;
       vp9.push_back(format);
@@ -66,7 +71,7 @@ std::vector<webrtc::SdpVideoFormat> iosLikeFormatOrder(std::vector<webrtc::SdpVi
   std::vector<webrtc::SdpVideoFormat> result;
   // First H264 slot: the constrained-baseline entry if there is one.
   for (const auto& format : h264) {
-    auto profile = format.parameters.find(cricket::kH264FmtpProfileLevelId);
+    auto profile = format.parameters.find(webrtc::kH264FmtpProfileLevelId);
     if (profile != format.parameters.end() && absl::StartsWithIgnoreCase(profile->second, "42e0")) {
       result.push_back(format);
       break;
@@ -94,11 +99,11 @@ class IosOrderVideoEncoderFactory : public webrtc::VideoEncoderFactory {
     return iosLikeFormatOrder(_inner->GetImplementations());
   }
   CodecSupport QueryCodecSupport(const webrtc::SdpVideoFormat& format,
-                                 absl::optional<std::string> scalability_mode) const override {
+                                 std::optional<std::string> scalability_mode) const override {
     return _inner->QueryCodecSupport(format, scalability_mode);
   }
-  std::unique_ptr<webrtc::VideoEncoder> CreateVideoEncoder(const webrtc::SdpVideoFormat& format) override {
-    return _inner->CreateVideoEncoder(format);
+  std::unique_ptr<webrtc::VideoEncoder> Create(const webrtc::Environment &env, const webrtc::SdpVideoFormat &format) override {
+    return _inner->Create(env, format);
   }
   std::unique_ptr<EncoderSelectorInterface> GetEncoderSelector() const override {
     return _inner->GetEncoderSelector();
@@ -122,15 +127,84 @@ class IosOrderVideoDecoderFactory : public webrtc::VideoDecoderFactory {
                                                const webrtc::SdpVideoFormat& format) override {
     return _inner->Create(env, format);
   }
-  std::unique_ptr<webrtc::VideoDecoder> CreateVideoDecoder(const webrtc::SdpVideoFormat& format) override {
-    return _inner->CreateVideoDecoder(format);
-  }
 
  private:
   std::unique_ptr<webrtc::VideoDecoderFactory> _inner;
 };
 
+// Decoded frames by codec name, over every decoder the fake platform made in this process: what the CLI reports as
+// the codec a side received (one side per process with --split, both sides together in one process).
+std::mutex gDecodedFramesMutex;
+std::map<std::string, int> gDecodedFrames;
+
+class CountingVideoDecoder : public webrtc::VideoDecoder {
+ public:
+  CountingVideoDecoder(std::unique_ptr<webrtc::VideoDecoder> inner, std::string codec)
+      : _inner(std::move(inner)), _codec(std::move(codec)) {}
+
+  bool Configure(const Settings& settings) override { return _inner->Configure(settings); }
+  int32_t Decode(const webrtc::EncodedImage& image, int64_t render_time_ms) override {
+    return count(_inner->Decode(image, render_time_ms));
+  }
+  int32_t Decode(const webrtc::EncodedImage& image, bool missing_frames, int64_t render_time_ms) override {
+    return count(_inner->Decode(image, missing_frames, render_time_ms));
+  }
+  int32_t RegisterDecodeCompleteCallback(webrtc::DecodedImageCallback* callback) override {
+    return _inner->RegisterDecodeCompleteCallback(callback);
+  }
+  int32_t Release() override { return _inner->Release(); }
+  DecoderInfo GetDecoderInfo() const override { return _inner->GetDecoderInfo(); }
+  const char* ImplementationName() const override { return _inner->ImplementationName(); }
+
+ private:
+  int32_t count(int32_t result) {
+    if (result == WEBRTC_VIDEO_CODEC_OK) {
+      std::lock_guard<std::mutex> lock(gDecodedFramesMutex);
+      gDecodedFrames[_codec]++;
+    }
+    return result;
+  }
+
+  std::unique_ptr<webrtc::VideoDecoder> _inner;
+  std::string _codec;
+};
+
+// The outermost decoder factory of the fake platform: its decoders count what they decode (gDecodedFrames).
+class CountingVideoDecoderFactory : public webrtc::VideoDecoderFactory {
+ public:
+  explicit CountingVideoDecoderFactory(std::unique_ptr<webrtc::VideoDecoderFactory> inner) : _inner(std::move(inner)) {}
+
+  std::vector<webrtc::SdpVideoFormat> GetSupportedFormats() const override { return _inner->GetSupportedFormats(); }
+  CodecSupport QueryCodecSupport(const webrtc::SdpVideoFormat& format, bool reference_scaling) const override {
+    return _inner->QueryCodecSupport(format, reference_scaling);
+  }
+  std::unique_ptr<webrtc::VideoDecoder> Create(const webrtc::Environment& env,
+                                               const webrtc::SdpVideoFormat& format) override {
+    return wrap(_inner->Create(env, format), format);
+  }
+
+ private:
+  static std::unique_ptr<webrtc::VideoDecoder> wrap(std::unique_ptr<webrtc::VideoDecoder> decoder,
+                                                    const webrtc::SdpVideoFormat& format) {
+    if (!decoder) return nullptr;
+    return std::make_unique<CountingVideoDecoder>(std::move(decoder), format.name);
+  }
+
+  std::unique_ptr<webrtc::VideoDecoderFactory> _inner;
+};
+
+std::unique_ptr<webrtc::VideoDecoderFactory> makeBaseVideoDecoderFactory() {
+  auto factory = webrtc::CreateBuiltinVideoDecoderFactory();
+  if (gUseBuiltinCodecOrder) return factory;
+  return std::make_unique<IosOrderVideoDecoderFactory>(std::move(factory));
+}
+
 }  // namespace
+
+std::map<std::string, int> fakePlatformDecodedFramesByCodec() {
+  std::lock_guard<std::mutex> lock(gDecodedFramesMutex);
+  return gDecodedFrames;
+}
 
 void setFakePlatformBuiltinCodecOrder(bool useBuiltinOrder) {
   gUseBuiltinCodecOrder = useBuiltinOrder;
@@ -143,9 +217,7 @@ std::unique_ptr<webrtc::VideoEncoderFactory> FakeInterface::makeVideoEncoderFact
 }
 
 std::unique_ptr<webrtc::VideoDecoderFactory> FakeInterface::makeVideoDecoderFactory() {
-  auto factory = webrtc::CreateBuiltinVideoDecoderFactory();
-  if (gUseBuiltinCodecOrder) return factory;
-  return std::make_unique<IosOrderVideoDecoderFactory>(std::move(factory));
+  return std::make_unique<CountingVideoDecoderFactory>(makeBaseVideoDecoderFactory());
 }
 
 #if TGCALLS_ENABLE_AV1
@@ -153,20 +225,32 @@ std::unique_ptr<webrtc::VideoEncoderFactory> FakeInterface::makeVideoEncoderFact
   return WrapEncoderFactoryWithAv1(makeVideoEncoderFactory(preferHardwareEncoding, false), allowAv1Encoding);
 }
 
+std::unique_ptr<webrtc::VideoEncoderFactory> FakeInterface::makeScreencastVideoEncoderFactoryWithAv1TopLayer(bool preferHardwareEncoding, std::shared_ptr<Av1TopLayerSwitch> av1TopLayer) {
+  // As on Darwin: today's screencast factory, and for the AV1 top layer tgcalls' simulcast adapter over an H264 factory
+  // of its own (OpenH264 here, VideoToolbox there), so the CLI runs the adapter and its top-stream hook.
+  std::shared_ptr<webrtc::VideoEncoderFactory> h264 = webrtc::CreateBuiltinVideoEncoderFactory();
+  Av1TopLayerPlatform platform;
+  platform.makeSimulcastEncoder = [h264](const webrtc::Environment &env, const webrtc::SdpVideoFormat &format, std::function<std::unique_ptr<webrtc::VideoEncoder>()> streamEncoder, bool everyStream) -> std::unique_ptr<webrtc::VideoEncoder> {
+    return std::make_unique<webrtc::CustomSimulcastEncoderAdapter>(env, h264.get(), nullptr, format, std::move(streamEncoder), everyStream);
+  };
+  return WrapScreencastEncoderFactoryWithAv1TopLayer(makeVideoEncoderFactory(preferHardwareEncoding, true), std::move(platform), std::move(av1TopLayer));
+}
+
 std::unique_ptr<webrtc::VideoDecoderFactory> FakeInterface::makeVideoDecoderFactoryWithAv1() {
   // Composed as on Darwin: a decoder factory listing AV1 bare, with the SDP defaults added on top.
-  return WrapDecoderFactoryWithSdpDefaults(WrapDecoderFactoryWithDav1d(makeVideoDecoderFactory()));
+  return std::make_unique<CountingVideoDecoderFactory>(
+      WrapDecoderFactoryWithSdpDefaults(WrapDecoderFactoryWithDav1d(makeBaseVideoDecoderFactory())));
 }
 #endif
 
-webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> FakeInterface::makeVideoSource(rtc::Thread *signalingThread,
-                                                                                     rtc::Thread *workerThread) {
+webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> FakeInterface::makeVideoSource(webrtc::Thread *signalingThread,
+                                                                                     webrtc::Thread *workerThread) {
   return FakePlatformVideoSource::Create();
 }
 
 bool FakeInterface::supportsEncoding(const std::string &codecName) {
   return false;
-  //return (codecName == cricket::kH264CodecName) || (codecName == cricket::kVp8CodecName);
+  //return (codecName == webrtc::kH264CodecName) || (codecName == webrtc::kVp8CodecName);
 }
 
 void FakeInterface::adaptVideoSource(webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> videoSource, int width,
@@ -184,7 +268,7 @@ std::unique_ptr<VideoCapturerInterface> FakeInterface::makeVideoCapturer(
   if (!source) return nullptr;
   // The only source this platform hands out is a FakePlatformVideoSource
   // (makeVideoSource above), so the downcast is exact.
-  auto fakeSource = rtc::scoped_refptr<FakePlatformVideoSource>(
+  auto fakeSource = webrtc::scoped_refptr<FakePlatformVideoSource>(
       static_cast<FakePlatformVideoSource *>(source.get()));
   outResolution = std::make_pair(1280, 720);
   return std::make_unique<FakeVideoCapturer>(std::move(fakeSource), std::move(deviceId), std::move(stateUpdated),

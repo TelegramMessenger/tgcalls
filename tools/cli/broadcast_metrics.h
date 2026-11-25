@@ -112,7 +112,7 @@ int readFrameCounter(webrtc::VideoFrame const &frame);
 // The same from a luma plane (a pixel buffer's or a decoder's); -1 when the frame is too small to carry it.
 int readFrameCounter(const uint8_t *y, int strideY, int width, int height);
 
-class CodedFrameSink : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
+class CodedFrameSink : public webrtc::VideoSinkInterface<webrtc::VideoFrame> {
 public:
     void OnFrame(const webrtc::VideoFrame &frame) override;
     void onFrameAt(const webrtc::VideoFrame &frame, int64_t arrivalMs);

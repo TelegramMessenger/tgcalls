@@ -10,7 +10,6 @@ In-process test harness for tgcalls. See the root `CLAUDE.md` for build instruct
 | `compat:<version>` | `InstanceV2CompatImpl` | CompatImpl constructed under that call version, e.g. `compat:8.0.0` against an unchanged `8.0.0` peer: the registry maps 7.0.0–13.0.0 to `InstanceV2Impl`, as the app does |
 | `13.0.0` (default) | `InstanceV2Impl` | Also: 7.0.0, 8.0.0, 9.0.0, 12.0.0 |
 | `11.0.0` | `InstanceV2ReferenceImpl` | Also: 10.0.0. Uses WebRTC PeerConnection |
-| `5.0.0` | `InstanceImpl` (v1) | Also: 2.7.7. Legacy |
 
 ## Architecture (P2P/Reflector)
 - Two `tgcalls::Instance` objects (caller + callee) created via `Meta::Create(version, ...)`
@@ -21,6 +20,9 @@ In-process test harness for tgcalls. See the root `CLAUDE.md` for build instruct
 - Group participant logs (`/tmp/tgcalls_group_p<id>_<pid>.log`) are written at stop and unlinked after validation; set `TGCALLS_CLI_KEEP_LOGS=1` to keep them (added 2026-09-17).
 - `--video` in p2p/reflector mode attaches a `tgcalls::VideoCaptureInterface::Create(threads, ...)` to BOTH descriptors (`descriptor.videoCapture`, the iOS join-time path: camera already on when the call is created). Added 2026-09-17 to reproduce the 18/19 start-glare renegotiation loop; a healthy video call shows 2 `Calling SetLocalDescription` in the `--log-file` for 11.0.0 (one per side since the 2026-10-12 one-round negotiation; 4 for 18/19), no `SetLocalDescription failed`, one `Creating data channel`. Combine with `--delay 100-300` for field-like signaling latency.
 - `run-parity-tests.sh` (2026-10-27): `InstanceV2CompatImpl` under a legacy version against `InstanceV2Impl` under the same version, "no worse than V ↔ V" as numbers. Eight scenarios (delay, mid-call cameras, mute, 30% signaling loss) × three pairings (V-V, CompatImpl caller, CompatImpl callee), 528 calls, ~6 min; `parity_report.py` prints failure counts with a one-sided Fisher p where CompatImpl is worse, and p50/p90 of connection and first audio/video per side. Default version 8.0.0; `-c 14.0.0` runs CompatImpl's ends as `14.0.0` (the pairing the server serves) instead of `compat:8.0.0`.
+  `parity_report.py DIR --baseline BASE_DIR` compares two runs instead (a build against an earlier one: the same
+  pairing of the same scenario in both, a one-sided Fisher p where DIR fails more often, both runs' timings). For
+  11.0.0 run it with `-c 11.0.0`: CompatImpl cannot talk to the reference engine, so all three pairings are 11 ↔ 11.
 - `--video-late-caller-ms N` / `--video-late-callee-ms N` attach that side's capture N ms after the instances are created (the other side gets none unless it has its own value): the Android app's shape, where the camera reaches the engine while the first offer is in flight. `run-negotiation-tests.sh` (2026-10-12) uses them with `network_reference_immediate_capture_renegotiation` to reproduce the late-camera DTLS failure and pins the one-round negotiation (see the tgcalls `CLAUDE.md`).
 - `--video-late` attaches the same captures mid-call via `setVideoCapture` (callee at 3 s, caller at 5 s). With either flag both instances get a `FakeVideoSink` (`setIncomingVideoOutput`) and the summary prints the decoded frames each side received; `remoteMediaStateUpdated` is counted per side. Both are informational, not pass criteria.
 - `--video-screencast` makes those captures screen captures (`VideoCaptureInterface::Create(threads, id, true)`), the private-call screencast path: every engine must still deliver frames both ways.
@@ -28,6 +30,45 @@ In-process test harness for tgcalls. See the root `CLAUDE.md` for build instruct
 - `FakeInterface` platform implementation (pure C++, no iOS/ObjC deps)
 - Stats log validation: both caller and callee write `config.statsLogPath` with bitrate records; non-empty log with at least one non-zero BWE value is a success condition
 - On failure, full tgcalls internal logs (caller + callee) are dumped to stdout via `config.logPath`
+
+## Split-process calls (`--split`) and the mixed-version matrix
+
+One side of a call per process, so two different builds (an M123 CLI and an M159 one) can call each other.
+
+- **p2p**: `--mode p2p --split caller|callee --split-socket PATH`. The caller listens on the Unix socket, the callee
+  connects (either may start first; 60 s to find each other). A hello each way carries the split protocol version
+  (`kSplitProtocolVersion`, `split_channel.h`; a mismatch ends the run) and the caller's call key, and is the start
+  barrier: both instances are created together, as in one process. Signaling packets then cross the socket as frames
+  (u32 big-endian length + bytes), `--delay` / `--drop-rate` applied by the sender. Each process prints its own
+  summary (`Split: <role> (protocol 1), version V`, `Audio heard`, `Video frames`, `Video decoded`, `Video receive
+  codec: <codec> (N frames)`) and exits 0 when its side connected, heard the other's tone and, with `--video`, got its
+  frames. Options naming the other side or an event (`--version2`, `--mute-participants`, `--video-late*`, ...) and
+  unknown options are refused.
+- **group**: `--mode group --split host|join --split-socket PATH`. The host runs the Go SFU and its participants and
+  listens; the joiner (`--participant-id-offset K`, K = the host's participant count) runs only participants. Every
+  SFU call a joiner makes (the join, SSRC lookups, the end-of-run counts) is a JSON request to the host
+  (`split_group.h`; `group_participant.h`'s `sfu*` functions route to the in-process SFU or `RemoteSfu`), and each
+  process knows the other's participants (`remoteParticipants()`): their audio SSRCs for `requestMediaChannelDescriptions`
+  and as senders in validation. Media goes between each participant and the SFU over UDP, as in one process. The run
+  starts when the joiner's participants exist (`ready`); the host keeps its SFU and participants until the joiner has
+  asked for its counts (`done`). Each process prints `Wire:` lines for its own senders and `Audio levels heard` /
+  `Video received` for its own participants against every participant of the call. The SFU options (`--sfu-av1`,
+  `--sfu-dd-id`) are the host's.
+- **Codec per direction (p2p)**: the fake platform's decoders count decoded frames per codec over the whole process
+  (`fakePlatformDecodedFramesByCodec`, `FakeInterface`), which with one side per process is what that side received;
+  the codec with the most frames is its `Video receive codec`. An in-process run prints the count of both sides
+  together (`Video decoded: … (both sides)`).
+- **`run-mixed-version-tests.sh OLD_CLI NEW_CLI [-o DIR] [-k p2p|group] [-v "V ..."]`**: every 1:1 version
+  (7.0.0–14.0.0, 18.0.0) as OLD caller → NEW callee and the reverse, with video, then 11.0.0, 13.0.0 and 18.0.0 again
+  over the mtproto media transport (`--custom-params {"network_use_mtproto":true}`: the framing of
+  `MtProtoDtlsTransport` and 13.0.0's own must match across builds; such a run logs no DTLS or SRTP line, which tells it
+  from a plain one, since `--quiet` hides the rest); group with the host OLD and the
+  joiner NEW and the reverse, for custom, reference, custom↔reference, `--e2e` and `--av1-screencast`. Each pairing is
+  also run OLD ↔ OLD, whose codecs are the reference: p2p the receive codec per direction, group each sender's media
+  payload types with ≥ 30 frames (layers and the RTX types 101/103/105/107 left out: both vary with the bandwidth
+  estimate run to run). A codec that differs is a FAIL. Sockets go under `/tmp` with short names (a socket path holds
+  about 104 bytes; longer is refused). 51 pairings, ~12 min. The host CLI cannot negotiate H.265 (the fake platform
+  lists none), so the matrix does not cover it.
 
 ## Architecture (Group)
 - N participants using `GroupInstanceCustomImpl` and/or `GroupInstanceReferenceImpl` connect to an in-process Go SFU
@@ -39,10 +80,10 @@ In-process test harness for tgcalls. See the root `CLAUDE.md` for build instruct
 - RTP forwarding: audio RTP forwarded to all others unconditionally; video RTP forwarded only to receivers that have requested video from that sender (via `ReceiverVideoConstraints`)
 - SSRC tracking: SFU maintains `ssrcRegistry map[uint32]ssrcInfo` with kind (audio/video/video-rtx) and simulcast layer index, exposed via `GoSfu_QuerySsrc` and `GoSfu_QueryVideoSsrcs` CGo exports
 - SSRC discovery: video SSRCs are broadcast via `ActiveVideoSsrcs` (the test app's `dataChannelMessageReceived` callback consumes them and calls `setRequestedVideoChannels`). Audio SSRCs are discovered by `GroupInstanceReferenceImpl` from the RTP packets WebRTC's demuxer drops (`OnUnDemuxableRtpPacket` seam; mid=0 is sendonly and payload-type demuxing is off, so an SSRC without its own m-line is always dropped) — same shape CustomImpl uses (`receiveUnknownSsrcPacket` → `_requestMediaChannelDescriptions`). The legacy `ActiveAudioSsrcs` data-channel message has been removed.
-- Video SSRC groups: parsed from join payload `"ssrc-groups"` field (SIM + FID semantics), stored per participant
+- Video SSRC groups: parsed from join payload `"ssrc-groups"` field (SIM + FID semantics), stored per participant (`videoLayersFromSSRCGroups`): the SIM group lists the layers; a sender with no SIM group and one FID group (a one-layer AV1 screen share, a conference camera) has that one layer, announced with its FID group alone
 - Colibri video constraints: SFU parses `ReceiverVideoConstraints` from receivers, sends `SenderVideoConstraints` back to senders with `idealHeight`, and sends proactive PLI to trigger keyframes when a receiver first requests video
 - RTCP feedback: SFU demuxes SRTCP from the shared ICE transport (RFC 5761: byte[1] >= 200 && < 224), decrypts with per-participant SRTCP contexts, parses PLI/FIR, and forwards as new PLI to the sender. NACK is terminated (not forwarded).
-- Audio validation: `audioLevelsUpdated` callback tracks remote audio levels; success requires every participant to receive audio from at least one other participant (remote SSRC != 0, level > 0.05). The 440Hz sine tone arrives at ~0.126 level after SFU forwarding.
+- Audio validation: `audioLevelsUpdated` callback tracks remote audio levels; success requires every participant to receive audio from at least one other participant (remote SSRC != 0, level > 0.05), and every peer to report every unmuted sender. A screen sharer (`--screencast-participants`) is a sender only: it is the app's share connection, which plays no audio and whose levels the app never reads, so it is not required to hear or report anyone (`GroupValidationResult::audioListeners`); everyone else must report its screen audio. The 440Hz sine tone arrives at ~0.126 level after SFU forwarding.
 - Video validation: `FakeVideoSink` (implements `rtc::VideoSinkInterface<VideoFrame>`) counts decoded frames per remote endpoint; success requires every participant to receive ≥1 frame from every other
 - Video signaling flow: SFU broadcasts `ActiveVideoSsrcs` over data channel → `dataChannelMessageReceived` callback fires in the app → app calls `setRequestedVideoChannels` → CustomImpl creates `IncomingVideoChannel` / ReferenceImpl adds recvonly video transceiver → both send `ReceiverVideoConstraints` → SFU sends `SenderVideoConstraints` + proactive PLI → sender produces keyframe → receiver decodes. `requestVideoFromEndpoints()` (group_participant.cpp) is the single request path: it accumulates the FULL requested set in `ParticipantState::requestedVideoChannels` and resends all of it on every call, because both engines treat the list as the complete set and drop endpoints missing from it. With `--early-video-request` the same helper runs right after `emitJoinPayload` for every already-joined participant (SSRCs via `GoSfu_QueryVideoSsrcs`), reproducing the real app's order — request before join response, before the data channel — which the `ActiveVideoSsrcs`-driven path never exercises (the broadcast fires 500 ms after the data channel is up)
 - `dataChannelMessageReceived` callback: added to `GroupInstanceDescriptor`, forwards all incoming Colibri data channel messages to the application. Used by the CLI test tool to react to `ActiveVideoSsrcs` and dynamically set up video channels — mirrors the real Telegram app's reactive flow
@@ -52,6 +93,13 @@ In-process test harness for tgcalls. See the root `CLAUDE.md` for build instruct
 - `dropAllVideoRequests()` / `rerequestAllVideo()` (group_participant.cpp, `--video-rerequest`): after frames flow, every participant's SFU egress gets a 150 ms delay (`GoSfu_SetNetworkParams`), then five rounds of `setRequestedVideoChannels({})` followed a second later by the full accumulated set again, sinks kept throughout. Validation requires every sink's frame count to grow past the value recorded at the last drop ("Video after re-request: N/M stalled", must be 0). The delay is load-bearing: on the in-process SFU the streams stop before the renegotiation lands, whereas on a real network the packets forwarded before the SFU read the empty `ReceiverVideoConstraints` are still arriving while the receive streams are torn down; that in-flight packet is what used to create a default receive stream on the abandoned transceiver's channel and freeze the tile on re-request. The window is sub-millisecond at the harness's packet rates, so the reproduction needs `--reference-participants 6` (both unfixed runs failed 1/30; three participants passed by luck).
 - `FakeVideoTrackSource` generates 1280x720 I420 frames at 30fps with per-participant color tint and frame counter (720p needed for 3 simulcast layers; 640x360 only allows 2 per WebRTC's `kSimulcastFormats`)
 - Two ways a participant feeds outgoing video (`VideoFeed` in group_participant.h): `Source` — `descriptor.getVideoSource` returning the `FakeVideoTrackSource` above (the CLI's original shortcut, no app uses it); `CaptureAtJoin` / `CaptureLate` (`--video-via-capture` / `--video-via-capture-late`) — a real `tgcalls::VideoCaptureInterface::Create(threads, "<id>")`, handed over as `descriptor.videoCapture` or via `setVideoCapture()` after the join response, exactly as the iOS wrapper does. For that to produce frames on the host, the fake platform implements `makeVideoSource` (a `FakePlatformVideoSource`: plain adapted source, pushed into) and `makeVideoCapturer` (`FakeVideoCapturer`: 1280x720 @ 30 fps on a schedule, tint from `deviceId`, a sweeping bar for motion, also feeds the uncropped preview sink) in `tgcalls/platform/fake/FakeVideoCapturer.{h,cpp}`. As on Darwin, the camera reports its rotation when it starts, which applies the capture interface's format request (`adaptVideoSource`: the call's 30 fps cap), and its frames go through the source's video adapter, so the encoder's resolution and frame-rate wants reach them as they reach a phone's camera. Both used to return nullptr, which is why `setVideoCapture` could be a no-op in the reference engine without any test noticing.
+- Group screen sharing (`--screencast-participants`, `GroupScreencastOptions gGroupScreencast` in group_participant.h,
+  set by main.cpp): a sharer is the app's in-app share instance (see the tgcalls `CLAUDE.md` option), its screen audio
+  fed from `ParticipantState::externalAudioThread`, which `stopScreencastAudio` joins before the instances stop.
+  `run-group-av1-tests.sh` (24 scenarios: a custom-engine sharer, then a reference-engine one, participant 2 of
+  `--participants 2 --reference-participants 2`) asserts the share's AV1 (both layers, one layer, or the top layer) and its dependency descriptor from the `Wire:` lines, the summary and the engines'
+  `GroupAv1:` log lines; group logs are kept for it with `TGCALLS_CLI_KEEP_LOGS=1`, and every engine of a run writes to
+  every participant's log file, so a decision line is counted in one of them.
 - `--request-own-video`: `requestVideoFromEndpoints()` appends the participant's own endpoint to every request (the SFU's `ActiveVideoSsrcs` never names the receiver, but the app's roster includes the local participant and is handed to the engine unfiltered) and registers a sink for it. Validation reads `GoSfu_QueryRequestedLayer(receiver, receiver)` before the SFU is destroyed (`ParticipantState::sfuSelfRequestedLayer`) — any value ≥ 0 means the engine let a self-request through — and, for Capture* feeds, requires the own-endpoint sink to have received preview frames (`videoViaCapture` outlives the released `videoCapture`). The own-endpoint sink is never counted as a received pair.
 - Group mode source: `submodules/TgVoipWebrtc/tgcalls/tools/cli/group_mode.cpp`
 

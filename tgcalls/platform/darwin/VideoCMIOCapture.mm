@@ -70,7 +70,7 @@ void decompressionSessionDecodeFrameCallback(void *decompressionOutputRefCon,
 }
 
 
-static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> nativeSource) {
+static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> nativeSource) {
     webrtc::VideoTrackSourceProxy *proxy_source =
     static_cast<webrtc::VideoTrackSourceProxy *>(nativeSource.get());
     return static_cast<tgcalls::DarwinVideoTrackSource *>(proxy_source->internal());
@@ -79,8 +79,8 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
 @implementation VideoCMIOCapture
 {
     TGCMIOCapturer *_capturer;
-    rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _source;
-    std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _uncroppedSink;
+    webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _source;
+    std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> _uncroppedSink;
     std::function<void ()> _onFatalError;
 
     
@@ -147,10 +147,10 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
                                                           timeStampNs:timeStampNs];
     
     if (_uncroppedSink) {
-        const int64_t timestamp_us = timeStampNs / rtc::kNumNanosecsPerMicrosec;
+        const int64_t timestamp_us = timeStampNs / webrtc::kNumNanosecsPerMicrosec;
 
-        rtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer;
-        buffer = new rtc::RefCountedObject<webrtc::ObjCFrameBuffer>(videoFrame.buffer);
+        webrtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer;
+        buffer = new webrtc::RefCountedObject<webrtc::ObjCFrameBuffer>(videoFrame.buffer);
 
         webrtc::VideoRotation rotation = static_cast<webrtc::VideoRotation>(videoFrame.rotation);
 
@@ -170,7 +170,7 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
 - (void)setIsEnabled:(bool)isEnabled {
     
 }
-- (void)setUncroppedSink:(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)sink {
+- (void)setUncroppedSink:(std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>>)sink {
     self->_uncroppedSink = sink;
 }
 - (void)setPreferredCaptureAspectRatio:(float)aspectRatio {
@@ -187,7 +187,7 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
     
 }
 
-- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source {
+- (instancetype)initWithSource:(webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source {
     self = [super init];
     if (self != nil) {
         _source = source;

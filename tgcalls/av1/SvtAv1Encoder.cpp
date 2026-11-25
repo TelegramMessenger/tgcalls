@@ -59,8 +59,12 @@ public:
         }
         Release();
         _codec = *codecSettings;
-        _scalabilityMode = webrtc::ScalabilityMode::kL1T1;
+        // L1T3 when asked for (an AV1 simulcast encoding: GroupAv1ScreencastLayers::Every); everything else L1T1.
+        _scalabilityMode = codecSettings->GetScalabilityMode() == webrtc::ScalabilityMode::kL1T3
+            ? webrtc::ScalabilityMode::kL1T3
+            : webrtc::ScalabilityMode::kL1T1;
         _svcController = webrtc::CreateScalabilityStructure(_scalabilityMode);
+        _t1SinceT0 = false;
         if (!_svcController) {
             return WEBRTC_VIDEO_CODEC_ERROR;
         }
@@ -88,7 +92,7 @@ public:
         if (!_handle || !_callback || !_svcController) {
             return WEBRTC_VIDEO_CODEC_UNINITIALIZED;
         }
-        rtc::scoped_refptr<webrtc::I420BufferInterface> buffer = frame.video_frame_buffer()->ToI420();
+        webrtc::scoped_refptr<webrtc::I420BufferInterface> buffer = frame.video_frame_buffer()->ToI420();
         if (!buffer) {
             RTC_LOG(LS_ERROR) << "SvtAv1Encoder: cannot convert the frame to I420";
             return WEBRTC_VIDEO_CODEC_ENCODER_FAILURE;
@@ -183,6 +187,7 @@ public:
         std::vector<uint8_t> data(output->p_buffer, output->p_buffer + output->n_filled_len);
         const bool isKeyframe = output->pic_type == EB_AV1_KEY_PICTURE;
         const int qp = int(output->qp);
+        const int svtTemporalLayer = int(output->temporal_layer_index);
         svt_av1_enc_release_out_buffer(&output);
         _needsKeyframe = false;
 
@@ -192,11 +197,15 @@ public:
         if (isKeyframe && !HasSequenceHeader(data)) {
             data.insert(data.begin(), _sequenceHeader.begin(), _sequenceHeader.end());
         }
+        if (isKeyframe) {
+            // Keyframes come only on request (no periodic ones): a log of them is a log of the requests.
+            RTC_LOG(LS_INFO) << "SvtAv1Encoder: keyframe " << buffer->width() << "x" << buffer->height() << ", " << data.size() << " bytes";
+        }
 
         webrtc::EncodedImage image;
         image.SetEncodedData(webrtc::EncodedImageBuffer::Create(data.data(), data.size()));
         image._frameType = isKeyframe ? webrtc::VideoFrameType::kVideoFrameKey : webrtc::VideoFrameType::kVideoFrameDelta;
-        image.SetRtpTimestamp(frame.timestamp());
+        image.SetRtpTimestamp(frame.rtp_timestamp());
         image.capture_time_ms_ = frame.render_time_ms();
         image.rotation_ = frame.rotation();
         image.content_type_ = webrtc::VideoContentType::UNSPECIFIED;
@@ -210,7 +219,7 @@ public:
         info.codecType = webrtc::kVideoCodecAV1;
         info.end_of_picture = true;
         info.scalability_mode = _scalabilityMode;
-        info.generic_frame_info = _svcController->OnEncodeDone(layer);
+        info.generic_frame_info = _svcController->OnEncodeDone(frameConfig(layer, svtTemporalLayer, isKeyframe));
         if (isKeyframe && info.generic_frame_info) {
             info.template_structure = _svcController->DependencyStructure();
             info.template_structure->resolutions = {webrtc::RenderResolution(int(_width), int(_height))};
@@ -240,6 +249,45 @@ public:
     }
 
 private:
+    // The frame's config for the dependency descriptor. L1T1: the controller's (every frame depends on the one before:
+    // it covers whatever SVT referenced). L1T3: the temporal layer SVT encoded the frame in, with SVT's references, which
+    // at one reference per frame (mrp level 0, the RTC presets above M10) are WebRTC's L1T3 exactly: T0 the previous T0,
+    // T1 and the first T2 the newest T0, the second T2 the T1 after it (svt_aom LD CBR, hierarchical_levels 2). The
+    // controller predicts the same pattern from every keyframe; when SVT's layer differs, the config is rebuilt from it.
+    webrtc::ScalableVideoController::LayerFrameConfig frameConfig(
+        const webrtc::ScalableVideoController::LayerFrameConfig &predicted, int svtTemporalLayer, bool isKeyframe) {
+        if (_scalabilityMode != webrtc::ScalabilityMode::kL1T3) {
+            return predicted;
+        }
+        // ScalabilityStructureFullSvc's frame patterns (its private FramePattern).
+        constexpr int kKey = 1;
+        constexpr int kDeltaT2A = 2;
+        constexpr int kDeltaT1 = 3;
+        constexpr int kDeltaT2B = 4;
+        constexpr int kDeltaT0 = 5;
+        webrtc::ScalableVideoController::LayerFrameConfig config;
+        if (isKeyframe) {
+            config.Id(kKey).S(0).T(0).Keyframe().Update(0);
+        } else if (svtTemporalLayer == 0) {
+            config.Id(kDeltaT0).S(0).T(0).ReferenceAndUpdate(0);
+        } else if (svtTemporalLayer == 1) {
+            config.Id(kDeltaT1).S(0).T(1).Reference(0).Update(1);
+        } else if (_t1SinceT0) {
+            config.Id(kDeltaT2B).S(0).T(2).Reference(1);
+        } else {
+            config.Id(kDeltaT2A).S(0).T(2).Reference(0);
+        }
+        _t1SinceT0 = svtTemporalLayer == 1 || (_t1SinceT0 && svtTemporalLayer == 2 && !isKeyframe);
+        if (config.TemporalId() != predicted.TemporalId() || config.IsKeyframe() != predicted.IsKeyframe()) {
+            if (_layerMismatches++ < 10) {
+                RTC_LOG(LS_WARNING) << "SvtAv1Encoder: SVT encoded T" << svtTemporalLayer << (isKeyframe ? " (key)" : "")
+                                    << " where L1T3 predicted T" << predicted.TemporalId()
+                                    << (predicted.IsKeyframe() ? " (key)" : "") << "; describing SVT's";
+            }
+        }
+        return config;
+    }
+
     bool createHandle(uint32_t width, uint32_t height) {
         EbSvtAv1EncConfiguration config;
         std::memset(&config, 0, sizeof(config));
@@ -260,6 +308,10 @@ private:
         config.rate_control_mode = SVT_AV1_RC_MODE_CBR;
         config.target_bit_rate = _targetBitrateBps;
         config.intra_period_length = -1;
+        if (_scalabilityMode == webrtc::ScalabilityMode::kL1T3) {
+            // Three temporal layers, a mini-GOP of 4 (also SVT's default for low-delay CBR): frameConfig describes it.
+            config.hierarchical_levels = 2;
+        }
         config.enc_mode = kPreset;
         config.level_of_parallelism = kParallelismLevel;
         if (svt_av1_enc_set_parameter(_handle, &config) != EB_ErrorNone || svt_av1_enc_init(_handle) != EB_ErrorNone) {
@@ -302,6 +354,9 @@ private:
     webrtc::EncodedImageCallback *_callback = nullptr;
     webrtc::VideoCodec _codec;
     webrtc::ScalabilityMode _scalabilityMode = webrtc::ScalabilityMode::kL1T1;
+    // L1T3: a T1 frame was encoded since the last T0 (the next T2 references it).
+    bool _t1SinceT0 = false;
+    int _layerMismatches = 0;
     std::unique_ptr<webrtc::ScalableVideoController> _svcController;
     std::vector<uint8_t> _sequenceHeader;
     uint32_t _width = 0;

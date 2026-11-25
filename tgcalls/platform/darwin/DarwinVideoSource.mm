@@ -26,7 +26,7 @@ bool DarwinVideoTrackSource::is_screencast() const {
   return false;
 }
 
-absl::optional<bool> DarwinVideoTrackSource::needs_denoising() const {
+std::optional<bool> DarwinVideoTrackSource::needs_denoising() const {
   return false;
 }
 
@@ -39,14 +39,14 @@ bool DarwinVideoTrackSource::remote() const {
 }
 
 void DarwinVideoTrackSource::OnOutputFormatRequest(int width, int height, int fps) {
-  cricket::VideoFormat format(width, height, cricket::VideoFormat::FpsToInterval(fps), 0);
+  webrtc::VideoFormat format(width, height, webrtc::VideoFormat::FpsToInterval(fps), 0);
   video_adapter()->OnOutputFormatRequest(format);
 }
 
 void DarwinVideoTrackSource::OnCapturedFrame(RTC_OBJC_TYPE(RTCVideoFrame) * frame) {
-  const int64_t timestamp_us = frame.timeStampNs / rtc::kNumNanosecsPerMicrosec;
+  const int64_t timestamp_us = frame.timeStampNs / webrtc::kNumNanosecsPerMicrosec;
   const int64_t translated_timestamp_us =
-      timestamp_aligner_.TranslateTimestamp(timestamp_us, rtc::TimeMicros());
+      timestamp_aligner_.TranslateTimestamp(timestamp_us, webrtc::TimeMicros());
 
   int adapted_width;
   int adapted_height;
@@ -70,14 +70,14 @@ void DarwinVideoTrackSource::OnCapturedFrame(RTC_OBJC_TYPE(RTCVideoFrame) * fram
   if (adapted_width == frame.width && adapted_height == frame.height) {
     // No adaption - optimized path.
     @autoreleasepool {
-    buffer = new rtc::RefCountedObject<webrtc::ObjCFrameBuffer>(frame.buffer);
+    buffer = new webrtc::RefCountedObject<webrtc::ObjCFrameBuffer>(frame.buffer);
     }
   } else if ([frame.buffer isKindOfClass:[RTC_OBJC_TYPE(RTCCVPixelBuffer) class]]) {
     // Adapted CVPixelBuffer frame.
     @autoreleasepool {
     RTC_OBJC_TYPE(RTCCVPixelBuffer) *rtcPixelBuffer =
         (RTC_OBJC_TYPE(RTCCVPixelBuffer) *)frame.buffer;
-    buffer = new rtc::RefCountedObject<webrtc::ObjCFrameBuffer>([[RTC_OBJC_TYPE(RTCCVPixelBuffer) alloc]
+    buffer = new webrtc::RefCountedObject<webrtc::ObjCFrameBuffer>([[RTC_OBJC_TYPE(RTCCVPixelBuffer) alloc]
         initWithPixelBuffer:rtcPixelBuffer.pixelBuffer
                adaptedWidth:adapted_width
               adaptedHeight:adapted_height
@@ -91,7 +91,7 @@ void DarwinVideoTrackSource::OnCapturedFrame(RTC_OBJC_TYPE(RTCVideoFrame) * fram
     // Adapted I420 frame.
     // TODO(magjed): Optimize this I420 path.
     webrtc::scoped_refptr<webrtc::I420Buffer> i420_buffer = webrtc::I420Buffer::Create(adapted_width, adapted_height);
-    buffer = new rtc::RefCountedObject<webrtc::ObjCFrameBuffer>(frame.buffer);
+    buffer = new webrtc::RefCountedObject<webrtc::ObjCFrameBuffer>(frame.buffer);
     i420_buffer->CropAndScaleFrom(*buffer->ToI420(), crop_x, crop_y, crop_width, crop_height);
     buffer = i420_buffer;
     }
@@ -113,9 +113,9 @@ void DarwinVideoTrackSource::OnCapturedFrame(RTC_OBJC_TYPE(RTCVideoFrame) * fram
 }
 
 bool DarwinVideoTrackSource::OnCapturedFrame(const webrtc::VideoFrame& frame) {
-    const int64_t timestamp_us = frame.timestamp_us() / rtc::kNumNanosecsPerMicrosec;
+    const int64_t timestamp_us = frame.timestamp_us() / webrtc::kNumNanosecsPerMicrosec;
     const int64_t translated_timestamp_us =
-        timestamp_aligner_.TranslateTimestamp(timestamp_us, rtc::TimeMicros());
+        timestamp_aligner_.TranslateTimestamp(timestamp_us, webrtc::TimeMicros());
 
     int adapted_width;
     int adapted_height;

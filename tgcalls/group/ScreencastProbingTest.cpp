@@ -14,7 +14,7 @@
 #include "modules/congestion_controller/goog_cc/probe_controller.h"
 
 // WebRTC's own ProbeController, driven as goog_cc drives it for the in-app screencast's connection:
-// periodic ALR probing on (what cricket::MediaConfig::video.periodic_alr_bandwidth_probing turns on),
+// periodic ALR probing on (what webrtc::MediaConfig::video.periodic_alr_bandwidth_probing turns on),
 // with and without the reference engine's field trial (iosScreencastFieldTrial). A misspelled key or
 // value would be ignored by WebRTC without a word, which only this test would show.
 
@@ -66,7 +66,7 @@ std::vector<webrtc::ProbeClusterConfig> periodicProbes(bool withScreencastTrial,
     now += webrtc::TimeDelta::Seconds(2);
     (void)controller.Process(now);
     (void)controller.SetEstimatedBitrate(estimate, webrtc::BandwidthLimitedCause::kDelayBasedLimited, now);
-    controller.SetAlrStartTimeMs(now.ms());
+    controller.SetAlrStartTime(now);
 
     now += webrtc::TimeDelta::Seconds(6);
     return controller.Process(now);

@@ -1,6 +1,7 @@
 #include "group/GroupExternalAudio.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include "common_audio/include/audio_util.h"
 
@@ -21,9 +22,10 @@ void appendGroupExternalAudioSamples(std::vector<float> &buffer, webrtc::Mutex &
     }
 }
 
-ExternalAudioRecorder::ExternalAudioRecorder(std::vector<float> *externalAudioSamples, webrtc::Mutex *externalAudioSamplesMutex) :
+ExternalAudioRecorder::ExternalAudioRecorder(std::vector<float> *externalAudioSamples, webrtc::Mutex *externalAudioSamplesMutex, std::function<void(float)> levelUpdated) :
 _externalAudioSamples(externalAudioSamples),
-_externalAudioSamplesMutex(externalAudioSamplesMutex) {
+_externalAudioSamplesMutex(externalAudioSamplesMutex),
+_levelUpdated(std::move(levelUpdated)) {
     _samples.resize(480);
 }
 
@@ -47,6 +49,22 @@ AudioFrame ExternalAudioRecorder::Record() {
         result.num_samples = 0;
     }
     _externalAudioSamplesMutex->Unlock();
+
+    if (_levelUpdated && result.num_samples != 0) {
+        for (size_t i = 0; i < result.num_samples; i++) {
+            const float sample = std::fabs((float)_samples[i]);
+            if (_peak < sample) {
+                _peak = sample;
+            }
+        }
+        _peakCount += (int)result.num_samples;
+        if (_peakCount >= 4400) {
+            const float level = _peak / 4000.0f;
+            _peak = 0.0f;
+            _peakCount = 0;
+            _levelUpdated(level);
+        }
+    }
 
     result.audio_samples = _samples.data();
     result.bytes_per_sample = 2;

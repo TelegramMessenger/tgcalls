@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """Summarises run-parity-tests.sh output: per scenario and pairing, how many calls failed
 each check, a one-sided Fisher p wherever a CompatImpl pairing failed more often than the
-baseline, and p50/p90 of the connection time and of each side's first audio and video."""
+baseline, and p50/p90 of the connection time and of each side's first audio and video.
+
+    parity_report.py DIR [--baseline BASE_DIR]
+
+With --baseline, the same pairing of the same scenario is compared across the two runs instead
+(a build against an earlier build, e.g. WebRTC M159 against M123): the failure counts of both,
+a one-sided Fisher p wherever DIR failed more often than BASE_DIR, and both runs' timings."""
 import glob
 import math
 import os
@@ -62,11 +68,63 @@ def timing(rs, key):
     return '-' if p50 is None else f'{p50:.2f}/{p90:.2f}'
 
 
-runs = defaultdict(list)
-for path in glob.glob(os.path.join(sys.argv[1], '*.out')):
-    scenario, pairing, _ = os.path.basename(path)[:-4].rsplit('.', 2)
-    runs[(scenario, pairing)].append(parse(path))
+def load(directory):
+    runs = defaultdict(list)
+    for path in glob.glob(os.path.join(directory, '*.out')):
+        scenario, pairing, _ = os.path.basename(path)[:-4].rsplit('.', 2)
+        runs[(scenario, pairing)].append(parse(path))
+    return runs
 
+
+def has_video(rs):
+    return any('video caller' in r for r in rs)
+
+
+def timings(rs):
+    line = f'connected {timing(rs, "setup")}'
+    line += f' | caller hears {timing(rs, "first audio caller")} | callee hears {timing(rs, "first audio callee")}'
+    if has_video(rs):
+        line += f' | caller sees {timing(rs, "first video caller")} | callee sees {timing(rs, "first video callee")}'
+    return line
+
+
+def report_against_baseline(runs, base_runs):
+    """Each pairing of each scenario against the same one in the baseline run."""
+    worse = 0
+    for scenario in sorted({s for s, _ in runs} | {s for s, _ in base_runs}):
+        print(f'== {scenario}')
+        for pairing in PAIRINGS:
+            rs, base = runs.get((scenario, pairing), []), base_runs.get((scenario, pairing), [])
+            if not rs and not base:
+                continue
+            if not rs or not base:
+                print(f'  {pairing:5} only in {"the baseline" if base else "this run"}')
+                continue
+            cells = []
+            for name, failed in CHECKS.items():
+                if name.endswith('video') and not has_video(rs):
+                    continue
+                bad, bad_base = sum(1 for r in rs if failed(r)), sum(1 for r in base if failed(r))
+                cell = f'{name} {bad_base}->{bad}'
+                if bad * len(base) > bad_base * len(rs):
+                    p = fisher_worse(bad_base, len(base), bad, len(rs))
+                    cell += f' (p={p:.2f})'
+                    if p < 0.05:
+                        worse += 1
+                cells.append(cell)
+            print(f'  {pairing:5} n={len(base):2}->{len(rs):2} | ' + ' | '.join(cells))
+            print(f'        p50/p90 s base: {timings(base)}')
+            print(f'        p50/p90 s now:  {timings(rs)}')
+    print(f'\n{worse} check(s) worse than the baseline at p < 0.05')
+
+
+if len(sys.argv) == 4 and sys.argv[2] == '--baseline':
+    report_against_baseline(load(sys.argv[1]), load(sys.argv[3]))
+    sys.exit(0)
+if len(sys.argv) != 2:
+    sys.exit('usage: parity_report.py DIR [--baseline BASE_DIR]')
+
+runs = load(sys.argv[1])
 for scenario in sorted({s for s, _ in runs}):
     print(f'== {scenario}')
     base = runs.get((scenario, 'V-V'), [])

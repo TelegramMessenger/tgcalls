@@ -40,7 +40,7 @@
             RTCCVPixelBuffer *frameBuffer = [[RTCCVPixelBuffer alloc] initWithPixelBuffer:pixelBuffer];
             RTCVideoFrame *frame = [[RTCVideoFrame alloc] initWithBuffer:frameBuffer
                                                                 rotation:RTCVideoRotation_0
-                                                             timeStampNs:rtc::TimeNanos()];
+                                                             timeStampNs:webrtc::TimeNanos()];
             frame.timeStamp = (int32_t)rtpTimestamp;
             callback(frame);
         });

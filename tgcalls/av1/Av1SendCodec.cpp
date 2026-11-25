@@ -14,8 +14,8 @@ bool IsNamed(const webrtc::RtpCodec &codec, const char *name) {
 }
 
 bool IsResilienceCodec(const webrtc::RtpCodec &codec) {
-    return IsNamed(codec, cricket::kRtxCodecName) || IsNamed(codec, cricket::kRedCodecName) ||
-           IsNamed(codec, cricket::kUlpfecCodecName) || IsNamed(codec, cricket::kFlexfecCodecName);
+    return IsNamed(codec, webrtc::kRtxCodecName) || IsNamed(codec, webrtc::kRedCodecName) ||
+           IsNamed(codec, webrtc::kUlpfecCodecName) || IsNamed(codec, webrtc::kFlexfecCodecName);
 }
 
 std::optional<webrtc::RtpCodec> FirstNamed(const std::vector<webrtc::RtpCodec> &available, const char *name) {
@@ -46,7 +46,7 @@ Av1CallSettings Av1CallSettingsFromCustomParameters(const std::map<std::string, 
 }
 
 std::vector<webrtc::RtpCodec> VideoSendCodecCandidates(const std::vector<webrtc::RtpCodec> &available, bool av1Allowed) {
-    const auto av1 = FirstNamed(available, cricket::kAv1CodecName);
+    const auto av1 = FirstNamed(available, webrtc::kAv1CodecName);
     if (!av1) {
         return {};
     }
@@ -54,7 +54,7 @@ std::vector<webrtc::RtpCodec> VideoSendCodecCandidates(const std::vector<webrtc:
         return {*av1};
     }
     std::vector<webrtc::RtpCodec> candidates;
-    for (const char *name : {cricket::kH265CodecName, cricket::kH264CodecName}) {
+    for (const char *name : {webrtc::kH265CodecName, webrtc::kH264CodecName}) {
         for (const auto &codec : available) {
             if (IsNamed(codec, name)) {
                 candidates.push_back(codec);
@@ -62,8 +62,8 @@ std::vector<webrtc::RtpCodec> VideoSendCodecCandidates(const std::vector<webrtc:
         }
     }
     for (const auto &codec : available) {
-        if (!IsNamed(codec, cricket::kAv1CodecName) && !IsNamed(codec, cricket::kH265CodecName) &&
-            !IsNamed(codec, cricket::kH264CodecName) && !IsResilienceCodec(codec)) {
+        if (!IsNamed(codec, webrtc::kAv1CodecName) && !IsNamed(codec, webrtc::kH265CodecName) &&
+            !IsNamed(codec, webrtc::kH264CodecName) && !IsResilienceCodec(codec)) {
             candidates.push_back(codec);
         }
     }

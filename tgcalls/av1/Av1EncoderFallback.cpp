@@ -13,7 +13,7 @@ namespace tgcalls {
 namespace {
 
 bool IsAv1(const webrtc::SdpVideoFormat &format) {
-    return absl::EqualsIgnoreCase(format.name, cricket::kAv1CodecName);
+    return absl::EqualsIgnoreCase(format.name, webrtc::kAv1CodecName);
 }
 
 // An AV1 encoder that reports failing to start or to encode; otherwise `inner` itself.
@@ -88,23 +88,23 @@ public:
         }
     }
 
-    absl::optional<webrtc::SdpVideoFormat> OnAvailableBitrate(const webrtc::DataRate &rate) override {
-        return _inner ? _inner->OnAvailableBitrate(rate) : absl::nullopt;
+    std::optional<webrtc::SdpVideoFormat> OnAvailableBitrate(const webrtc::DataRate &rate) override {
+        return _inner ? _inner->OnAvailableBitrate(rate) : std::nullopt;
     }
 
-    absl::optional<webrtc::SdpVideoFormat> OnResolutionChange(const webrtc::RenderResolution &resolution) override {
-        return _inner ? _inner->OnResolutionChange(resolution) : absl::nullopt;
+    std::optional<webrtc::SdpVideoFormat> OnResolutionChange(const webrtc::RenderResolution &resolution) override {
+        return _inner ? _inner->OnResolutionChange(resolution) : std::nullopt;
     }
 
-    absl::optional<webrtc::SdpVideoFormat> OnEncoderBroken() override {
+    std::optional<webrtc::SdpVideoFormat> OnEncoderBroken() override {
         // The last encoder the factory was asked for: WebRTC does not call OnCurrentEncoder for one it could not create.
         if (_fallback->lastCreatedIsAv1()) {
             if (const auto format = _fallback->fallbackFormat()) {
                 return *format;
             }
-            return absl::nullopt;
+            return std::nullopt;
         }
-        return _inner ? _inner->OnEncoderBroken() : absl::nullopt;
+        return _inner ? _inner->OnEncoderBroken() : std::nullopt;
     }
 
 private:
@@ -126,14 +126,14 @@ public:
     }
 
     CodecSupport QueryCodecSupport(const webrtc::SdpVideoFormat &format,
-                                   absl::optional<std::string> scalabilityMode) const override {
+                                   std::optional<std::string> scalabilityMode) const override {
         return _inner->QueryCodecSupport(format, scalabilityMode);
     }
 
-    std::unique_ptr<webrtc::VideoEncoder> CreateVideoEncoder(const webrtc::SdpVideoFormat &format) override {
+    std::unique_ptr<webrtc::VideoEncoder> Create(const webrtc::Environment &env, const webrtc::SdpVideoFormat &format) override {
         const bool isAv1 = IsAv1(format);
         _fallback->noteCreated(isAv1);
-        std::unique_ptr<webrtc::VideoEncoder> encoder = _inner->CreateVideoEncoder(format);
+        std::unique_ptr<webrtc::VideoEncoder> encoder = _inner->Create(env, format);
         if (!isAv1) {
             return encoder;
         }

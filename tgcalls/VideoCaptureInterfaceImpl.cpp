@@ -1,8 +1,6 @@
 #include "VideoCaptureInterfaceImpl.h"
 
 #include "VideoCapturerInterface.h"
-#include "Manager.h"
-#include "MediaManager.h"
 #include "platform/PlatformInterface.h"
 #include "StaticThreads.h"
 
@@ -137,7 +135,7 @@ void VideoCaptureInterfaceObject::updateAspectRateAdaptation() {
     }
 }
 
-void VideoCaptureInterfaceObject::setOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+void VideoCaptureInterfaceObject::setOutput(std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
 	if (_videoCapturer) {
 		_videoCapturer->setUncroppedOutput(sink);
 	}
@@ -217,7 +215,7 @@ void VideoCaptureInterfaceImpl::setOnIsActiveUpdated(std::function<void(bool)> o
     });
 }
 
-void VideoCaptureInterfaceImpl::setOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+void VideoCaptureInterfaceImpl::setOutput(std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
 	_impl.perform([sink](VideoCaptureInterfaceObject *impl) {
 		impl->setOutput(sink);
 	});

@@ -10,7 +10,7 @@
 
 #include "v2/Signaling.h"
 #include "api/jsep.h"
-#include "api/jsep_session_description.h"
+#include "api/jsep.h"
 #include "pc/session_description.h"
 #include "api/peer_connection_interface.h"
 
@@ -40,17 +40,17 @@ public:
     // The InitialSetupMessage to send ahead of the next NegotiateChannels, or
     // nullopt when the local ICE credentials and fingerprint are unchanged since
     // the last one sent. `setup` is fixed by role, exactly as InstanceV2Impl does.
-    absl::optional<signaling::InitialSetupMessage> takeInitialSetupIfChanged(
-        const cricket::SessionDescription *localDescription);
+    std::optional<signaling::InitialSetupMessage> takeInitialSetupIfChanged(
+        const webrtc::SessionDescription *localDescription);
     // Our offer: our sending sections, under a fresh exchangeId that becomes the
     // pending offer.
     signaling::NegotiateChannelsMessage makeOffer(
-        const cricket::SessionDescription *localOffer);
+        const webrtc::SessionDescription *localOffer);
     // Our answer to the remote offer last given to buildRemoteOffer.
     signaling::NegotiateChannelsMessage makeAnswer(
-        const cricket::SessionDescription *localAnswer) const;
+        const webrtc::SessionDescription *localAnswer) const;
     signaling::CandidatesMessage extractCandidates(
-        const webrtc::IceCandidateInterface *candidate) const;
+        const webrtc::IceCandidate *candidate) const;
 
     // Inbound.
 
@@ -76,13 +76,13 @@ public:
     // exchange), with the remote's new channels appended.
     std::unique_ptr<webrtc::SessionDescriptionInterface> buildRemoteOffer(
         const signaling::NegotiateChannelsMessage &offer,
-        const cricket::SessionDescription *currentLocal);
+        const webrtc::SessionDescription *currentLocal);
     // A remote answer mirroring `localOffer`.
     std::unique_ptr<webrtc::SessionDescriptionInterface> buildRemoteAnswer(
         const signaling::NegotiateChannelsMessage &answer,
-        const cricket::SessionDescription *localOffer);
+        const webrtc::SessionDescription *localOffer);
 
-    std::vector<std::unique_ptr<webrtc::IceCandidateInterface>> parseCandidates(
+    std::vector<std::unique_ptr<webrtc::IceCandidate>> parseCandidates(
         const signaling::CandidatesMessage &message) const;
 
 private:
@@ -93,20 +93,20 @@ private:
     };
 
     std::string remoteChannelMid(uint32_t ssrc);
-    cricket::TransportDescription makeRemoteTransportDescription() const;
-    void addRemoteChannel(cricket::SessionDescription *description, std::string const &mid, RemoteChannel const &channel) const;
-    void addLocalChannelMirror(cricket::SessionDescription *description, cricket::ContentInfo const &localContent, signaling::MediaContent const *acceptedContent) const;
-    static void addApplication(cricket::SessionDescription *description, std::string const &mid, cricket::ContentInfo const *localContent);
-    static void addRejected(cricket::SessionDescription *description, cricket::ContentInfo const &localContent);
+    webrtc::TransportDescription makeRemoteTransportDescription() const;
+    void addRemoteChannel(webrtc::SessionDescription *description, std::string const &mid, RemoteChannel const &channel) const;
+    void addLocalChannelMirror(webrtc::SessionDescription *description, webrtc::ContentInfo const &localContent, signaling::MediaContent const *acceptedContent) const;
+    static void addApplication(webrtc::SessionDescription *description, std::string const &mid, webrtc::ContentInfo const *localContent);
+    static void addRejected(webrtc::SessionDescription *description, webrtc::ContentInfo const &localContent);
     std::unique_ptr<webrtc::SessionDescriptionInterface> finishDescription(
-        std::unique_ptr<cricket::SessionDescription> description,
+        std::unique_ptr<webrtc::SessionDescription> description,
         webrtc::SdpType type) const;
 
     bool _isOutgoing = false;
 
-    absl::optional<signaling::InitialSetupMessage> _remoteSetup;
+    std::optional<signaling::InitialSetupMessage> _remoteSetup;
 
-    absl::optional<uint32_t> _pendingOfferExchangeId;
+    std::optional<uint32_t> _pendingOfferExchangeId;
     std::set<uint32_t> _sentOfferExchangeIds;
     uint32_t _answeringExchangeId = 0;
 
@@ -115,7 +115,7 @@ private:
         std::string pwd;
         std::string fingerprint;
     };
-    absl::optional<SentSetup> _lastSentSetup;
+    std::optional<SentSetup> _lastSentSetup;
 
     // Keyed by the mid we gave the channel.
     std::map<std::string, RemoteChannel> _remoteChannels;

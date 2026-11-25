@@ -176,7 +176,7 @@ private:
         if (entry && entry->value) {
             std::string decoded;
             size_t used = 0;
-            rtc::Base64::Decode(std::string(entry->value), rtc::Base64::DO_LAX, &decoded, &used);
+            webrtc::Base64::Decode(std::string(entry->value), webrtc::Base64::DO_LAX, &decoded, &used);
             if (!decoded.empty()) {
                 updates = parseChannelUpdates(decoded);
             }

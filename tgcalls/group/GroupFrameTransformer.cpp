@@ -39,7 +39,7 @@ size_t calculateSliceHeaderBytesForPpsId(const uint8_t* data, size_t size) {
 
     // Create a bitstream reader for the RBSP data (skipping NAL header)
     // We need to skip the NAL header (1 byte) but still read from the start of the slice header
-    rtc::ArrayView<const uint8_t> rbspView(rbsp.data() + 1, rbsp.size() - 1);
+    webrtc::ArrayView<const uint8_t> rbspView(rbsp.data() + 1, rbsp.size() - 1);
     webrtc::BitstreamReader reader(rbspView);
 
     // first_mb_in_slice: ue(v)
@@ -147,7 +147,7 @@ struct UnencryptedRange {
  * @param frame The H264 RTP payload in Annex B format
  * @return The size of the header that must remain unencrypted
  */
-std::vector<uint8_t> calculateH264FramePlaintextHeaderSize(rtc::ArrayView<const uint8_t> frame, uint32_t& headerSize) {
+std::vector<uint8_t> calculateH264FramePlaintextHeaderSize(webrtc::ArrayView<const uint8_t> frame, uint32_t& headerSize) {
     if (frame.empty()) {
         headerSize = 0;
         return std::vector<uint8_t>();
@@ -155,7 +155,7 @@ std::vector<uint8_t> calculateH264FramePlaintextHeaderSize(rtc::ArrayView<const 
 
     // Find all NAL units in the frame
     std::vector<webrtc::H264::NaluIndex> naluIndices =
-        webrtc::H264::FindNaluIndices(frame.data(), frame.size());
+        webrtc::H264::FindNaluIndices(frame);
 
     if (naluIndices.empty()) {
         // No valid NAL units found
@@ -288,7 +288,7 @@ std::vector<uint8_t> calculateH264FramePlaintextHeaderSize(rtc::ArrayView<const 
  * @param frame The VP8 payload data (after RTP header and VP8 payload descriptor)
  * @return The size of the header that must remain unencrypted
  */
-std::vector<uint8_t> calculateVp8FramePlaintextHeaderSize(rtc::ArrayView<const uint8_t> frame, uint32_t& headerSize) {
+std::vector<uint8_t> calculateVp8FramePlaintextHeaderSize(webrtc::ArrayView<const uint8_t> frame, uint32_t& headerSize) {
     // Ensure we have at least 1 byte
     if (frame.empty()) {
         headerSize = 0;
@@ -317,7 +317,7 @@ std::vector<uint8_t> calculateVp8FramePlaintextHeaderSize(rtc::ArrayView<const u
 }
 
 
-bool ValidateEncryptedFrame(FrameTransformerPayloadType payloadType, rtc::ArrayView<uint8_t> frame, int plaintextPrefix) {
+bool ValidateEncryptedFrame(FrameTransformerPayloadType payloadType, webrtc::ArrayView<uint8_t> frame, int plaintextPrefix) {
     if (payloadType != FrameTransformerPayloadType::H264) {
         return true;
     }
@@ -365,7 +365,7 @@ bool ValidateEncryptedFrame(FrameTransformerPayloadType payloadType, rtc::ArrayV
 std::vector<uint8_t> encryptGroupAudioFrame(
         GroupEncryptDecryptFunction const &transform,
         int64_t userId,
-        rtc::ArrayView<const uint8_t> frame,
+        webrtc::ArrayView<const uint8_t> frame,
         uint8_t audioLevel,
         bool hasSpeech) {
     std::vector<uint8_t> buffer;
@@ -387,7 +387,7 @@ std::vector<uint8_t> encryptGroupVideoFrame(
         GroupEncryptDecryptFunction const &transform,
         int64_t userId,
         FrameTransformerPayloadType payloadType,
-        rtc::ArrayView<const uint8_t> frame) {
+        webrtc::ArrayView<const uint8_t> frame) {
     uint32_t plaintextHeaderSize = 0;
     std::vector<uint8_t> frameData;
     if (payloadType == FrameTransformerPayloadType::H264) {
@@ -417,7 +417,7 @@ std::vector<uint8_t> encryptGroupVideoFrame(
 std::vector<uint8_t> decryptGroupAudioFrame(
         GroupEncryptDecryptFunction const &transform,
         int64_t userId,
-        rtc::ArrayView<const uint8_t> frame,
+        webrtc::ArrayView<const uint8_t> frame,
         uint8_t *audioLevel,
         bool *hasSpeech,
         bool *hadExtension) {
@@ -457,7 +457,7 @@ std::vector<uint8_t> decryptGroupAudioFrame(
 std::vector<uint8_t> decryptGroupVideoFrame(
         GroupEncryptDecryptFunction const &transform,
         int64_t userId,
-        rtc::ArrayView<const uint8_t> frame) {
+        webrtc::ArrayView<const uint8_t> frame) {
     std::vector<uint8_t> encryptedFrame;
     encryptedFrame.resize(frame.size());
     std::copy(frame.begin(), frame.end(), encryptedFrame.begin());
@@ -483,7 +483,7 @@ _getAudioLevelAndSpeech(getAudioLevelAndSpeech),
 _setAudioLevelAndSpeech(setAudioLevelAndSpeech) {
 }
 
-void FrameTransformer::RegisterTransformedFrameCallback(rtc::scoped_refptr<webrtc::TransformedFrameCallback> callback) {
+void FrameTransformer::RegisterTransformedFrameCallback(webrtc::scoped_refptr<webrtc::TransformedFrameCallback> callback) {
     webrtc::MutexLock lock(&_mutex);
     // Last writer wins. UnregisterTransformedFrameCallback is a no-op default in
     // FrameTransformerInterface, so a receiver that re-registers across a
@@ -495,7 +495,7 @@ void FrameTransformer::RegisterTransformedFrameCallback(rtc::scoped_refptr<webrt
     _sinkCallback = callback;
 }
 
-void FrameTransformer::RegisterTransformedFrameSinkCallback(rtc::scoped_refptr<webrtc::TransformedFrameCallback> callback, uint32_t ssrc) {
+void FrameTransformer::RegisterTransformedFrameSinkCallback(webrtc::scoped_refptr<webrtc::TransformedFrameCallback> callback, uint32_t ssrc) {
     webrtc::MutexLock lock(&_mutex);
     _sinkCallbackBySsrc[ssrc] = callback;
 }

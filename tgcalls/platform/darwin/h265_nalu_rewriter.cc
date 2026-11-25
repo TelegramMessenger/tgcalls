@@ -88,7 +88,7 @@ H265AnnexBBufferReader::H265AnnexBBufferReader(const uint8_t* annexb_buffer,
                                        size_t length)
     : start_(annexb_buffer), length_(length) {
   RTC_DCHECK(annexb_buffer);
-  offsets_ = H264::FindNaluIndices(annexb_buffer, length);
+  offsets_ = H264::FindNaluIndices(std::span<const uint8_t>(annexb_buffer, length));
   offset_ = offsets_.begin();
 }
 
@@ -159,7 +159,7 @@ size_t H265AvccBufferWriter::BytesRemaining() const {
 bool H265CMSampleBufferToAnnexBBuffer(
     CMSampleBufferRef hvcc_sample_buffer,
     bool is_keyframe,
-    rtc::Buffer* annexb_buffer) {
+    webrtc::Buffer* annexb_buffer) {
   RTC_DCHECK(hvcc_sample_buffer);
 
   // Get format description from the sample buffer.

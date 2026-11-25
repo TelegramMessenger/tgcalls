@@ -10,7 +10,7 @@
 
 namespace tgcalls {
 
-VideoCameraCapturer::VideoCameraCapturer(rtc::scoped_refptr<webrtc::JavaVideoTrackSourceInterface> source, std::string deviceId, std::function<void(VideoState)> stateUpdated, std::shared_ptr<PlatformContext> platformContext) : _source(source), _stateUpdated(stateUpdated), _platformContext(platformContext) {
+VideoCameraCapturer::VideoCameraCapturer(webrtc::scoped_refptr<webrtc::JavaVideoTrackSourceInterface> source, std::string deviceId, std::function<void(VideoState)> stateUpdated, std::shared_ptr<PlatformContext> platformContext) : _source(source), _stateUpdated(stateUpdated), _platformContext(platformContext) {
     AndroidContext *context = (AndroidContext *) platformContext.get();
     JNIEnv *env = webrtc::AttachCurrentThreadIfNeeded();
     jmethodID methodId = env->GetMethodID(context->getJavaCapturerClass(), "init", "(JZ)V");
@@ -37,12 +37,12 @@ void VideoCameraCapturer::setPreferredCaptureAspectRatio(float aspectRatio) {
     env->CallVoidMethod(context->getJavaCapturer(), methodId, (jfloat) aspectRatio);
 }
 
-void VideoCameraCapturer::setUncroppedSink(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+void VideoCameraCapturer::setUncroppedSink(std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
     if (_uncroppedSink != nullptr) {
         _source->RemoveSink(_uncroppedSink.get());
     }
     if (sink != nullptr) {
-        _source->AddOrUpdateSink(sink.get(), rtc::VideoSinkWants());
+        _source->AddOrUpdateSink(sink.get(), webrtc::VideoSinkWants());
     }
     _uncroppedSink = sink;
 }

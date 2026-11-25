@@ -3,6 +3,7 @@
 
 #include "av1/Av1EncoderFallback.h"
 
+#include "api/environment/environment_factory.h"
 #include "api/video/i420_buffer.h"
 #include "api/video/video_frame.h"
 #include "api/video_codecs/sdp_video_format.h"
@@ -70,7 +71,7 @@ public:
     std::vector<webrtc::SdpVideoFormat> GetSupportedFormats() const override {
         return {webrtc::SdpVideoFormat("H264"), webrtc::SdpVideoFormat("AV1")};
     }
-    std::unique_ptr<webrtc::VideoEncoder> CreateVideoEncoder(const webrtc::SdpVideoFormat &format) override {
+    std::unique_ptr<webrtc::VideoEncoder> Create(const webrtc::Environment &env, const webrtc::SdpVideoFormat &format) override {
         if (format.name == "AV1") {
             return createAv1 ? std::make_unique<FakeEncoder>(av1) : nullptr;
         }
@@ -123,7 +124,7 @@ void TestAv1InitFailureReportsAndSwitchesToTheFallback() {
     setup->inner->av1.initResult = WEBRTC_VIDEO_CODEC_ERROR;
     setup->fallback->setFallbackFormat(H265());
     CHECK_TRUE(setup->selector != nullptr);
-    auto encoder = setup->factory->CreateVideoEncoder(webrtc::SdpVideoFormat("AV1"));
+    auto encoder = setup->factory->Create(webrtc::CreateEnvironment(), webrtc::SdpVideoFormat("AV1"));
     CHECK_TRUE(encoder != nullptr);
     if (!encoder || !setup->selector) {
         return;
@@ -139,7 +140,7 @@ void TestAv1EncodeFailureReports() {
     auto setup = MakeSetup();
     setup->inner->av1.encodeResult = WEBRTC_VIDEO_CODEC_ENCODER_FAILURE;
     setup->fallback->setFallbackFormat(H265());
-    auto encoder = setup->factory->CreateVideoEncoder(webrtc::SdpVideoFormat("AV1"));
+    auto encoder = setup->factory->Create(webrtc::CreateEnvironment(), webrtc::SdpVideoFormat("AV1"));
     if (!encoder || !setup->selector) {
         CHECK_TRUE(false);
         return;
@@ -158,7 +159,7 @@ void TestAv1CreationFailureReports() {
     auto setup = MakeSetup();
     setup->inner->createAv1 = false;
     setup->fallback->setFallbackFormat(H265());
-    CHECK_TRUE(setup->factory->CreateVideoEncoder(webrtc::SdpVideoFormat("AV1")) == nullptr);
+    CHECK_TRUE(setup->factory->Create(webrtc::CreateEnvironment(), webrtc::SdpVideoFormat("AV1")) == nullptr);
     CHECK_TRUE(setup->reports == 1);
     if (!setup->selector) {
         CHECK_TRUE(false);
@@ -172,7 +173,7 @@ void TestAnotherBrokenEncoderKeepsWebRtcsChoice() {
     auto setup = MakeSetup();
     setup->inner->h264.initResult = WEBRTC_VIDEO_CODEC_ERROR;
     setup->fallback->setFallbackFormat(H265());
-    auto encoder = setup->factory->CreateVideoEncoder(webrtc::SdpVideoFormat("H264"));
+    auto encoder = setup->factory->Create(webrtc::CreateEnvironment(), webrtc::SdpVideoFormat("H264"));
     if (!encoder || !setup->selector) {
         CHECK_TRUE(false);
         return;
@@ -186,7 +187,7 @@ void TestAnotherBrokenEncoderKeepsWebRtcsChoice() {
 void TestNoFallbackBeforeTheFirstNegotiation() {
     auto setup = MakeSetup();
     setup->inner->av1.initResult = WEBRTC_VIDEO_CODEC_ERROR;
-    auto encoder = setup->factory->CreateVideoEncoder(webrtc::SdpVideoFormat("AV1"));
+    auto encoder = setup->factory->Create(webrtc::CreateEnvironment(), webrtc::SdpVideoFormat("AV1"));
     if (!encoder || !setup->selector) {
         CHECK_TRUE(false);
         return;
@@ -200,7 +201,7 @@ void TestNoFallbackBeforeTheFirstNegotiation() {
 void TestAWorkingAv1EncoderNeitherReportsNorSwitches() {
     auto setup = MakeSetup();
     setup->fallback->setFallbackFormat(H265());
-    auto encoder = setup->factory->CreateVideoEncoder(webrtc::SdpVideoFormat("AV1"));
+    auto encoder = setup->factory->Create(webrtc::CreateEnvironment(), webrtc::SdpVideoFormat("AV1"));
     if (!encoder || !setup->selector) {
         CHECK_TRUE(false);
         return;

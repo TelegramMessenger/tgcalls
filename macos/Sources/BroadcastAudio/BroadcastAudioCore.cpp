@@ -335,7 +335,7 @@ private:
             }
             _mixList.push_back(&frame);
         }
-        _combiner.Combine(rtc::ArrayView<webrtc::AudioFrame *const>(_mixList.data(), _mixList.size()), 1, (int)Core::kSampleRate, _mixList.size(), &_mixed);
+        _combiner.Combine(webrtc::ArrayView<webrtc::AudioFrame *const>(_mixList.data(), _mixList.size()), 1, (int)Core::kSampleRate, _mixList.size(), &_mixed);
         std::memcpy(_mono, _mixed.data(), sizeof(_mono));
     }
 

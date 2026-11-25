@@ -18,7 +18,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <memory>
+#include <span>
 #include <vector>
 
 static int failures = 0;
@@ -36,14 +38,25 @@ namespace {
 struct EncodedFrame {
     std::vector<uint8_t> data;
     bool isKey = false;
+    // From the generic frame info (the dependency descriptor's): -1 when absent.
+    int temporalId = -1;
+    int decodeTargets = 0;
+    bool hasStructure = false;
 };
 
 class EncodedCollector : public webrtc::EncodedImageCallback {
 public:
-    Result OnEncodedImage(const webrtc::EncodedImage &image, const webrtc::CodecSpecificInfo *) override {
+    void OnFrameDropped(uint32_t, int, bool) override {}
+
+    Result OnEncodedImage(const webrtc::EncodedImage &image, const webrtc::CodecSpecificInfo *info) override {
         EncodedFrame frame;
         frame.data.assign(image.data(), image.data() + image.size());
         frame.isKey = image._frameType == webrtc::VideoFrameType::kVideoFrameKey;
+        if (info && info->generic_frame_info) {
+            frame.temporalId = info->generic_frame_info->temporal_id;
+            frame.decodeTargets = int(info->generic_frame_info->decode_target_indications.size());
+        }
+        frame.hasStructure = info && info->template_structure.has_value();
         frames.push_back(std::move(frame));
         return Result(Result::OK);
     }
@@ -56,11 +69,11 @@ public:
         frames.push_back(frame.video_frame_buffer()->ToI420());
         return 0;
     }
-    std::vector<rtc::scoped_refptr<webrtc::I420BufferInterface>> frames;
+    std::vector<webrtc::scoped_refptr<webrtc::I420BufferInterface>> frames;
 };
 
 // The same moving texture the encoder test uses.
-rtc::scoped_refptr<webrtc::I420Buffer> MakeI420(int index, int width, int height) {
+webrtc::scoped_refptr<webrtc::I420Buffer> MakeI420(int index, int width, int height) {
     auto buffer = webrtc::I420Buffer::Create(width, height);
     for (int row = 0; row < height; row++) {
         uint8_t *y = buffer->MutableDataY() + row * buffer->StrideY();
@@ -79,7 +92,8 @@ rtc::scoped_refptr<webrtc::I420Buffer> MakeI420(int index, int width, int height
     return buffer;
 }
 
-webrtc::VideoCodec CodecSettings(int width, int height, int kbps) {
+webrtc::VideoCodec CodecSettings(int width, int height, int kbps,
+                                 webrtc::ScalabilityMode mode = webrtc::ScalabilityMode::kL1T1) {
     webrtc::VideoCodec codec;
     codec.codecType = webrtc::kVideoCodecAV1;
     codec.width = uint16_t(width);
@@ -88,7 +102,7 @@ webrtc::VideoCodec CodecSettings(int width, int height, int kbps) {
     codec.startBitrate = uint32_t(kbps);
     codec.maxBitrate = 2500;
     codec.qpMax = 63;
-    codec.SetScalabilityMode(webrtc::ScalabilityMode::kL1T1);
+    codec.SetScalabilityMode(mode);
     return codec;
 }
 
@@ -124,7 +138,7 @@ std::vector<uint8_t> ThroughRtp(const EncodedFrame &frame) {
         auto payload = packet.payload();
         payloads.emplace_back(payload.begin(), payload.end());
     }
-    std::vector<rtc::ArrayView<const uint8_t>> views;
+    std::vector<std::span<const uint8_t>> views;
     for (const auto &payload : payloads) {
         views.emplace_back(payload);
     }
@@ -168,11 +182,12 @@ double LumaPsnr(const webrtc::I420BufferInterface &a, const webrtc::I420BufferIn
 }
 
 std::vector<EncodedFrame> EncodeSequence(int count, int width, int height, int kbps, int forcedKeyAt,
-                                         int resizeAt, int newWidth, int newHeight) {
+                                         int resizeAt, int newWidth, int newHeight,
+                                         webrtc::ScalabilityMode mode = webrtc::ScalabilityMode::kL1T1) {
     auto encoder = tgcalls::CreateSvtAv1Encoder();
     EncodedCollector collector;
     encoder->RegisterEncodeCompleteCallback(&collector);
-    auto codec = CodecSettings(width, height, kbps);
+    auto codec = CodecSettings(width, height, kbps, mode);
     CHECK_TRUE(encoder->InitEncode(&codec, webrtc::VideoEncoder::Settings(webrtc::VideoEncoder::Capabilities(false), 4, 1200)) == WEBRTC_VIDEO_CODEC_OK);
     SetRate(*encoder, uint32_t(kbps) * 1000);
     for (int i = 0; i < count; i++) {
@@ -240,12 +255,90 @@ void TestResolutionChangeDecodes() {
     }
 }
 
+bool SameLuma(const webrtc::I420BufferInterface &a, const webrtc::I420BufferInterface &b) {
+    if (a.width() != b.width() || a.height() != b.height()) {
+        return false;
+    }
+    for (int row = 0; row < a.height(); row++) {
+        if (std::memcmp(a.DataY() + row * a.StrideY(), b.DataY() + row * b.StrideY(), size_t(a.width())) != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Decodes the frames whose temporal id is at most `maxTemporalId` and checks each picture against the same frame of
+// the full decode: a frame that referenced a dropped layer would decode, but to another picture.
+int DecodeLayersMatchingFull(const std::vector<EncodedFrame> &encoded, int maxTemporalId,
+                             const std::vector<webrtc::scoped_refptr<webrtc::I420BufferInterface>> &full) {
+    DecodedCollector decoded;
+    auto decoder = MakeDecoder(640, 360, decoded);
+    std::vector<size_t> indices;
+    for (size_t i = 0; i < encoded.size(); i++) {
+        if (encoded[i].temporalId > maxTemporalId) {
+            continue;
+        }
+        CHECK_TRUE(Decode(*decoder, ThroughRtp(encoded[i]), encoded[i].isKey, int(i)));
+        indices.push_back(i);
+    }
+    CHECK_TRUE(decoded.frames.size() == indices.size());
+    int matching = 0;
+    for (size_t k = 0; k < decoded.frames.size() && k < indices.size(); k++) {
+        if (indices[k] < full.size() && SameLuma(*decoded.frames[k], *full[indices[k]])) {
+            matching++;
+        }
+    }
+    return matching;
+}
+
+// L1T3 (what an AV1 simulcast encoding asks for): SVT-AV1's three-layer low-delay structure, described per frame by
+// WebRTC's L1T3 structure (the dependency descriptor's): temporal ids 0, 2, 1, 2 from every keyframe, a forced keyframe
+// mid-pattern included, three decode targets, the structure on keyframes; and the lower decode targets decode on their
+// own (T0 alone, T0 and T1) to the very pictures of the full stream.
+void TestL1T3LayersDecodeOnTheirOwn() {
+    auto encoded = EncodeSequence(26, 640, 360, 800, 10, -1, 0, 0, webrtc::ScalabilityMode::kL1T3);
+    CHECK_TRUE(encoded.size() == 26);
+    const int pattern[4] = {0, 2, 1, 2};
+    int patternErrors = 0;
+    for (size_t i = 0; i < encoded.size(); i++) {
+        const int sinceKey = int(i) < 10 ? int(i) : int(i) - 10;
+        const int expected = pattern[sinceKey % 4];
+        if (encoded[i].temporalId != expected) {
+            patternErrors++;
+            std::fprintf(stderr, "  frame %zu: temporal id %d, expected %d\n", i, encoded[i].temporalId, expected);
+        }
+        CHECK_TRUE(encoded[i].decodeTargets == 3);
+        CHECK_TRUE(encoded[i].hasStructure == encoded[i].isKey);
+    }
+    CHECK_TRUE(patternErrors == 0);
+    CHECK_TRUE(encoded[0].isKey && encoded[10].isKey);
+
+    DecodedCollector full;
+    auto decoder = MakeDecoder(640, 360, full);
+    for (size_t i = 0; i < encoded.size(); i++) {
+        CHECK_TRUE(Decode(*decoder, ThroughRtp(encoded[i]), encoded[i].isKey, int(i)));
+    }
+    CHECK_TRUE(full.frames.size() == encoded.size());
+    int t0 = 0;
+    int t01 = 0;
+    for (const auto &frame : encoded) {
+        t0 += frame.temporalId == 0 ? 1 : 0;
+        t01 += frame.temporalId <= 1 ? 1 : 0;
+    }
+    const int t0Matching = DecodeLayersMatchingFull(encoded, 0, full.frames);
+    const int t01Matching = DecodeLayersMatchingFull(encoded, 1, full.frames);
+    std::printf("L1T3: T0 alone %d/%d pictures as in the full stream, T0+T1 %d/%d\n", t0Matching, t0, t01Matching, t01);
+    CHECK_TRUE(t0 >= 6 && t0Matching == t0);
+    CHECK_TRUE(t01 >= 12 && t01Matching == t01);
+}
+
 } // namespace
 
 int main() {
     TestRoundTripKeyAndDeltaFrames();
     TestDecodeFromMidStreamKeyframe();
     TestResolutionChangeDecodes();
+    TestL1T3LayersDecodeOnTheirOwn();
     if (failures != 0) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;

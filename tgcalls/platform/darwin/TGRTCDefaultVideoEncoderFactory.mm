@@ -23,10 +23,42 @@
 #import "TGRTCVideoEncoderH265.h"
 #endif
 
-#import "sdk/objc/api/video_codec/RTCWrappedNativeVideoEncoder.h"
+#import "sdk/objc/api/video_codec/RTCNativeVideoEncoder.h"
+#import "sdk/objc/api/video_codec/RTCNativeVideoEncoderBuilder+Native.h"
 #import "modules/video_coding/codecs/h264/include/h264.h"
 #import "h264_encoder_impl.h"
 
+// The software H.264 encoder, built by CustomObjCVideoEncoderFactory with the call's environment.
+@interface TGRTCSoftwareH264EncoderBuilder : RTC_OBJC_TYPE(RTCNativeVideoEncoder) <RTC_OBJC_TYPE(RTCNativeVideoEncoderBuilder)>
+- (instancetype)initWithX264:(bool)x264;
+@end
+
+@implementation TGRTCSoftwareH264EncoderBuilder {
+    bool _x264;
+}
+
+- (instancetype)initWithX264:(bool)x264 {
+    self = [super init];
+    if (self) {
+        _x264 = x264;
+    }
+    return self;
+}
+
+- (std::unique_ptr<webrtc::VideoEncoder>)build:(const webrtc::Environment &)env {
+    return [self buildWithEnvironment:env format:webrtc::SdpVideoFormat::H264()];
+}
+
+- (std::unique_ptr<webrtc::VideoEncoder>)buildWithEnvironment:(const webrtc::Environment &)env format:(const webrtc::SdpVideoFormat &)format {
+#ifdef TGCALLS_ENABLE_X264
+    if (_x264) {
+        return std::make_unique<webrtc::H264EncoderX264Impl>(webrtc::CreateVideoCodec(format));
+    }
+#endif
+    return webrtc::CreateH264Encoder(env, webrtc::H264EncoderSettings::Parse(format));
+}
+
+@end
 @interface TGRTCDefaultVideoEncoderFactory () {
     bool _preferHardwareH264;
     bool _preferX264;
@@ -97,7 +129,7 @@ static RTCVideoCodecInfo *highestLevelH264CodecInfo() {
 #endif
 
 #if !defined(WEBRTC_DISABLE_H265)
-  RTCVideoCodecInfo *h265Info = [[RTCVideoCodecInfo alloc] initWithName:kRTCVideoCodecH265Name];
+  RTCVideoCodecInfo *h265Info = [[RTCVideoCodecInfo alloc] initWithName:kRTCVideoCodecH265Name parameters:TGRTCH265StandardParameters()];
 #endif
 
   NSMutableArray *result = [[NSMutableArray alloc] initWithArray:@[
@@ -134,22 +166,7 @@ static RTCVideoCodecInfo *highestLevelH264CodecInfo() {
           return [[TGRTCVideoEncoderH264 alloc] initWithCodecInfo:info screenContent:_screenContent];
       } else {
           
-          webrtc::SdpVideoFormat videoFormat(info.name.UTF8String);
-          for (NSString *key in info.parameters) {
-              videoFormat.parameters.insert(std::make_pair(key.UTF8String, info.parameters[key].UTF8String));
-          }
-          
-          cricket::VideoCodec videoCodec = cricket::CreateVideoCodec(videoFormat);
-          
-#ifdef TGCALLS_ENABLE_X264
-          if (_preferX264) {
-              return [[RTC_OBJC_TYPE(RTCWrappedNativeVideoEncoder) alloc] initWithNativeEncoder:std::make_unique<webrtc::H264EncoderX264Impl>(videoCodec)];
-          } else {
-#endif
-              return [[RTC_OBJC_TYPE(RTCWrappedNativeVideoEncoder) alloc] initWithNativeEncoder:std::unique_ptr<webrtc::VideoEncoder>(webrtc::H264Encoder::Create(videoCodec))];
-#ifdef TGCALLS_ENABLE_X264
-          }
-#endif
+          return [[TGRTCSoftwareH264EncoderBuilder alloc] initWithX264:_preferX264];
       }
   } else if ([info.name isEqualToString:kRTCVideoCodecVp8Name]) {
     return [RTCVideoEncoderVP8 vp8Encoder];

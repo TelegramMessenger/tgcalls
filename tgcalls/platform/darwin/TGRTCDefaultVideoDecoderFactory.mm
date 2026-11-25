@@ -23,13 +23,30 @@
 #import "TGRTCVideoDecoderH265.h"
 #endif
 
-#import "sdk/objc/api/video_codec/RTCWrappedNativeVideoDecoder.h"
 #include "modules/video_coding/codecs/h264/include/h264.h"
 
 #if TGCALLS_ENABLE_AV1
 #import "TGRTCVideoDecoderAV1.h"
 #include "modules/video_coding/codecs/av1/dav1d_decoder.h"
 #include "platform/darwin/Av1VideoToolboxDecoder.h"
+#import "sdk/objc/api/video_codec/RTCNativeVideoDecoder.h"
+#import "sdk/objc/api/video_codec/RTCNativeVideoDecoderBuilder+Native.h"
+
+// dav1d, built by CustomObjCVideoDecoderFactory with the call's environment.
+@interface TGRTCDav1dDecoderBuilder : RTC_OBJC_TYPE(RTCNativeVideoDecoder) <RTC_OBJC_TYPE(RTCNativeVideoDecoderBuilder)>
+@end
+
+@implementation TGRTCDav1dDecoderBuilder
+
+- (std::unique_ptr<webrtc::VideoDecoder>)build:(const webrtc::Environment &)env {
+    return webrtc::CreateDav1dDecoder(env);
+}
+
+- (std::unique_ptr<webrtc::VideoDecoder>)buildWithEnvironment:(const webrtc::Environment &)env format:(const webrtc::SdpVideoFormat &)format {
+    return webrtc::CreateDav1dDecoder(env);
+}
+
+@end
 #endif
 
 @implementation TGRTCDefaultVideoDecoderFactory {
@@ -72,7 +89,7 @@
 #endif
     
 #if !defined(WEBRTC_DISABLE_H265)
-    RTCVideoCodecInfo *h265Info = [[RTCVideoCodecInfo alloc] initWithName:kRTCVideoCodecH265Name];
+    RTCVideoCodecInfo *h265Info = [[RTCVideoCodecInfo alloc] initWithName:kRTCVideoCodecH265Name parameters:TGRTCH265StandardParameters()];
 #endif
     
     NSMutableArray<RTCVideoCodecInfo *> *result = [[NSMutableArray alloc] initWithArray:@[
@@ -141,7 +158,7 @@
     if (tgcalls::Av1VideoToolboxDecoder::IsSupported()) {
       return [[TGRTCVideoDecoderAV1 alloc] init];
     }
-    return [[RTCWrappedNativeVideoDecoder alloc] initWithNativeDecoder:webrtc::CreateDav1dDecoder()];
+    return [[TGRTCDav1dDecoderBuilder alloc] init];
   }
 #endif
 

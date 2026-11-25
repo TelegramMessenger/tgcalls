@@ -24,7 +24,7 @@
 #include "rtc_base/thread.h"
 #include "rtc_base/thread_annotations.h"
 #include "rtc_base/time_utils.h"
-#include "system_wrappers/include/field_trial.h"
+#include "api/environment/deprecated_global_field_trials.h"
 #include "system_wrappers/include/metrics.h"
 
 #import "base/RTCLogging.h"
@@ -110,7 +110,7 @@ AudioDeviceIOS::AudioDeviceIOS(bool bypass_voice_processing, bool disable_record
   LOGI() << "ctor" << ios::GetCurrentThreadDescription()
          << ",bypass_voice_processing=" << bypass_voice_processing_;
   io_thread_checker_.Detach();
-  thread_ = rtc::Thread::Current();
+  thread_ = webrtc::Thread::Current();
 
   audio_session_observer_ = [[RTCNativeAudioSessionDelegateAdapter alloc] initWithObserver:this];
 }
@@ -464,7 +464,7 @@ OSStatus AudioDeviceIOS::OnGetPlayoutData(AudioUnitRenderActionFlags* flags,
   // If so, we have an indication of a glitch in the output audio since the
   // core audio layer will most likely run dry in this state.
   ++num_playout_callbacks_;
-  const int64_t now_time = rtc::TimeMillis();
+  const int64_t now_time = webrtc::TimeMillis();
   if (time_stamp->mSampleTime != num_frames) {
     const int64_t delta_time = now_time - last_playout_time_;
     const int glitch_threshold = 1.6 * playout_parameters_.GetBufferSizeInMilliseconds();
@@ -493,7 +493,7 @@ OSStatus AudioDeviceIOS::OnGetPlayoutData(AudioUnitRenderActionFlags* flags,
   // `io_data` destination.
   if (isBufferPlaying_) {
     fine_audio_buffer_->GetPlayoutData(
-      rtc::ArrayView<int16_t>(static_cast<int16_t*>(audio_buffer->mData), num_frames * audio_buffer->mNumberChannels), kFixedPlayoutDelayEstimate);
+      webrtc::ArrayView<int16_t>(static_cast<int16_t*>(audio_buffer->mData), num_frames * audio_buffer->mNumberChannels), kFixedPlayoutDelayEstimate);
   } else {
     memset(audio_buffer->mData, 0, num_frames * audio_buffer->mNumberChannels * sizeof(int16_t));
   }
@@ -573,7 +573,7 @@ void AudioDeviceIOS::HandleInterruptionEnd() {
          is_interrupted_);
   is_interrupted_ = false;
   if (!audio_unit_) return;
-  if (webrtc::field_trial::IsEnabled("WebRTC-Audio-iOS-Holding")) {
+  if (webrtc::DeprecatedGlobalFieldTrials().IsEnabled("WebRTC-Audio-iOS-Holding")) {
     // Work around an issue where audio does not restart properly after an interruption
     // by restarting the audio unit when the interruption ends.
     if (audio_unit_->GetState() == VoiceProcessingAudioUnit::kStarted) {
@@ -697,7 +697,7 @@ void AudioDeviceIOS::HandlePlayoutGlitchDetected() {
   // Avoid doing glitch detection for two seconds after a volume change
   // has been detected to reduce the risk of false alarm.
   if (last_output_volume_change_time_ > 0 &&
-      rtc::TimeSince(last_output_volume_change_time_) < 2000) {
+      webrtc::TimeSince(last_output_volume_change_time_) < 2000) {
     RTCLog(@"Ignoring audio glitch due to recent output volume change.");
     return;
   }
@@ -716,7 +716,7 @@ void AudioDeviceIOS::HandleOutputVolumeChange() {
   RTCLog(@"Output volume change detected.");
   // Store time of this detection so it can be used to defer detection of
   // glitches too close in time to this event.
-  last_output_volume_change_time_ = rtc::TimeMillis();
+  last_output_volume_change_time_ = webrtc::TimeMillis();
 }
 
 void AudioDeviceIOS::UpdateAudioDeviceBuffer() {

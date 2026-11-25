@@ -18,6 +18,7 @@ enum class VideoState;
 
 class VideoCapturerInterface;
 class PlatformContext;
+class Av1TopLayerSwitch;
 
 struct PlatformCaptureInfo {
     bool shouldBeAdaptedToReceiverAspectRate = false;
@@ -326,14 +327,17 @@ public:
 	virtual void configurePlatformAudio(int numChannels = 1) {
 	}
 
-    virtual std::unique_ptr<rtc::NetworkMonitorFactory> createNetworkMonitorFactory() {
+    virtual std::unique_ptr<webrtc::NetworkMonitorFactory> createNetworkMonitorFactory() {
         return nullptr;
     }
     
 	virtual std::unique_ptr<webrtc::VideoEncoderFactory> makeVideoEncoderFactory(bool preferHardwareEncoding = false, bool isScreencast = false) = 0;
 	virtual std::unique_ptr<webrtc::VideoDecoderFactory> makeVideoDecoderFactory() = 0;
-	// AV1 reaches only the engines that ask for these (InstanceV2ReferenceImpl). The defaults keep a platform without
-	// AV1; a platform that has it lists AV1 last, and encodes it only when `allowAv1Encoding`.
+	// AV1 reaches only the engines that ask for these: InstanceV2ReferenceImpl (both), and both group engines (the decoder
+	// factory). The defaults keep a platform without AV1; a platform that has it lists AV1 last, and encodes it only when
+	// `allowAv1Encoding`. A platform that defines TGCALLS_ENABLE_AV1 must override the decoder factory: the group engines
+	// receive AV1 106 in every build with the define, and WebRTC refuses a whole receive codec list holding a codec its
+	// decoder factory lacks.
 	virtual std::unique_ptr<webrtc::VideoEncoderFactory> makeVideoEncoderFactoryWithAv1(bool preferHardwareEncoding, bool allowAv1Encoding) {
 		return makeVideoEncoderFactory(preferHardwareEncoding, false);
 	}
@@ -344,12 +348,18 @@ public:
 	virtual bool canEncodeAv1Realtime() {
 		return false;
 	}
+	// The group screen share's encoder factory (GroupInstanceCustomImpl). The default is today's screencast factory; a
+	// platform with AV1 returns one that encodes the top simulcast stream in AV1 while `av1TopLayer` is enabled
+	// (av1/Av1TopLayerFactory).
+	virtual std::unique_ptr<webrtc::VideoEncoderFactory> makeScreencastVideoEncoderFactoryWithAv1TopLayer(bool preferHardwareEncoding, std::shared_ptr<Av1TopLayerSwitch> av1TopLayer) {
+		return makeVideoEncoderFactory(preferHardwareEncoding, true);
+	}
 	virtual bool supportsEncoding(const std::string &codecName) = 0;
-	virtual webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> makeVideoSource(rtc::Thread *signalingThread, rtc::Thread *workerThread) = 0;
+	virtual webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> makeVideoSource(webrtc::Thread *signalingThread, webrtc::Thread *workerThread) = 0;
     virtual void adaptVideoSource(webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> videoSource, int width, int height, int fps) = 0;
 	virtual std::unique_ptr<VideoCapturerInterface> makeVideoCapturer(webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source, std::string deviceId, std::function<void(VideoState)> stateUpdated, std::function<void(PlatformCaptureInfo)> captureInfoUpdated, std::shared_ptr<PlatformContext> platformContext, std::pair<int, int> &outResolution) = 0;
     virtual webrtc::scoped_refptr<WrappedAudioDeviceModule> wrapAudioDeviceModule(webrtc::scoped_refptr<webrtc::AudioDeviceModule> module) {
-        return rtc::make_ref_counted<DefaultWrappedAudioDeviceModule>(module);
+        return webrtc::make_ref_counted<DefaultWrappedAudioDeviceModule>(module);
     }
 
 public:

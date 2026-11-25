@@ -77,19 +77,19 @@ void TestAv1FactoriesAppendAv1Last() {
 
 void TestEncodingNotAllowedGivesRefusingEncoder() {
     tgcalls::FakeInterface platform;
-    auto refusing = platform.makeVideoEncoderFactoryWithAv1(true, false)->CreateVideoEncoder(webrtc::SdpVideoFormat("AV1"));
+    auto refusing = platform.makeVideoEncoderFactoryWithAv1(true, false)->Create(webrtc::CreateEnvironment(), webrtc::SdpVideoFormat("AV1"));
     CHECK_TRUE(refusing != nullptr);
     if (refusing) {
         CHECK_TRUE(InitAv1(*refusing) == WEBRTC_VIDEO_CODEC_ERROR);
     }
-    auto encoding = platform.makeVideoEncoderFactoryWithAv1(true, true)->CreateVideoEncoder(webrtc::SdpVideoFormat("AV1"));
+    auto encoding = platform.makeVideoEncoderFactoryWithAv1(true, true)->Create(webrtc::CreateEnvironment(), webrtc::SdpVideoFormat("AV1"));
     CHECK_TRUE(encoding != nullptr);
     if (encoding) {
         CHECK_TRUE(InitAv1(*encoding) == WEBRTC_VIDEO_CODEC_OK);
         encoding->Release();
     }
     // The other codecs still come from the inner factory.
-    auto vp8 = platform.makeVideoEncoderFactoryWithAv1(true, false)->CreateVideoEncoder(webrtc::SdpVideoFormat("VP8"));
+    auto vp8 = platform.makeVideoEncoderFactoryWithAv1(true, false)->Create(webrtc::CreateEnvironment(), webrtc::SdpVideoFormat("VP8"));
     CHECK_TRUE(vp8 != nullptr);
 }
 
@@ -237,11 +237,11 @@ public:
         return {webrtc::SdpVideoFormat("H265")};
     }
     CodecSupport QueryCodecSupport(const webrtc::SdpVideoFormat &format,
-                                   absl::optional<std::string> scalabilityMode) const override {
+                                   std::optional<std::string> scalabilityMode) const override {
         queried.push_back(format);
         return CodecSupport();
     }
-    std::unique_ptr<webrtc::VideoEncoder> CreateVideoEncoder(const webrtc::SdpVideoFormat &format) override {
+    std::unique_ptr<webrtc::VideoEncoder> Create(const webrtc::Environment &env, const webrtc::SdpVideoFormat &format) override {
         created.push_back(format);
         return nullptr;
     }
@@ -259,8 +259,8 @@ void TestInnerFactoryGetsItsOwnFormat() {
         return;
     }
     CHECK_TRUE(Param(listed[0].parameters, "level-id") == "93");
-    factory->CreateVideoEncoder(listed[0]);
-    factory->QueryCodecSupport(listed[0], absl::nullopt);
+    factory->Create(webrtc::CreateEnvironment(), listed[0]);
+    factory->QueryCodecSupport(listed[0], std::nullopt);
     CHECK_TRUE(recorder->created.size() == 1 && recorder->created[0].parameters.empty());
     CHECK_TRUE(recorder->queried.size() == 1 && recorder->queried[0].parameters.empty());
 }

@@ -46,6 +46,63 @@ type SimulcastLayer struct {
 	FidSSRC uint32
 }
 
+// videoLayersFromSSRCGroups reads a sender's video layers from its join payload: the SIM group lists them, each FID group
+// gives a layer its RTX. One layer has no SIM group, only its FID group (a one-layer AV1 screen share, a conference
+// camera); several FID groups without a SIM group name no layers.
+func videoLayersFromSSRCGroups(groups []ssrcGroupJSON) []SimulcastLayer {
+	var simSSRCs []uint32 // SIM group: primary SSRCs per layer
+	var fidPrimaries []uint32
+	fidMap := make(map[uint32]uint32) // primary SSRC -> RTX SSRC
+	for _, g := range groups {
+		switch g.Semantics {
+		case "SIM":
+			for _, v := range g.Sources {
+				simSSRCs = append(simSSRCs, uint32(v))
+			}
+		case "FID":
+			if len(g.Sources) == 2 {
+				fidMap[uint32(g.Sources[0])] = uint32(g.Sources[1])
+				fidPrimaries = append(fidPrimaries, uint32(g.Sources[0]))
+			}
+		}
+	}
+	if len(simSSRCs) == 0 && len(fidPrimaries) == 1 {
+		simSSRCs = fidPrimaries
+	}
+
+	var layers []SimulcastLayer
+	for _, primary := range simSSRCs {
+		layer := SimulcastLayer{SSRC: primary}
+		if rtx, ok := fidMap[primary]; ok {
+			layer.FidSSRC = rtx
+		}
+		layers = append(layers, layer)
+	}
+	return layers
+}
+
+// videoSSRCGroupsForAnnouncement is a sender's ssrc-groups in ActiveVideoSsrcs: a SIM group when it has two or more
+// layers, and each layer's FID group.
+func videoSSRCGroupsForAnnouncement(layers []SimulcastLayer) []ssrcGroupJSON {
+	var groups []ssrcGroupJSON
+	if len(layers) > 1 {
+		simGroup := ssrcGroupJSON{Semantics: "SIM"}
+		for _, l := range layers {
+			simGroup.Sources = append(simGroup.Sources, int32(l.SSRC))
+		}
+		groups = append(groups, simGroup)
+	}
+	for _, l := range layers {
+		if l.FidSSRC != 0 {
+			groups = append(groups, ssrcGroupJSON{
+				Semantics: "FID",
+				Sources:   []int32{int32(l.SSRC), int32(l.FidSSRC)},
+			})
+		}
+	}
+	return groups
+}
+
 type fingerprintJSON struct {
 	Hash        string `json:"hash"`
 	Fingerprint string `json:"fingerprint"`
@@ -123,6 +180,18 @@ type SFU struct {
 	// participant sends nothing" check. Own lock: incremented under s.mu.RLock.
 	audioRTPCountMu sync.Mutex
 	audioRTPCount   map[uint32]int64
+	// Join responses list AV1 106 (RTX 107) beside H264 (GoSfu_SetListAv1): the group screen share's AV1 top layer.
+	listAv1 atomic.Bool
+	// Join responses list the AV1 Dependency Descriptor at this ID when > 0 (GoSfu_SetDependencyDescriptorId).
+	ddExtensionID atomic.Int32
+	// Video packets received per sender, simulcast layer and payload type (GoSfu_QueryPayloadTypeStats): which codec
+	// each layer of a sender carried. Own lock: updated on the forwarding path.
+	ptStatsMu sync.Mutex
+	ptStats   map[int]map[int]map[int]*payloadTypeStats
+	// [receiverID, senderID] -> the sequence/timestamp translation of the video forwarded on that pair, continuous
+	// across layer switches (layer_forwarder.go).
+	forwardersMu sync.Mutex
+	forwarders   map[[2]int]*layerForwarder
 	// Listener audio of the emulated broadcast server: every speaker's audio RTP, decoded onto a timeline.
 	broadcastAudio *broadcastAudio
 	// The emulated broadcast server: part, time and stream-channel answers per listener.
@@ -146,6 +215,8 @@ func NewSFU() *SFU {
 		maxActiveLayer: make(map[int]int),
 		twccGenerators: make(map[int]*TransportCCGenerator),
 		audioRTPCount:  make(map[uint32]int64),
+		ptStats:        make(map[int]map[int]map[int]*payloadTypeStats),
+		forwarders:     make(map[[2]int]*layerForwarder),
 		broadcastAudio: newBroadcastAudio(defaultBroadcastTranscoder(), broadcastDefaultRetainMs),
 		loggerFactory:  lf,
 		log:           lf.NewLogger("sfu"),
@@ -182,29 +253,7 @@ func (s *SFU) Join(participantID int, joinPayloadJSON string, iceControlling boo
 	}
 
 	// 4. Parse video ssrc-groups into SimulcastLayers.
-	var simSSRCs []uint32 // SIM group: primary SSRCs per layer
-	fidMap := make(map[uint32]uint32) // primary SSRC -> RTX SSRC
-	for _, g := range payload.SSRCGroups {
-		switch g.Semantics {
-		case "SIM":
-			for _, v := range g.Sources {
-				simSSRCs = append(simSSRCs, uint32(v))
-			}
-		case "FID":
-			if len(g.Sources) == 2 {
-				fidMap[uint32(g.Sources[0])] = uint32(g.Sources[1])
-			}
-		}
-	}
-
-	var videoLayers []SimulcastLayer
-	for _, primary := range simSSRCs {
-		layer := SimulcastLayer{SSRC: primary}
-		if rtx, ok := fidMap[primary]; ok {
-			layer.FidSSRC = rtx
-		}
-		videoLayers = append(videoLayers, layer)
-	}
+	videoLayers := videoLayersFromSSRCGroups(payload.SSRCGroups)
 
 	// 5. Create participant config.
 	config := ParticipantConfig{
@@ -280,37 +329,8 @@ func (s *SFU) Join(participantID int, joinPayloadJSON string, iceControlling boo
 	if len(videoLayers) > 0 {
 		resp.Video = &videoResponseJSON{
 			Endpoint: fmt.Sprintf("%d", participantID),
-			PayloadTypes: []videoPayloadTypeJSON{
-				{
-					ID:        100,
-					Name:      "H264",
-					Clockrate: 90000,
-					Parameters: map[string]string{
-						"profile-level-id":  "42e01f",
-						"packetization-mode": "1",
-					},
-					Feedback: []rtcpFeedbackJSON{
-						{Type: "goog-remb"},
-						{Type: "transport-cc"},
-						{Type: "ccm", Subtype: "fir"},
-						{Type: "nack"},
-						{Type: "nack", Subtype: "pli"},
-					},
-				},
-				{
-					ID:        101,
-					Name:      "rtx",
-					Clockrate: 90000,
-					Parameters: map[string]string{
-						"apt": "100",
-					},
-				},
-			},
-			RTPHdrexts: []rtpHdrextJSON{
-				{ID: 2, URI: "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time"},
-				{ID: 3, URI: "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01"},
-				{ID: 13, URI: "urn:3gpp:video-orientation"},
-			},
+			PayloadTypes: videoPayloadTypesJSON(s.listAv1.Load()),
+			RTPHdrexts:   videoHdrextsJSON(int(s.ddExtensionID.Load())),
 		}
 	}
 
@@ -423,6 +443,172 @@ func (s *SFU) forwardRTP(from *Participant) {
 }
 
 // processIncomingRTP handles a single RTP packet from a participant after ingress simulation.
+// The video payload types a join response lists: H264 (and its RTX), then AV1 106 with RTX 107 when listAv1. Clients
+// take only the names from this list (the numbers are the group calls' fixed table, GroupVideoPayloadTypes in tgcalls).
+func videoPayloadTypesJSON(listAv1 bool) []videoPayloadTypeJSON {
+	feedback := []rtcpFeedbackJSON{
+		{Type: "goog-remb"},
+		{Type: "transport-cc"},
+		{Type: "ccm", Subtype: "fir"},
+		{Type: "nack"},
+		{Type: "nack", Subtype: "pli"},
+	}
+	result := []videoPayloadTypeJSON{
+		{
+			ID:        100,
+			Name:      "H264",
+			Clockrate: 90000,
+			Parameters: map[string]string{
+				"profile-level-id":  "42e01f",
+				"packetization-mode": "1",
+			},
+			Feedback: feedback,
+		},
+		{
+			ID:        101,
+			Name:      "rtx",
+			Clockrate: 90000,
+			Parameters: map[string]string{
+				"apt": "100",
+			},
+		},
+	}
+	if listAv1 {
+		result = append(result,
+			videoPayloadTypeJSON{
+				ID:        106,
+				Name:      "AV1",
+				Clockrate: 90000,
+				Parameters: map[string]string{
+					"profile":   "0",
+					"level-idx": "5",
+					"tier":      "0",
+				},
+				Feedback: feedback,
+			},
+			videoPayloadTypeJSON{
+				ID:        107,
+				Name:      "rtx",
+				Clockrate: 90000,
+				Parameters: map[string]string{
+					"apt": "106",
+				},
+			})
+	}
+	return result
+}
+
+// layerForwarderFor returns the translation state of what `receiverID` gets from `senderID`.
+func (s *SFU) layerForwarderFor(receiverID, senderID int) *layerForwarder {
+	s.forwardersMu.Lock()
+	defer s.forwardersMu.Unlock()
+	key := [2]int{receiverID, senderID}
+	f, ok := s.forwarders[key]
+	if !ok {
+		f = &layerForwarder{}
+		s.forwarders[key] = f
+	}
+	return f
+}
+
+// SetListAv1 makes later join responses list AV1 (or stop listing it).
+func (s *SFU) SetListAv1(enabled bool) {
+	s.listAv1.Store(enabled)
+}
+
+// SetDependencyDescriptorID makes later join responses list the AV1 Dependency Descriptor at `id` (0: not listed).
+func (s *SFU) SetDependencyDescriptorID(id int) {
+	s.ddExtensionID.Store(int32(id))
+}
+
+// dependencyDescriptorExtensionID is the ID the SFU counts the descriptor at: the listed one, else the client's default.
+func (s *SFU) dependencyDescriptorExtensionID() int {
+	if id := int(s.ddExtensionID.Load()); id > 0 {
+		return id
+	}
+	return dependencyDescriptorDefaultID
+}
+
+type payloadTypeStats struct {
+	packets int64
+	// Packets carrying the Dependency Descriptor (dependencyDescriptorExtensionID).
+	dd      int64
+	frames  int64
+	firstMs int64
+	lastMs  int64
+	lastTs  uint32
+}
+
+type payloadTypeStatsJSON struct {
+	Packets int64 `json:"packets"`
+	DD      int64 `json:"dd"`
+	Frames  int64 `json:"frames"`
+	FirstMs int64 `json:"firstMs"`
+	LastMs  int64 `json:"lastMs"`
+}
+
+// recordPayloadType counts one video (or video RTX) packet received from a sender on a simulcast layer, by payload
+// type; a frame is a new RTP timestamp.
+func (s *SFU) recordPayloadType(senderID int, layer int, pkt []byte) {
+	if len(pkt) < 12 {
+		return
+	}
+	pt := int(pkt[1] & 0x7f)
+	ts := uint32(pkt[4])<<24 | uint32(pkt[5])<<16 | uint32(pkt[6])<<8 | uint32(pkt[7])
+	hasDD := rtpHasExtension(pkt, s.dependencyDescriptorExtensionID())
+	nowMs := time.Now().UnixMilli()
+	s.ptStatsMu.Lock()
+	defer s.ptStatsMu.Unlock()
+	layers, ok := s.ptStats[senderID]
+	if !ok {
+		layers = make(map[int]map[int]*payloadTypeStats)
+		s.ptStats[senderID] = layers
+	}
+	types, ok := layers[layer]
+	if !ok {
+		types = make(map[int]*payloadTypeStats)
+		layers[layer] = types
+	}
+	stats, ok := types[pt]
+	if !ok {
+		stats = &payloadTypeStats{firstMs: nowMs, lastTs: ts, frames: 1}
+		types[pt] = stats
+	} else if ts != stats.lastTs {
+		stats.frames++
+		stats.lastTs = ts
+	}
+	stats.packets++
+	if hasDD {
+		stats.dd++
+	}
+	stats.lastMs = nowMs
+}
+
+// QueryPayloadTypeStats returns {"<layer>": {"<pt>": {packets, frames, firstMs, lastMs}}} for a sender.
+func (s *SFU) QueryPayloadTypeStats(senderID int) string {
+	s.ptStatsMu.Lock()
+	result := make(map[string]map[string]payloadTypeStatsJSON)
+	for layer, types := range s.ptStats[senderID] {
+		layerKey := fmt.Sprintf("%d", layer)
+		result[layerKey] = make(map[string]payloadTypeStatsJSON)
+		for pt, stats := range types {
+			result[layerKey][fmt.Sprintf("%d", pt)] = payloadTypeStatsJSON{
+				Packets: stats.packets,
+				DD:      stats.dd,
+				Frames:  stats.frames,
+				FirstMs: stats.firstMs,
+				LastMs:  stats.lastMs,
+			}
+		}
+	}
+	s.ptStatsMu.Unlock()
+	data, err := json.Marshal(result)
+	if err != nil {
+		return "{}"
+	}
+	return string(data)
+}
+
 func (s *SFU) processIncomingRTP(from *Participant, pkt []byte, ssrc uint32, streamInfo ssrcInfo) {
 	if streamInfo.kind == "audio" {
 		s.audioRTPCountMu.Lock()
@@ -444,6 +630,7 @@ func (s *SFU) processIncomingRTP(from *Participant, pkt []byte, ssrc uint32, str
 		s.mu.RUnlock()
 	} else {
 		// Video/video-rtx: forward the best available layer to each receiver.
+		s.recordPayloadType(from.ID, streamInfo.layer, pkt)
 		// Track max active layer for video (not video-rtx) packets.
 		if streamInfo.kind == "video" {
 			s.mu.Lock()
@@ -506,7 +693,8 @@ func (s *SFU) processIncomingRTP(from *Participant, pkt []byte, ssrc uint32, str
 				effectiveLayer = maxActive
 			}
 			if streamInfo.layer == effectiveLayer {
-				fwdPkt := pkt
+				fwdPkt := make([]byte, len(pkt))
+				copy(fwdPkt, pkt)
 				// If forwarding a non-base layer, rewrite the SSRC in the
 				// RTP header to the primary (layer 0) SSRC. The receiver's
 				// video sink is attached to the primary SSRC only.
@@ -520,8 +708,6 @@ func (s *SFU) processIncomingRTP(from *Participant, pkt []byte, ssrc uint32, str
 						if streamInfo.kind == "video-rtx" && senderLayers[0].FidSSRC != 0 {
 							rtxSSRC = senderLayers[0].FidSSRC
 						}
-						fwdPkt = make([]byte, len(pkt))
-						copy(fwdPkt, pkt)
 						targetSSRC := primarySSRC
 						if streamInfo.kind == "video-rtx" && rtxSSRC != 0 {
 							targetSSRC = rtxSSRC
@@ -531,6 +717,13 @@ func (s *SFU) processIncomingRTP(from *Participant, pkt []byte, ssrc uint32, str
 						fwdPkt[10] = byte(targetSSRC >> 8)
 						fwdPkt[11] = byte(targetSSRC)
 					}
+				}
+				// Sequence numbers and timestamps continue across layer switches.
+				forwarder := s.layerForwarderFor(id, from.ID)
+				if streamInfo.kind == "video-rtx" {
+					forwarder.translateRtx(fwdPkt, effectiveLayer)
+				} else {
+					forwarder.translateMedia(fwdPkt, effectiveLayer)
 				}
 				if _, err := p.WriteRTP(fwdPkt); err != nil {
 					s.log.Debugf("WriteRTP video to participant %d failed: %v", id, err)
@@ -764,6 +957,10 @@ func (s *SFU) ensureLayerSelector(receiverID, senderID, maxLayer int) {
 	if initialLayer > 2 {
 		initialLayer = 2
 	}
+	// A sender with fewer layers (a screen share has two): start at its top one.
+	if top := len(videoLayers) - 1; top >= 0 && initialLayer > top {
+		initialLayer = top
+	}
 
 	// Set selectedLayer immediately, clamped to what the sender produces.
 	// The forwardRTP loop will further clamp to maxActiveLayer on each packet.
@@ -974,21 +1171,7 @@ func (s *SFU) broadcastActiveVideoSSRCs() {
 				EndpointID: fmt.Sprintf("%d", otherID),
 				SSRC:       int32(layers[0].SSRC),
 			}
-			// Build SIM group.
-			simGroup := ssrcGroupJSON{Semantics: "SIM"}
-			for _, l := range layers {
-				simGroup.Sources = append(simGroup.Sources, int32(l.SSRC))
-			}
-			entry.SSRCGroups = append(entry.SSRCGroups, simGroup)
-			// Build FID groups.
-			for _, l := range layers {
-				if l.FidSSRC != 0 {
-					entry.SSRCGroups = append(entry.SSRCGroups, ssrcGroupJSON{
-						Semantics: "FID",
-						Sources:   []int32{int32(l.SSRC), int32(l.FidSSRC)},
-					})
-				}
-			}
+			entry.SSRCGroups = videoSSRCGroupsForAnnouncement(layers)
 			entries = append(entries, entry)
 		}
 
@@ -1031,6 +1214,13 @@ func (s *SFU) Leave(participantID int) error {
 	// Remove from participants map.
 	delete(s.participants, participantID)
 	s.broadcastAudio.participantLeft(participantID, time.Now().UnixMilli())
+	s.forwardersMu.Lock()
+	for key := range s.forwarders {
+		if key[0] == participantID || key[1] == participantID {
+			delete(s.forwarders, key)
+		}
+	}
+	s.forwardersMu.Unlock()
 
 	// Remove all SSRCs owned by this participant.
 	for ssrc, info := range s.ssrcRegistry {
@@ -1266,6 +1456,39 @@ func GoSfu_SetNetworkParams(handle C.int, participantID C.int, direction C.int, 
 		return
 	}
 	sfu.SetNetworkParams(int(participantID), int(direction), int(delayMs), int(jitterMs), float64(dropRate), int64(bandwidthBps))
+}
+
+//export GoSfu_SetListAv1
+func GoSfu_SetListAv1(handle C.int, enabled C.int) {
+	sfuRegistryMu.Lock()
+	sfu, ok := sfuRegistry[int(handle)]
+	sfuRegistryMu.Unlock()
+	if !ok {
+		return
+	}
+	sfu.SetListAv1(enabled != 0)
+}
+
+//export GoSfu_SetDependencyDescriptorId
+func GoSfu_SetDependencyDescriptorId(handle C.int, id C.int) {
+	sfuRegistryMu.Lock()
+	sfu, ok := sfuRegistry[int(handle)]
+	sfuRegistryMu.Unlock()
+	if !ok {
+		return
+	}
+	sfu.SetDependencyDescriptorID(int(id))
+}
+
+//export GoSfu_QueryPayloadTypeStats
+func GoSfu_QueryPayloadTypeStats(handle C.int, senderID C.int) *C.char {
+	sfuRegistryMu.Lock()
+	sfu, ok := sfuRegistry[int(handle)]
+	sfuRegistryMu.Unlock()
+	if !ok {
+		return C.CString("{}")
+	}
+	return C.CString(sfu.QueryPayloadTypeStats(int(senderID)))
 }
 
 //export GoSfu_Free

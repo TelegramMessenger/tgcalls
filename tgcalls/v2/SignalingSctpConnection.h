@@ -6,7 +6,6 @@
 #include <WinSock2.h>
 #endif // WEBRTC_WIN
 
-#include "rtc_base/third_party/sigslot/sigslot.h"
 #include "rtc_base/socket_address.h"
 #include "rtc_base/copy_on_write_buffer.h"
 #include "rtc_base/byte_buffer.h"
@@ -22,13 +21,15 @@
 #include "SignalingConnection.h"
 #include "third-party/json11.hpp"
 
-namespace rtc {
+namespace webrtc {
 class Socket;
 }
 
-namespace cricket {
+namespace webrtc {
 class SctpTransportInternal;
 };
+
+#include "api/transport/data_channel_transport_interface.h"
 
 namespace tgcalls {
 
@@ -64,7 +65,7 @@ struct Envelope {
 
 std::vector<uint8_t> encode(uint32_t position, std::vector<uint8_t> const &message);
 // nullopt for anything that is not an envelope, an SCTP packet included.
-absl::optional<Envelope> decode(std::vector<uint8_t> const &packet);
+std::optional<Envelope> decode(std::vector<uint8_t> const &packet);
 
 // Delivers the peer's messages once each, in its send order, from whichever
 // copy arrives first. SCTP delivers every message, in order, so its j-th
@@ -96,14 +97,14 @@ private:
 
 }  // namespace signaling_fast_path
 
-class SignalingSctpConnection : public sigslot::has_slots<>, public SignalingConnection, public webrtc::DataChannelSink {
+class SignalingSctpConnection : public SignalingConnection, public webrtc::DataChannelSink {
 private:
     struct PacketReadState {
-        rtc::CopyOnWriteBuffer headerData;
+        webrtc::CopyOnWriteBuffer headerData;
         int remainingHeaderSize = 0;
         bool isHeaderCompleted = false;
 
-        rtc::CopyOnWriteBuffer data;
+        webrtc::CopyOnWriteBuffer data;
         int remainingDataSize = 0;
         bool isDataCompleted = false;
     };
@@ -143,13 +144,16 @@ public:
 
     virtual void OnDataReceived(int channel_id,
                                 webrtc::DataMessageType type,
-                                const rtc::CopyOnWriteBuffer& buffer) override;
+                                const webrtc::CopyOnWriteBuffer& buffer) override;
     virtual void OnReadyToSend() override;
     virtual void OnTransportClosed(webrtc::RTCError error) override;
 
     // Unused
     virtual void OnChannelClosing(int channel_id) override{}
     virtual void OnChannelClosed(int channel_id) override{}
+    virtual void OnTransportConnected() override{}
+    virtual void OnBufferedAmountLow(int channel_id) override{}
+    virtual void OnMaxMessageSize(int max_message_size) override{}
 
 private:
     std::shared_ptr<Threads> _threads;
@@ -157,7 +161,7 @@ private:
     std::function<void(const std::vector<uint8_t> &)> _onIncomingData;
 
     std::unique_ptr<SignalingPacketTransport> _packetTransport;
-    std::unique_ptr<cricket::SctpTransportInternal> _sctpTransport;
+    std::unique_ptr<webrtc::SctpTransportInternal> _sctpTransport;
     
     void deliverIncoming(std::vector<std::vector<uint8_t>> &&messages);
 

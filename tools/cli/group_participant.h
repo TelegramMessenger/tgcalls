@@ -10,9 +10,12 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
+#if TGCALLS_ENABLE_CUSTOM_GROUP_ENGINE
 #include "group/GroupInstanceCustomImpl.h"
+#endif
 #include "group/GroupInstanceImpl.h"
 #include "group/GroupInstanceReferenceImpl.h"
 #include "group/GroupFrameTransformer.h"
@@ -123,7 +126,33 @@ enum class VideoFeed {
 // ParticipantState
 // ---------------------------------------------------------------------------
 
+// Group screen sharing in the harness (main.cpp sets it before any participant exists).
+struct GroupScreencastOptions {
+    // --screencast-participants: these participants share a screen (the in-app ScreenCaptureKit share's instance:
+    // VideoContentType::Screencast, iosInAppScreencast, a 60 fps source, screen audio through addExternalAudioSamples)
+    // instead of sending a camera.
+    std::set<int> sharers;
+    // --sfu-av1: the SFU's join responses list AV1 (GoSfu_SetListAv1).
+    bool sfuListsAv1 = false;
+    // --sfu-dd-id ID: the SFU's join responses list the AV1 Dependency Descriptor at ID (GoSfu_SetDependencyDescriptorId).
+    int sfuDependencyDescriptorId = 0;
+    // --av1-screencast: GroupInstanceDescriptor::allowAv1ScreencastSending on every participant.
+    bool allowAv1 = false;
+    // --av1-screencast-layers single|top|every: GroupInstanceDescriptor::av1ScreencastLayers (every, as in the app).
+    tgcalls::GroupAv1ScreencastLayers av1Layers = tgcalls::GroupAv1ScreencastLayers::Every;
+    // --av1-test-encoder-fails: the sharers' AV1 encoder fails to initialise (av1TestEncoderFails).
+    bool av1TestEncoderFails = false;
+    // --video-quality-switch MS: every MS each receiver alternates its request for the sharers between thumbnail and
+    // full (their low H264 layer and their top layer); validation requires frames after every switch.
+    int qualitySwitchMs = 0;
+    // --sharer-ingress-loss RATE: packets from the sharers dropped on the way into the SFU.
+    double sharerIngressLoss = 0.0;
+};
+extern GroupScreencastOptions gGroupScreencast;
+
 struct ParticipantState {
+    ~ParticipantState();
+
     int id;
     bool isReference;
     bool muted{false};
@@ -150,9 +179,14 @@ struct ParticipantState {
 
     // Video fields
     bool sendsVideo{false};
+    // --screencast-participants: this participant shares a screen. Its screen audio (a 440 Hz tone) goes in through
+    // addExternalAudioSamples from `externalAudioThread` until stopScreencastAudio.
+    bool sharesScreen{false};
+    std::atomic<bool> externalAudioRunning{false};
+    std::thread externalAudioThread;
     std::string endpointId;
     // Exactly one of these is set for a video participant, per VideoFeed.
-    rtc::scoped_refptr<FakeVideoTrackSource> videoSource;
+    webrtc::scoped_refptr<FakeVideoTrackSource> videoSource;
     std::shared_ptr<tgcalls::VideoCaptureInterface> videoCapture;
     // True for the Capture* feeds; outlives `videoCapture`, which teardown
     // releases before validation runs.
@@ -184,13 +218,71 @@ struct ParticipantState {
 };
 
 // ---------------------------------------------------------------------------
+// The SFU, here or in the other process of a split call (--split)
+// ---------------------------------------------------------------------------
+
+// A participant of the other process of a split group call: what this process's SSRC lookups and validation need to
+// know about it.
+struct SplitParticipantInfo {
+    int id = 0;
+    bool isReference = false;
+    uint32_t audioSsrc = 0;
+    bool muted = false;
+    bool sharesScreen = false;
+    bool sendsVideo = false;
+    std::string endpointId;
+};
+
+// The other process's participants: the host adds the joiner's as they join, the joiner the host's from its hello.
+// Empty when the call runs in one process.
+void addRemoteParticipant(const SplitParticipantInfo& info);
+std::vector<SplitParticipantInfo> remoteParticipants();
+
+// The host process's SFU, for a joining process (--split join): every SFU call below goes there instead of to the
+// in-process Go SFU once it is set.
+class RemoteSfu {
+public:
+    virtual ~RemoteSfu() = default;
+    // The join response, empty on failure. `info` tells the host who joined.
+    virtual std::string join(int participantId, const std::string& payload, bool iceControlling,
+                             const SplitParticipantInfo& info) = 0;
+    virtual int64_t querySsrc(uint32_t ssrc) = 0;
+    virtual std::string queryVideoSsrcs(int participantId) = 0;
+    virtual int queryRequestedLayer(int receiverId, int senderId) = 0;
+    virtual int64_t querySsrcPackets(uint32_t ssrc) = 0;
+    virtual std::string queryPayloadTypeStats(int senderId) = 0;
+    virtual void setNetworkParams(int participantId, int direction, int delayMs, int jitterMs, double dropRate,
+                                  int64_t bandwidthBps) = 0;
+};
+void setRemoteSfu(std::shared_ptr<RemoteSfu> sfu);
+
+// The SFU calls group mode and the participants make: to the in-process Go SFU (`handle`), or to the remote one.
+// Strings are empty where the Go SFU returns null.
+std::string sfuJoin(GoInt handle, int participantId, const std::string& payload, bool iceControlling,
+                    const SplitParticipantInfo& info);
+int64_t sfuQuerySsrc(GoInt handle, uint32_t ssrc);
+std::string sfuQueryVideoSsrcs(GoInt handle, int participantId);
+int sfuQueryRequestedLayer(GoInt handle, int receiverId, int senderId);
+int64_t sfuQuerySsrcPackets(GoInt handle, uint32_t ssrc);
+std::string sfuQueryPayloadTypeStats(GoInt handle, int senderId);
+void sfuSetNetworkParams(GoInt handle, int participantId, int direction, int delayMs, int jitterMs, double dropRate,
+                         int64_t bandwidthBps);
+
+// This process's participant as the other process of a split call sees it.
+SplitParticipantInfo splitParticipantInfo(const ParticipantState& state);
+
+// ---------------------------------------------------------------------------
 // GroupValidationResult
 // ---------------------------------------------------------------------------
 
 struct GroupValidationResult {
     int totalParticipants;
     int connectedCount;
+    // Participants that heard audio from someone, over those expected to: every participant but a screen sharer (the
+    // app's share connection plays no audio and the app reads no levels from it: PresentationGroupCall takes them from
+    // the main connection; the reference engine's levels come from playout, which a share connection has none of).
     int audioReceivedCount;
+    int audioListeners;
     int videoReceivedPairs;
     int videoExpectedPairs;
     // Participants the SFU saw requesting their own video (must be 0).
@@ -287,6 +379,16 @@ void rerequestAllVideo(const std::vector<std::unique_ptr<ParticipantState>>& sta
 // thumbnail to a height below the SFU's lowest layer and no run caught it.
 void setRequestedVideoMaxQuality(tgcalls::VideoChannelDescription::Quality quality);
 
+// --video-quality-switch: every receiver's request for these endpoints gets `quality` as its max (min thumbnail), and
+// the full requested set is sent again.
+void setRequestedVideoQualityFor(
+    const std::vector<std::unique_ptr<ParticipantState>>& states,
+    const std::set<std::string>& endpoints,
+    tgcalls::VideoChannelDescription::Quality quality);
+
+// Stops a sharer's screen-audio thread; before its instance stops.
+void stopScreencastAudio(ParticipantState* state);
+
 // Requests video from `endpointIds` (endpoints already requested are skipped):
 // registers a FakeVideoSink per new endpoint, resolves the sender's simulcast
 // SSRC groups from the SFU registry, and resends the accumulated full request
@@ -300,18 +402,22 @@ void requestVideoFromEndpoints(
 // Clean teardown: GoSfu_Leave, stop video, stop instance, reset.
 void stopParticipant(ParticipantState* state, GoInt sfuHandle);
 
-// Validates group state: connection, audio, video. Returns result struct.
+// Validates group state: connection, audio, video. Returns result struct. In a split call (--split) the peers are this
+// process's participants and the senders every participant of the call, the other process's (remoteParticipants())
+// included.
 GroupValidationResult validateGroupState(
     const std::vector<std::unique_ptr<ParticipantState>>& states,
     bool video
 );
 
 // Prints a group call summary to stdout. Returns the success boolean.
+// `split` is the "Split: ..." line's text for a split call (--split), empty otherwise.
 bool printGroupSummary(
     int customParticipants,
     int referenceParticipants,
     int duration,
     bool video,
     const GroupValidationResult& result,
-    bool anyFailed
+    bool anyFailed,
+    const std::string& split = std::string()
 );

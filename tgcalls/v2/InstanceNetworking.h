@@ -8,13 +8,14 @@
 #endif // WEBRTC_WIN
 
 #include "rtc_base/copy_on_write_buffer.h"
-#include "rtc_base/third_party/sigslot/sigslot.h"
 #include "api/candidate.h"
+#include "api/environment/environment.h"
+#include "api/crypto/crypto_options.h"
 #include "media/base/media_channel.h"
 #include "rtc_base/ssl_fingerprint.h"
 #include "pc/sctp_data_channel.h"
 #include "p2p/base/port.h"
-#include "api/transport/field_trial_based_config.h"
+#include "api/environment/deprecated_global_field_trials.h"
 
 #include <functional>
 #include <memory>
@@ -25,20 +26,20 @@
 
 #include "third-party/json11.hpp"
 
-namespace rtc {
+namespace webrtc {
 class BasicPacketSocketFactory;
 class BasicNetworkManager;
 class PacketTransportInternal;
 struct NetworkRoute;
-} // namespace rtc
+} // namespace webrtc
 
-namespace cricket {
+namespace webrtc {
 class BasicPortAllocator;
 class P2PTransportChannel;
 class IceTransportInternal;
 class DtlsTransport;
 class RelayPortFactoryInterface;
-} // namespace cricket
+} // namespace webrtc
 
 namespace webrtc {
 class TurnCustomizer;
@@ -127,8 +128,8 @@ public:
     struct State {
         bool isReadyToSendData = false;
         bool isFailed = false;
-        absl::optional<RouteDescription> route;
-        absl::optional<ConnectionDescription> connection;
+        std::optional<RouteDescription> route;
+        std::optional<ConnectionDescription> connection;
     };
     
     struct Configuration {
@@ -138,20 +139,22 @@ public:
         bool enableTCP = false;
         bool enableP2P = false;
         std::vector<RtcServer> rtcServers;
-        absl::optional<Proxy> proxy;
+        std::optional<Proxy> proxy;
         std::function<void(const InstanceNetworking::State &)> stateUpdated;
-        std::function<void(const cricket::Candidate &)> candidateGathered;
-        std::function<void(rtc::CopyOnWriteBuffer const &, bool)> transportMessageReceived;
-        std::function<void(rtc::CopyOnWriteBuffer const &, int64_t)> rtcpPacketReceived;
+        std::function<void(const webrtc::Candidate &)> candidateGathered;
+        std::function<void(webrtc::CopyOnWriteBuffer const &, bool)> transportMessageReceived;
+        std::function<void(webrtc::CopyOnWriteBuffer const &, int64_t)> rtcpPacketReceived;
         std::function<void(bool)> dataChannelStateUpdated;
         std::function<void(std::string const &)> dataChannelMessageReceived;
         std::shared_ptr<Threads> threads;
         std::shared_ptr<DirectConnectionChannel> directConnectionChannel;
         std::map<std::string, json11::Json> customParameters;
+        // The engine's; a default one when unset.
+        std::optional<webrtc::Environment> env;
     };
     
     static webrtc::CryptoOptions getDefaulCryptoOptions();
-    static ConnectionDescription::CandidateDescription connectionDescriptionFromCandidate(cricket::Candidate const &candidate);
+    static ConnectionDescription::CandidateDescription connectionDescriptionFromCandidate(webrtc::Candidate const &candidate);
 
     virtual ~InstanceNetworking() = default;
 
@@ -159,9 +162,9 @@ public:
     virtual void stop() = 0;
 
     virtual PeerIceParameters getLocalIceParameters() = 0;
-    virtual std::unique_ptr<rtc::SSLFingerprint> getLocalFingerprint() = 0;
-    virtual void setRemoteParams(PeerIceParameters const &remoteIceParameters, rtc::SSLFingerprint *fingerprint, std::string const &sslSetup) = 0;
-    virtual void addCandidates(std::vector<cricket::Candidate> const &candidates) = 0;
+    virtual std::unique_ptr<webrtc::SSLFingerprint> getLocalFingerprint() = 0;
+    virtual void setRemoteParams(PeerIceParameters const &remoteIceParameters, webrtc::SSLFingerprint *fingerprint, std::string const &sslSetup) = 0;
+    virtual void addCandidates(std::vector<webrtc::Candidate> const &candidates) = 0;
 
     virtual void sendDataChannelMessage(std::string const &message) = 0;
 

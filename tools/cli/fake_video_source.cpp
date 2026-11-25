@@ -58,8 +58,8 @@ static const UVTint kTints[6] = {
 
 } // namespace
 
-FakeVideoTrackSource::FakeVideoTrackSource(int participantId)
-    : participantId_(participantId) {
+FakeVideoTrackSource::FakeVideoTrackSource(int participantId, int fps)
+    : participantId_(participantId), fps_(fps > 0 ? fps : kFps) {
     const auto& tint = kTints[participantId % 6];
     uTint_ = tint.u;
     vTint_ = tint.v;
@@ -70,9 +70,9 @@ FakeVideoTrackSource::~FakeVideoTrackSource() {
     Stop();
 }
 
-rtc::scoped_refptr<FakeVideoTrackSource> FakeVideoTrackSource::Create(int participantId) {
-    return rtc::scoped_refptr<FakeVideoTrackSource>(
-        new rtc::RefCountedObject<FakeVideoTrackSource>(participantId));
+webrtc::scoped_refptr<FakeVideoTrackSource> FakeVideoTrackSource::Create(int participantId, int fps) {
+    return webrtc::scoped_refptr<FakeVideoTrackSource>(
+        new webrtc::RefCountedObject<FakeVideoTrackSource>(participantId, fps));
 }
 
 void FakeVideoTrackSource::Stop() {
@@ -85,6 +85,7 @@ void FakeVideoTrackSource::Stop() {
 
 void FakeVideoTrackSource::GenerateThread() {
     int frameNumber = 0;
+    auto nextFrame = std::chrono::steady_clock::now();
     while (running_.load(std::memory_order_relaxed)) {
         auto buffer = webrtc::I420Buffer::Create(kWidth, kHeight);
 
@@ -104,13 +105,15 @@ void FakeVideoTrackSource::GenerateThread() {
         auto frame = webrtc::VideoFrame::Builder()
             .set_video_frame_buffer(buffer)
             .set_rotation(webrtc::kVideoRotation_0)
-            .set_timestamp_us(rtc::TimeMicros())
+            .set_timestamp_us(webrtc::TimeMicros())
             .build();
 
         OnFrame(frame);
 
         ++frameNumber;
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000 / kFps));
+        // Paced on a schedule, not a fixed sleep: a 60 fps source sleeping 16 ms after each frame's work runs slow.
+        nextFrame += std::chrono::microseconds(1000000 / fps_);
+        std::this_thread::sleep_until(nextFrame);
     }
 }
 

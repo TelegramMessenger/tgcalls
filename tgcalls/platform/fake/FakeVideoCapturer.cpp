@@ -2,7 +2,7 @@
 
 #include "api/video/i420_buffer.h"
 #include "api/video/video_rotation.h"
-#include "media/base/video_common.h"
+#include "api/video/video_common.h"
 #include "rtc_base/time_utils.h"
 
 #include <chrono>
@@ -29,9 +29,9 @@ constexpr UVTint kTints[6] = {
 
 } // namespace
 
-rtc::scoped_refptr<FakePlatformVideoSource> FakePlatformVideoSource::Create() {
-    return rtc::scoped_refptr<FakePlatformVideoSource>(
-        new rtc::RefCountedObject<FakePlatformVideoSource>());
+webrtc::scoped_refptr<FakePlatformVideoSource> FakePlatformVideoSource::Create() {
+    return webrtc::scoped_refptr<FakePlatformVideoSource>(
+        new webrtc::RefCountedObject<FakePlatformVideoSource>());
 }
 
 void FakePlatformVideoSource::PushFrame(const webrtc::VideoFrame &frame) {
@@ -49,7 +49,7 @@ void FakePlatformVideoSource::PushFrame(const webrtc::VideoFrame &frame) {
         OnFrame(frame);
         return;
     }
-    rtc::scoped_refptr<webrtc::I420Buffer> scaled = webrtc::I420Buffer::Create(adaptedWidth, adaptedHeight);
+    webrtc::scoped_refptr<webrtc::I420Buffer> scaled = webrtc::I420Buffer::Create(adaptedWidth, adaptedHeight);
     scaled->CropAndScaleFrom(*frame.video_frame_buffer()->ToI420(), cropX, cropY, cropWidth, cropHeight);
     OnFrame(webrtc::VideoFrame::Builder()
         .set_video_frame_buffer(scaled)
@@ -59,11 +59,11 @@ void FakePlatformVideoSource::PushFrame(const webrtc::VideoFrame &frame) {
 }
 
 void FakePlatformVideoSource::OnOutputFormatRequest(int width, int height, int fps) {
-    cricket::VideoFormat format(width, height, cricket::VideoFormat::FpsToInterval(fps), 0);
+    webrtc::VideoFormat format(width, height, webrtc::VideoFormat::FpsToInterval(fps), 0);
     video_adapter()->OnOutputFormatRequest(format);
 }
 
-FakeVideoCapturer::FakeVideoCapturer(rtc::scoped_refptr<FakePlatformVideoSource> source,
+FakeVideoCapturer::FakeVideoCapturer(webrtc::scoped_refptr<FakePlatformVideoSource> source,
                                      std::string deviceId,
                                      std::function<void(VideoState)> stateUpdated,
                                      std::function<void(PlatformCaptureInfo)> captureInfoUpdated)
@@ -99,7 +99,7 @@ void FakeVideoCapturer::setState(VideoState state) {
     }
 }
 
-void FakeVideoCapturer::setUncroppedOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+void FakeVideoCapturer::setUncroppedOutput(std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
     std::lock_guard<std::mutex> lock(_sinkMutex);
     _uncroppedSink = std::move(sink);
 }
@@ -138,12 +138,12 @@ void FakeVideoCapturer::generateThread() {
         auto frame = webrtc::VideoFrame::Builder()
             .set_video_frame_buffer(buffer)
             .set_rotation(webrtc::kVideoRotation_0)
-            .set_timestamp_us(rtc::TimeMicros())
+            .set_timestamp_us(webrtc::TimeMicros())
             .build();
 
         _source->PushFrame(frame);
 
-        std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink;
+        std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink;
         {
             std::lock_guard<std::mutex> lock(_sinkMutex);
             sink = _uncroppedSink;

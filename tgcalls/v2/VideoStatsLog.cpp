@@ -16,7 +16,7 @@ namespace tgcalls {
 
 namespace {
 
-std::string CodecName(const webrtc::RTCStatsReport &report, const absl::optional<std::string> &codecId) {
+std::string CodecName(const webrtc::RTCStatsReport &report, const std::optional<std::string> &codecId) {
     if (!codecId) {
         return "?";
     }
@@ -34,7 +34,7 @@ std::string CodecName(const webrtc::RTCStatsReport &report, const absl::optional
 }
 
 template <typename T>
-T ValueOr(const absl::optional<T> &value, T fallback) {
+T ValueOr(const std::optional<T> &value, T fallback) {
     return value ? *value : fallback;
 }
 

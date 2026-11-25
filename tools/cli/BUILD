@@ -7,7 +7,7 @@ cc_library(
     name = "broadcast_signals",
     srcs = ["broadcast_signals.cpp"],
     hdrs = ["broadcast_signals.h"],
-    copts = ["-std=c++17"],
+    copts = ["-std=c++20"],
     # Used by the new player's runner (telegram-ios Tests/BroadcastRunner), as are the libraries below marked public.
     visibility = ["//visibility:public"],
 )
@@ -15,7 +15,7 @@ cc_library(
 cc_test(
     name = "broadcast_signals_test",
     srcs = ["broadcast_signals_test.cpp"],
-    copts = ["-std=c++17"],
+    copts = ["-std=c++20"],
     deps = [
         ":broadcast_signals",
         "//third-party/opus:opus",
@@ -30,7 +30,7 @@ TGCALLS_CLI_COPTS = [
     "-Ithird-party/libyuv",
     "-DRTC_ENABLE_VP9",
     "-DNDEBUG",
-    "-std=c++17",
+    "-std=c++20",
     "-w",
 ] + select({
     "@platforms//os:linux": ["-DWEBRTC_LINUX", "-DWEBRTC_POSIX"],
@@ -96,6 +96,7 @@ cc_library(
     ],
     hdrs = [
         "group_participant.h",
+        "cli_audio_device.h",
         "fake_video_source.h",
         "fake_video_sink.h",
     ],
@@ -108,6 +109,15 @@ cc_library(
     visibility = ["//visibility:public"],
 )
 
+# cliIgnoreBrokenPipes(): the CLI survives a write to a reset TCP connection (cli_signals.h).
+cc_test(
+    name = "cli_broken_pipe_test",
+    srcs = [
+        "cli_broken_pipe_test.cpp",
+        "cli_signals.h",
+    ],
+)
+
 cc_binary(
     name = "tgcalls_cli",
     srcs = [
@@ -116,6 +126,11 @@ cc_binary(
         "group_mode.h",
         "group_churn_mode.cpp",
         "group_churn_mode.h",
+        "split_channel.cpp",
+        "split_channel.h",
+        "split_group.cpp",
+        "split_group.h",
+        "cli_signals.h",
     ],
     copts = [
         "-I{}/tgcalls/tgcalls".format("submodules/TgVoipWebrtc"),
@@ -125,7 +140,7 @@ cc_binary(
         "-Ithird-party/libyuv",
         "-DRTC_ENABLE_VP9",
         "-DNDEBUG",
-        "-std=c++17",
+        "-std=c++20",
         "-w",
     ] + select({
         "@platforms//os:linux": ["-DWEBRTC_LINUX", "-DWEBRTC_POSIX"],

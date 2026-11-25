@@ -22,31 +22,56 @@ and verifies its SHA256. The binary name carries both version and arch.
 
 ## Linux Build
 
-Prerequisites (Ubuntu/Debian):
+Prerequisites (Ubuntu 24.04):
 ```bash
-apt install gcc g++ cmake meson ninja-build nasm make autoconf automake libtool pkg-config zlib1g-dev libbz2-dev
+apt install gcc g++ clang-18 libc++-18-dev libc++abi-18-dev cmake meson ninja-build nasm make autoconf automake \
+  libtool pkg-config zlib1g-dev libbz2-dev
 ```
 
-Download the matching Linux Bazel binary to `build-input/` (use the version `versions.json` pins):
+Download the Linux Bazel binary to `build-input/` (the version `versions.json` pins):
 ```bash
 curl -fL "https://github.com/bazelbuild/bazel/releases/download/9.2.0/bazel-9.2.0-linux-arm64" -o build-input/bazel-9.2.0-linux
+echo "049dd21f40ad979db11c3ee68c96a42ce75f1185e69ac61ab20de1501427a410  build-input/bazel-9.2.0-linux" | sha256sum -c -
 chmod +x build-input/bazel-9.2.0-linux
 ```
 
-Build the CLI test tool:
+Build the CLI test tool with clang and libc++:
 ```bash
+export CC=clang-18 CXX=clang++-18 BAZEL_CXXOPTS=-std=c++17:-stdlib=libc++ BAZEL_LINKLIBS=-lc++:-lc++abi:-lm
 ./build-input/bazel-9.2.0-linux build //submodules/TgVoipWebrtc/tgcalls/tools/cli:tgcalls_cli
 ```
 
-The same Bazel version as `versions.json` is required. The build uses the system GCC toolchain and system-installed cmake/meson/ninja for third-party library compilation.
+- **libc++, not libstdc++.** WebRTC is built upstream with clang and libc++ only, and M159 does not compile against
+  libstdc++: 13 cannot compare a `pair<string, bool>` with a `pair<string_view, bool>` (`uri_to_id_.find(std::pair{uri,
+  encrypt})`, `call/payload_type_picker.cc`), and 14 has no global `isfinite` from `<cmath>`
+  (`modules/audio_processing/echo_detector/`). Upstream's main branch is the same, so the next bump will bring more:
+  keep the toolchain, don't patch the fork for it.
+- `BAZEL_CXXOPTS` and `BAZEL_LINKLIBS` put Bazel's autodetected C++ toolchain on libc++ (the binary links
+  `libc++.so.1`). `.bazelrc` passes `CC`/`CXX` to actions, so the genrules' cmake/meson/configure builds (C only) use
+  clang too.
+- On a machine with less than about 1.5 GB of memory per core, cap `--jobs`. A compile of WebRTC's media files takes
+  about a gigabyte, and a job per core thrashed an 8 GB VM: files of a minute took 15-18.
+- GNU ld reads static archives once, in order, so a library must come before the ones it calls (`ffmpeg_lib` in
+  `submodules/ffmpeg/BUILD` lists libavutil last); Apple's linker never shows a wrong order.
+- **The CLI's audio device reports echo cancellation, AGC and noise suppression as built in**, on Linux and macOS
+  (`cliAudioDeviceOptions()` in `tools/cli/cli_audio_device.h`, `FakeAudioDeviceModule::Options::
+  reports_builtin_processing`), so WebRTC's voice engine runs without its software ones, as in the app (its shared call
+  audio device reports all three built in, and its `WEBRTC_IOS` build keeps echo cancellation and AGC off). Both host
+  builds of WebRTC (neither defines `WEBRTC_IOS`) would turn them on, and noise suppression at `kHigh` removes the
+  CLI's steady tones: the audio checks fail (11.0.0 heard 0-300 frames a side instead of about 650; M123 the same). A
+  healthy log (`--log-file`) has at least three `Disabling EC|AGC|NS since built-in … will be used instead` lines per
+  participant (more for a custom engine's channels) and no `AEC3 created`. A custom engine's explicit noise
+  suppression request goes to the "built-in" one there, as in the app.
+- **Linux arm64 only.** `MODULE.bazel` pins wasi-sdk (the compiler of the 19.0.0 wasm core the CLI embeds) for arm64
+  Linux alone, so on an x86_64 host the wasm genrules would fail; the Dockerfile stops there with that reason.
 
 ## Docker Build
 
-Build a minimal Linux container image from macOS (or any Docker host):
+Build a minimal Linux container image from macOS (or any Docker host). The build context is the whole superproject:
 
 ```bash
-# Build (uses BuildKit cache — first build ~5 min, rebuilds seconds)
-docker build -t tgcalls-test .
+# Build, from the superproject's root (BuildKit cache: first build ~25 min on an 8 GB Docker VM, rebuilds seconds)
+docker build -t tgcalls-test -f submodules/TgVoipWebrtc/tgcalls/Dockerfile .
 
 # Run locally
 docker run --rm tgcalls-test --mode p2p --duration 5 --quiet
@@ -57,7 +82,16 @@ docker tag tgcalls-test 654654616143.dkr.ecr.eu-west-1.amazonaws.com/tgcalls-tes
 docker push 654654616143.dkr.ecr.eu-west-1.amazonaws.com/tgcalls-test:latest
 ```
 
-The Dockerfile uses a multi-stage build: full build environment in stage 1, minimal runtime image (~50MB) in stage 2. Bazel's build cache is preserved across `docker build` invocations via `--mount=type=cache`. The image is built for ARM64 (matches Apple Silicon and Fargate ARM).
+The Dockerfile uses a multi-stage build. Stage 1 is the full build environment of "Linux Build" above: the pinned Bazel,
+checked against its sha256, and one compile job per 1.5 GB of the VM's memory. Stage 2 is a minimal runtime image:
+Ubuntu with `libc++1-18` and `libc++abi1-18`. Bazel's build cache is preserved across `docker build` invocations via
+`--mount=type=cache` (`docker builder prune` empties it: the next build compiles everything again). The image takes the
+Docker host's architecture and builds on arm64 only (Apple Silicon, Fargate ARM; see "Linux Build").
+`Dockerfile.dockerignore` (beside the Dockerfile; BuildKit reads it in place of a root `.dockerignore`) keeps
+`build-input/` (the app's configuration with its API credentials and provisioning profiles, the codesigning checkout),
+git metadata, `bazel-*` and the agents' scratch directories out of the context, and the Dockerfile writes the empty
+`build_configuration` module that `MODULE.bazel` names, so any checkout builds the image, with or without `Make.py`
+having run.
 
 ## Testing
 
@@ -253,6 +287,29 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
   `Video after re-request: X/Y stalled (must be 0)`: every sink must receive frames past the count
   recorded just before the re-request. The regression test for ReferenceImpl's frozen tile after
   the video grid comes back; needs `--reference-participants 6` to hit the window on a host.
+- `--screencast-participants I,J,...` — group mode, with `--video`: those participants share a screen instead of a
+  camera, as the app's in-app ScreenCaptureKit share does (`VideoContentType::Screencast`, `iosInAppScreencast`, no
+  microphone, a 60 fps 1280x720 source, a 440 Hz tone as screen audio through `addExternalAudioSamples` every 10 ms; no
+  `createAudioDeviceModule`, so the engine records from its external audio buffer). A sharer is a sender only in the
+  audio checks: every other peer must hear its screen audio, and it need not hear or report anyone (the app's share
+  connection plays no audio, and the app reads levels from the main connection only; the reference engine's levels
+  come from playout). Every group run with `--video`
+  prints `Wire: P<id>[ (screen)] layer <L> pt <PT>: N packets, N frames, F fps` per sender, layer and payload type
+  (`GoSfu_QueryPayloadTypeStats`): which codec each layer carried.
+- `--sfu-av1` — the SFU's join responses list AV1 106 (RTX 107) (`GoSfu_SetListAv1`). `--av1-screencast` sets
+  `allowAv1ScreencastSending` on every participant (Debug Settings "Group calls: AV1 screen sharing");
+  `--av1-screencast-layers single|top|every` sets `av1ScreencastLayers` (default every, as in the app);
+  `--sfu-dd-id ID` makes the SFU's join responses list the AV1 Dependency Descriptor at ID
+  (`GoSfu_SetDependencyDescriptorId`), and every group run with `--video` also prints `Wire: P<id>[ (screen)] layer <L>
+  pt <PT> dependency descriptor: N packets`, the packets carrying it at that ID (else 11);
+  `--av1-test-encoder-fails` makes the sharers' AV1 encoder fail to initialise. `run-group-av1-tests.sh` (see "AV1 in
+  group calls") drives them.
+- `--video-quality-switch MS` — group mode: 3 s after the start, then every MS, every receiver's request for the
+  screen-sharing participants alternates between thumbnail and full (their low and their top layer: with AV1 on the top
+  layer, a decoder switch between H264 and AV1 on one receive stream). Validation adds `Video after quality switch: X/Y
+  stalled (must be 0)`: every sink must get frames in every interval.
+- `--sharer-ingress-loss RATE` — group mode: packets from the screen-sharing participants are dropped on the way into the
+  SFU at this rate.
 - `--video-quality thumbnail|medium|full` — with `--video`, every participant requests video with
   this `maxQuality` and `minQuality` Thumbnail, the shape the app sends (without the flag the harness
   requests Full/Full, which never exercised the lower qualities). The Go SFU refuses a `maxHeight`
@@ -270,8 +327,7 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
   participant's user id, so an engine that resolves the wrong `userId` fails the tag check instead
   of silently passing; the nonce is random per call so the four-attempt retry is exercised.
   Deliberately does NOT set `descriptor.isConference` — that flag is unrelated to encryption and
-  drops CustomImpl's outgoing video to one simulcast layer, removing the `SIM` group the SFU
-  resolves senders through (video goes to 0/2).
+  drops CustomImpl's outgoing video to one simulcast layer.
   **The pass counters do not prove decryption.** Ciphertext fed to Opus still produces a level, and
   the error-resilient H264 decoder emits corrupt frames rather than refusing. Judge decryption by
   the level *value* (a real 440 Hz sine reads a steady ~0.126–0.133; garbage swings 0.157–1.000),
@@ -319,6 +375,9 @@ For group-churn: success = all churn cycles complete without crash/hang AND base
   unsignaled streams for 3 reference participants.
 - `--churn-cycles N` — number of join/leave cycles in group-churn mode (default: 100)
 - `--network-scenario NAME` — network simulation test scenario (e.g., `step-down-up`). Group mode only.
+- `--split caller|callee` (p2p) / `--split host|join` (group), `--split-socket PATH`, `--participant-id-offset K`
+  (group join) — one side of the call per process, so two builds can call each other (`tools/cli/CLAUDE.md`,
+  "Split-process calls"; `run-mixed-version-tests.sh` runs the old-build/new-build matrix).
 - `--quiet` — summary output only
 - `--log-file PATH` — write RTC_LOG output to a file — log sinks are process-global, so one flag captures both sides; needed to observe `[core]` marker lines
 
@@ -732,6 +791,147 @@ dav1d at runtime.
     then WebRTC's AV1 packetizer and depacketizer, then dav1d), `av1_videotoolbox_decoder_test` (bit-exact against
     dav1d, macOS only), `av1_platform_factories_test`, `av1_send_codec_test`, `video_stats_log_test` (the stats line), `av1_encoder_fallback_test` (the selector and the
     failure reports).
+
+## AV1 in group calls (the screen share)
+
+Both group engines receive AV1 and send it, for the in-app screen share only, in one of three ways
+(`GroupInstanceDescriptor::av1ScreencastLayers`, `GroupAv1ScreencastLayers`). The rules below are
+`GroupInstanceCustomImpl`'s; how `GroupInstanceReferenceImpl` does the same through PeerConnection is its own bullet.
+
+- **Every** (the default, what the app sends): both layers in AV1, as WebRTC's own AV1 simulcast with L1T3 on each:
+  the shape Jitsi's AV1 path switches between. The production bridge does not take that path yet and forwards only the
+  low layer (below), so the app does not ship this until the server maps the Dependency Descriptor.
+- **Single**: one layer at full quality, AV1 as the sender's own codec. A receiver without AV1 sees nothing of the
+  share.
+- **Top**: the top of two layers in AV1, the 240p layer in H264, so a receiver without AV1 still sees the screen. Jitsi
+  can't forward it: its `VideoParser` keeps one codec parser per sender and its `AdaptiveSourceProjection` one projection
+  context per source, and both are replaced whenever a packet's codec differs from the last one's, so with the two layers
+  interleaved a viewer gets only keyframes (3–5 a second on the test servers, which map the descriptor; on production
+  it kept the H264 layer, the sender asked for a keyframe about every 350 ms). That is a bridge change.
+
+The rules:
+
+- **Payload types** (`group/GroupVideoPayloadTypes`): the group calls' fixed table, VP8 100, VP9 102, H264 104 (each
+  with RTX at +1, numbered over the codecs a device has, as before) and, in builds with `TGCALLS_ENABLE_AV1`, AV1
+  **106** with RTX **107** on every device (fmtp `profile` 0, `level-idx` 5, `tier` 0: `groupAv1VideoFormat()`, the AV1
+  factories' SDP defaults). Other clients must use the same numbers.
+- **Receiving**: CustomImpl's incoming channels list the whole table; the reference engine pins AV1 106 in its offers
+  (`mungeVideoCodecsInOffer`) and answers it on every recvonly m-line whose offer lists it. Both use
+  `makeVideoDecoderFactoryWithAv1()`, in the same change as the table on purpose: WebRTC refuses a *whole* receive codec
+  list holding one codec its decoder factory lacks (`GetChangedReceiverParameters`, "unsupported video codec"), which
+  would stop all incoming video. A receive stream switches between H264 and AV1 decoding as the SFU moves it between
+  the share's layers (stock libwebrtc, no change).
+- **The layer count is decided at the join** (`groupAv1JoinsWithSingleLayer`, in `generateSsrcs`): the share's SSRCs go
+  into the join request, before the server's answer says whether it takes AV1. Single joins with one layer whenever this
+  side could send AV1 (the switch, the in-app share, not encrypted, the chip); a server without AV1 then gets that layer
+  in H264. Otherwise a screen share has two layers.
+- **When the share sends AV1** (`group/GroupAv1Decision`, checked in this order, the first failure logged): the Debug
+  switch (`GroupInstanceDescriptor::allowAv1ScreencastSending`), the in-app share (`iosInAppScreencast`), not encrypted
+  (`e2eEncryptDecrypt` unset: the frame transformer would encrypt the OBU headers the AV1 packetizer reads; every
+  conference is encrypted), the SFU's join response lists `AV1` (`groupPayloadTypesListAv1`, name only), the chip
+  (`canEncodeAv1Realtime()`), base codec H264, then the layers: exactly one in Single, two or more in Top and Every.
+  Decided in `createOutgoingVideoChannel`; a new share or a rejoin decides again.
+- **How**: only with the switch on does the in-app share build its encoder factory with
+  `makeScreencastVideoEncoderFactoryWithAv1TopLayer` (`av1/Av1TopLayerFactory`; Darwin: VideoToolbox H264, fake:
+  OpenH264); otherwise the factory is today's. That factory lists AV1 (so a negotiated 106 survives WebRTC's match
+  against the encoder factory). While the engine's `Av1TopLayerSwitch` is on:
+  - Single: the outgoing channel lists AV1 106/107 first, the send codec, and H264 104/105 after it. The factory's AV1
+    encoder is `CreateAv1TopStreamEncoder(SVT-AV1)` without a fallback, so a failure reaches WebRTC, and the factory's
+    encoder selector answers WebRTC's `OnEncoderBroken` for the AV1 sender with H264 and tells the engine. An AV1
+    stream cannot go on in H264 by itself: WebRTC sends each stream's images with that stream's payload type.
+  - Every: AV1 first in the send list too, and WebRTC's AV1 simulcast: L1T3 on each encoding (with its
+    `scale_resolution_down_by`: without both WebRTC sends AV1 as one stream, `IsCodecDisabledForSimulcast`), which the
+    table's AV1 lists (`scalability_modes`, else `SetRtpSendParameters` refuses it) and the factory reports as supported
+    (`QueryCodecSupport`, else WebRTC replaces it by L1T2). The factory's AV1 encoder is tgcalls'
+    `CustomSimulcastEncoderAdapter` whose every-stream hook makes each stream a `CreateAv1TopStreamEncoder(SVT-AV1)`
+    without a fallback; a failure goes the way of Single, and the engine then clears the scalability modes
+    (`onAv1TopLayerFailed`, `adjustVideoSendParams`).
+  - Top: WebRTC's mixed-codec simulcast (`WebRTC-MixedCodecSimulcast`, on in both engines' field trials). The
+    outgoing channel lists H264 104/105 first, the send codec, and AV1 106/107 after it; each encoding names its codec
+    (`setGroupAv1TopLayerCodecs`, `GroupVideoPayloadTypes`: the negotiated H264 below, AV1 on the top layer), from
+    which WebRTC sends each stream with its own payload type, packetizer and RTX (106/107 for the top one). The encoder
+    is tgcalls' `CustomSimulcastEncoderAdapter` with a stream hook: the highest-quality stream of two or more is
+    `CreateAv1TopStreamEncoder(SVT-AV1)` with a failure callback, the others H264 (the adapter's cached encoders stay
+    with their stream). When AV1 fails the top stream sends nothing more and the engine names H264 on every encoding
+    (`onAv1TopLayerFailed`; an encoding left without a codec would keep the last one), which recreates the encoder with
+    an H264 top stream: an H264 image on the AV1-configured stream would go out as AV1. The factory refuses AV1 as the
+    whole sender.
+- **The Dependency Descriptor**: Jitsi's AV1 path reads the AV1 RTP Dependency Descriptor, where it finds frames,
+  keyframes, temporal layers and their dependencies. While the share sends AV1 its outgoing channel registers the extension
+  (both descriptions: WebRTC takes the send extensions from the remote one) at the ID the join response's video
+  `rtp-hdrexts` give its URI, else 11 (`groupDependencyDescriptorExtensionId`, `GroupVideoPayloadTypes`; none when the
+  server gives 11 to another extension). WebRTC writes it from the encoder's `generic_frame_info` and, on keyframes,
+  `template_structure` (`SvtAv1Encoder`'s L1T1 or L1T3 structure, below). Camera and H264 senders do not send it. Every
+  incoming video channel registers it at the same ID (in AV1 builds), so a viewer finds an AV1 sender's frames and their
+  dependencies there.
+- **`GroupInstanceReferenceImpl`** (the app's in-app share on the reference engine) sends the same three ways with the
+  same factory, decision, switch and fallback, through PeerConnection:
+  - It decides in `setJoinResponsePayload`, before the first answer (base codec H264, its only one), and only for a
+    `Screencast` connection: its main connection that sends the screen as its camera video keeps three H264 layers.
+  - Its answer's outgoing m-line is the send side: Single and Every list the table's AV1 106/107 (with L1T1/L1T3) first
+    and H264 after it, Top H264 first and AV1 after it. Every's L1T3 goes on each encoding through the sender's
+    `SetParameters` (`applyScreencastEncodingIfNeeded`, also as soon as the answer is applied), which checks it against
+    the sender's codec preferences, the engine's send codecs: so the AV1 screen-share factory's AV1 format lists L1T1 and
+    L1T3 too (`AddGroupAv1Format`).
+  - The descriptor's ID: an extension ID can't be re-mapped once negotiated (`ValidateRtpExtensions`), and PeerConnection
+    offers `repaired-rtp-stream-id` at 11 and `rtp-stream-id` at 10, which an SSRC-signalled group sender never uses. So
+    an AV1 share instance (`_av1TopLayer` set) drops both from every video m-line from its first offer on, and its
+    answer's outgoing m-line carries the descriptor at the server's ID while AV1 is sent
+    (`groupReferenceVideoHeaderExtensions`). A server ID the first offer gave another extension: no descriptor, logged.
+  - Reference viewers do **not** register the descriptor (their offers are PeerConnection's, `repaired-rtp-stream-id` at
+    11 included), and order an AV1 sender's frames without it. Registering it on them made the harness's quality
+    switches stall, the custom viewers' too (`--participants 3 --reference-participants 1 --screencast-participants 0
+    --av1-screencast --sfu-av1 --video-quality-switch 3000`: about 4 runs in 10 against 0 in 30); the cause was not
+    found.
+  - Single joins with one layer and no SIM group, as CustomImpl.
+- **Temporal layers** (`SvtAv1Encoder`): L1T3 when the encoding asks for it (Every), else L1T1. SVT-AV1 in RTC
+  low-delay CBR encodes three temporal layers anyway (`hierarchical_levels` 2, its default there: a mini-GOP of T2, T1,
+  T2, T0), and at the RTC presets above M10 (mrp level 0) with one reference per frame, which is WebRTC's L1T3 exactly:
+  T0 the previous T0, T1 and the first T2 the newest T0, the second T2 the T1 after it (`pd_process.c`, LD CBR HL2). Each
+  frame is described from the temporal layer SVT reports (`temporal_layer_index`); a mismatch with the L1T3 prediction
+  is logged (`SvtAv1Encoder: SVT encoded T<n> where L1T3 predicted …`) and the config rebuilt from SVT's. L1T1 describes
+  every frame as depending on the one before, which covers SVT's references. A higher preset or more references would
+  break the L1T3 description: `av1_round_trip_test` decodes T0 alone and T0+T1 and requires the very pictures of the
+  full stream.
+- **The AV1 encoder wrapper** (`av1/Av1TopStreamEncoder`) hands SVT-AV1 the stream's settings as AV1 and holds AV1 to
+  **30 fps** itself, dropping frames above it (never one carrying a keyframe request) and rating SVT for 30: a cap on the
+  encoding's `max_framerate` would outlive a fallback, because WebRTC changes that without re-initialising the encoder.
+  An H264 layer keeps the share's up to 60 fps. With a failure callback (Top) it never surfaces an AV1 failure (WebRTC
+  would move the whole sender to another codec): the stream stops for good and the engine is told; without one
+  (Single, Every) it returns the failure.
+- **The production bridge** (Jitsi Videobridge; Telegram's fork, not in this repo) learns header-extension IDs only from
+  the server's signaling for each endpoint, and production gives it no Dependency Descriptor (the join response's video
+  `rtp-hdrexts` are 2, 3 and 13). So it parses no AV1 and forwards it on its generic path, which passes **only the
+  source's first SIM SSRC, whatever quality the viewer asks for**, and strips the descriptor. Single works because its
+  one layer is that SSRC; Every's top layer and Top's AV1 layer never reach a viewer, while the bridge's DebugMessages
+  name the top layer as the target (it labels two layers 180p/360p by position) and it asks for no keyframes. Viewers
+  then order AV1 frames without the descriptor: WebRTC's sequence-number ref finder, `Generic frame … has no GoP` in
+  their log. Mapping the descriptor is a server change (its URI at one ID, 11 as clients default to, in every
+  endpoint's video extensions, and in the join response); nothing on the client reaches it. The test servers map it at
+  11, and Every's top layer reaches viewers there.
+- **Retransmission**: on the production SFU a viewer's NACKs for the AV1 stream went unanswered (`removed from NACK list
+  due to max retries`, about 20 a minute at steady state, each a 3 s stall until a keyframe), where the H264 share's were
+  answered. The CLI cannot show either side of it: the Go SFU does not forward NACKs.
+- **Log lines**: `GroupAv1: dependency descriptor as header extension <id>`, `GroupAv1: screen share layers: AV1` (Single; Top: `H264, AV1`; Every: `AV1, AV1`), `GroupAv1: not
+  sending AV1: <reason> (layers: <n>, <codec>)` (only with the switch on), `GroupAv1: the AV1 encoder failed; the
+  share|layer goes on in H264`, `Av1TopLayer: the share is one AV1 stream` / `the share is AV1 simulcast, an AV1 encoder
+  per stream` / `the top stream is encoded with AV1`, `Av1TopLayer: the AV1 sender broke; switching it to H264`,
+  `Screencast send parameters for WxH, applied: {…, L1T3}` (Every; `GroupRef: …` from the reference engine),
+  `SvtAv1Encoder: initialized WxH, N kbps`, `SvtAv1Encoder: keyframe WxH, N bytes` (keyframes come only on request, so
+  these count the requests), `Av1TopStreamEncoder: …` on a failure.
+- **Tests**: host `group_video_payload_types_test` (also the reference engine's video header extensions),
+  `av1_top_stream_encoder_test`, `av1_top_layer_factory_test` (real OpenH264 and SVT-AV1
+  through the adapter, the single AV1 stream, AV1 simulcast, the AV1 format's scalability modes),
+  `group_av1_decision_test`; `tools/cli/run-group-av1-tests.sh` (24 scenarios; for a reference-engine sharer: every,
+  its quality switches, a failing encoder, a server without AV1, single, single with the descriptor at 12, encrypted,
+  top, each with every peer hearing the screen audio. For a custom sharer: with `--av1-screencast-layers every`, the
+  default, both layers AV1 at <= 31 fps with L1T3 and the descriptor on every packet, quality switches between them, a
+  failing AV1 encoder switching both layers to H264 and not VP8, both layers in H264 when the SFU does not list AV1;
+  with `single` one AV1 layer at <= 31 fps with the
+  dependency descriptor on every packet, at 11 or at the SFU's listed ID, one layer in
+  H264 when the SFU does not list AV1, one layer whose AV1 encoder fails switching to H264 and not VP8; with `--av1-screencast-layers top`
+  AV1 on the top layer only at <= 31 fps for custom and reference receivers, quality switches across H264 and AV1, the
+  SFU not listing AV1, a failing AV1 encoder, ingress loss; and the switch off, encrypted, a camera).
 
 ## Further Context
 

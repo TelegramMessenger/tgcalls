@@ -39,6 +39,8 @@ struct EncodedFrame {
 
 class EncodedCollector : public webrtc::EncodedImageCallback {
 public:
+    void OnFrameDropped(uint32_t, int, bool) override {}
+
     Result OnEncodedImage(const webrtc::EncodedImage &image, const webrtc::CodecSpecificInfo *) override {
         EncodedFrame frame;
         frame.data.assign(image.data(), image.data() + image.size());
@@ -55,10 +57,10 @@ public:
         frames.push_back(frame.video_frame_buffer()->ToI420());
         return 0;
     }
-    std::vector<rtc::scoped_refptr<webrtc::I420BufferInterface>> frames;
+    std::vector<webrtc::scoped_refptr<webrtc::I420BufferInterface>> frames;
 };
 
-rtc::scoped_refptr<webrtc::I420Buffer> MakeI420(int index, int width, int height) {
+webrtc::scoped_refptr<webrtc::I420Buffer> MakeI420(int index, int width, int height) {
     auto buffer = webrtc::I420Buffer::Create(width, height);
     for (int row = 0; row < height; row++) {
         uint8_t *y = buffer->MutableDataY() + row * buffer->StrideY();
@@ -132,7 +134,7 @@ std::unique_ptr<tgcalls::Av1VideoToolboxDecoder> MakeVideoToolboxDecoder(VideoTo
     });
 }
 
-std::vector<rtc::scoped_refptr<webrtc::I420BufferInterface>> DecodeWithDav1d(const std::vector<EncodedFrame> &frames) {
+std::vector<webrtc::scoped_refptr<webrtc::I420BufferInterface>> DecodeWithDav1d(const std::vector<EncodedFrame> &frames) {
     DecodedCollector collector;
     auto decoder = webrtc::CreateDav1dDecoder();
     webrtc::VideoDecoder::Settings settings;

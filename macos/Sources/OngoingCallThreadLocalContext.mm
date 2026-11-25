@@ -4,7 +4,6 @@
 #include "BroadcastAudio/BroadcastAudioCoreBridge.h"
 
 #import "Instance.h"
-#import "InstanceImpl.h"
 #import "v2/InstanceV2Impl.h"
 #import "v2/InstanceV2ReferenceImpl.h"
 #include "StaticThreads.h"
@@ -227,7 +226,7 @@
 
 @implementation CallVideoFrameNV12Buffer
 
-- (instancetype)initWithBuffer:(rtc::scoped_refptr<webrtc::NV12BufferInterface>)nv12Buffer {
+- (instancetype)initWithBuffer:(webrtc::scoped_refptr<webrtc::NV12BufferInterface>)nv12Buffer {
     self = [super init];
     if (self != nil) {
         _width = nv12Buffer->width();
@@ -251,7 +250,7 @@
 
 @implementation CallVideoFrameI420Buffer
 
-- (instancetype)initWithBuffer:(rtc::scoped_refptr<webrtc::I420BufferInterface>)i420Buffer {
+- (instancetype)initWithBuffer:(webrtc::scoped_refptr<webrtc::I420BufferInterface>)i420Buffer {
     self = [super init];
     if (self != nil) {
         _width = i420Buffer->width();
@@ -330,7 +329,7 @@
 
 namespace {
 
-class GroupCallVideoSinkAdapter : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
+class GroupCallVideoSinkAdapter : public webrtc::VideoSinkInterface<webrtc::VideoFrame> {
 public:
     GroupCallVideoSinkAdapter(void (^frameReceived)(webrtc::VideoFrame const &)) {
         _frameReceived = [frameReceived copy];
@@ -418,10 +417,10 @@ private:
                     }
                 }
             } else if (videoFrame.video_frame_buffer()->type() == webrtc::VideoFrameBuffer::Type::kNV12) {
-                rtc::scoped_refptr<webrtc::NV12BufferInterface> nv12Buffer(static_cast<webrtc::NV12BufferInterface *>(videoFrame.video_frame_buffer().get()));
+                webrtc::scoped_refptr<webrtc::NV12BufferInterface> nv12Buffer(static_cast<webrtc::NV12BufferInterface *>(videoFrame.video_frame_buffer().get()));
                 mappedBuffer = [[CallVideoFrameNV12Buffer alloc] initWithBuffer:nv12Buffer];
             } else if (videoFrame.video_frame_buffer()->type() == webrtc::VideoFrameBuffer::Type::kI420) {
-                rtc::scoped_refptr<webrtc::I420BufferInterface> i420Buffer(static_cast<webrtc::I420BufferInterface *>(videoFrame.video_frame_buffer().get()));
+                webrtc::scoped_refptr<webrtc::I420BufferInterface> i420Buffer(static_cast<webrtc::I420BufferInterface *>(videoFrame.video_frame_buffer().get()));
                 mappedBuffer = [[CallVideoFrameI420Buffer alloc] initWithBuffer:i420Buffer];
             }
 
@@ -434,7 +433,7 @@ private:
     return self;
 }
 
-- (std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)sink {
+- (std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>>)sink {
     return _adapter;
 }
 
@@ -614,7 +613,7 @@ tgcalls::VideoCaptureInterfaceObject *GetVideoCaptureAssumingSameThread(tgcalls:
                 VideoSampleBufferView *remoteRenderer = [[VideoSampleBufferView alloc] initWithFrame:CGRectZero];
                 remoteRenderer.videoContentMode = UIViewContentModeScaleAspectFill;
 
-                std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink = [remoteRenderer getSink];
+                std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink = [remoteRenderer getSink];
                 interface->setOutput(sink);
 
                 VideoSampleBufferView *cloneRenderer = nil;
@@ -642,7 +641,7 @@ tgcalls::VideoCaptureInterfaceObject *GetVideoCaptureAssumingSameThread(tgcalls:
 #endif
                 }
 
-                std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink = [remoteRenderer getSink];
+                std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink = [remoteRenderer getSink];
 
                 interface->setOutput(sink);
 
@@ -784,7 +783,6 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
 + (void)ensureRegisteredImplementations {
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        tgcalls::Register<tgcalls::InstanceImpl>();
         tgcalls::Register<tgcalls::InstanceV2Impl>();
         tgcalls::Register<tgcalls::InstanceV2ReferenceImpl>();
     });
@@ -804,16 +802,6 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
     }];
     
     return list;
-}
-
-+ (tgcalls::ProtocolVersion)protocolVersionFromLibraryVersion:(NSString *)version {
-    if ([version isEqualToString:@"2.7.7"]) {
-        return tgcalls::ProtocolVersion::V0;
-    } else if ([version isEqualToString:@"5.0.0"]) {
-        return tgcalls::ProtocolVersion::V1;
-    } else {
-        return tgcalls::ProtocolVersion::V0;
-    }
 }
 
 - (instancetype _Nonnull)initWithVersion:(NSString * _Nonnull)version queue:(id<OngoingCallThreadLocalContextQueueWebrtc> _Nonnull)queue proxy:(VoipProxyServerWebrtc * _Nullable)proxy networkType:(OngoingCallNetworkTypeWebrtc)networkType dataSaving:(OngoingCallDataSavingWebrtc)dataSaving derivedState:(NSData * _Nonnull)derivedState key:(NSData * _Nonnull)key isOutgoing:(bool)isOutgoing connections:(NSArray<OngoingCallConnectionDescriptionWebrtc *> * _Nonnull)connections maxLayer:(int32_t)maxLayer allowP2P:(BOOL)allowP2P allowTCP:(BOOL)allowTCP enableStunMarking:(BOOL)enableStunMarking logPath:(NSString * _Nonnull)logPath statsLogPath:(NSString * _Nonnull)statsLogPath sendSignalingData:(void (^)(NSData * _Nonnull))sendSignalingData videoCapturer:(OngoingCallThreadLocalContextVideoCapturer * _Nullable)videoCapturer preferredVideoCodec:(NSString * _Nullable)preferredVideoCodec inputDeviceId: (NSString * _Nonnull)inputDeviceId outputDeviceId: (NSString * _Nonnull)outputDeviceId {
@@ -908,8 +896,7 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
             .statsLogPath = std::string(statsLogPath.length == 0 ? "" : statsLogPath.UTF8String),
             .maxApiLayer = [OngoingCallThreadLocalContextWebrtc maxLayer],
             .enableHighBitrateVideo = true,
-            .preferredVideoCodecs = preferredVideoCodecs,
-            .protocolVersion = [OngoingCallThreadLocalContextWebrtc protocolVersionFromLibraryVersion:version]
+            .preferredVideoCodecs = preferredVideoCodecs
         };
         
         auto encryptionKeyValue = std::make_shared<std::array<uint8_t, 256>>();
@@ -1045,8 +1032,8 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
             },
             .initialInputDeviceId = inputDeviceId.UTF8String,
             .initialOutputDeviceId = outputDeviceId.UTF8String,
-//            .createAudioDeviceModule = [](webrtc::TaskQueueFactory *taskQueueFactory) -> rtc::scoped_refptr<webrtc::AudioDeviceModule> {
-//                return rtc::make_ref_counted<webrtc::tgcalls_ios_adm::AudioDeviceModuleIOS>(false, false, 1);
+//            .createAudioDeviceModule = [](webrtc::TaskQueueFactory *taskQueueFactory) -> webrtc::scoped_refptr<webrtc::AudioDeviceModule> {
+//                return webrtc::make_ref_counted<webrtc::tgcalls_ios_adm::AudioDeviceModuleIOS>(false, false, 1);
 //            }
         });
         _state = OngoingCallStateInitializing;
@@ -1260,7 +1247,7 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
             remoteRenderer.videoContentMode = UIViewContentModeScaleAspect;
 #endif
             
-            std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink = [remoteRenderer getSink];
+            std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink = [remoteRenderer getSink];
             __strong OngoingCallThreadLocalContextWebrtc *strongSelf = weakSelf;
             if (strongSelf) {
                 [remoteRenderer setOrientation:strongSelf->_remoteVideoOrientation];
@@ -1578,12 +1565,12 @@ encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, boo
                 return std::make_shared<RequestMediaChannelDescriptionTaskImpl>(task);
             },
             .minOutgoingVideoBitrateKbit = minOutgoingVideoBitrateKbit,
-//            .createAudioDeviceModule = [weakSelf, queue, disableAudioInput, enableSystemMute, audioDeviceModule, onMutedSpeechActivityDetected = _onMutedSpeechActivityDetected](webrtc::TaskQueueFactory *taskQueueFactory) -> rtc::scoped_refptr<webrtc::AudioDeviceModule> {
+//            .createAudioDeviceModule = [weakSelf, queue, disableAudioInput, enableSystemMute, audioDeviceModule, onMutedSpeechActivityDetected = _onMutedSpeechActivityDetected](webrtc::TaskQueueFactory *taskQueueFactory) -> webrtc::scoped_refptr<webrtc::AudioDeviceModule> {
 //                if (audioDeviceModule) {
 //                    return audioDeviceModule->getSyncAssumingSameThread()->audioDeviceModule();
 //                } else {
-//                    rtc::Thread *audioDeviceModuleThread = rtc::Thread::Current();
-//                    auto resultModule = rtc::make_ref_counted<webrtc::tgcalls_ios_adm::AudioDeviceModuleIOS>(false, disableAudioInput, enableSystemMute, disableAudioInput ? 2 : 1);
+//                    webrtc::Thread *audioDeviceModuleThread = webrtc::Thread::Current();
+//                    auto resultModule = webrtc::make_ref_counted<webrtc::tgcalls_ios_adm::AudioDeviceModuleIOS>(false, disableAudioInput, enableSystemMute, disableAudioInput ? 2 : 1);
 //                    if (resultModule) {
 //                        resultModule->mutedSpeechDetectionChanged = ^(bool value) {
 //                            if (onMutedSpeechActivityDetected) {
@@ -1785,7 +1772,7 @@ encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, boo
                 VideoSampleBufferView *remoteRenderer = [[VideoSampleBufferView alloc] initWithFrame:CGRectZero];
                 remoteRenderer.videoContentMode = UIViewContentModeScaleAspectFill;
 
-                std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink = [remoteRenderer getSink];
+                std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink = [remoteRenderer getSink];
 
                 VideoSampleBufferView *cloneRenderer = nil;
                 if (requestClone) {
@@ -1822,8 +1809,8 @@ encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, boo
 #endif
                 }
                 
-                std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink = [remoteRenderer getSink];
-                std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> cloneSink = [cloneRenderer getSink];
+                std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink = [remoteRenderer getSink];
+                std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> cloneSink = [cloneRenderer getSink];
                 
                 [queue dispatch:^{
                     __strong GroupCallThreadLocalContext *strongSelf = weakSelf;

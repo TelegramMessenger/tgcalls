@@ -27,7 +27,7 @@
 
 namespace {
 
-class VideoRendererAdapterImpl : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
+class VideoRendererAdapterImpl : public webrtc::VideoSinkInterface<webrtc::VideoFrame> {
 public:
     VideoRendererAdapterImpl(void (^frameReceived)(std::shared_ptr<webrtc::VideoFrame>)) {
         _frameReceived = [frameReceived copy];
@@ -707,7 +707,7 @@ static bool CopyNV12VideoFrameToNV12PixelBuffer(const webrtc::NV12BufferInterfac
     }
 }
 
-- (std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)getSink {
+- (std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>>)getSink {
     assert([NSThread isMainThread]);
     
     return _sink;

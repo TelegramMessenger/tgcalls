@@ -42,6 +42,8 @@ struct EncodedFrame {
 
 class Collector : public webrtc::EncodedImageCallback {
 public:
+    void OnFrameDropped(uint32_t, int, bool) override {}
+
     Result OnEncodedImage(const webrtc::EncodedImage &image, const webrtc::CodecSpecificInfo *info) override {
         EncodedFrame frame;
         frame.data.assign(image.data(), image.data() + image.size());
@@ -83,7 +85,7 @@ void SetRate(webrtc::VideoEncoder &encoder, uint32_t bps) {
 }
 
 // Moving pseudo-random texture over a gradient, as the SVT-AV1 API test uses.
-rtc::scoped_refptr<webrtc::I420Buffer> MakeI420(int index, int width, int height) {
+webrtc::scoped_refptr<webrtc::I420Buffer> MakeI420(int index, int width, int height) {
     auto buffer = webrtc::I420Buffer::Create(width, height);
     for (int row = 0; row < height; row++) {
         uint8_t *y = buffer->MutableDataY() + row * buffer->StrideY();
@@ -102,7 +104,7 @@ rtc::scoped_refptr<webrtc::I420Buffer> MakeI420(int index, int width, int height
     return buffer;
 }
 
-webrtc::VideoFrame MakeFrame(rtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer, int index) {
+webrtc::VideoFrame MakeFrame(webrtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer, int index) {
     return webrtc::VideoFrame::Builder()
         .set_video_frame_buffer(buffer)
         .set_timestamp_rtp(uint32_t(index) * 3000)

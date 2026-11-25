@@ -2,6 +2,7 @@
 #define TGCALLS_GROUP_EXTERNAL_AUDIO_H
 
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 #include "FakeAudioDeviceModule.h"
@@ -17,9 +18,14 @@ void appendGroupExternalAudioSamples(std::vector<float> &buffer, webrtc::Mutex &
 
 // FakeAudioDeviceModule's recorder for that buffer: 10 ms (480 samples) per Record() once that much is
 // buffered, nothing before.
+//
+// levelUpdated (optional) gets the level of the audio it records: the share connection's own level, which an
+// encrypted call stamps into every Opus frame's trailer and its peers read (a share connection has no microphone
+// processor to measure it). It is the microphone's measure (AudioCapturePostProcessor): the peak over at least 4400
+// samples, divided by 4000 (float s16), on the recording thread.
 class ExternalAudioRecorder : public FakeAudioDeviceModule::Recorder {
 public:
-    ExternalAudioRecorder(std::vector<float> *externalAudioSamples, webrtc::Mutex *externalAudioSamplesMutex);
+    ExternalAudioRecorder(std::vector<float> *externalAudioSamples, webrtc::Mutex *externalAudioSamplesMutex, std::function<void(float)> levelUpdated = nullptr);
     ~ExternalAudioRecorder() override;
 
     AudioFrame Record() override;
@@ -29,6 +35,9 @@ private:
     std::vector<float> *_externalAudioSamples = nullptr;
     webrtc::Mutex *_externalAudioSamplesMutex = nullptr;
     std::vector<int16_t> _samples;
+    std::function<void(float)> _levelUpdated;
+    float _peak = 0.0f;
+    int _peakCount = 0;
 };
 
 } // namespace tgcalls

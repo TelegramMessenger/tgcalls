@@ -8,8 +8,8 @@
 namespace tgcalls {
 
 bool isGzip(std::vector<uint8_t> const &data);
-absl::optional<std::vector<uint8_t>> gzipData(std::vector<uint8_t> const &data);
-absl::optional<std::vector<uint8_t>> gunzipData(std::vector<uint8_t> const &data, size_t sizeLimit);
+std::optional<std::vector<uint8_t>> gzipData(std::vector<uint8_t> const &data);
+std::optional<std::vector<uint8_t>> gunzipData(std::vector<uint8_t> const &data, size_t sizeLimit);
 
 }
 

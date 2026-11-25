@@ -44,7 +44,7 @@ std::vector<ScreencastLayerParameters> iosScreencastLayerParameters(int layerCou
 // The field trials of the in-app screencast's connections on the reference engine (its PeerConnection
 // factory's own FieldTrialsView): for "WebRTC-Bwe-ProbingConfiguration", periodic ALR probes stop once the
 // estimate is within 10% of the cap. Empty for any other key. Both engines turn periodic ALR probing on
-// for these connections (cricket::MediaConfig::video.periodic_alr_bandwidth_probing): a still screen sends
+// for these connections (webrtc::MediaConfig::video.periodic_alr_bandwidth_probing): a still screen sends
 // well below its estimate, and without probes an estimate that a failed start-up probe or one delay spike
 // left low stays low for the whole share. CustomImpl's field trials are the process's, so it probes at
 // the cap as well (about 4-6 KB every 5 s while the screen is still). Test: screencast_probing_test.

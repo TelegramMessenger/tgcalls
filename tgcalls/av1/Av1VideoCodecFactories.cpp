@@ -18,7 +18,7 @@ namespace tgcalls {
 namespace {
 
 bool IsAv1(const webrtc::SdpVideoFormat &format) {
-    return absl::EqualsIgnoreCase(format.name, cricket::kAv1CodecName);
+    return absl::EqualsIgnoreCase(format.name, webrtc::kAv1CodecName);
 }
 
 // `formats` with any AV1 entry moved to a single bare "AV1" at the end.
@@ -29,7 +29,7 @@ std::vector<webrtc::SdpVideoFormat> WithAv1Last(std::vector<webrtc::SdpVideoForm
             result.push_back(std::move(format));
         }
     }
-    result.push_back(webrtc::SdpVideoFormat(cricket::kAv1CodecName));
+    result.push_back(webrtc::SdpVideoFormat(webrtc::kAv1CodecName));
     return result;
 }
 
@@ -66,7 +66,7 @@ public:
     }
 
     CodecSupport QueryCodecSupport(const webrtc::SdpVideoFormat &format,
-                                   absl::optional<std::string> scalabilityMode) const override {
+                                   std::optional<std::string> scalabilityMode) const override {
         if (IsAv1(format)) {
             CodecSupport support;
             support.is_supported = !scalabilityMode || *scalabilityMode == "L1T1";
@@ -75,11 +75,11 @@ public:
         return _inner->QueryCodecSupport(InnerFormat(_inner->GetSupportedFormats(), format), scalabilityMode);
     }
 
-    std::unique_ptr<webrtc::VideoEncoder> CreateVideoEncoder(const webrtc::SdpVideoFormat &format) override {
+    std::unique_ptr<webrtc::VideoEncoder> Create(const webrtc::Environment &env, const webrtc::SdpVideoFormat &format) override {
         if (IsAv1(format)) {
             return _allowAv1Encoding ? CreateSvtAv1Encoder() : CreateRefusingAv1Encoder();
         }
-        return _inner->CreateVideoEncoder(InnerFormat(_inner->GetSupportedFormats(), format));
+        return _inner->Create(env, InnerFormat(_inner->GetSupportedFormats(), format));
     }
 
     std::unique_ptr<EncoderSelectorInterface> GetEncoderSelector() const override {
@@ -117,13 +117,6 @@ public:
         return _inner->Create(env, format);
     }
 
-    std::unique_ptr<webrtc::VideoDecoder> CreateVideoDecoder(const webrtc::SdpVideoFormat &format) override {
-        if (IsAv1(format)) {
-            return webrtc::CreateDav1dDecoder();
-        }
-        return _inner->CreateVideoDecoder(format);
-    }
-
 private:
     std::unique_ptr<webrtc::VideoDecoderFactory> _inner;
 };
@@ -145,9 +138,6 @@ public:
         return _inner->Create(env, InnerFormat(_inner->GetSupportedFormats(), format));
     }
 
-    std::unique_ptr<webrtc::VideoDecoder> CreateVideoDecoder(const webrtc::SdpVideoFormat &format) override {
-        return _inner->CreateVideoDecoder(InnerFormat(_inner->GetSupportedFormats(), format));
-    }
 
 private:
     std::unique_ptr<webrtc::VideoDecoderFactory> _inner;
@@ -155,8 +145,8 @@ private:
 
 #if TGCALLS_ALLOW_TEST_KNOBS
 webrtc::SdpVideoFormat WithH264Level(webrtc::SdpVideoFormat format, const std::string &levelHex) {
-    if (absl::EqualsIgnoreCase(format.name, cricket::kH264CodecName)) {
-        auto it = format.parameters.find(cricket::kH264FmtpProfileLevelId);
+    if (absl::EqualsIgnoreCase(format.name, webrtc::kH264CodecName)) {
+        auto it = format.parameters.find(webrtc::kH264FmtpProfileLevelId);
         if (it != format.parameters.end() && it->second.size() == 6 && levelHex.size() == 2) {
             it->second = it->second.substr(0, 4) + levelHex;
         }
@@ -196,13 +186,13 @@ public:
     }
 
     CodecSupport QueryCodecSupport(const webrtc::SdpVideoFormat &format,
-                                   absl::optional<std::string> scalabilityMode) const override {
+                                   std::optional<std::string> scalabilityMode) const override {
         return _inner->QueryCodecSupport(InnerH264LevelFormat(_inner->GetSupportedFormats(), format, _levelHex),
                                          scalabilityMode);
     }
 
-    std::unique_ptr<webrtc::VideoEncoder> CreateVideoEncoder(const webrtc::SdpVideoFormat &format) override {
-        return _inner->CreateVideoEncoder(InnerH264LevelFormat(_inner->GetSupportedFormats(), format, _levelHex));
+    std::unique_ptr<webrtc::VideoEncoder> Create(const webrtc::Environment &env, const webrtc::SdpVideoFormat &format) override {
+        return _inner->Create(env, InnerH264LevelFormat(_inner->GetSupportedFormats(), format, _levelHex));
     }
 
     std::unique_ptr<EncoderSelectorInterface> GetEncoderSelector() const override {
@@ -249,14 +239,14 @@ public:
         return _inner->GetImplementations();
     }
     CodecSupport QueryCodecSupport(const webrtc::SdpVideoFormat &format,
-                                   absl::optional<std::string> scalabilityMode) const override {
+                                   std::optional<std::string> scalabilityMode) const override {
         return _inner->QueryCodecSupport(format, scalabilityMode);
     }
-    std::unique_ptr<webrtc::VideoEncoder> CreateVideoEncoder(const webrtc::SdpVideoFormat &format) override {
+    std::unique_ptr<webrtc::VideoEncoder> Create(const webrtc::Environment &env, const webrtc::SdpVideoFormat &format) override {
         if (IsAv1(format)) {
             return std::make_unique<FailingAv1Encoder>();
         }
-        return _inner->CreateVideoEncoder(format);
+        return _inner->Create(env, format);
     }
     std::unique_ptr<EncoderSelectorInterface> GetEncoderSelector() const override {
         return _inner->GetEncoderSelector();
@@ -285,9 +275,6 @@ public:
         return _inner->Create(env, InnerH264LevelFormat(_inner->GetSupportedFormats(), format, _levelHex));
     }
 
-    std::unique_ptr<webrtc::VideoDecoder> CreateVideoDecoder(const webrtc::SdpVideoFormat &format) override {
-        return _inner->CreateVideoDecoder(InnerH264LevelFormat(_inner->GetSupportedFormats(), format, _levelHex));
-    }
 
 private:
     std::unique_ptr<webrtc::VideoDecoderFactory> _inner;
@@ -300,17 +287,17 @@ private:
 webrtc::SdpVideoFormat WithSdpDefaultParameters(webrtc::SdpVideoFormat format) {
     // emplace keeps a value that is already there.
     auto &parameters = format.parameters;
-    if (absl::EqualsIgnoreCase(format.name, cricket::kVp9CodecName)) {
-        parameters.emplace(cricket::kVP9ProfileId, "0");
-    } else if (absl::EqualsIgnoreCase(format.name, cricket::kH264CodecName)) {
-        parameters.emplace(cricket::kH264FmtpPacketizationMode, "0");
+    if (absl::EqualsIgnoreCase(format.name, webrtc::kVp9CodecName)) {
+        parameters.emplace(webrtc::kVP9ProfileId, "0");
+    } else if (absl::EqualsIgnoreCase(format.name, webrtc::kH264CodecName)) {
+        parameters.emplace(webrtc::kH264FmtpPacketizationMode, "0");
     } else if (IsAv1(format)) {
-        parameters.emplace(cricket::kAv1FmtpProfile, "0");
-        parameters.emplace(cricket::kAv1FmtpLevelIdx, "5");
-        parameters.emplace(cricket::kAv1FmtpTier, "0");
-    } else if (absl::EqualsIgnoreCase(format.name, cricket::kH265CodecName)) {
-        parameters.emplace(cricket::kH265FmtpLevelId, "93");
-        parameters.emplace(cricket::kH265FmtpTxMode, "SRST");
+        parameters.emplace(webrtc::kAv1FmtpProfile, "0");
+        parameters.emplace(webrtc::kAv1FmtpLevelIdx, "5");
+        parameters.emplace(webrtc::kAv1FmtpTier, "0");
+    } else if (absl::EqualsIgnoreCase(format.name, webrtc::kH265CodecName)) {
+        parameters.emplace(webrtc::kH265FmtpLevelId, "93");
+        parameters.emplace(webrtc::kH265FmtpTxMode, "SRST");
     }
     return format;
 }

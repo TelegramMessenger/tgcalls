@@ -102,7 +102,7 @@ void AddAudioSend(webrtc::RTCStatsReport &report) {
     report.AddStats(std::move(stats));
 }
 
-rtc::scoped_refptr<webrtc::RTCStatsReport> Report() {
+webrtc::scoped_refptr<webrtc::RTCStatsReport> Report() {
     auto report = webrtc::RTCStatsReport::Create(kTime);
     AddCodec(*report, "CAV1", "video/AV1");
     AddCodec(*report, "CH264", "video/H264");

@@ -26,20 +26,20 @@ int g_failures = 0;
 using tgcalls::ContentNegotiationContext;
 using tgcalls::signaling::MediaContent;
 
-class StubVoiceEngine : public cricket::VoiceEngineInterface {
+class StubVoiceEngine : public webrtc::VoiceEngineInterface {
 public:
-    StubVoiceEngine() : _codecs({ cricket::CreateAudioCodec(111, "opus", 48000, 2) }) {
+    StubVoiceEngine() : _codecs({ webrtc::CreateAudioCodec(111, "opus", 48000, 2) }) {
     }
 
     void Init() override {
     }
-    rtc::scoped_refptr<webrtc::AudioState> GetAudioState() const override {
+    webrtc::scoped_refptr<webrtc::AudioState> GetAudioState() const override {
         return nullptr;
     }
-    const std::vector<cricket::AudioCodec> &send_codecs() const override {
+    const std::vector<webrtc::Codec> &send_codecs() const override {
         return _codecs;
     }
-    const std::vector<cricket::AudioCodec> &recv_codecs() const override {
+    const std::vector<webrtc::Codec> &recv_codecs() const override {
         return _codecs;
     }
     bool StartAecDump(webrtc::FileWrapper file, int64_t max_size_bytes) override {
@@ -47,24 +47,24 @@ public:
     }
     void StopAecDump() override {
     }
-    absl::optional<webrtc::AudioDeviceModule::Stats> GetAudioDeviceStats() override {
-        return absl::nullopt;
+    std::optional<webrtc::AudioDeviceModule::Stats> GetAudioDeviceStats() override {
+        return std::nullopt;
     }
     std::vector<webrtc::RtpHeaderExtensionCapability> GetRtpHeaderExtensions() const override {
         return {};
     }
 
 private:
-    std::vector<cricket::AudioCodec> _codecs;
+    std::vector<webrtc::Codec> _codecs;
 };
 
-class StubVideoEngine : public cricket::VideoEngineInterface {
+class StubVideoEngine : public webrtc::VideoEngineInterface {
 public:
-    std::vector<cricket::VideoCodec> send_codecs() const override {
-        return { cricket::CreateVideoCodec(96, "VP8") };
+    std::vector<webrtc::Codec> send_codecs() const override {
+        return { webrtc::CreateVideoCodec(96, "VP8") };
     }
-    std::vector<cricket::VideoCodec> recv_codecs() const override {
-        return { cricket::CreateVideoCodec(96, "VP8") };
+    std::vector<webrtc::Codec> recv_codecs() const override {
+        return { webrtc::CreateVideoCodec(96, "VP8") };
     }
     std::vector<webrtc::RtpHeaderExtensionCapability> GetRtpHeaderExtensions() const override {
         return {};
@@ -72,10 +72,10 @@ public:
 };
 
 struct Side {
-    rtc::UniqueRandomIdGenerator ids;
+    webrtc::UniqueRandomIdGenerator ids;
     ContentNegotiationContext context;
 
-    Side(bool isOutgoing, cricket::MediaEngineInterface *engine) :
+    Side(bool isOutgoing, webrtc::MediaEngineInterface *engine) :
     context(tgcalls::fieldTrialsBasedConfig, isOutgoing, engine, &ids) {
         context.copyCodecsFromChannelManager(engine, false);
     }
@@ -111,7 +111,7 @@ int outgoingCount(Side const &side, MediaContent::Type type) {
 }
 
 void TestRemoveNegotiatedChannel() {
-    cricket::CompositeMediaEngine engine(std::make_unique<StubVoiceEngine>(), std::make_unique<StubVideoEngine>());
+    webrtc::CompositeMediaEngine engine(std::make_unique<StubVoiceEngine>(), std::make_unique<StubVideoEngine>());
     Side caller(true, &engine);
     Side callee(false, &engine);
 
@@ -128,7 +128,7 @@ void TestRemoveNegotiatedChannel() {
 }
 
 void TestRemoveChannelWhileItsOfferIsInFlight() {
-    cricket::CompositeMediaEngine engine(std::make_unique<StubVoiceEngine>(), std::make_unique<StubVideoEngine>());
+    webrtc::CompositeMediaEngine engine(std::make_unique<StubVoiceEngine>(), std::make_unique<StubVideoEngine>());
     Side caller(true, &engine);
     Side callee(false, &engine);
 
@@ -150,7 +150,7 @@ void TestRemoveChannelWhileItsOfferIsInFlight() {
 }
 
 void TestRemoveChannelBeforeFirstAnswer() {
-    cricket::CompositeMediaEngine engine(std::make_unique<StubVoiceEngine>(), std::make_unique<StubVideoEngine>());
+    webrtc::CompositeMediaEngine engine(std::make_unique<StubVoiceEngine>(), std::make_unique<StubVideoEngine>());
     Side caller(true, &engine);
     Side callee(false, &engine);
 
@@ -166,7 +166,7 @@ void TestRemoveChannelBeforeFirstAnswer() {
 }
 
 void TestSwitchChannelsWhileOfferIsInFlight() {
-    cricket::CompositeMediaEngine engine(std::make_unique<StubVoiceEngine>(), std::make_unique<StubVideoEngine>());
+    webrtc::CompositeMediaEngine engine(std::make_unique<StubVoiceEngine>(), std::make_unique<StubVideoEngine>());
     Side caller(true, &engine);
     Side callee(false, &engine);
 

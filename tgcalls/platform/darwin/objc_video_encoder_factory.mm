@@ -23,7 +23,7 @@
 #import "sdk/objc/api/peerconnection/RTCVideoCodecInfo+Private.h"
 #import "sdk/objc/api/peerconnection/RTCVideoEncoderSettings+Private.h"
 #import "sdk/objc/api/video_codec/RTCVideoCodecConstants.h"
-#import "sdk/objc/api/video_codec/RTCWrappedNativeVideoEncoder.h"
+#import "sdk/objc/api/video_codec/RTCNativeVideoEncoderBuilder+Native.h"
 #import "sdk/objc/helpers/NSString+StdString.h"
 
 #include "api/video/video_frame.h"
@@ -33,7 +33,7 @@
 #include "modules/video_coding/include/video_error_codes.h"
 #include "rtc_base/logging.h"
 #include "sdk/objc/native/src/objc_video_frame.h"
-#include "api/transport/field_trial_based_config.h"
+#include "api/environment/environment.h"
 
 #include "CustomSimulcastEncoderAdapter.h"
 
@@ -135,19 +135,19 @@ class ObjcVideoEncoderSelector : public VideoEncoderFactory::EncoderSelectorInte
         [[RTC_OBJC_TYPE(RTCVideoCodecInfo) alloc] initWithNativeSdpVideoFormat:format];
     [selector_ registerCurrentEncoderInfo:info];
   }
-  absl::optional<SdpVideoFormat> OnEncoderBroken() override {
+  std::optional<SdpVideoFormat> OnEncoderBroken() override {
     RTC_OBJC_TYPE(RTCVideoCodecInfo) *info = [selector_ encoderForBrokenEncoder];
     if (info) {
       return [info nativeSdpVideoFormat];
     }
-    return absl::nullopt;
+    return std::nullopt;
   }
-  absl::optional<SdpVideoFormat> OnAvailableBitrate(const DataRate &rate) override {
+  std::optional<SdpVideoFormat> OnAvailableBitrate(const DataRate &rate) override {
     RTC_OBJC_TYPE(RTCVideoCodecInfo) *info = [selector_ encoderForBitrate:rate.kbps<NSInteger>()];
     if (info) {
       return [info nativeSdpVideoFormat];
     }
-    return absl::nullopt;
+    return std::nullopt;
   }
 
  private:
@@ -188,12 +188,20 @@ std::vector<SdpVideoFormat> CustomObjCVideoEncoderFactory::GetImplementations() 
   return GetSupportedFormats();
 }
 
-std::unique_ptr<VideoEncoder> CustomObjCVideoEncoderFactory::CreateVideoEncoder(
-    const SdpVideoFormat &format) {
+std::unique_ptr<VideoEncoder> CustomObjCVideoEncoderFactory::Create(
+    const Environment &env, const SdpVideoFormat &format) {
   RTCVideoCodecInfo *info = [[RTCVideoCodecInfo alloc] initWithNativeSdpVideoFormat:format];
   id<RTCVideoEncoder> encoder = [encoder_factory_ createEncoder:info];
-  if ([encoder isKindOfClass:[RTCWrappedNativeVideoEncoder class]]) {
-    return [(RTCWrappedNativeVideoEncoder *)encoder releaseWrappedEncoder];
+  // An encoder that wraps a native one builds it, as WebRTC's ObjCVideoEncoderFactory does.
+  if ([encoder conformsToProtocol:@protocol(RTC_OBJC_TYPE(RTCNativeVideoEncoderBuilder))]) {
+    id<RTC_OBJC_TYPE(RTCNativeVideoEncoderBuilder)> builder = (id<RTC_OBJC_TYPE(RTCNativeVideoEncoderBuilder)>)encoder;
+    if ([builder respondsToSelector:@selector(buildWithEnvironment:format:)]) {
+      return [builder buildWithEnvironment:env format:format];
+    }
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    return [builder build:env];
+#pragma clang diagnostic pop
   } else {
     return std::unique_ptr<ObjCVideoEncoder>(new ObjCVideoEncoder(encoder, trusts_rate_controller_));
   }
@@ -225,15 +233,15 @@ std::vector<SdpVideoFormat> SimulcastVideoEncoderFactory::GetImplementations() c
     return _hardwareFactory->GetImplementations();
 }
 
-std::unique_ptr<VideoEncoder> SimulcastVideoEncoderFactory::CreateVideoEncoder(const SdpVideoFormat& format) {
+std::unique_ptr<VideoEncoder> SimulcastVideoEncoderFactory::Create(const Environment& env, const SdpVideoFormat& format) {
 #ifndef __aarch64__
 #ifdef WEBRTC_MAC
-    return std::make_unique<webrtc::CustomSimulcastEncoderAdapter>(_softwareFactory.get(), _softwareFactory.get(), format, webrtc::FieldTrialBasedConfig());
+    return std::make_unique<webrtc::CustomSimulcastEncoderAdapter>(env, _softwareFactory.get(), _softwareFactory.get(), format);
 #else
-    return std::make_unique<webrtc::CustomSimulcastEncoderAdapter>(_hardwareFactory.get(), _hardwareFactory.get(), format, webrtc::FieldTrialBasedConfig());
+    return std::make_unique<webrtc::CustomSimulcastEncoderAdapter>(env, _hardwareFactory.get(), _hardwareFactory.get(), format);
 #endif //WEBRTC_MAC
 #else
-    return std::make_unique<webrtc::CustomSimulcastEncoderAdapter>(_hardwareFactory.get(), _hardwareFactory.get(), format, webrtc::FieldTrialBasedConfig());
+    return std::make_unique<webrtc::CustomSimulcastEncoderAdapter>(env, _hardwareFactory.get(), _hardwareFactory.get(), format);
 #endif //__aarch64__
 }
 

@@ -10,10 +10,10 @@ InstanceV2PumpImpl::InstanceV2PumpImpl(Descriptor &&descriptor) {
     if (descriptor.config.logPath.data.size() != 0) {
         _logSink = std::make_unique<LogSinkImpl>(descriptor.config.logPath);
     }
-    rtc::LogMessage::LogToDebug(rtc::LS_INFO);
-    rtc::LogMessage::SetLogToStderr(false);
+    webrtc::LogMessage::LogToDebug(webrtc::LS_INFO);
+    webrtc::LogMessage::SetLogToStderr(false);
     if (_logSink) {
-        rtc::LogMessage::AddLogToStream(_logSink.get(), rtc::LS_INFO);
+        webrtc::LogMessage::AddLogToStream(_logSink.get(), webrtc::LS_INFO);
     }
 
     _threads = StaticThreads::getThreads();
@@ -26,7 +26,7 @@ InstanceV2PumpImpl::InstanceV2PumpImpl(Descriptor &&descriptor) {
 }
 
 InstanceV2PumpImpl::~InstanceV2PumpImpl() {
-    rtc::LogMessage::RemoveLogToStream(_logSink.get());
+    webrtc::LogMessage::RemoveLogToStream(_logSink.get());
 }
 
 void InstanceV2PumpImpl::receiveSignalingData(const std::vector<uint8_t> &data) {
@@ -53,7 +53,7 @@ void InstanceV2PumpImpl::setMuteMicrophone(bool muteMicrophone) {
     });
 }
 
-void InstanceV2PumpImpl::setIncomingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+void InstanceV2PumpImpl::setIncomingVideoOutput(std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
     _internal->perform([sink](CallCoreHost *internal) {
         internal->setIncomingVideoOutput(sink);
     });

@@ -74,6 +74,52 @@ void testAtMostTwoSecondsAreKeptNewestFirst() {
     CHECK_TRUE(((const int16_t *)frame.audio_samples)[0] == (int16_t)48000);
 }
 
+// Little-endian s16 bytes of a square wave at +-amplitude.
+std::vector<uint8_t> squareBytes(int amplitude, int count) {
+    std::vector<uint8_t> bytes;
+    bytes.reserve(count * 2);
+    for (int i = 0; i < count; i++) {
+        const uint16_t value = (uint16_t)(int16_t)((i % 2 == 0) ? amplitude : -amplitude);
+        bytes.push_back(value & 0xff);
+        bytes.push_back(value >> 8);
+    }
+    return bytes;
+}
+
+// The screen audio's level (an encrypted call's frame trailer carries it): the peak over at least 4400 samples,
+// divided by 4000, as the microphone's (AudioCapturePostProcessor). Ten 10 ms frames are 4800 samples: one level.
+void testTheLevelIsThePeakOverAboutAHundredMilliseconds() {
+    std::vector<float> buffer;
+    webrtc::Mutex mutex;
+    std::vector<float> levels;
+    tgcalls::ExternalAudioRecorder recorder(&buffer, &mutex, [&levels](float level) {
+        levels.push_back(level);
+    });
+
+    tgcalls::appendGroupExternalAudioSamples(buffer, mutex, squareBytes(3000, 4800));
+    for (int i = 0; i < 9; i++) {
+        CHECK_TRUE(recorder.Record().num_samples == 480);
+    }
+    CHECK_TRUE(levels.empty());
+    CHECK_TRUE(recorder.Record().num_samples == 480);
+    CHECK_TRUE(levels.size() == 1);
+    if (levels.size() == 1) {
+        CHECK_TRUE(levels[0] > 0.749f && levels[0] < 0.751f);
+    }
+
+    // Silence reads 0; no audio buffered (a Record() of nothing) measures nothing.
+    tgcalls::appendGroupExternalAudioSamples(buffer, mutex, squareBytes(0, 4800));
+    for (int i = 0; i < 10; i++) {
+        recorder.Record();
+    }
+    CHECK_TRUE(levels.size() == 2);
+    if (levels.size() == 2) {
+        CHECK_TRUE(levels[1] == 0.0f);
+    }
+    CHECK_TRUE(recorder.Record().num_samples == 0);
+    CHECK_TRUE(levels.size() == 2);
+}
+
 void testAnOddByteCountIsIgnored() {
     std::vector<float> buffer;
     webrtc::Mutex mutex;
@@ -90,6 +136,7 @@ int main() {
     testLessThanTenMillisecondsWaits();
     testAtMostTwoSecondsAreKeptNewestFirst();
     testAnOddByteCountIsIgnored();
+    testTheLevelIsThePeakOverAboutAHundredMilliseconds();
     if (g_failures == 0) {
         std::printf("PASS group_external_audio_test\n");
         return 0;

@@ -29,7 +29,7 @@ namespace webrtc {
 bool H265CMSampleBufferToAnnexBBuffer(
     CMSampleBufferRef hvcc_sample_buffer,
     bool is_keyframe,
-    rtc::Buffer* annexb_buffer)
+    webrtc::Buffer* annexb_buffer)
     __OSX_AVAILABLE_STARTING(__MAC_10_12, __IPHONE_11_0);
 
  // Converts a buffer received from RTP into a sample buffer suitable for the

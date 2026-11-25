@@ -1,6 +1,7 @@
 #include "Message.h"
 
 #include "rtc_base/byte_buffer.h"
+#include "api/array_view.h"
 #include "api/jsep_ice_candidate.h"
 
 namespace tgcalls {
@@ -8,14 +9,14 @@ namespace {
 
 constexpr auto kMaxStringLength = 65536;
 
-void Serialize(rtc::ByteBufferWriter &to, const std::string &from) {
+void Serialize(webrtc::ByteBufferWriter &to, const std::string &from) {
 	assert(from.size() < kMaxStringLength);
 
 	to.WriteUInt32(uint32_t(from.size()));
 	to.WriteString(from);
 }
 
-bool Deserialize(std::string &to, rtc::ByteBufferReader &from) {
+bool Deserialize(std::string &to, webrtc::ByteBufferReader &from) {
 	uint32_t length = 0;
 	if (!from.ReadUInt32(&length)) {
 		RTC_LOG(LS_ERROR) << "Could not read string length.";
@@ -30,7 +31,7 @@ bool Deserialize(std::string &to, rtc::ByteBufferReader &from) {
 	return true;
 }
 
-void Serialize(rtc::ByteBufferWriter &to, const webrtc::SdpVideoFormat &from) {
+void Serialize(webrtc::ByteBufferWriter &to, const webrtc::SdpVideoFormat &from) {
 	assert(from.parameters.size() < std::numeric_limits<uint8_t>::max());
 
 	Serialize(to, from.name);
@@ -41,7 +42,7 @@ void Serialize(rtc::ByteBufferWriter &to, const webrtc::SdpVideoFormat &from) {
 	}
 }
 
-bool Deserialize(webrtc::SdpVideoFormat &to, rtc::ByteBufferReader &from) {
+bool Deserialize(webrtc::SdpVideoFormat &to, webrtc::ByteBufferReader &from) {
 	if (!Deserialize(to.name, from)) {
 		RTC_LOG(LS_ERROR) << "Could not read video format name.";
 		return false;
@@ -66,44 +67,39 @@ bool Deserialize(webrtc::SdpVideoFormat &to, rtc::ByteBufferReader &from) {
 	return true;
 }
 
-void Serialize(rtc::ByteBufferWriter &to, const cricket::Candidate &from) {
-	webrtc::JsepIceCandidate iceCandidate{ std::string(), 0 };
-	iceCandidate.SetCandidate(from);
-	std::string serialized;
-	const auto success = iceCandidate.ToString(&serialized);
-	assert(success);
-	(void)success;
-	Serialize(to, serialized);
+void Serialize(webrtc::ByteBufferWriter &to, const webrtc::Candidate &from) {
+	const webrtc::IceCandidate iceCandidate(std::string(), 0, from);
+	Serialize(to, iceCandidate.ToString());
 }
 
-bool Deserialize(cricket::Candidate &to, rtc::ByteBufferReader &from) {
+bool Deserialize(webrtc::Candidate &to, webrtc::ByteBufferReader &from) {
 	std::string candidate;
 	if (!Deserialize(candidate, from)) {
 		RTC_LOG(LS_ERROR) << "Could not read candidate string.";
 		return false;
 	}
-	webrtc::JsepIceCandidate parseCandidate{ std::string(), 0 };
-	if (!parseCandidate.Initialize(candidate, nullptr)) {
+	const auto parseCandidate = webrtc::IceCandidate::Create(std::string(), 0, candidate);
+	if (!parseCandidate) {
 		RTC_LOG(LS_ERROR) << "Could not parse candidate: " << candidate;
 		return false;
 	}
-	to = parseCandidate.candidate();
+	to = parseCandidate->candidate();
 	return true;
 }
 
-void Serialize(rtc::ByteBufferWriter &to, const RequestVideoMessage &from, bool singleMessagePacket) {
+void Serialize(webrtc::ByteBufferWriter &to, const RequestVideoMessage &from, bool singleMessagePacket) {
 }
 
-bool Deserialize(RequestVideoMessage &to, rtc::ByteBufferReader &reader, bool singleMessagePacket) {
+bool Deserialize(RequestVideoMessage &to, webrtc::ByteBufferReader &reader, bool singleMessagePacket) {
 	return true;
 }
 
-void Serialize(rtc::ByteBufferWriter &to, const RemoteMediaStateMessage &from, bool singleMessagePacket) {
+void Serialize(webrtc::ByteBufferWriter &to, const RemoteMediaStateMessage &from, bool singleMessagePacket) {
 	uint8_t state = (uint8_t(from.video) << 1) | uint8_t(from.audio);
 	to.WriteUInt8(state);
 }
 
-bool Deserialize(RemoteMediaStateMessage &to, rtc::ByteBufferReader &reader, bool singleMessagePacket) {
+bool Deserialize(RemoteMediaStateMessage &to, webrtc::ByteBufferReader &reader, bool singleMessagePacket) {
 	uint8_t state = 0;
 	if (!reader.ReadUInt8(&state)) {
 		RTC_LOG(LS_ERROR) << "Could not read remote media state.";
@@ -118,7 +114,7 @@ bool Deserialize(RemoteMediaStateMessage &to, rtc::ByteBufferReader &reader, boo
 	return true;
 }
 
-void Serialize(rtc::ByteBufferWriter &to, const CandidatesListMessage &from, bool singleMessagePacket) {
+void Serialize(webrtc::ByteBufferWriter &to, const CandidatesListMessage &from, bool singleMessagePacket) {
 	assert(from.candidates.size() < std::numeric_limits<uint8_t>::max());
 
 	to.WriteUInt8(uint8_t(from.candidates.size()));
@@ -130,14 +126,14 @@ void Serialize(rtc::ByteBufferWriter &to, const CandidatesListMessage &from, boo
     Serialize(to, from.iceParameters.pwd);
 }
 
-bool Deserialize(CandidatesListMessage &to, rtc::ByteBufferReader &reader, bool singleMessagePacket) {
+bool Deserialize(CandidatesListMessage &to, webrtc::ByteBufferReader &reader, bool singleMessagePacket) {
 	auto count = uint8_t();
 	if (!reader.ReadUInt8(&count)) {
 		RTC_LOG(LS_ERROR) << "Could not read candidates count.";
 		return false;
 	}
 	for (uint32_t i = 0; i != count; ++i) {
-		auto candidate = cricket::Candidate();
+		auto candidate = webrtc::Candidate();
 		if (!Deserialize(candidate, reader)) {
 			RTC_LOG(LS_ERROR) << "Could not read candidate.";
 			return false;
@@ -153,7 +149,7 @@ bool Deserialize(CandidatesListMessage &to, rtc::ByteBufferReader &reader, bool 
 	return true;
 }
 
-void Serialize(rtc::ByteBufferWriter &to, const VideoFormatsMessage &from, bool singleMessagePacket) {
+void Serialize(webrtc::ByteBufferWriter &to, const VideoFormatsMessage &from, bool singleMessagePacket) {
 	assert(from.formats.size() < std::numeric_limits<uint8_t>::max());
 	assert(from.encodersCount <= from.formats.size());
 
@@ -164,7 +160,7 @@ void Serialize(rtc::ByteBufferWriter &to, const VideoFormatsMessage &from, bool 
 	to.WriteUInt8(uint8_t(from.encodersCount));
 }
 
-bool Deserialize(VideoFormatsMessage &to, rtc::ByteBufferReader &from, bool singleMessagePacket) {
+bool Deserialize(VideoFormatsMessage &to, webrtc::ByteBufferReader &from, bool singleMessagePacket) {
 	auto count = uint8_t();
 	if (!from.ReadUInt8(&count)) {
 		RTC_LOG(LS_ERROR) << "Could not read video formats count.";
@@ -190,15 +186,15 @@ bool Deserialize(VideoFormatsMessage &to, rtc::ByteBufferReader &from, bool sing
 	return true;
 }
 
-void Serialize(rtc::ByteBufferWriter &to, const rtc::CopyOnWriteBuffer &from, bool singleMessagePacket) {
+void Serialize(webrtc::ByteBufferWriter &to, const webrtc::CopyOnWriteBuffer &from, bool singleMessagePacket) {
 	if (!singleMessagePacket) {
 		assert(from.size() <= UINT16_MAX);
 		to.WriteUInt16(from.size());
 	}
-	to.WriteBytes(reinterpret_cast<const uint8_t*>(from.cdata()), from.size());
+	to.Write(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(from.cdata()), from.size()));
 }
 
-bool Deserialize(rtc::CopyOnWriteBuffer &to, rtc::ByteBufferReader &from, bool singleMessagePacket) {
+bool Deserialize(webrtc::CopyOnWriteBuffer &to, webrtc::ByteBufferReader &from, bool singleMessagePacket) {
 	auto length = uint16_t(from.Length());
 	if (!singleMessagePacket) {
 		if (!from.ReadUInt16(&length)) {
@@ -214,35 +210,35 @@ bool Deserialize(rtc::CopyOnWriteBuffer &to, rtc::ByteBufferReader &from, bool s
 	return true;
 }
 
-void Serialize(rtc::ByteBufferWriter &to, const AudioDataMessage &from, bool singleMessagePacket) {
+void Serialize(webrtc::ByteBufferWriter &to, const AudioDataMessage &from, bool singleMessagePacket) {
 	Serialize(to, from.data, singleMessagePacket);
 }
 
-bool Deserialize(AudioDataMessage &to, rtc::ByteBufferReader &from, bool singleMessagePacket) {
+bool Deserialize(AudioDataMessage &to, webrtc::ByteBufferReader &from, bool singleMessagePacket) {
 	return Deserialize(to.data, from, singleMessagePacket);
 }
 
-void Serialize(rtc::ByteBufferWriter &to, const VideoDataMessage &from, bool singleMessagePacket) {
+void Serialize(webrtc::ByteBufferWriter &to, const VideoDataMessage &from, bool singleMessagePacket) {
 	Serialize(to, from.data, singleMessagePacket);
 }
 
-bool Deserialize(VideoDataMessage &to, rtc::ByteBufferReader &from, bool singleMessagePacket) {
+bool Deserialize(VideoDataMessage &to, webrtc::ByteBufferReader &from, bool singleMessagePacket) {
 	return Deserialize(to.data, from, singleMessagePacket);
 }
 
-void Serialize(rtc::ByteBufferWriter &to, const UnstructuredDataMessage &from, bool singleMessagePacket) {
+void Serialize(webrtc::ByteBufferWriter &to, const UnstructuredDataMessage &from, bool singleMessagePacket) {
     Serialize(to, from.data, singleMessagePacket);
 }
 
-bool Deserialize(UnstructuredDataMessage &to, rtc::ByteBufferReader &from, bool singleMessagePacket) {
+bool Deserialize(UnstructuredDataMessage &to, webrtc::ByteBufferReader &from, bool singleMessagePacket) {
     return Deserialize(to.data, from, singleMessagePacket);
 }
 
-void Serialize(rtc::ByteBufferWriter &to, const VideoParametersMessage &from, bool singleMessagePacket) {
+void Serialize(webrtc::ByteBufferWriter &to, const VideoParametersMessage &from, bool singleMessagePacket) {
     to.WriteUInt32(from.aspectRatio);
 }
 
-bool Deserialize(VideoParametersMessage &to, rtc::ByteBufferReader &from, bool singleMessagePacket) {
+bool Deserialize(VideoParametersMessage &to, webrtc::ByteBufferReader &from, bool singleMessagePacket) {
     uint32_t aspectRatio = 0;
     if (!from.ReadUInt32(&aspectRatio)) {
         return false;
@@ -251,11 +247,11 @@ bool Deserialize(VideoParametersMessage &to, rtc::ByteBufferReader &from, bool s
     return true;
 }
 
-void Serialize(rtc::ByteBufferWriter &to, const RemoteBatteryLevelIsLowMessage &from, bool singleMessagePacket) {
+void Serialize(webrtc::ByteBufferWriter &to, const RemoteBatteryLevelIsLowMessage &from, bool singleMessagePacket) {
     to.WriteUInt8(from.batteryLow ? 1 : 0);
 }
 
-bool Deserialize(RemoteBatteryLevelIsLowMessage &to, rtc::ByteBufferReader &reader, bool singleMessagePacket) {
+bool Deserialize(RemoteBatteryLevelIsLowMessage &to, webrtc::ByteBufferReader &reader, bool singleMessagePacket) {
     uint8_t value = 0;
     if (!reader.ReadUInt8(&value)) {
         RTC_LOG(LS_ERROR) << "Could not read batteryLevelIsLow.";
@@ -265,12 +261,12 @@ bool Deserialize(RemoteBatteryLevelIsLowMessage &to, rtc::ByteBufferReader &read
     return true;
 }
 
-void Serialize(rtc::ByteBufferWriter &to, const RemoteNetworkStatusMessage &from, bool singleMessagePacket) {
+void Serialize(webrtc::ByteBufferWriter &to, const RemoteNetworkStatusMessage &from, bool singleMessagePacket) {
     to.WriteUInt8(from.isLowCost ? 1 : 0);
     to.WriteUInt8(from.isLowDataRequested ? 1 : 0);
 }
 
-bool Deserialize(RemoteNetworkStatusMessage &to, rtc::ByteBufferReader &reader, bool singleMessagePacket) {
+bool Deserialize(RemoteNetworkStatusMessage &to, webrtc::ByteBufferReader &reader, bool singleMessagePacket) {
     uint8_t value = 0;
     if (!reader.ReadUInt8(&value)) {
         RTC_LOG(LS_ERROR) << "Could not read isLowCost.";
@@ -291,8 +287,8 @@ enum class TryResult : uint8_t {
 
 template <typename T>
 TryResult TryDeserialize(
-		absl::optional<Message> &to,
-		rtc::ByteBufferReader &reader,
+		std::optional<Message> &to,
+		webrtc::ByteBufferReader &reader,
 		bool singleMessagePacket) {
 	assert(reader.Length() != 0);
 
@@ -316,8 +312,8 @@ struct TryDeserializeNext;
 template <>
 struct TryDeserializeNext<> {
 	static bool Call(
-			absl::optional<Message> &to,
-			rtc::ByteBufferReader &reader,
+			std::optional<Message> &to,
+			webrtc::ByteBufferReader &reader,
 			bool singleMessagePacket) {
 		return false;
 	}
@@ -326,8 +322,8 @@ struct TryDeserializeNext<> {
 template <typename T, typename ...Other>
 struct TryDeserializeNext<T, Other...> {
 	static bool Call(
-			absl::optional<Message> &to,
-			rtc::ByteBufferReader &reader,
+			std::optional<Message> &to,
+			webrtc::ByteBufferReader &reader,
 			bool singleMessagePacket) {
 		const auto result = TryDeserialize<T>(to, reader, singleMessagePacket);
 		return (result == TryResult::TryNext)
@@ -338,66 +334,66 @@ struct TryDeserializeNext<T, Other...> {
 
 template <typename ...Types>
 bool TryDeserializeRecursive(
-		absl::optional<Message> &to,
-		rtc::ByteBufferReader &reader,
+		std::optional<Message> &to,
+		webrtc::ByteBufferReader &reader,
 		bool singleMessagePacket,
-		absl::variant<Types...> *) {
+		std::variant<Types...> *) {
 	return TryDeserializeNext<Types...>::Call(to, reader, singleMessagePacket);
 }
 
 } // namespace
 
 
-rtc::CopyOnWriteBuffer SerializeMessageWithSeq(
+webrtc::CopyOnWriteBuffer SerializeMessageWithSeq(
 		const Message &message,
 		uint32_t seq,
 		bool singleMessagePacket) {
-	rtc::ByteBufferWriter writer;
+	webrtc::ByteBufferWriter writer;
 	writer.WriteUInt32(seq);
-	absl::visit([&](const auto &data) {
+	std::visit([&](const auto &data) {
 		writer.WriteUInt8(std::decay_t<decltype(data)>::kId);
 		Serialize(writer, data, singleMessagePacket);
 	}, message.data);
 
-	auto result = rtc::CopyOnWriteBuffer();
+	auto result = webrtc::CopyOnWriteBuffer();
 	result.AppendData(writer.Data(), writer.Length());
 
 	return result;
 }
 
-absl::optional<Message> DeserializeMessage(
-		rtc::ByteBufferReader &reader,
+std::optional<Message> DeserializeMessage(
+		webrtc::ByteBufferReader &reader,
 		bool singleMessagePacket) {
 	if (!reader.Length()) {
-		return absl::nullopt;
+		return std::nullopt;
 	}
 	using Variant = decltype(std::declval<Message>().data);
-	auto result = absl::make_optional<Message>();
+	auto result = std::make_optional<Message>();
 	return TryDeserializeRecursive(result, reader, singleMessagePacket, (Variant*)nullptr)
 		? result
-		: absl::nullopt;
+		: std::nullopt;
 }
 
-absl::optional<rtc::CopyOnWriteBuffer> DeserializeRawMessage(
-    rtc::ByteBufferReader &reader,
+std::optional<webrtc::CopyOnWriteBuffer> DeserializeRawMessage(
+    webrtc::ByteBufferReader &reader,
     bool singleMessagePacket) {
     if (!reader.Length()) {
-        return absl::nullopt;
+        return std::nullopt;
     }
 
     uint32_t length = 0;
     if (!reader.ReadUInt32(&length)) {
-        return absl::nullopt;
+        return std::nullopt;
     }
 
     if (/*length < 0 || */length > 1024 * 1024) {
-        return absl::nullopt;
+        return std::nullopt;
     }
 
-    rtc::CopyOnWriteBuffer result;
+    webrtc::CopyOnWriteBuffer result;
     result.SetSize(length);
-    if (!reader.ReadBytes(rtc::ArrayView<uint8_t>((uint8_t *)result.MutableData(), result.size()))) {
-        return absl::nullopt;
+    if (!reader.ReadBytes(webrtc::ArrayView<uint8_t>((uint8_t *)result.MutableData(), result.size()))) {
+        return std::nullopt;
     }
 
     return result;

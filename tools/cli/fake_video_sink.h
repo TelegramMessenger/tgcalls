@@ -4,7 +4,7 @@
 #include <atomic>
 #include <chrono>
 
-class FakeVideoSink : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
+class FakeVideoSink : public webrtc::VideoSinkInterface<webrtc::VideoFrame> {
 public:
     void OnFrame(const webrtc::VideoFrame& frame) override {
         if (frameCount_.fetch_add(1, std::memory_order_relaxed) == 0) {

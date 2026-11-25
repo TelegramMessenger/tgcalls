@@ -28,6 +28,7 @@
 #import "components/video_frame_buffer/RTCCVPixelBuffer.h"
 #import "helpers.h"
 
+#include "api/video/video_timing.h"
 #include "common_video/h264/h264_bitstream_parser.h"
 
 #include "api/video_codecs/h264_profile_level_id.h"
@@ -332,7 +333,7 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
   uint32_t _encoderFrameRate;
   uint32_t _maxAllowedFrameRate;
   RTCH264PacketizationMode _packetizationMode;
-  absl::optional<webrtc::H264ProfileLevelId> _profile_level_id;
+  std::optional<webrtc::H264ProfileLevelId> _profile_level_id;
   RTCVideoEncoderCallback _callback;
   int32_t _width;
   int32_t _height;
@@ -477,7 +478,7 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
     }
   }
 
-  CMTime presentationTimeStamp = CMTimeMake(frame.timeStampNs / rtc::kNumNanosecsPerMillisec, 1000);
+  CMTime presentationTimeStamp = CMTimeMake(frame.timeStampNs / webrtc::kNumNanosecsPerMillisec, 1000);
   CFDictionaryRef frameProperties = nullptr;
   if (isKeyframeRequired) {
     CFTypeRef keys[] = {kVTEncodeFrameOptionKey_ForceKeyFrame};
@@ -490,7 +491,7 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
                                               codecSpecificInfo,
                                               _width,
                                               _height,
-                                              frame.timeStampNs / rtc::kNumNanosecsPerMillisec,
+                                              frame.timeStampNs / webrtc::kNumNanosecsPerMillisec,
                                               frame.timeStamp,
                                               frame.rotation));
   encodeParams->codecSpecificInfo.packetizationMode = _packetizationMode;
@@ -831,7 +832,7 @@ NSUInteger GetMaxSampleRate(const webrtc::H264ProfileLevelId &profile_level_id) 
     RTC_LOG(LS_INFO) << "Generated keyframe";
   }
 
-  __block std::unique_ptr<rtc::Buffer> buffer = std::make_unique<rtc::Buffer>();
+  __block std::unique_ptr<webrtc::Buffer> buffer = std::make_unique<webrtc::Buffer>();
   {
 	bool result = webrtc::H264CMSampleBufferToAnnexBBuffer(sampleBuffer, isKeyframe, buffer.get());
     if (!result) {

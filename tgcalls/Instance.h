@@ -11,10 +11,10 @@
 #include "Stats.h"
 #include "DirectConnectionChannel.h"
 
-namespace rtc {
+namespace webrtc {
 template <typename VideoFrameT>
 class VideoSinkInterface;
-} // namespace rtc
+} // namespace webrtc
 
 namespace webrtc {
 class VideoFrame;
@@ -74,11 +74,6 @@ struct Endpoint {
 	unsigned char peerTag[16] = { 0 };
 };
 
-enum class ProtocolVersion {
-    V0,
-    V1 // Low-cost network negotiation
-};
-
 enum class NetworkType {
 	Unknown,
 	Gprs,
@@ -121,7 +116,6 @@ struct Config {
 	int maxApiLayer = 0;
     bool enableHighBitrateVideo = false;
     std::vector<std::string> preferredVideoCodecs;
-    ProtocolVersion protocolVersion = ProtocolVersion::V0;
     std::string customParameters = "";
 };
 
@@ -189,7 +183,7 @@ public:
 	virtual void setEchoCancellationStrength(int strength) = 0;
 
 	virtual bool supportsVideo() = 0;
-	virtual void setIncomingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) = 0;
+	virtual void setIncomingVideoOutput(std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) = 0;
 
 	virtual void setAudioInputDevice(std::string id) = 0;
 	virtual void setAudioOutputDevice(std::string id) = 0;

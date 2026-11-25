@@ -5,9 +5,9 @@
 #include "Instance.h"
 #include "Message.h"
 
-namespace rtc {
+namespace webrtc {
 class ByteBufferReader;
-} // namespace rtc
+} // namespace webrtc
 
 namespace tgcalls {
 
@@ -26,9 +26,9 @@ public:
         std::vector<uint8_t> bytes;
         uint32_t counter = 0;
     };
-    absl::optional<EncryptedPacket> prepareForSending(const Message &message);
-    absl::optional<EncryptedPacket> prepareForSendingRawMessage(rtc::CopyOnWriteBuffer &serialized, bool messageRequiresAck);
-    absl::optional<EncryptedPacket> prepareForSendingService(int cause);
+    std::optional<EncryptedPacket> prepareForSending(const Message &message);
+    std::optional<EncryptedPacket> prepareForSendingRawMessage(webrtc::CopyOnWriteBuffer &serialized, bool messageRequiresAck);
+    std::optional<EncryptedPacket> prepareForSendingService(int cause);
 
     struct DecryptedPacket {
         DecryptedMessage main;
@@ -38,19 +38,19 @@ public:
         DecryptedRawMessage main;
         std::vector<DecryptedRawMessage> additional;
     };
-    absl::optional<DecryptedPacket> handleIncomingPacket(const char *bytes, size_t size);
-    absl::optional<DecryptedRawPacket> handleIncomingRawPacket(const char *bytes, size_t size);
+    std::optional<DecryptedPacket> handleIncomingPacket(const char *bytes, size_t size);
+    std::optional<DecryptedRawPacket> handleIncomingRawPacket(const char *bytes, size_t size);
 
-    absl::optional<rtc::CopyOnWriteBuffer> encryptRawPacket(rtc::CopyOnWriteBuffer const &buffer);
-    absl::optional<rtc::CopyOnWriteBuffer> decryptRawPacket(rtc::CopyOnWriteBuffer const &buffer);
+    std::optional<webrtc::CopyOnWriteBuffer> encryptRawPacket(webrtc::CopyOnWriteBuffer const &buffer);
+    std::optional<webrtc::CopyOnWriteBuffer> decryptRawPacket(webrtc::CopyOnWriteBuffer const &buffer);
 
     // Pump-host seam (v2wasm): seal/open a full plaintext packet whose first
     // 4 bytes are the seq chosen by the caller. Additive only — existing
     // methods and their counter handling are untouched.
-    absl::optional<rtc::CopyOnWriteBuffer> encryptFullPlaintextPacket(rtc::CopyOnWriteBuffer const &packet);
+    std::optional<webrtc::CopyOnWriteBuffer> encryptFullPlaintextPacket(webrtc::CopyOnWriteBuffer const &packet);
     // Decrypt + verify + replay-check; returns the full plaintext INCLUDING
     // the 4-byte seq (decryptRawPacket strips it).
-    absl::optional<rtc::CopyOnWriteBuffer> decryptFullPlaintextPacket(rtc::CopyOnWriteBuffer const &buffer);
+    std::optional<webrtc::CopyOnWriteBuffer> decryptFullPlaintextPacket(webrtc::CopyOnWriteBuffer const &buffer);
 
 private:
     struct DelayIntervals {
@@ -60,38 +60,38 @@ private:
         int maxDelayBeforeAckResend = 0;
     };
     struct MessageForResend {
-        rtc::CopyOnWriteBuffer data;
+        webrtc::CopyOnWriteBuffer data;
         int64_t lastSent = 0;
     };
 
-    bool enoughSpaceInPacket(const rtc::CopyOnWriteBuffer &buffer, size_t amount) const;
+    bool enoughSpaceInPacket(const webrtc::CopyOnWriteBuffer &buffer, size_t amount) const;
     size_t packetLimit() const;
     size_t fullNotAckedLength() const;
-    void appendAcksToSend(rtc::CopyOnWriteBuffer &buffer);
-    void appendAdditionalMessages(rtc::CopyOnWriteBuffer &buffer);
-    EncryptedPacket encryptPrepared(const rtc::CopyOnWriteBuffer &buffer);
+    void appendAcksToSend(webrtc::CopyOnWriteBuffer &buffer);
+    void appendAdditionalMessages(webrtc::CopyOnWriteBuffer &buffer);
+    EncryptedPacket encryptPrepared(const webrtc::CopyOnWriteBuffer &buffer);
     bool registerIncomingCounter(uint32_t incomingCounter);
-    absl::optional<DecryptedPacket> processPacket(const rtc::Buffer &fullBuffer, uint32_t packetSeq);
-    absl::optional<DecryptedRawPacket> processRawPacket(const rtc::Buffer &fullBuffer, uint32_t packetSeq);
+    std::optional<DecryptedPacket> processPacket(const webrtc::Buffer &fullBuffer, uint32_t packetSeq);
+    std::optional<DecryptedRawPacket> processRawPacket(const webrtc::Buffer &fullBuffer, uint32_t packetSeq);
     bool registerSentAck(uint32_t counter, bool firstInPacket);
     void ackMyMessage(uint32_t counter);
     void sendAckPostponed(uint32_t incomingSeq);
     bool haveAdditionalMessages() const;
-    absl::optional<uint32_t> computeNextSeq(bool messageRequiresAck, bool singleMessagePacket);
+    std::optional<uint32_t> computeNextSeq(bool messageRequiresAck, bool singleMessagePacket);
     void appendReceivedMessage(
-        absl::optional<DecryptedPacket> &to,
+        std::optional<DecryptedPacket> &to,
         Message &&message,
         uint32_t incomingSeq);
     void appendReceivedRawMessage(
-        absl::optional<DecryptedRawPacket> &to,
-        rtc::CopyOnWriteBuffer &&message,
+        std::optional<DecryptedRawPacket> &to,
+        webrtc::CopyOnWriteBuffer &&message,
         uint32_t incomingSeq);
-    absl::optional<EncryptedPacket> prepareForSendingMessageInternal(rtc::CopyOnWriteBuffer &serialized, uint32_t seq, bool messageRequiresAck);
+    std::optional<EncryptedPacket> prepareForSendingMessageInternal(webrtc::CopyOnWriteBuffer &serialized, uint32_t seq, bool messageRequiresAck);
 
     const char *logHeader() const;
 
     static DelayIntervals DelayIntervalsByType(Type type);
-    static rtc::CopyOnWriteBuffer SerializeEmptyMessageWithSeq(uint32_t seq);
+    static webrtc::CopyOnWriteBuffer SerializeEmptyMessageWithSeq(uint32_t seq);
 
     Type _type = Type();
     EncryptionKey _key;

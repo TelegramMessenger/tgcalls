@@ -7,6 +7,7 @@
 #include <list>
 #include <map>
 #include <memory>
+#include <span>
 #include <set>
 #include <string>
 #include <vector>
@@ -15,7 +16,10 @@
 #include "api/async_dns_resolver.h"
 #include "p2p/base/port.h"
 #include "p2p/client/basic_port_allocator.h"
+#include "p2p/client/relay_port_factory_interface.h"
 #include "rtc_base/async_packet_socket.h"
+#include "rtc_base/network/received_packet.h"
+#include "rtc_base/network/sent_packet.h"
 #include "rtc_base/ssl_certificate.h"
 
 namespace webrtc {
@@ -29,7 +33,7 @@ extern const char TURN_PORT_TYPE[];
 class TurnAllocateRequest;
 class TurnEntry;
 
-class ReflectorPort : public cricket::Port {
+class ReflectorPort : public webrtc::Port {
 public:
     enum PortState {
         STATE_CONNECTING,    // Initial state, cannot send any packets.
@@ -42,9 +46,9 @@ public:
     
     // Create a TURN port using the shared UDP socket, `socket`.
     static std::unique_ptr<ReflectorPort> Create(
-        const cricket::CreateRelayPortArgs& args,
-        rtc::SocketFactory *underlying_socket_factory,
-        rtc::AsyncPacketSocket* socket,
+        webrtc::CreateRelayPortArgs args,
+        webrtc::SocketFactory *underlying_socket_factory,
+        webrtc::AsyncPacketSocket* socket,
         uint8_t serverId,
         int server_priority,
         bool standaloneReflectorMode,
@@ -64,14 +68,14 @@ public:
             return nullptr;
         }
         // Using `new` to access a non-public constructor.
-        return absl::WrapUnique(new ReflectorPort(args, underlying_socket_factory, socket, serverId, server_priority, standaloneReflectorMode, standaloneReflectorRoleId, resolveRemoteCandidateIp));
+        return absl::WrapUnique(new ReflectorPort(std::move(args), underlying_socket_factory, socket, serverId, server_priority, standaloneReflectorMode, standaloneReflectorRoleId, resolveRemoteCandidateIp));
     }
     
     // Create a TURN port that will use a new socket, bound to `network` and
     // using a port in the range between `min_port` and `max_port`.
     static std::unique_ptr<ReflectorPort> Create(
-        const cricket::CreateRelayPortArgs& args,
-        rtc::SocketFactory *underlying_socket_factory,
+        webrtc::CreateRelayPortArgs args,
+        webrtc::SocketFactory *underlying_socket_factory,
         uint16_t min_port,
         uint16_t max_port,
         uint8_t serverId,
@@ -93,91 +97,73 @@ public:
             return nullptr;
         }
         // Using `new` to access a non-public constructor.
-        return absl::WrapUnique(new ReflectorPort(args, underlying_socket_factory, min_port, max_port, serverId, server_priority, standaloneReflectorMode, standaloneReflectorRoleId, resolveRemoteCandidateIp));
+        return absl::WrapUnique(new ReflectorPort(std::move(args), underlying_socket_factory, min_port, max_port, serverId, server_priority, standaloneReflectorMode, standaloneReflectorRoleId, resolveRemoteCandidateIp));
     }
     
     ~ReflectorPort() override;
     
-    const cricket::ProtocolAddress& server_address() const { return server_address_; }
+    const webrtc::ProtocolAddress& server_address() const { return server_address_; }
     // Returns an empty address if the local address has not been assigned.
-    rtc::SocketAddress GetLocalAddress() const;
+    webrtc::SocketAddress GetLocalAddress() const;
     
     bool ready() const { return state_ == STATE_READY; }
     bool connected() const {
         return state_ == STATE_READY || state_ == STATE_CONNECTED;
     }
-    const cricket::RelayCredentials& credentials() const { return credentials_; }
+    const webrtc::RelayCredentials& credentials() const { return credentials_; }
     
-    cricket::ProtocolType GetProtocol() const override;
+    webrtc::ProtocolType GetProtocol() const override;
     
     // Sets state to STATE_RECEIVEONLY.
     void Release();
     
     void PrepareAddress() override;
-    cricket::Connection* CreateConnection(const cricket::Candidate& c,
+    webrtc::Connection* CreateConnection(const webrtc::Candidate& c,
                                           PortInterface::CandidateOrigin origin) override;
-    int SendTo(const void* data,
-               size_t size,
-               const rtc::SocketAddress& addr,
-               const rtc::PacketOptions& options,
+    int SendTo(std::span<const uint8_t> data,
+               const webrtc::SocketAddress& addr,
+               const webrtc::AsyncSocketPacketOptions& options,
                bool payload) override;
-    int SetOption(rtc::Socket::Option opt, int value) override;
-    int GetOption(rtc::Socket::Option opt, int* value) override;
+    int SetOption(webrtc::Socket::Option opt, int value) override;
+    int GetOption(webrtc::Socket::Option opt, int* value) override;
     int GetError() override;
     
-    virtual bool HandleIncomingPacket(rtc::AsyncPacketSocket* socket,
-                                      const rtc::ReceivedPacket& packet) override;
+    virtual bool HandleIncomingPacket(webrtc::AsyncPacketSocket* socket,
+                                      const webrtc::ReceivedIpPacket& packet) override;
     bool CanHandleIncomingPacketsFrom(
-                                      const rtc::SocketAddress& addr) const override;
-    virtual void OnReadPacket(rtc::AsyncPacketSocket* socket, rtc::ReceivedPacket const &packet);
+                                      const webrtc::SocketAddress& addr) const override;
+    virtual void OnReadPacket(webrtc::AsyncPacketSocket* socket, webrtc::ReceivedIpPacket const &packet);
     
-    void OnSentPacket(rtc::AsyncPacketSocket* socket,
-                      const rtc::SentPacket& sent_packet) override;
-    virtual void OnReadyToSend(rtc::AsyncPacketSocket* socket);
+    void OnSentPacket(webrtc::AsyncPacketSocket* socket,
+                      const webrtc::SentPacketInfo& sent_packet) override;
+    virtual void OnReadyToSend(webrtc::AsyncPacketSocket* socket);
     bool SupportsProtocol(absl::string_view protocol) const override;
     
-    void OnSocketConnect(rtc::AsyncPacketSocket* socket);
-    void OnSocketClose(rtc::AsyncPacketSocket* socket, int error);
+    void OnSocketConnect(webrtc::AsyncPacketSocket* socket);
+    void OnSocketClose(webrtc::AsyncPacketSocket* socket, int error);
     
     int error() const { return error_; }
     
-    rtc::AsyncPacketSocket* socket() const { return socket_; }
-    
-    // Signal with resolved server address.
-    // Parameters are port, server address and resolved server address.
-    // This signal will be sent only if server address is resolved successfully.
-    sigslot::
-    signal3<ReflectorPort*, const rtc::SocketAddress&, const rtc::SocketAddress&>
-    SignalResolvedServerAddress;
-    
-    // Signal when ReflectorPort is closed,
-    // e.g remote socket closed (TCP)
-    //  or receiveing a REFRESH response with lifetime 0.
-    sigslot::signal1<ReflectorPort*> SignalReflectorPortClosed;
-    
-    // All public methods/signals below are for testing only.
-    sigslot::signal2<ReflectorPort*, int> SignalTurnRefreshResult;
-    sigslot::signal3<ReflectorPort*, const rtc::SocketAddress&, int>
-    SignalCreatePermissionResult;
+    webrtc::AsyncPacketSocket* socket() const { return socket_; }
     
     // Visible for testing.
     // Shuts down the turn port, usually because of some fatal errors.
     void Close();
     
-    void HandleConnectionDestroyed(cricket::Connection* conn) override;
+    void HandleConnectionDestroyed(webrtc::Connection* conn) override;
     
 protected:
-    ReflectorPort(const cricket::CreateRelayPortArgs& args,
-                  rtc::SocketFactory *underlying_socket_factory,
-                  rtc::AsyncPacketSocket* socket,
+    ReflectorPort(webrtc::CreateRelayPortArgs args,
+                  webrtc::SocketFactory *underlying_socket_factory,
+                  webrtc::AsyncPacketSocket* socket,
                   uint8_t serverId,
                   int server_priority,
                   bool standaloneReflectorMode,
                   uint32_t standaloneReflectorRoleId,
                   bool resolveRemoteCandidateIp);
     
-    ReflectorPort(const cricket::CreateRelayPortArgs& args,
-                  rtc::SocketFactory *underlying_socket_factory,
+    ReflectorPort(webrtc::CreateRelayPortArgs args,
+                  webrtc::SocketFactory *underlying_socket_factory,
                   uint16_t min_port,
                   uint16_t max_port,
                   uint8_t serverId,
@@ -186,53 +172,54 @@ protected:
                   uint32_t standaloneReflectorRoleId,
                   bool resolveRemoteCandidateIp);
     
-    rtc::DiffServCodePoint StunDscpValue() const override;
+    webrtc::DiffServCodePoint StunDscpValue() const override;
     
 private:
-    typedef std::map<rtc::Socket::Option, int> SocketOptionsMap;
-    typedef std::set<rtc::SocketAddress> AttemptedServerSet;
+    typedef std::map<webrtc::Socket::Option, int> SocketOptionsMap;
+    typedef std::set<webrtc::SocketAddress> AttemptedServerSet;
     
     static bool AllowedReflectorPort(int port);
     
     bool CreateReflectorClientSocket();
     
-    void ResolveTurnAddress(const rtc::SocketAddress& address);
-    void OnResolveResult(rtc::AsyncResolverInterface* resolver);
+    void ResolveTurnAddress(const webrtc::SocketAddress& address);
     
-    void OnSendStunPacket(const void* data, size_t size, cricket::StunRequest* request);
+    void OnSendStunPacket(const void* data, size_t size, webrtc::StunRequest* request);
     
     void OnAllocateError(int error_code, const std::string& reason);
     
-    void DispatchPacket(rtc::ReceivedPacket const &packet, cricket::ProtocolType proto);
+    void DispatchPacket(webrtc::ReceivedIpPacket const &packet, webrtc::ProtocolType proto);
     
-    int Send(const void* data, size_t size, const rtc::PacketOptions& options);
+    int Send(const void* data, size_t size, const webrtc::AsyncSocketPacketOptions& options);
     
     // Marks the connection with remote address `address` failed and
     // pruned (a.k.a. write-timed-out). Returns true if a connection is found.
-    bool FailAndPruneConnection(const rtc::SocketAddress& address);
+    bool FailAndPruneConnection(const webrtc::SocketAddress& address);
     
     // Reconstruct the URL of the server which the candidate is gathered from.
     std::string ReconstructedServerUrl(bool use_hostname);
     
     void SendReflectorHello();
     
-    rtc::CopyOnWriteBuffer peer_tag_;
+    webrtc::CopyOnWriteBuffer peer_tag_;
     uint32_t randomTag_ = 0;
     
-    cricket::ProtocolAddress server_address_;
+    webrtc::ProtocolAddress server_address_;
     uint8_t serverId_ = 0;
     
     std::map<std::string, uint32_t> resolved_peer_tags_by_hostname_;
     
-    cricket::RelayCredentials credentials_;
+    webrtc::RelayCredentials credentials_;
     AttemptedServerSet attempted_server_addresses_;
     
-    rtc::AsyncPacketSocket* socket_;
-    rtc::SocketFactory *underlying_socket_factory_;
+    webrtc::AsyncPacketSocket* socket_;
+    // The socket this port made itself (not a shared one); `socket_` points at it.
+    std::unique_ptr<webrtc::AsyncPacketSocket> owned_socket_;
+    webrtc::SocketFactory *underlying_socket_factory_;
     SocketOptionsMap socket_options_;
     std::unique_ptr<webrtc::AsyncDnsResolverInterface> resolver_;
     int error_;
-    rtc::DiffServCodePoint stun_dscp_value_;
+    webrtc::DiffServCodePoint stun_dscp_value_;
     
     PortState state_;
     // By default the value will be set to 0. This value will be used in

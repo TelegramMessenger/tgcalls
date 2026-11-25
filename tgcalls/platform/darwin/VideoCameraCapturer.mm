@@ -165,7 +165,7 @@ static UIInterfaceOrientation currentInterfaceOrientation() {
     // Live on frameQueue.
     float _aspectRatio;
     std::vector<uint8_t> _croppingBuffer;
-    std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _uncroppedSink;
+    std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> _uncroppedSink;
     
     // Live on frameQueue and RTCDispatcherTypeCaptureSession.
     std::atomic<int> _warmupFrameCount;
@@ -173,7 +173,7 @@ static UIInterfaceOrientation currentInterfaceOrientation() {
     webrtc::NV12ToI420Scaler _nv12ToI420Scaler;
 
     NSMutableArray<VideoCameraCapturerPreviewRecord *> *_previews;
-    std::vector<std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>> _directSinks;
+    std::vector<std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>>> _directSinks;
 }
 
 @end
@@ -326,7 +326,7 @@ static UIInterfaceOrientation currentInterfaceOrientation() {
     [self updateIsActiveValue];
 }
 
-- (void)setUncroppedSink:(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)sink {
+- (void)setUncroppedSink:(std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>>)sink {
 	dispatch_async(self.frameQueue, ^{
 		_uncroppedSink = sink;
 	});
@@ -352,7 +352,7 @@ static UIInterfaceOrientation currentInterfaceOrientation() {
     [previewView previewLayer].session = _captureSession;
 }
 
-- (void)addDirectSink:(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)directSink {
+- (void)addDirectSink:(std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>>)directSink {
     _directSinks.push_back(directSink);
 }
 
@@ -441,7 +441,7 @@ static UIInterfaceOrientation currentInterfaceOrientation() {
 
     CVPixelBufferLockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
 
-    auto resultBuffer = rtc::make_ref_counted<webrtc::I420Buffer>((int)CVPixelBufferGetWidth(pixelBuffer), (int)CVPixelBufferGetHeight(pixelBuffer));
+    auto resultBuffer = webrtc::make_ref_counted<webrtc::I420Buffer>((int)CVPixelBufferGetWidth(pixelBuffer), (int)CVPixelBufferGetHeight(pixelBuffer));
 
     switch (pixelFormat) {
         case kCVPixelFormatType_420YpCbCr8BiPlanarFullRange:
@@ -509,7 +509,7 @@ static UIInterfaceOrientation currentInterfaceOrientation() {
             int resultHeight = (int)(srcHeight * 0.8f);
             resultHeight &= ~1;
 
-            webrtc::scoped_refptr<webrtc::NV12Buffer> resultBuffer = rtc::make_ref_counted<webrtc::NV12Buffer>(resultWidth, resultHeight, srcYStride, srcUVStride);
+            webrtc::scoped_refptr<webrtc::NV12Buffer> resultBuffer = webrtc::make_ref_counted<webrtc::NV12Buffer>(resultWidth, resultHeight, srcYStride, srcUVStride);
 
             libyuv::NV12Scale(srcY, srcYStride, srcUV, srcUVStride,
                                         resultWidth, resultHeight, resultBuffer->MutableDataY(),
@@ -706,10 +706,10 @@ static UIInterfaceOrientation currentInterfaceOrientation() {
                 kNanosecondsPerSecond;
                 RTCVideoFrame *frame = [[RTCVideoFrame alloc] initWithBuffer:uncroppedRtcPixelBuffer rotation:_rotation timeStampNs:timeStampNs];
                 
-                const int64_t timestamp_us = frame.timeStampNs / rtc::kNumNanosecsPerMicrosec;
+                const int64_t timestamp_us = frame.timeStampNs / webrtc::kNumNanosecsPerMicrosec;
 
                 webrtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer;
-                buffer = new rtc::RefCountedObject<webrtc::ObjCFrameBuffer>(frame.buffer);
+                buffer = new webrtc::RefCountedObject<webrtc::ObjCFrameBuffer>(frame.buffer);
                 
                 webrtc::VideoRotation rotation = static_cast<webrtc::VideoRotation>(frame.rotation);
                 

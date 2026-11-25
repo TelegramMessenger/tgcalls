@@ -3,7 +3,7 @@
 
 #include "pc/video_track_source.h"
 #include "api/video/video_sink_interface.h"
-#include "media/base/video_broadcaster.h"
+#include "api/video/video_broadcaster.h"
 
 #include "VideoCameraCapturer.h"
 
@@ -16,14 +16,14 @@ class VideoCapturerTrackSource : public webrtc::VideoTrackSource {
 public:
 	VideoCapturerTrackSource();
 
-	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink();
+	std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink();
 
 	void SetSourceConstraints(double maxFps);
 
 private:
-	rtc::VideoSourceInterface<webrtc::VideoFrame> *source() override;
+	webrtc::VideoSourceInterface<webrtc::VideoFrame> *source() override;
 
-	std::shared_ptr<rtc::VideoBroadcaster> _broadcaster;
+	std::shared_ptr<webrtc::VideoBroadcaster> _broadcaster;
 
 };
 

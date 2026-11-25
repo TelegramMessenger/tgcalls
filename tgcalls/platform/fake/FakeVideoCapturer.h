@@ -6,7 +6,7 @@
 
 #include "api/video/video_frame.h"
 #include "api/video/video_sink_interface.h"
-#include "media/base/adapted_video_track_source.h"
+#include "api/video/adapted_video_track_source.h"
 #include "rtc_base/ref_counted_object.h"
 
 #include <atomic>
@@ -25,9 +25,9 @@ namespace tgcalls {
 // what lets a host test drive an engine through the app's real contract —
 // VideoCaptureInterface::Create → descriptor.videoCapture / setVideoCapture —
 // instead of the CLI-only descriptor.getVideoSource shortcut.
-class FakePlatformVideoSource : public rtc::AdaptedVideoTrackSource {
+class FakePlatformVideoSource : public webrtc::AdaptedVideoTrackSource {
 public:
-    static rtc::scoped_refptr<FakePlatformVideoSource> Create();
+    static webrtc::scoped_refptr<FakePlatformVideoSource> Create();
 
     // Through the video adapter, as DarwinVideoTrackSource's frames go: the format request (adaptVideoSource) and the
     // encoder's sink wants decide the frame rate and size that reach the call.
@@ -37,7 +37,7 @@ public:
     SourceState state() const override { return kLive; }
     bool remote() const override { return false; }
     bool is_screencast() const override { return false; }
-    absl::optional<bool> needs_denoising() const override { return false; }
+    std::optional<bool> needs_denoising() const override { return false; }
 
 protected:
     FakePlatformVideoSource() = default;
@@ -50,7 +50,7 @@ protected:
 // preview sink. 720p is what three simulcast layers need.
 class FakeVideoCapturer : public VideoCapturerInterface {
 public:
-    FakeVideoCapturer(rtc::scoped_refptr<FakePlatformVideoSource> source,
+    FakeVideoCapturer(webrtc::scoped_refptr<FakePlatformVideoSource> source,
                       std::string deviceId,
                       std::function<void(VideoState)> stateUpdated,
                       std::function<void(PlatformCaptureInfo)> captureInfoUpdated = nullptr);
@@ -58,7 +58,7 @@ public:
 
     void setState(VideoState state) override;
     void setPreferredCaptureAspectRatio(float aspectRatio) override {}
-    void setUncroppedOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) override;
+    void setUncroppedOutput(std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) override;
     int getRotation() override { return 0; }
 
 private:
@@ -66,14 +66,14 @@ private:
     void stop();
     void generateThread();
 
-    rtc::scoped_refptr<FakePlatformVideoSource> _source;
+    webrtc::scoped_refptr<FakePlatformVideoSource> _source;
     std::function<void(VideoState)> _stateUpdated;
     std::function<void(PlatformCaptureInfo)> _captureInfoUpdated;
     uint8_t _uTint = 128;
     uint8_t _vTint = 128;
 
     std::mutex _sinkMutex;
-    std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _uncroppedSink;
+    std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> _uncroppedSink;
 
     std::atomic<bool> _running{false};
     std::thread _thread;

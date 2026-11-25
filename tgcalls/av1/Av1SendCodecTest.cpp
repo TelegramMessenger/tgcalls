@@ -30,7 +30,7 @@ std::map<std::string, json11::Json> Parameters(const char *json) {
 webrtc::RtpCodec Codec(const char *name) {
     webrtc::RtpCodec codec;
     codec.name = name;
-    codec.kind = cricket::MEDIA_TYPE_VIDEO;
+    codec.kind = webrtc::MediaType::VIDEO;
     codec.clock_rate = 90000;
     return codec;
 }

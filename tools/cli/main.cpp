@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <csignal>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -13,6 +14,7 @@
 #include <random>
 #include <fstream>
 #include <algorithm>
+#include <map>
 #include <set>
 #include <string>
 #include <thread>
@@ -23,12 +25,17 @@
 #include "group_churn_mode.h"
 #include "group_participant.h"
 #include "fake_video_sink.h"
+#include "split_channel.h"
+#include "cli_signals.h"
 #include "platform/fake/FakeInterface.h"
 #include "Instance.h"
 #include "FakeAudioDeviceModule.h"
+#include "cli_audio_device.h"
 #include "VideoCaptureInterface.h"
 #include "StaticThreads.h"
+#if TGCALLS_ENABLE_CUSTOM_P2P_ENGINE
 #include "v2/InstanceV2Impl.h"
+#endif
 #include "v2/InstanceV2CompatImpl.h"
 #include "v2/InstanceV2ReferenceImpl.h"
 #include "v2wasm/InstanceV2PumpImpl.h"
@@ -39,15 +46,6 @@
 #include "api/task_queue/task_queue_factory.h"
 #include "rtc_base/logging.h"
 
-// Stub: AudioDeviceModule::Create is referenced by InstanceV2Impl as a fallback
-// but never called when createAudioDeviceModule is provided in the Descriptor.
-namespace webrtc {
-rtc::scoped_refptr<AudioDeviceModule> AudioDeviceModule::Create(
-    AudioDeviceModule::AudioLayer audio_layer,
-    TaskQueueFactory* task_queue_factory) {
-    return nullptr;
-}
-} // namespace webrtc
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -127,7 +125,8 @@ public:
         tgcalls::AudioFrame frame;
         frame.audio_samples = buffer_.data();
         frame.num_samples = kFrameSamples;
-        frame.bytes_per_sample = sizeof(int16_t);
+        // WebRTC's AudioTransport counts the bytes of one sample of every channel.
+        frame.bytes_per_sample = sizeof(int16_t) * kChannels;
         frame.num_channels = kChannels;
         frame.samples_per_sec = kSampleRate;
         frame.elapsed_time_ms = 0;
@@ -309,11 +308,418 @@ static std::string buildCustomParameters(std::string const &wasmCorePath, std::s
     return json11::Json(params).dump();
 }
 
+// What a side's stats log holds: its bitrate records, and whether any carried a non-zero estimate.
+struct StatsResult {
+    int bitrateRecords = 0;
+    bool hasNonZeroBwe = false;
+};
+
+static StatsResult parseStatsLog(const std::string& path) {
+    StatsResult result;
+    std::ifstream f(path);
+    if (!f.is_open()) return result;
+    std::string content((std::istreambuf_iterator<char>(f)),
+                         std::istreambuf_iterator<char>());
+    size_t pos = 0;
+    while ((pos = content.find("\"b\":", pos)) != std::string::npos) {
+        pos += 4;
+        result.bitrateRecords++;
+        // Parse the integer value after "b":
+        int val = std::atoi(content.c_str() + pos);
+        if (val > 0) {
+            result.hasNonZeroBwe = true;
+        }
+    }
+    return result;
+}
+
+// "H264 520, VP8 3": frames decoded per codec (the fake platform's count, over the whole process), "none" without any.
+static std::string formatDecodedFrames(const std::map<std::string, int>& counts) {
+    std::string text;
+    for (const auto& entry : counts) {
+        if (!text.empty()) text += ", ";
+        text += entry.first + " " + std::to_string(entry.second);
+    }
+    return text.empty() ? "none" : text;
+}
+
+// ---------------------------------------------------------------------------
+// Split p2p: one side of the call per process (--split caller|callee)
+// ---------------------------------------------------------------------------
+
+struct SplitP2pOptions {
+    std::string role;
+    std::string socketPath;
+    std::string version;
+    std::string wasmCore;
+    std::string customParams;
+    std::string logFile;
+    int duration = 10;
+    bool video = false;
+    bool videoScreencast = false;
+    double dropRate = 0.0;
+    int delayMinMs = 0;
+    int delayMaxMs = 0;
+};
+
+// The caller listens on the socket and the callee connects; the hello each way (the split protocol, and the caller's
+// call key) is the start barrier, so both instances are created at about the same moment, as in one process. Then
+// the signaling packets cross the socket, with --drop-rate and --delay applied by their sender. The side prints its
+// own summary and exits 0 when it connected, heard the other side's tone and (with --video) decoded its frames.
+static int runSplitP2p(const SplitP2pOptions& o) {
+    signal(SIGPIPE, SIG_IGN);
+    constexpr int kConnectTimeoutMs = 60000;
+    constexpr int kHelloTimeoutMs = 15000;
+    const bool isCaller = o.role == "caller";
+    const char* role = isCaller ? "Caller" : "Callee";
+
+    std::string error;
+    std::shared_ptr<SplitChannel> channel;
+    if (isCaller) {
+        std::unique_ptr<SplitChannel> listening = SplitChannel::listen(o.socketPath, error);
+        if (!listening || !listening->accept(kConnectTimeoutMs, error)) {
+            fprintf(stderr, "Error: --split caller: %s\n", error.c_str());
+            return 1;
+        }
+        channel = std::move(listening);
+    } else {
+        channel = SplitChannel::connect(o.socketPath, kConnectTimeoutMs, error);
+        if (!channel) {
+            fprintf(stderr, "Error: --split callee: %s\n", error.c_str());
+            return 1;
+        }
+    }
+
+    auto keyData = std::make_shared<std::array<uint8_t, 256>>();
+    static const char kHex[] = "0123456789abcdef";
+    if (isCaller) {
+        // The in-process call's key, sent to the callee rather than derived again there.
+        std::mt19937 rng(42);
+        std::uniform_int_distribution<int> dist(0, 255);
+        std::string keyHex;
+        for (auto& b : *keyData) {
+            b = static_cast<uint8_t>(dist(rng));
+            keyHex += kHex[b >> 4];
+            keyHex += kHex[b & 15];
+        }
+        const std::string hello = json11::Json(json11::Json::object{
+            {"protocol", kSplitProtocolVersion}, {"role", "caller"}, {"key", keyHex}}).dump();
+        std::string reply;
+        if (!channel->send(hello) || !channel->receive(reply, kHelloTimeoutMs)) {
+            fprintf(stderr, "Error: --split caller: no hello from the callee\n");
+            return 1;
+        }
+        std::string parseError;
+        const auto json = json11::Json::parse(reply, parseError);
+        if (json["protocol"].int_value() != kSplitProtocolVersion || json["role"].string_value() != "callee") {
+            fprintf(stderr, "Error: --split caller: the other process is not a split callee of protocol %d: %s\n",
+                    kSplitProtocolVersion, reply.c_str());
+            return 1;
+        }
+    } else {
+        std::string hello;
+        if (!channel->receive(hello, kHelloTimeoutMs)) {
+            fprintf(stderr, "Error: --split callee: no hello from the caller\n");
+            return 1;
+        }
+        std::string parseError;
+        const auto json = json11::Json::parse(hello, parseError);
+        const std::string keyHex = json["key"].string_value();
+        if (json["protocol"].int_value() != kSplitProtocolVersion || json["role"].string_value() != "caller" ||
+            keyHex.size() != keyData->size() * 2) {
+            fprintf(stderr, "Error: --split callee: the other process is not a split caller of protocol %d: %s\n",
+                    kSplitProtocolVersion, hello.substr(0, 200).c_str());
+            return 1;
+        }
+        auto nibble = [](char c) { return (uint8_t)(c <= '9' ? c - '0' : c - 'a' + 10); };
+        for (size_t i = 0; i < keyData->size(); ++i) {
+            (*keyData)[i] = (uint8_t)((nibble(keyHex[2 * i]) << 4) | nibble(keyHex[2 * i + 1]));
+        }
+        channel->send(json11::Json(json11::Json::object{{"protocol", kSplitProtocolVersion}, {"role", "callee"}}).dump());
+    }
+    logMsg(role, "split: the other process is there (protocol %d)", kSplitProtocolVersion);
+
+    // Incoming signaling: delivered to the instance, or held until it exists.
+    struct Incoming {
+        std::mutex mutex;
+        std::shared_ptr<tgcalls::Instance> instance;
+        std::vector<std::vector<uint8_t>> pending;
+    };
+    auto incoming = std::make_shared<Incoming>();
+    std::thread reader([channel, incoming, role]() {
+        std::vector<uint8_t> frame;
+        while (channel->receive(frame, -1)) {
+            std::shared_ptr<tgcalls::Instance> target;
+            {
+                std::lock_guard<std::mutex> lock(incoming->mutex);
+                target = incoming->instance;
+                if (!target) {
+                    incoming->pending.push_back(frame);
+                    continue;
+                }
+            }
+            target->receiveSignalingData(frame);
+        }
+        logMsg(role, "split: the signaling channel closed");
+    });
+
+    // Outgoing signaling, through the network simulation (as SignalingBridge::deliver).
+    struct Outgoing {
+        std::mutex mutex;
+        std::mt19937 rng{std::random_device{}()};
+    };
+    auto outgoing = std::make_shared<Outgoing>();
+    auto sendSignaling = [channel, outgoing, o, role](const std::vector<uint8_t>& data) {
+        int delayMs = 0;
+        {
+            std::lock_guard<std::mutex> lock(outgoing->mutex);
+            if (o.dropRate > 0.0) {
+                std::uniform_real_distribution<double> dropDist(0.0, 1.0);
+                if (dropDist(outgoing->rng) < o.dropRate) {
+                    logMsg(role, "signaling DROPPED (%zu bytes)", data.size());
+                    return;
+                }
+            }
+            if (o.delayMaxMs > 0) {
+                std::uniform_int_distribution<int> delayDist(o.delayMinMs, o.delayMaxMs);
+                delayMs = delayDist(outgoing->rng);
+            }
+        }
+        if (delayMs > 0) {
+            logMsg(role, "signaling delayed %dms (%zu bytes)", delayMs, data.size());
+            std::thread([channel, data, delayMs]() {
+                std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+                channel->send(data);
+            }).detach();
+            return;
+        }
+        channel->send(data);
+    };
+
+    struct SideState {
+        std::mutex mutex;
+        tgcalls::State state = tgcalls::State::WaitInit;
+        double establishedAt = -1.0;
+        int remoteMediaStates = 0;
+        std::vector<std::string> errors;
+    };
+    auto sideState = std::make_shared<SideState>();
+    auto recorder = std::make_shared<SineRecorder>();
+    auto renderer = std::make_shared<ToneRenderer>();
+    auto videoSink = std::make_shared<FakeVideoSink>();
+    std::shared_ptr<tgcalls::VideoCaptureInterface> videoCapture;
+    if (o.video) {
+        videoCapture = tgcalls::VideoCaptureInterface::Create(tgcalls::StaticThreads::getThreads(), isCaller ? "caller" : "callee", o.videoScreencast);
+    }
+    const std::string statsPath = std::string("/tmp/tgcalls_cli_") + (isCaller ? "caller_" : "callee_") + std::to_string(getpid()) + ".json";
+
+#if TGCALLS_ENABLE_CUSTOM_P2P_ENGINE
+    tgcalls::Register<tgcalls::InstanceV2Impl>();
+#endif
+    tgcalls::Register<tgcalls::InstanceV2CompatImpl>();
+    tgcalls::Register<tgcalls::InstanceV2ReferenceImpl>();
+    tgcalls::Register<tgcalls::InstanceV2PumpImpl>();
+
+    auto descriptor = (tgcalls::Descriptor){
+        .version = o.version,
+        .config = {
+            .initializationTimeout = 10.0,
+            .receiveTimeout = 10.0,
+            .enableP2P = true,
+            .logPath = {o.logFile},
+            .statsLogPath = {statsPath},
+            .customParameters = buildCustomParameters(o.wasmCore, o.customParams),
+        },
+        .encryptionKey = tgcalls::EncryptionKey(keyData, isCaller),
+        .videoCapture = videoCapture,
+        .stateUpdated = [sideState, role](tgcalls::State state) {
+            logMsg(role, "state -> %s", stateName(state));
+            std::lock_guard<std::mutex> lock(sideState->mutex);
+            sideState->state = state;
+            if (state == tgcalls::State::Established && sideState->establishedAt < 0) {
+                sideState->establishedAt = elapsed();
+            }
+            if (state == tgcalls::State::Failed) {
+                sideState->errors.push_back(std::string(role) + " entered Failed state");
+            }
+        },
+        .remoteMediaStateUpdated = [sideState, role](tgcalls::AudioState audioState, tgcalls::VideoState videoState) {
+            logMsg(role, "remote media state: audio %d video %d", (int)audioState, (int)videoState);
+            std::lock_guard<std::mutex> lock(sideState->mutex);
+            sideState->remoteMediaStates++;
+        },
+        .signalingDataEmitted = [sendSignaling, role](const std::vector<uint8_t>& data) {
+            logMsg(role, "signaling data emitted (%zu bytes)", data.size());
+            sendSignaling(data);
+        },
+        .createAudioDeviceModule = tgcalls::FakeAudioDeviceModule::Creator(
+            renderer, recorder,
+            cliAudioDeviceOptions()
+        ),
+    };
+
+    auto instance = std::shared_ptr<tgcalls::Instance>(createInstance(o.version, std::move(descriptor)).release());
+    if (!instance) {
+        fprintf(stderr, "Error: unknown version '%s'\n", o.version.c_str());
+        return 1;
+    }
+    logMsg(role, "created (version %s)", o.version.c_str());
+    std::vector<std::vector<uint8_t>> early;
+    {
+        std::lock_guard<std::mutex> lock(incoming->mutex);
+        incoming->instance = instance;
+        early.swap(incoming->pending);
+    }
+    for (const auto& data : early) {
+        instance->receiveSignalingData(data);
+    }
+    if (videoCapture) {
+        instance->setIncomingVideoOutput(videoSink);
+    }
+
+    std::this_thread::sleep_for(std::chrono::seconds(o.duration));
+
+    // What the call delivered, read before teardown (see main()).
+    const int audibleFrames = renderer->audibleFrames();
+    const double firstAudibleAt = renderer->firstAudibleAt();
+    const int videoFrames = videoSink->frameCount();
+    const int64_t firstFrameTime = videoSink->firstFrameTime();
+    const auto decodedFrames = tgcalls::fakePlatformDecodedFramesByCodec();
+
+    logMsg(role, "stopping...");
+    if (videoCapture) {
+        videoCapture->setState(tgcalls::VideoState::Inactive);
+    }
+    auto stopped = std::make_shared<std::atomic<bool>>(false);
+    instance->stop([stopped](tgcalls::FinalState) { stopped->store(true); });
+    for (int i = 0; i < 50 && !stopped->load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    {
+        std::lock_guard<std::mutex> lock(incoming->mutex);
+        incoming->instance.reset();
+    }
+    channel->shutdown();
+    reader.join();
+    instance.reset();
+
+    const auto stats = parseStatsLog(statsPath);
+    unlink(statsPath.c_str());
+
+    std::lock_guard<std::mutex> lock(sideState->mutex);
+    const bool established = sideState->establishedAt >= 0;
+    std::string receiveCodec = "none";
+    int receiveCodecFrames = 0;
+    for (const auto& entry : decodedFrames) {
+        if (entry.second > receiveCodecFrames) {
+            receiveCodec = entry.first;
+            receiveCodecFrames = entry.second;
+        }
+    }
+    printf("\n=== Call Summary ===\n");
+    printf("Split:             %s (protocol %d), version %s\n", o.role.c_str(), kSplitProtocolVersion, o.version.c_str());
+    printf("Duration:          %ds\n", o.duration);
+    if (o.dropRate > 0.0 || o.delayMaxMs > 0) {
+        printf("Signaling:         drop=%.0f%% delay=%d-%dms (this side's sends)\n", o.dropRate * 100.0, o.delayMinMs, o.delayMaxMs);
+    }
+    printf("Mode:              p2p\n");
+    printf("State:             %s\n", stateName(sideState->state));
+    if (established) {
+        printf("Call established:  yes (at %.3fs)\n", sideState->establishedAt);
+    } else {
+        printf("Call established:  no\n");
+    }
+    printf("Stats log:         %d bitrate records\n", stats.bitrateRecords);
+    printf("BWE non-zero:      %s\n", stats.hasNonZeroBwe ? "yes" : "no");
+    printf("Remote media state: %d updates\n", sideState->remoteMediaStates);
+    printf("Audio heard:       %d frames (first at %.3fs)\n", audibleFrames, firstAudibleAt);
+    if (videoCapture) {
+        const double firstFrameAt = firstFrameTime == 0 ? -1.0 :
+            std::chrono::duration<double>(std::chrono::steady_clock::duration(firstFrameTime - gStartTime.time_since_epoch().count())).count();
+        printf("Video frames:      received %d\n", videoFrames);
+        printf("Video first frame: at %.3fs\n", firstFrameAt);
+        printf("Video decoded:     %s\n", formatDecodedFrames(decodedFrames).c_str());
+        printf("Video receive codec: %s (%d frames)\n", receiveCodec.c_str(), receiveCodecFrames);
+    }
+    if (sideState->errors.empty()) {
+        printf("Errors:            none\n");
+    } else {
+        printf("Errors:\n");
+        for (const auto& err : sideState->errors) {
+            printf("  - %s\n", err.c_str());
+        }
+    }
+    const bool success = established && audibleFrames > 0 && (!videoCapture || videoFrames > 0);
+    printf("Result:            %s\n", success ? "SUCCESS" : "FAILED");
+    fflush(stdout);
+    fflush(stderr);
+    _exit(success ? 0 : 1);
+}
+
+// Checks the options of a split run (--split): one side per process, so options naming the other side (--version2,
+// caller:/callee: events, ...) and options this mode does not carry over the socket are refused, as is anything
+// unknown. Returns the error, empty when the run may go on.
+static std::string validateSplitOptions(const std::string& mode, const std::string& role, const std::string& socketPath,
+                                        int participantIdOffset, const std::set<std::string>& seenOptions,
+                                        const std::vector<std::string>& unknownOptions) {
+    if (role.empty()) {
+        return "--split-socket and --participant-id-offset need --split";
+    }
+    if (socketPath.empty()) {
+        return "--split needs --split-socket PATH";
+    }
+    if (!unknownOptions.empty()) {
+        return "unknown option " + unknownOptions.front() + " (with --split every option must be known)";
+    }
+    std::set<std::string> allowed = {"--mode", "--split", "--split-socket", "--duration", "--quiet", "--video",
+                                      "--builtin-codec-order"};
+    if (mode == "p2p") {
+        if (role != "caller" && role != "callee") {
+            return "--mode p2p --split takes caller or callee, got " + role;
+        }
+        for (const char* option : {"--version", "--wasm-core", "--custom-params", "--log-file", "--video-screencast",
+                                   "--delay", "--drop-rate"}) {
+            allowed.insert(option);
+        }
+    } else if (mode == "group") {
+        if (role != "host" && role != "join") {
+            return "--mode group --split takes host or join, got " + role;
+        }
+        for (const char* option : {"--participants", "--reference-participants", "--e2e", "--screencast-participants",
+                                   "--av1-screencast", "--av1-screencast-layers", "--av1-test-encoder-fails",
+                                   "--video-quality", "--video-via-capture", "--video-via-capture-late"}) {
+            allowed.insert(option);
+        }
+        if (role == "host") {
+            allowed.insert("--sfu-av1");
+            allowed.insert("--sfu-dd-id");
+        } else {
+            allowed.insert("--participant-id-offset");
+            if (participantIdOffset <= 0) {
+                return "--split join needs --participant-id-offset K (the host's participant count)";
+            }
+        }
+    } else {
+        return "--split works with --mode p2p and --mode group";
+    }
+    for (const auto& option : seenOptions) {
+        if (allowed.count(option) == 0) {
+            return option + " is not supported with --mode " + mode + " --split " + role;
+        }
+    }
+    return std::string();
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
 int main(int argc, char* argv[]) {
+    cliIgnoreBrokenPipes();
+    // The summary (stdout) goes out a line at a time: WebRTC's log goes to stderr, flushed per message, and with both
+    // redirected to one file a fully buffered stdout was cut wherever its buffer flushed, in the middle of a line the
+    // test scripts read ("Wire: P0 (screen) layer 1 pt 106: 574 pac(probe_controller.cc:490): …").
+    setvbuf(stdout, nullptr, _IOLBF, 0);
     int duration = 10;
     std::string mode;
     std::string reflectorAddr;
@@ -373,8 +779,18 @@ int main(int argc, char* argv[]) {
     std::string networkScenario;
     std::set<int> mutedParticipants;
     int unmuteAfterSeconds = 0;
+    // --split ROLE --split-socket PATH: one side of the call in this process (p2p caller|callee, group host|join).
+    std::string splitRole;
+    std::string splitSocket;
+    // --participant-id-offset K: a group join process's participants are K, K+1, ...
+    int participantIdOffset = 0;
+    std::set<std::string> seenOptions;
+    std::vector<std::string> unknownOptions;
 
     for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]).rfind("--", 0) == 0) {
+            seenOptions.insert(argv[i]);
+        }
         if (std::string(argv[i]) == "--duration" && i + 1 < argc) {
             duration = std::atoi(argv[++i]);
         } else if (std::string(argv[i]) == "--quiet") {
@@ -465,6 +881,40 @@ int main(int argc, char* argv[]) {
                 fprintf(stderr, "--video-quality must be thumbnail, medium or full\n");
                 return 1;
             }
+        } else if (std::string(argv[i]) == "--screencast-participants" && i + 1 < argc) {
+            std::string list = argv[++i];
+            size_t pos = 0;
+            while (pos < list.size()) {
+                size_t next = list.find(',', pos);
+                if (next == std::string::npos) next = list.size();
+                std::string idStr = list.substr(pos, next - pos);
+                if (!idStr.empty()) gGroupScreencast.sharers.insert(std::atoi(idStr.c_str()));
+                pos = next + 1;
+            }
+        } else if (std::string(argv[i]) == "--sfu-av1") {
+            gGroupScreencast.sfuListsAv1 = true;
+        } else if (std::string(argv[i]) == "--sfu-dd-id" && i + 1 < argc) {
+            gGroupScreencast.sfuDependencyDescriptorId = std::atoi(argv[++i]);
+        } else if (std::string(argv[i]) == "--av1-screencast") {
+            gGroupScreencast.allowAv1 = true;
+        } else if (std::string(argv[i]) == "--av1-screencast-layers" && i + 1 < argc) {
+            const std::string layers = argv[++i];
+            if (layers == "single") {
+                gGroupScreencast.av1Layers = tgcalls::GroupAv1ScreencastLayers::Single;
+            } else if (layers == "top") {
+                gGroupScreencast.av1Layers = tgcalls::GroupAv1ScreencastLayers::Top;
+            } else if (layers == "every") {
+                gGroupScreencast.av1Layers = tgcalls::GroupAv1ScreencastLayers::Every;
+            } else {
+                fprintf(stderr, "--av1-screencast-layers: single, top or every\n");
+                return 2;
+            }
+        } else if (std::string(argv[i]) == "--av1-test-encoder-fails") {
+            gGroupScreencast.av1TestEncoderFails = true;
+        } else if (std::string(argv[i]) == "--video-quality-switch" && i + 1 < argc) {
+            gGroupScreencast.qualitySwitchMs = std::atoi(argv[++i]);
+        } else if (std::string(argv[i]) == "--sharer-ingress-loss" && i + 1 < argc) {
+            gGroupScreencast.sharerIngressLoss = std::atof(argv[++i]);
         } else if (std::string(argv[i]) == "--video-via-capture") {
             videoFeed = VideoFeed::CaptureAtJoin;
         } else if (std::string(argv[i]) == "--video-via-capture-late") {
@@ -499,6 +949,14 @@ int main(int argc, char* argv[]) {
                 delayMinMs = 0;
                 delayMaxMs = std::atoi(delayStr.c_str());
             }
+        } else if (std::string(argv[i]) == "--split" && i + 1 < argc) {
+            splitRole = argv[++i];
+        } else if (std::string(argv[i]) == "--split-socket" && i + 1 < argc) {
+            splitSocket = argv[++i];
+        } else if (std::string(argv[i]) == "--participant-id-offset" && i + 1 < argc) {
+            participantIdOffset = std::atoi(argv[++i]);
+        } else {
+            unknownOptions.push_back(argv[i]);
         }
     }
 
@@ -551,9 +1009,37 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    if (!splitRole.empty() || !splitSocket.empty() || participantIdOffset != 0) {
+        const std::string splitError = validateSplitOptions(mode, splitRole, splitSocket, participantIdOffset, seenOptions, unknownOptions);
+        if (!splitError.empty()) {
+            fprintf(stderr, "Error: %s\n", splitError.c_str());
+            return 1;
+        }
+    }
+
     // Group mode: dispatch to separate implementation
     if (mode == "group") {
-        return runGroupMode(participants, referenceParticipants, duration, gQuiet, enableVideo, networkScenario, mutedParticipants, earlyVideoRequest, videoSinkChurn, e2e, videoFeed, requestOwnVideo, unmuteAfterSeconds, videoRerequest);
+        GroupSplitOptions groupSplit;
+        groupSplit.role = splitRole;
+        groupSplit.socketPath = splitSocket;
+        groupSplit.participantIdOffset = participantIdOffset;
+        return runGroupMode(participants, referenceParticipants, duration, gQuiet, enableVideo, networkScenario, mutedParticipants, earlyVideoRequest, videoSinkChurn, e2e, videoFeed, requestOwnVideo, unmuteAfterSeconds, videoRerequest, groupSplit);
+    }
+    if (mode == "p2p" && !splitRole.empty()) {
+        SplitP2pOptions options;
+        options.role = splitRole;
+        options.socketPath = splitSocket;
+        options.version = version;
+        options.wasmCore = wasmCore;
+        options.customParams = customParams;
+        options.logFile = logFile;
+        options.duration = duration;
+        options.video = enableVideo;
+        options.videoScreencast = videoScreencast;
+        options.dropRate = dropRate;
+        options.delayMinMs = delayMinMs;
+        options.delayMaxMs = delayMaxMs;
+        return runSplitP2p(options);
     }
     if (mode == "group-churn") {
         return runGroupChurnMode(participants, referenceParticipants, duration, gQuiet, enableVideo, churnCycles);
@@ -600,7 +1086,9 @@ int main(int argc, char* argv[]) {
     }
 
     // Register implementations
+#if TGCALLS_ENABLE_CUSTOM_P2P_ENGINE
     tgcalls::Register<tgcalls::InstanceV2Impl>();
+#endif
     tgcalls::Register<tgcalls::InstanceV2CompatImpl>();
     tgcalls::Register<tgcalls::InstanceV2ReferenceImpl>();
     tgcalls::Register<tgcalls::InstanceV2PumpImpl>();
@@ -675,10 +1163,10 @@ int main(int argc, char* argv[]) {
             .initializationTimeout = 10.0,
             .receiveTimeout = 10.0,
             .enableP2P = (mode == "p2p"),
-            .statsLogPath = {callerStatsPath},
             // rtc log sinks are process-global, so wiring logPath on just the caller
             // captures RTC_LOG output for both sides of the call.
             .logPath = {logFile},
+            .statsLogPath = {callerStatsPath},
             .customParameters = buildCustomParameters(wasmCore, customParams),
         },
         .rtcServers = (mode == "reflector")
@@ -709,7 +1197,7 @@ int main(int argc, char* argv[]) {
         },
         .createAudioDeviceModule = tgcalls::FakeAudioDeviceModule::Creator(
             callerRenderer, callerRecorder,
-            tgcalls::FakeAudioDeviceModule::Options{.samples_per_sec = 48000, .num_channels = 2}
+            cliAudioDeviceOptions()
         ),
     };
 
@@ -751,7 +1239,7 @@ int main(int argc, char* argv[]) {
         },
         .createAudioDeviceModule = tgcalls::FakeAudioDeviceModule::Creator(
             calleeRenderer, calleeRecorder,
-            tgcalls::FakeAudioDeviceModule::Options{.samples_per_sec = 48000, .num_channels = 2}
+            cliAudioDeviceOptions()
         ),
     };
 
@@ -922,6 +1410,8 @@ int main(int argc, char* argv[]) {
     const int calleeVideoFrames = calleeVideoSink->frameCount();
     const int64_t callerFirstFrameTime = callerVideoSink->firstFrameTime();
     const int64_t calleeFirstFrameTime = calleeVideoSink->firstFrameTime();
+    // Both sides' decoders together: one process.
+    const auto decodedFrames = tgcalls::fakePlatformDecodedFramesByCodec();
     double establishedAt = -1.0;
     {
         std::lock_guard<std::mutex> lock(callState->mutex);
@@ -971,29 +1461,6 @@ int main(int argc, char* argv[]) {
     calleeInstance.reset();
 
     // Read stats logs: count bitrate records and check for non-zero BWE
-    struct StatsResult {
-        int bitrateRecords = 0;
-        bool hasNonZeroBwe = false;
-    };
-    auto parseStatsLog = [](const std::string& path) -> StatsResult {
-        StatsResult result;
-        std::ifstream f(path);
-        if (!f.is_open()) return result;
-        std::string content((std::istreambuf_iterator<char>(f)),
-                             std::istreambuf_iterator<char>());
-        size_t pos = 0;
-        while ((pos = content.find("\"b\":", pos)) != std::string::npos) {
-            pos += 4;
-            result.bitrateRecords++;
-            // Parse the integer value after "b":
-            int val = std::atoi(content.c_str() + pos);
-            if (val > 0) {
-                result.hasNonZeroBwe = true;
-            }
-        }
-        return result;
-    };
-
     auto callerStats = parseStatsLog(callerStatsPath);
     auto calleeStats = parseStatsLog(calleeStatsPath);
     unlink(callerStatsPath.c_str());
@@ -1045,6 +1512,7 @@ int main(int argc, char* argv[]) {
             };
             printf("Video first frame: caller at %.3fs, callee at %.3fs\n",
                    firstFrameAt(callerFirstFrameTime), firstFrameAt(calleeFirstFrameTime));
+            printf("Video decoded:     %s (both sides)\n", formatDecodedFrames(decodedFrames).c_str());
         }
 
         bool statsCollected = (callerStats.bitrateRecords > 0 && calleeStats.bitrateRecords > 0);

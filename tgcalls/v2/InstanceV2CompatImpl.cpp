@@ -3,14 +3,15 @@
 #include "LogSinkImpl.h"
 #include "VideoCaptureInterfaceImpl.h"
 #include "VideoCapturerInterface.h"
-#include "v2/NativeNetworkingImpl.h"
+#include "v2/InstanceNetworking.h"
 #include "v2/Signaling.h"
 #include "v2/SignalingTranslator.h"
-#include "v2/ContentNegotiation.h"
 #include "group/ScreencastSendParameters.h"
 
-#include "CodecSelectHelper.h"
 
+#include "api/audio/builtin_audio_processing_builder.h"
+#include "api/create_modular_peer_connection_factory.h"
+#include "api/environment/environment_factory.h"
 #include "api/audio_codecs/audio_decoder_factory_template.h"
 #include "api/audio_codecs/audio_encoder_factory_template.h"
 #include "api/audio_codecs/opus/audio_decoder_opus.h"
@@ -20,18 +21,17 @@
 #include "api/audio_codecs/L16/audio_encoder_L16.h"
 #include "api/task_queue/default_task_queue_factory.h"
 #include "media/engine/webrtc_media_engine.h"
-#include "system_wrappers/include/field_trial.h"
+#include "api/environment/deprecated_global_field_trials.h"
 #include "api/video/builtin_video_bitrate_allocator_factory.h"
 #include "call/call.h"
 #include "api/call/audio_sink.h"
 #include "modules/audio_processing/audio_buffer.h"
 #include "absl/strings/match.h"
 #include "audio/audio_state.h"
-#include "modules/audio_coding/neteq/default_neteq_factory.h"
+#include "api/neteq/default_neteq_factory.h"
 #include "modules/audio_coding/include/audio_coding_module.h"
 #include "api/candidate.h"
 #include "api/jsep_ice_candidate.h"
-#include "pc/used_ids.h"
 #include "media/base/sdp_video_format_utils.h"
 #include "pc/media_session.h"
 #include "rtc_base/rtc_certificate_generator.h"
@@ -47,12 +47,9 @@
 
 #include "AudioFrame.h"
 #include "ThreadLocalObject.h"
-#include "Manager.h"
-#include "NetworkManager.h"
 #include "VideoCaptureInterfaceImpl.h"
 #include "platform/PlatformInterface.h"
 #include "LogSinkImpl.h"
-#include "CodecSelectHelper.h"
 #include "AudioDeviceHelper.h"
 #include "SignalingEncryption.h"
 #include "ReflectorRelayPortFactory.h"
@@ -113,13 +110,13 @@ class PeerConnectionDelegateAdapter: public webrtc::PeerConnectionObserver {
 public:
     struct Parameters {
         std::function<void()> onRenegotiationNeeded;
-        std::function<void(const webrtc::IceCandidateInterface *)> onIceCandidate;
+        std::function<void(const webrtc::IceCandidate *)> onIceCandidate;
         std::function<void(webrtc::PeerConnectionInterface::SignalingState state)> onSignalingChange;
         std::function<void(webrtc::PeerConnectionInterface::IceConnectionState state)> onConnectionChange;
         std::function<void(webrtc::scoped_refptr<webrtc::DataChannelInterface>)> onDataChannel;
         std::function<void(webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>)> onTransceiverAdded;
         std::function<void(webrtc::scoped_refptr<webrtc::RtpReceiverInterface>)> onTransceiverRemoved;
-        std::function<void(const cricket::CandidatePairChangeEvent &)> onCandidatePairChangeEvent;
+        std::function<void(const webrtc::CandidatePairChangeEvent &)> onCandidatePairChangeEvent;
     };
 
 public:
@@ -176,16 +173,14 @@ public:
     void OnIceGatheringChange(webrtc::PeerConnectionInterface::IceGatheringState new_state) override {
     }
 
-    void OnIceCandidate(const webrtc::IceCandidateInterface *candidate) override {
+    void OnIceCandidate(const webrtc::IceCandidate *candidate) override {
         if (_parameters.onIceCandidate) {
             _parameters.onIceCandidate(candidate);
         }
     }
 
-    void OnIceCandidatesRemoved(const std::vector<cricket::Candidate> &candidates) override {
-    }
 
-    void OnIceSelectedCandidatePairChanged(const cricket::CandidatePairChangeEvent &event) override {
+    void OnIceSelectedCandidatePairChanged(const webrtc::CandidatePairChangeEvent &event) override {
         if (_parameters.onCandidatePairChangeEvent) {
             _parameters.onCandidatePairChangeEvent(event);
         }
@@ -219,7 +214,7 @@ private:
     std::function<void(const webrtc::scoped_refptr<const webrtc::RTCStatsReport> &)> completion;
 };
 
-class VideoSinkImpl : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
+class VideoSinkImpl : public webrtc::VideoSinkInterface<webrtc::VideoFrame> {
 public:
     VideoSinkImpl() {
     }
@@ -249,7 +244,7 @@ public:
         }
     }
 
-    void addSink(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> impl) {
+    void addSink(std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> impl) {
         _sinks.push_back(impl);
         if (_lastFrame) {
             auto strong = impl.lock();
@@ -260,8 +255,8 @@ public:
     }
 
 private:
-    std::vector<std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>> _sinks;
-    absl::optional<webrtc::VideoFrame> _lastFrame;
+    std::vector<std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>>> _sinks;
+    std::optional<webrtc::VideoFrame> _lastFrame;
 };
 
 class DataChannelObserverImpl : public webrtc::DataChannelObserver {
@@ -309,8 +304,8 @@ struct StateLogRecord {
 struct NetworkStateLogRecord {
     bool isConnected = false;
     bool isFailed = false;
-    absl::optional<InstanceNetworking::RouteDescription> route;
-    absl::optional<InstanceNetworking::ConnectionDescription> connection;
+    std::optional<InstanceNetworking::RouteDescription> route;
+    std::optional<InstanceNetworking::ConnectionDescription> connection;
 
     bool operator==(NetworkStateLogRecord const &rhs) const {
         if (isConnected != rhs.isConnected) {
@@ -368,8 +363,7 @@ public:
 
         _signalingProtocolVersion = compatSignalingFraming(descriptor.version, getCustomParameterBool(_customParameters, "network_kcp_experiment"));
 
-        webrtc::field_trial::InitFieldTrialsFromString(
-            "WebRTC-DataChannel-Dcsctp/Enabled/"
+        webrtc::DeprecatedGlobalFieldTrials::Set(
             "WebRTC-Audio-iOS-Holding/Enabled/"
         );
     }
@@ -451,14 +445,15 @@ public:
         webrtc::PeerConnectionFactoryDependencies peerConnectionFactoryDependencies;
         peerConnectionFactoryDependencies.network_thread = _threads->getNetworkThread();
         peerConnectionFactoryDependencies.signaling_thread = _threads->getMediaThread();
-        peerConnectionFactoryDependencies.worker_thread = _threads->getWorkerThread();
-        peerConnectionFactoryDependencies.task_queue_factory = webrtc::CreateDefaultTaskQueueFactory();
+        // M159: the task queue factory and field trials (the process-wide string, DeprecatedGlobalFieldTrials) live
+        // in the factory's Environment; the network thread is also the worker.
+        peerConnectionFactoryDependencies.env = webrtc::CreateEnvironment(webrtc::CreateDefaultTaskQueueFactory());
         peerConnectionFactoryDependencies.network_monitor_factory = PlatformInterface::SharedInstance()->createNetworkMonitorFactory();
 
         peerConnectionFactoryDependencies.adm = _audioDeviceModule;
 
-        webrtc:: AudioProcessingBuilder builder;
-        peerConnectionFactoryDependencies.audio_processing = builder.Create();
+        peerConnectionFactoryDependencies.audio_processing_builder = webrtc::CustomAudioProcessing(
+            webrtc::BuiltinAudioProcessingBuilder().Build(*peerConnectionFactoryDependencies.env));
 
         peerConnectionFactoryDependencies.audio_encoder_factory = webrtc::CreateAudioEncoderFactory<webrtc::AudioEncoderOpus>();
         peerConnectionFactoryDependencies.audio_decoder_factory = webrtc::CreateAudioDecoderFactory<webrtc::AudioDecoderOpus>();
@@ -468,7 +463,7 @@ public:
 
         webrtc::EnableMedia(peerConnectionFactoryDependencies);
 
-        peerConnectionFactoryDependencies.event_log_factory = std::make_unique<webrtc::RtcEventLogFactory>(peerConnectionFactoryDependencies.task_queue_factory.get());
+        peerConnectionFactoryDependencies.event_log_factory = std::make_unique<webrtc::RtcEventLogFactory>();
 
         _peerConnectionFactory = webrtc::CreateModularPeerConnectionFactory(std::move(peerConnectionFactoryDependencies));
 
@@ -514,7 +509,7 @@ public:
                 strong->requestRenegotiation();
             });
         };
-        delegateParameters.onIceCandidate = [weak](const webrtc::IceCandidateInterface *iceCandidate) {
+        delegateParameters.onIceCandidate = [weak](const webrtc::IceCandidate *iceCandidate) {
             const auto strong = weak.lock();
             if (!strong) {
                 return;
@@ -579,7 +574,7 @@ public:
             std::string mid = transceiver->mid().value();
 
             switch (transceiver->media_type()) {
-                case cricket::MediaType::MEDIA_TYPE_VIDEO: {
+                case webrtc::MediaType::VIDEO: {
                     if (strong->_incomingVideoTransceivers.find(mid) == strong->_incomingVideoTransceivers.end()) {
                         strong->_incomingVideoTransceivers.insert(std::make_pair(mid, transceiver));
 
@@ -613,7 +608,7 @@ public:
                 break;
             }
         };
-        delegateParameters.onCandidatePairChangeEvent = [weak](const cricket::CandidatePairChangeEvent &event) {
+        delegateParameters.onCandidatePairChangeEvent = [weak](const webrtc::CandidatePairChangeEvent &event) {
             const auto strong = weak.lock();
             if (!strong) {
                 return;
@@ -634,11 +629,11 @@ public:
         peerConnectionDependencies.observer = _peerConnectionObserver.get();
 
         _networkMonitorFactory = PlatformInterface::SharedInstance()->createNetworkMonitorFactory();
-        _socketFactory = std::make_unique<rtc::BasicPacketSocketFactory>(_threads->getNetworkThread()->socketserver());
-        _networkManager = std::make_unique<rtc::BasicNetworkManager>(_networkMonitorFactory.get(), _threads->getNetworkThread()->socketserver());
+        _socketFactory = std::make_unique<webrtc::BasicPacketSocketFactory>(_threads->getNetworkThread()->socketserver());
+        _networkManager = std::make_unique<webrtc::BasicNetworkManager>(webrtc::CreateEnvironment(), _threads->getNetworkThread()->socketserver(), _networkMonitorFactory.get());
         _relayPortFactory = std::make_unique<ReflectorRelayPortFactory>(_rtcServers, false, 0, _threads->getNetworkThread()->socketserver(), getCustomParameterBoolDefaultTrue(_customParameters, "network_reflector_resolve_remote_candidate_ip"));
 
-        auto portAllocator = std::make_unique<cricket::BasicPortAllocator>(_networkManager.get(), _socketFactory.get(), nullptr, _relayPortFactory.get());
+        auto portAllocator = std::make_unique<webrtc::BasicPortAllocator>(webrtc::CreateEnvironment(), _networkManager.get(), _socketFactory.get(), nullptr, _relayPortFactory.get());
 
         if (getCustomParameterBool(_customParameters, "network_disable_stun_when_unconfigured")) {
             bool hasStunServer = false;
@@ -663,7 +658,7 @@ public:
                 //
                 // InitializePortAllocator_n ORs onto the existing flags, so setting
                 // this before the allocator is moved survives.
-                portAllocator->set_flags(portAllocator->flags() | cricket::PORTALLOCATOR_DISABLE_STUN);
+                portAllocator->set_flags(portAllocator->flags() | webrtc::PORTALLOCATOR_DISABLE_STUN);
             }
         }
 
@@ -690,7 +685,7 @@ public:
                 continue;
             }
 
-            rtc::SocketAddress address(server.host, server.port);
+            webrtc::SocketAddress address(server.host, server.port);
             if (!address.IsComplete()) {
                 RTC_LOG(LS_ERROR) << "Invalid ICE server host: " << server.host;
                 continue;
@@ -755,7 +750,7 @@ public:
             transceiverInit.stream_ids = { "0" };
             transceiverInit.direction = webrtc::RtpTransceiverDirection::kSendOnly;
 
-            cricket::AudioOptions audioSourceOptions;
+            webrtc::AudioOptions audioSourceOptions;
             webrtc::scoped_refptr<webrtc::AudioSourceInterface> audioSource = _peerConnectionFactory->CreateAudioSource(audioSourceOptions);
 
             webrtc::scoped_refptr<webrtc::AudioTrackInterface> audioTrack = _peerConnectionFactory->CreateAudioTrack("0", audioSource.get());
@@ -808,7 +803,7 @@ public:
         beginSignaling();
 
         beginLogTimer(0);
-        _lastDisconnectedTimestamp = rtc::TimeMillis();
+        _lastDisconnectedTimestamp = webrtc::TimeMillis();
         beginCheckConnectionTimer();
 
         // Emit a baseline record so a call that never transitions still uploads a
@@ -845,7 +840,7 @@ public:
                         packetData = data;
                     }
 
-                    if (const auto message = _signalingEncryptedConnection->encryptRawPacket(rtc::CopyOnWriteBuffer(packetData.data(), packetData.size()))) {
+                    if (const auto message = _signalingEncryptedConnection->encryptRawPacket(webrtc::CopyOnWriteBuffer(std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(packetData.data()), packetData.size())))) {
                         _signalingConnection->send(std::vector<uint8_t>(message.value().data(), message.value().data() + message.value().size()));
                     } else {
                         RTC_LOG(LS_ERROR) << "Could not encrypt signaling message";
@@ -856,7 +851,7 @@ public:
                     // Acknowledged and resent by EncryptedConnection itself (no
                     // SCTP here); acks and resends leave through
                     // sendPendingSignalingServiceData.
-                    rtc::CopyOnWriteBuffer message;
+                    webrtc::CopyOnWriteBuffer message;
                     message.AppendData(data.data(), data.size());
 
                     commitSendSignalingMessage(_signalingEncryptedConnection->prepareForSendingRawMessage(message, true));
@@ -879,7 +874,7 @@ public:
         }
     }
 
-    void commitSendSignalingMessage(absl::optional<EncryptedConnection::EncryptedPacket> packet) {
+    void commitSendSignalingMessage(std::optional<EncryptedConnection::EncryptedPacket> packet) {
         if (!packet) {
             return;
         }
@@ -914,7 +909,7 @@ public:
                 return;
             }
 
-            int64_t currentTimestamp = rtc::TimeMillis();
+            int64_t currentTimestamp = webrtc::TimeMillis();
             const int64_t maxTimeout = 20000;
 
             if (!strong->_isConnected && !strong->_isFailed && strong->_lastDisconnectedTimestamp + maxTimeout < currentTimestamp) {
@@ -937,7 +932,7 @@ public:
         if (isConnected) {
             onNetworkStateUpdated();
         } else {
-            _lastDisconnectedTimestamp = rtc::TimeMillis();
+            _lastDisconnectedTimestamp = webrtc::TimeMillis();
 
             // The legacy ICE state reports kIceConnectionDisconnected on a ~2.5s
             // receiving timeout, so brief loss blips would surface as Reconnecting
@@ -974,7 +969,7 @@ public:
             return;
         }
 
-        int64_t timestamp = rtc::TimeMillis();
+        int64_t timestamp = webrtc::TimeMillis();
         const int64_t minRestartIntervalMs = 5000;
         if (_lastIceRestartTimestamp != 0 && _lastIceRestartTimestamp + minRestartIntervalMs > timestamp) {
             return;
@@ -1029,7 +1024,7 @@ public:
                 NetworkBitrateLogRecord networkBitrateLogRecord;
                 networkBitrateLogRecord.bitrate = (int32_t)sendBitrateKbps;
 
-                strong->_networkBitrateLogRecords.emplace_back(rtc::TimeMillis(), std::move(networkBitrateLogRecord));
+                strong->_networkBitrateLogRecords.emplace_back(webrtc::TimeMillis(), std::move(networkBitrateLogRecord));
             });
         });
     }
@@ -1058,7 +1053,7 @@ public:
         _isSettingLocalDescription = true;
         _isMakingOffer = isOffer;
 
-        webrtc::scoped_refptr<webrtc::SetLocalDescriptionObserverInterface> observer(new rtc::RefCountedObject<SetSessionDescriptionObserver>([threads = _threads, weak](webrtc::RTCError error) {
+        webrtc::scoped_refptr<webrtc::SetLocalDescriptionObserverInterface> observer(new webrtc::RefCountedObject<SetSessionDescriptionObserver>([threads = _threads, weak](webrtc::RTCError error) {
             const bool isOk = error.ok();
             if (!isOk) {
                 RTC_LOG(LS_ERROR) << "SetLocalDescription failed: " << error.message();
@@ -1126,10 +1121,10 @@ public:
 
         RTC_LOG(LS_INFO) << "Rolling back the " << (isLocal ? "local offer" : "remote offer");
         if (isLocal) {
-            webrtc::scoped_refptr<webrtc::SetLocalDescriptionObserverInterface> observer(new rtc::RefCountedObject<SetSessionDescriptionObserver>(std::move(completion)));
+            webrtc::scoped_refptr<webrtc::SetLocalDescriptionObserverInterface> observer(new webrtc::RefCountedObject<SetSessionDescriptionObserver>(std::move(completion)));
             _peerConnection->SetLocalDescription(std::move(rollbackDescription), observer);
         } else {
-            webrtc::scoped_refptr<webrtc::SetRemoteDescriptionObserverInterface> observer(new rtc::RefCountedObject<SetSessionDescriptionObserver>(std::move(completion)));
+            webrtc::scoped_refptr<webrtc::SetRemoteDescriptionObserverInterface> observer(new webrtc::RefCountedObject<SetSessionDescriptionObserver>(std::move(completion)));
             _peerConnection->SetRemoteDescription(std::move(rollbackDescription), observer);
         }
     }
@@ -1209,7 +1204,7 @@ public:
         // its offer for good: its audio would never be negotiated (seen at 30%
         // signaling loss, where that offer took 5.6 s). Bounded, in case a callee
         // has nothing to offer.
-        if (_encryptionKey.isOutgoing && !_hasAppliedRemoteOffer && _firstRemoteAnswerTimestamp != 0 && rtc::TimeMillis() < _firstRemoteAnswerTimestamp + kCallerOfferHoldMs) {
+        if (_encryptionKey.isOutgoing && !_hasAppliedRemoteOffer && _firstRemoteAnswerTimestamp != 0 && webrtc::TimeMillis() < _firstRemoteAnswerTimestamp + kCallerOfferHoldMs) {
             return;
         }
         // Likewise right after every answer of ours, under 8.0.0's framing. A
@@ -1221,7 +1216,7 @@ public:
         // first. 8.0.0 resends a lost message only after 3-5 s, so changes pile up
         // behind a lost answer of ours and this is common there; InstanceV2Impl
         // offers at once and its caller loses the callee's change the same way.
-        if (_encryptionKey.isOutgoing && _signalingProtocolVersion == SignalingProtocolVersion::V2 && _lastAnswerSentTimestamp != 0 && rtc::TimeMillis() < _lastAnswerSentTimestamp + kPostAnswerOfferHoldMs) {
+        if (_encryptionKey.isOutgoing && _signalingProtocolVersion == SignalingProtocolVersion::V2 && _lastAnswerSentTimestamp != 0 && webrtc::TimeMillis() < _lastAnswerSentTimestamp + kPostAnswerOfferHoldMs) {
             return;
         }
 
@@ -1239,7 +1234,7 @@ public:
         sendLocalDescription();
     }
 
-    void sendIceCandidate(const webrtc::IceCandidateInterface *iceCandidate) {
+    void sendIceCandidate(const webrtc::IceCandidate *iceCandidate) {
         signaling::CandidatesMessage candidatesMsg = _signalingTranslator.extractCandidates(iceCandidate);
 
         signaling::Message message;
@@ -1252,7 +1247,7 @@ public:
         if (!localDescription || !localDescription->description()) {
             return;
         }
-        const cricket::SessionDescription *description = localDescription->description();
+        const webrtc::SessionDescription *description = localDescription->description();
 
         // Ahead of the NegotiateChannels it belongs to: our credentials changed
         // (first exchange, or an ICE restart on either side).
@@ -1267,7 +1262,7 @@ public:
             message.data = _signalingTranslator.makeOffer(description);
         } else {
             message.data = _signalingTranslator.makeAnswer(description);
-            _lastAnswerSentTimestamp = rtc::TimeMillis();
+            _lastAnswerSentTimestamp = webrtc::TimeMillis();
             scheduleOfferHoldRelease(kPostAnswerOfferHoldMs + 1);
         }
         sendSignalingMessage(message);
@@ -1292,7 +1287,7 @@ public:
             switch (_signalingProtocolVersion) {
                 case SignalingProtocolVersion::V1:
                 case SignalingProtocolVersion::V3: {
-                    if (const auto message = _signalingEncryptedConnection->decryptRawPacket(rtc::CopyOnWriteBuffer(data.data(), data.size()))) {
+                    if (const auto message = _signalingEncryptedConnection->decryptRawPacket(webrtc::CopyOnWriteBuffer(std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(data.data()), data.size())))) {
                         processSignalingMessage(message.value());
                     } else {
                         RTC_LOG(LS_ERROR) << "receiveSignalingData could not decrypt signaling data";
@@ -1317,7 +1312,7 @@ public:
         }
     }
 
-    void processSignalingMessage(rtc::CopyOnWriteBuffer const &data) {
+    void processSignalingMessage(webrtc::CopyOnWriteBuffer const &data) {
         std::vector<uint8_t> decryptedData = std::vector<uint8_t>(data.data(), data.data() + data.size());
 
         if (isGzip(decryptedData)) {
@@ -1347,7 +1342,7 @@ public:
 
         const auto &messageData = parsedMessage->data;
 
-        if (const auto initialSetup = absl::get_if<signaling::InitialSetupMessage>(&messageData)) {
+        if (const auto initialSetup = std::get_if<signaling::InitialSetupMessage>(&messageData)) {
             RTC_LOG(LS_INFO) << "Received InitialSetupMessage";
 
             // Applied on receipt, as InstanceV2Impl does: it describes the peer's ICE
@@ -1358,7 +1353,7 @@ public:
             _signalingTranslator.setRemoteSetup(*initialSetup);
 
             processPendingRemoteNegotiation();
-        } else if (const auto negotiateChannels = absl::get_if<signaling::NegotiateChannelsMessage>(&messageData)) {
+        } else if (const auto negotiateChannels = std::get_if<signaling::NegotiateChannelsMessage>(&messageData)) {
             PendingRemoteNegotiation item;
             item.channels = *negotiateChannels;
 
@@ -1387,13 +1382,13 @@ public:
             _pendingRemoteNegotiation.push_back(std::move(item));
 
             processPendingRemoteNegotiation();
-        } else if (const auto candidates = absl::get_if<signaling::CandidatesMessage>(&messageData)) {
+        } else if (const auto candidates = std::get_if<signaling::CandidatesMessage>(&messageData)) {
             auto parsedCandidates = _signalingTranslator.parseCandidates(*candidates);
             for (auto &candidate : parsedCandidates) {
                 _pendingIceCandidates.push_back(std::move(candidate));
             }
             maybeCommitPendingIceCandidates();
-        } else if (const auto mediaState = absl::get_if<signaling::MediaStateMessage>(&messageData)) {
+        } else if (const auto mediaState = std::get_if<signaling::MediaStateMessage>(&messageData)) {
             processMediaState(*mediaState);
         }
     }
@@ -1442,7 +1437,7 @@ public:
     void applyRemoteOffer(signaling::NegotiateChannelsMessage const &offer) {
         // The current description, not the pending one: as the callee in glare,
         // our offer is about to be rolled back.
-        const cricket::SessionDescription *currentLocal = nullptr;
+        const webrtc::SessionDescription *currentLocal = nullptr;
         if (const auto description = _peerConnection->current_local_description()) {
             currentLocal = description->description();
         }
@@ -1474,7 +1469,7 @@ public:
         _isSettingRemoteDescription = true;
 
         const auto weak = std::weak_ptr<InstanceV2CompatImplInternal>(shared_from_this());
-        webrtc::scoped_refptr<webrtc::SetRemoteDescriptionObserverInterface> observer(new rtc::RefCountedObject<SetSessionDescriptionObserver>([threads = _threads, weak, isOffer](webrtc::RTCError error) {
+        webrtc::scoped_refptr<webrtc::SetRemoteDescriptionObserverInterface> observer(new webrtc::RefCountedObject<SetSessionDescriptionObserver>([threads = _threads, weak, isOffer](webrtc::RTCError error) {
             const bool isOk = error.ok();
             if (!isOk) {
                 RTC_LOG(LS_ERROR) << "SetRemoteDescription failed: " << error.message();
@@ -1495,7 +1490,7 @@ public:
                     } else {
                         strong->_consecutiveNegotiationFailures = 0;
                         if (strong->_firstRemoteAnswerTimestamp == 0) {
-                            strong->_firstRemoteAnswerTimestamp = rtc::TimeMillis();
+                            strong->_firstRemoteAnswerTimestamp = webrtc::TimeMillis();
                             strong->scheduleOfferHoldRelease(kCallerOfferHoldMs + 1);
                         }
                     }
@@ -1603,7 +1598,7 @@ public:
 
         if (!_currentNetworkStateLogRecord || !(_currentNetworkStateLogRecord.value() == record)) {
             _currentNetworkStateLogRecord = record;
-            _networkStateLogRecords.emplace_back(rtc::TimeMillis(), std::move(record));
+            _networkStateLogRecords.emplace_back(webrtc::TimeMillis(), std::move(record));
         }
 
         State mappedState;
@@ -1741,13 +1736,13 @@ public:
                 _outgoingVideoTrack = videoTrack;
                 _outgoingVideoTransceiver = videoTransceiverOrError.value();
 
-                auto currentCapabilities = _peerConnectionFactory->GetRtpSenderCapabilities(cricket::MediaType::MEDIA_TYPE_VIDEO);
+                auto currentCapabilities = _peerConnectionFactory->GetRtpSenderCapabilities(webrtc::MediaType::VIDEO);
 
                 std::vector<std::string> codecPreferences = {
                     #ifndef WEBRTC_DISABLE_H265
-                    cricket::kH265CodecName,
+                    webrtc::kH265CodecName,
                     #endif
-                    cricket::kH264CodecName
+                    webrtc::kH264CodecName
                 };
 
                 for (const auto &codecCapability : currentCapabilities.codecs) {
@@ -1787,9 +1782,9 @@ public:
     }
 
     struct OutgoingVideoEncoding {
-        absl::optional<int> maxBitrateBps;
-        absl::optional<double> maxFramerate;
-        absl::optional<double> scaleResolutionDownBy;
+        std::optional<int> maxBitrateBps;
+        std::optional<double> maxFramerate;
+        std::optional<double> scaleResolutionDownBy;
     };
 
     static OutgoingVideoEncoding outgoingVideoEncoding(bool isScreenCapture) {
@@ -1905,7 +1900,7 @@ public:
             return;
         }
         webrtc::VideoTrackInterface *videoTrack = (webrtc::VideoTrackInterface *)track.get();
-        videoTrack->AddOrUpdateSink(_currentStrongSink.get(), rtc::VideoSinkWants());
+        videoTrack->AddOrUpdateSink(_currentStrongSink.get(), webrtc::VideoSinkWants());
         _attachedSinkTracks.insert(videoTrack);
     }
 
@@ -1936,7 +1931,7 @@ public:
         _attachedSinkTracks.clear();
     }
 
-    void setIncomingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+    void setIncomingVideoOutput(std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
         disconnectAllIncomingVideoSinks();
 
         _currentStrongSink = sink.lock();
@@ -2050,11 +2045,9 @@ private:
     webrtc::scoped_refptr<webrtc::AudioDeviceModule> createAudioDeviceModule() {
         const auto create = [&](webrtc::AudioDeviceModule::AudioLayer layer) {
 #ifdef WEBRTC_IOS
-            return rtc::make_ref_counted<webrtc::tgcalls_ios_adm::AudioDeviceModuleIOS>(false, false, false, 1);
+            return webrtc::make_ref_counted<webrtc::tgcalls_ios_adm::AudioDeviceModuleIOS>(false, false, false, 1);
 #else
-            return webrtc::AudioDeviceModule::Create(
-                layer,
-                _taskQueueFactory.get());
+            return webrtc::scoped_refptr<webrtc::AudioDeviceModule>() /* no platform ADM: WebRTC's own is not built; hosts pass createAudioDeviceModule */;
 #endif
         };
         const auto check = [&](const webrtc::scoped_refptr<webrtc::AudioDeviceModule> &result) {
@@ -2115,9 +2108,9 @@ private:
     int64_t _lastDisconnectedTimestamp = 0;
     int32_t _disconnectReportGeneration = 0;
     int64_t _lastIceRestartTimestamp = 0;
-    absl::optional<InstanceNetworking::ConnectionDescription> _currentConnectionDescription;
+    std::optional<InstanceNetworking::ConnectionDescription> _currentConnectionDescription;
 
-    absl::optional<NetworkStateLogRecord> _currentNetworkStateLogRecord;
+    std::optional<NetworkStateLogRecord> _currentNetworkStateLogRecord;
     std::vector<StateLogRecord<NetworkStateLogRecord>> _networkStateLogRecords;
     std::vector<StateLogRecord<NetworkBitrateLogRecord>> _networkBitrateLogRecords;
 
@@ -2149,7 +2142,7 @@ private:
 
     std::map<std::string, webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>> _incomingVideoTransceivers;
 
-    std::vector<std::unique_ptr<webrtc::IceCandidateInterface>> _pendingIceCandidates;
+    std::vector<std::unique_ptr<webrtc::IceCandidate>> _pendingIceCandidates;
 
     std::unique_ptr<DataChannelObserverImpl> _dataChannelObserver;
     webrtc::scoped_refptr<webrtc::DataChannelInterface> _dataChannel;
@@ -2158,10 +2151,10 @@ private:
     std::unique_ptr<webrtc::RtcEventLogNull> _eventLog;
     std::unique_ptr<webrtc::TaskQueueFactory> _taskQueueFactory;
 
-    std::unique_ptr<rtc::NetworkMonitorFactory> _networkMonitorFactory;
-    std::unique_ptr<rtc::BasicPacketSocketFactory> _socketFactory;
-    std::unique_ptr<rtc::BasicNetworkManager> _networkManager;
-    std::unique_ptr<cricket::RelayPortFactoryInterface> _relayPortFactory;
+    std::unique_ptr<webrtc::NetworkMonitorFactory> _networkMonitorFactory;
+    std::unique_ptr<webrtc::BasicPacketSocketFactory> _socketFactory;
+    std::unique_ptr<webrtc::BasicNetworkManager> _networkManager;
+    std::unique_ptr<webrtc::RelayPortFactoryInterface> _relayPortFactory;
 
     webrtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> _peerConnectionFactory;
     std::unique_ptr<PeerConnectionDelegateAdapter> _peerConnectionObserver;
@@ -2174,7 +2167,7 @@ private:
     bool _isBatteryLow = false;
     std::atomic<bool> _isStopped{false};
 
-    std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _currentStrongSink;
+    std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> _currentStrongSink;
     // Exactly the tracks we called AddOrUpdateSink on. RemoveSink DCHECKs when the
     // sink was never added, and attachment is asymmetric (a transceiver added while
     // no sink is set is never attached, and setIncomingVideoOutput attaches only the
@@ -2188,10 +2181,10 @@ InstanceV2CompatImpl::InstanceV2CompatImpl(Descriptor &&descriptor) {
     if (descriptor.config.logPath.data.size() != 0) {
         _logSink = std::make_unique<LogSinkImpl>(descriptor.config.logPath);
     }
-    rtc::LogMessage::LogToDebug(rtc::LS_INFO);
-    rtc::LogMessage::SetLogToStderr(false);
+    webrtc::LogMessage::LogToDebug(webrtc::LS_INFO);
+    webrtc::LogMessage::SetLogToStderr(false);
     if (_logSink) {
-        rtc::LogMessage::AddLogToStream(_logSink.get(), rtc::LS_INFO);
+        webrtc::LogMessage::AddLogToStream(_logSink.get(), webrtc::LS_INFO);
     }
 
     _threads = StaticThreads::getThreads();
@@ -2204,7 +2197,7 @@ InstanceV2CompatImpl::InstanceV2CompatImpl(Descriptor &&descriptor) {
 }
 
 InstanceV2CompatImpl::~InstanceV2CompatImpl() {
-    rtc::LogMessage::RemoveLogToStream(_logSink.get());
+    webrtc::LogMessage::RemoveLogToStream(_logSink.get());
 }
 
 void InstanceV2CompatImpl::receiveSignalingData(const std::vector<uint8_t> &data) {
@@ -2237,7 +2230,7 @@ void InstanceV2CompatImpl::setMuteMicrophone(bool muteMicrophone) {
     });
 }
 
-void InstanceV2CompatImpl::setIncomingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+void InstanceV2CompatImpl::setIncomingVideoOutput(std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
     _internal->perform([sink](InstanceV2CompatImplInternal *internal) {
         internal->setIncomingVideoOutput(sink);
     });

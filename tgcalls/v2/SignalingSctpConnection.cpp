@@ -1,5 +1,12 @@
 #include "v2/SignalingSctpConnection.h"
 
+#include "api/environment/environment_factory.h"
+#include "api/priority.h"
+#include "api/sctp_transport_interface.h"
+#include "p2p/dtls/dtls_transport_internal.h"
+#include "rtc_base/network/received_packet.h"
+#include "rtc_base/network/sent_packet.h"
+
 #include <algorithm>
 #include <iterator>
 #include <random>
@@ -76,18 +83,18 @@ std::vector<uint8_t> encode(uint32_t position, std::vector<uint8_t> const &messa
     return packet;
 }
 
-absl::optional<Envelope> decode(std::vector<uint8_t> const &packet) {
+std::optional<Envelope> decode(std::vector<uint8_t> const &packet) {
     if (packet.size() < kHeaderSize) {
-        return absl::nullopt;
+        return std::nullopt;
     }
     if (packet[0] != 0 || packet[1] != 0 || packet[2] != 0 || packet[3] != 0) {
-        return absl::nullopt;
+        return std::nullopt;
     }
     if (!std::equal(kMagic, kMagic + 4, packet.begin() + 4)) {
-        return absl::nullopt;
+        return std::nullopt;
     }
     if (packet[12] != kChunkType || packet[13] != kVersion || packet[14] != 0 || packet[15] != 0) {
-        return absl::nullopt;
+        return std::nullopt;
     }
     Envelope envelope;
     envelope.position = readUint32(packet, 16);
@@ -180,7 +187,13 @@ private:
     SignalingSctpConnection::Options _opts;
 };
 
-class SignalingPacketTransport : public rtc::PacketTransportInternal {
+// The packet transport under the signaling SCTP: packets go out through `emitData`
+// and come in through receiveData(). WebRTC's DcSctpTransport sits on a DTLS
+// transport and takes only DTLS-decrypted packets; the signaling channel has no
+// DTLS (the call's signaling is encrypted below it), so this is a DTLS transport
+// that is always secure: everything it receives is handed up as kDtlsDecrypted,
+// and the DTLS queries get "nothing negotiated" answers.
+class SignalingPacketTransport : public webrtc::DtlsTransportInternal {
 public:
     SignalingPacketTransport(std::shared_ptr<Threads> threads, std::function<void(const std::vector<uint8_t> &)> emitData, bool writable) :
     _threads(threads),
@@ -194,71 +207,118 @@ public:
 
     void receiveData(std::vector<uint8_t> const &data) {
         RTC_LOG(LS_INFO) << "SignalingPacketTransport: adding data of " << data.size() << " bytes";
-        SignalReadPacket.emit(this, (const char *)data.data(), data.size(), -1, 0);
+        NotifyPacketReceived(webrtc::ReceivedIpPacket(
+            std::span<const uint8_t>(data.data(), data.size()), _address, std::nullopt,
+            webrtc::EcnMarking::kNotEct, webrtc::ReceivedIpPacket::kDtlsDecrypted));
     }
 
     void setWritable(bool writable) {
         if (_writable != writable) {
             _writable = writable;
-            SignalWritableState.emit(this);
+            NotifyWritableState(this);
         }
     }
 
-    virtual const std::string& transport_name() const override {
+    // webrtc::PacketTransportInternal
+    const std::string& transport_name() const override {
         return _transportName;
     }
 
-    virtual bool writable() const override {
+    bool writable() const override {
         return _writable;
     }
 
-    virtual bool receiving() const override {
+    bool receiving() const override {
         return false;
     }
 
-    // Attempts to send the given packet.
-    // The return value is < 0 on failure. The return value in failure case is not
-    // descriptive. Depending on failure cause and implementation details
-    // GetError() returns an descriptive errno.h error value.
-    // This mimics posix socket send() or sendto() behavior.
-    // TODO(johan): Reliable, meaningful, consistent error codes for all
-    // implementations would be nice.
-    // TODO(johan): Remove the default argument once channel code is updated.
-    virtual int SendPacket(const char* data,
-                           size_t len,
-                           const rtc::PacketOptions& options,
-                           int flags = 0) override {
+    int SendPacket(const char* data,
+                   size_t len,
+                   const webrtc::AsyncSocketPacketOptions& options,
+                   int flags = 0) override {
         _emitData(std::vector<uint8_t>(data, data + len));
 
-        rtc::SentPacket sentPacket;
+        webrtc::SentPacketInfo sentPacket;
         sentPacket.packet_id = options.packet_id;
-        SignalSentPacket.emit(this, sentPacket);
+        NotifySentPacket(this, sentPacket);
 
         return (int)len;
     }
 
-    virtual int SetOption(rtc::Socket::Option opt, int value) override {
+    int SetOption(webrtc::Socket::Option opt, int value) override {
         return 0;
     }
 
-    virtual bool GetOption(rtc::Socket::Option opt, int* value) override {
+    bool GetOption(webrtc::Socket::Option opt, int* value) override {
+        return false;
+    }
+
+    int GetError() override {
         return 0;
     }
 
-    virtual int GetError() override {
-        return 0;
+    std::optional<webrtc::NetworkRoute> network_route() const override {
+        return std::nullopt;
     }
 
-    virtual absl::optional<rtc::NetworkRoute> network_route() const override {
-        return absl::nullopt;
+    // webrtc::DtlsTransportInternal
+    webrtc::DtlsTransportState dtls_state() const override {
+        return webrtc::DtlsTransportState::kConnected;
+    }
+    int component() const override {
+        return 1;
+    }
+    bool IsDtlsActive() const override {
+        return false;
+    }
+    bool GetDtlsRole(webrtc::SSLRole* role) const override {
+        return false;
+    }
+    bool SetDtlsRole(webrtc::SSLRole role) override {
+        return true;
+    }
+    bool GetSslVersionBytes(int* version) const override {
+        return false;
+    }
+    uint16_t GetSslGroupId() const override {
+        return 0;
+    }
+    bool GetSrtpCryptoSuite(int* cipher) const override {
+        return false;
+    }
+    bool GetSslCipherSuite(int* cipher) const override {
+        return false;
+    }
+    std::optional<absl::string_view> GetTlsCipherSuiteName() const override {
+        return std::nullopt;
+    }
+    uint16_t GetSslPeerSignatureAlgorithm() const override {
+        return 0;
+    }
+    bool SetLocalCertificate(const webrtc::scoped_refptr<webrtc::RTCCertificate>& certificate) override {
+        return true;
+    }
+    std::unique_ptr<webrtc::SSLCertChain> GetRemoteSSLCertChain() const override {
+        return nullptr;
+    }
+    bool AppendSrtpKeyingMaterial(webrtc::ZeroOnFreeBuffer<uint8_t>& keying_material) override {
+        return false;
+    }
+    void MaybeStartDtlsInStun() override {
+    }
+    webrtc::RTCError SetRemoteParameters(absl::string_view digest_alg, const uint8_t* digest, size_t digest_len, std::optional<webrtc::SSLRole> role) override {
+        return webrtc::RTCError::OK();
+    }
+    webrtc::IceTransportInternal* ice_transport() override {
+        return nullptr;
     }
 
 private:
     std::shared_ptr<Threads> _threads;
-    std::function<void(const std::vector<uint8_t> &)> _onIncomingData;
     std::function<void(const std::vector<uint8_t> &)> _emitData;
     bool _writable;
     std::string _transportName;
+    webrtc::SocketAddress _address;
 };
 
 SignalingSctpConnection::SignalingSctpConnection(std::shared_ptr<Threads> threads, std::function<void(const std::vector<uint8_t> &)> onIncomingData, std::function<void(const std::vector<uint8_t> &)> emitData, bool isInitiator, Options options) :
@@ -285,14 +345,18 @@ _fastPath(options.fastPath) {
         // signaling SCTP gets the t1 timer backoff cap fix (the stock
         // DcSctpSocket doesn't wire max_timer_backoff_duration to t1 timers).
         _sctpTransport = std::make_unique<webrtc::DcSctpTransport>(
+            webrtc::CreateEnvironment(),
             _threads->getNetworkThread(),
             _packetTransport.get(),
-            webrtc::Clock::GetRealTimeClock(),
             std::make_unique<CustomDcSctpSocketFactory>(options));
-        _sctpTransport->OpenStream(0);
+        _sctpTransport->OpenStream(0, webrtc::PriorityValue(webrtc::Priority::kLow));
         _sctpTransport->SetDataChannelSink(this);
 
-        _sctpTransport->Start(5000, 5000, 262144);
+        webrtc::SctpOptions sctpOptions;
+        sctpOptions.local_port = 5000;
+        sctpOptions.remote_port = 5000;
+        sctpOptions.max_message_size = 262144;
+        _sctpTransport->Start(sctpOptions);
     });
 }
 
@@ -313,7 +377,7 @@ void SignalingSctpConnection::OnReadyToSend() {
         params.type = webrtc::DataMessageType::kBinary;
         params.ordered = true;
 
-        rtc::CopyOnWriteBuffer payload;
+        webrtc::CopyOnWriteBuffer payload;
         payload.AppendData(data.data(), data.size());
 
         webrtc::RTCError sendError = _sctpTransport->SendData(0, params, payload);
@@ -342,7 +406,7 @@ void SignalingSctpConnection::OnTransportClosed(webrtc::RTCError error) {
     assert(_threads->getNetworkThread()->IsCurrent());
 }
 
-void SignalingSctpConnection::OnDataReceived(int channel_id, webrtc::DataMessageType type, const rtc::CopyOnWriteBuffer& buffer) {
+void SignalingSctpConnection::OnDataReceived(int channel_id, webrtc::DataMessageType type, const webrtc::CopyOnWriteBuffer& buffer) {
     assert(_threads->getNetworkThread()->IsCurrent());
 
     std::vector<uint8_t> message(buffer.data(), buffer.data() + buffer.size());
@@ -415,7 +479,7 @@ void SignalingSctpConnection::send(const std::vector<uint8_t> &data) {
             params.type = webrtc::DataMessageType::kBinary;
             params.ordered = true;
             
-            rtc::CopyOnWriteBuffer payload;
+            webrtc::CopyOnWriteBuffer payload;
             payload.AppendData(data.data(), data.size());
             
             webrtc::RTCError sendError = _sctpTransport->SendData(0, params, payload);
