@@ -1702,13 +1702,13 @@ public:
         // so camera toggles do not add m-lines.
         _outgoingVideoTrack = nullptr;
 
-        // On iOS a screen capture goes out on the same transceiver as the camera
+        // On iOS and Android a screen capture goes out on the same transceiver as the camera
         // (the 13.0.0 protocol's screencast channel is not implemented here); only
         // its encoding differs (applyOutgoingVideoEncoding).
         webrtc::scoped_refptr<webrtc::VideoTrackInterface> videoTrack;
         bool isScreenCapture = false;
         auto videoCaptureImpl = GetVideoCaptureAssumingSameThread(videoCapture.get());
-        if (videoCaptureImpl && (!videoCaptureImpl->isScreenCapture() || kIosPrivateCallScreencast)) {
+        if (videoCaptureImpl && (!videoCaptureImpl->isScreenCapture() || kPrivateCallScreenAsVideo)) {
             _videoCapture = videoCapture;
             isScreenCapture = videoCaptureImpl->isScreenCapture();
             videoTrack = _peerConnectionFactory->CreateVideoTrack(videoCaptureImpl->source(), "1");

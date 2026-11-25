@@ -1804,10 +1804,10 @@ public:
 
         auto videoCaptureImpl = GetVideoCaptureAssumingSameThread(videoCapture.get());
         if (videoCaptureImpl) {
-            // On iOS a screen capture goes out as the camera does (this engine has no
+            // On iOS and Android a screen capture goes out as the camera does (this engine has no
             // separate screencast channel); only its encoding differs, below.
             const bool isScreenCapture = videoCaptureImpl->isScreenCapture();
-            if (!isScreenCapture || kIosPrivateCallScreencast) {
+            if (!isScreenCapture || kPrivateCallScreenAsVideo) {
                 _videoCapture = videoCapture;
 
                 auto videoTrack = _peerConnectionFactory->CreateVideoTrack(videoCaptureImpl->source(), "1");

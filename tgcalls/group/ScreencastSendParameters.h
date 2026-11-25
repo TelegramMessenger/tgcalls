@@ -14,10 +14,24 @@
 #define TGCALLS_IOS_PRIVATE_CALL_SCREENCAST 0
 #endif
 
+// Engines without a screencast channel (10/11 InstanceV2ReferenceImpl, 14 InstanceV2CompatImpl,
+// 18/19 CallCoreHost) send a private call's screen capture on the camera's transceiver, with the
+// screencast encoding, instead of dropping it: on iOS (with the rest of the changes above) and on
+// Android, whose app shares the screen in private calls through the same capture interface. Desktop
+// keeps dropping it.
+#if TGCALLS_IOS_PRIVATE_CALL_SCREENCAST || defined(WEBRTC_ANDROID)
+#define TGCALLS_PRIVATE_CALL_SCREEN_AS_VIDEO 1
+#else
+#define TGCALLS_PRIVATE_CALL_SCREEN_AS_VIDEO 0
+#endif
+
 namespace tgcalls {
 
 // See TGCALLS_IOS_PRIVATE_CALL_SCREENCAST.
 constexpr bool kIosPrivateCallScreencast = TGCALLS_IOS_PRIVATE_CALL_SCREENCAST != 0;
+
+// See TGCALLS_PRIVATE_CALL_SCREEN_AS_VIDEO.
+constexpr bool kPrivateCallScreenAsVideo = TGCALLS_PRIVATE_CALL_SCREEN_AS_VIDEO != 0;
 
 // Send parameters of one simulcast layer of the iOS screencast (the in-app
 // ScreenCaptureKit capture). Plain values, applied to webrtc::RtpEncodingParameters

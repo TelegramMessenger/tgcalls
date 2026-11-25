@@ -639,10 +639,10 @@ void CallCoreHost::start() {
     // Stock start() applies descriptor.videoCapture before beginSignaling(), so
     // the camera is part of the first offer; the core reproduces that from this
     // flag (see the post-create check below).
-    // On iOS a screen capture counts: it goes out as the camera (see setVideoCapture).
+    // On iOS and Android a screen capture counts: it goes out as the camera (see setVideoCapture).
     bool hasInitialVideoCapture = false;
     if (const auto captureImpl = GetVideoCaptureAssumingSameThread(_videoCapture.get())) {
-        hasInitialVideoCapture = !captureImpl->isScreenCapture() || kIosPrivateCallScreencast;
+        hasInitialVideoCapture = !captureImpl->isScreenCapture() || kPrivateCallScreenAsVideo;
     }
     const std::string configJson = json11::Json(json11::Json::object{
         {"abiVersion", 1},
@@ -1219,7 +1219,7 @@ void CallCoreHost::executeAddTransceiver(json11::Json const &command) {
         track = _peerConnectionFactory->CreateAudioTrack("0", audioSource.get());
     } else if (trackSource == "camera") {
         auto videoCaptureImpl = GetVideoCaptureAssumingSameThread(_videoCapture.get());
-        if (!videoCaptureImpl || (videoCaptureImpl->isScreenCapture() && !kIosPrivateCallScreencast)) {
+        if (!videoCaptureImpl || (videoCaptureImpl->isScreenCapture() && !kPrivateCallScreenAsVideo)) {
             emitErrorEvent("no usable video capture", "pc_add_transceiver");
             return;
         }
@@ -1699,7 +1699,7 @@ void CallCoreHost::setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoC
     // told, and drops it, as before.
     bool screencast = false;
     if (const auto captureImpl = GetVideoCaptureAssumingSameThread(videoCapture.get())) {
-        screencast = captureImpl->isScreenCapture() && !kIosPrivateCallScreencast;
+        screencast = captureImpl->isScreenCapture() && !kPrivateCallScreenAsVideo;
     }
     deliverEvent({ {"@type", "video_capture"}, {"active", videoCapture != nullptr}, {"screencast", screencast} });
 }
