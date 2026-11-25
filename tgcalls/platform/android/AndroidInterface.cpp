@@ -49,8 +49,8 @@ public:
         return main_factory->GetEncoderSelector();
     }
 
-    std::unique_ptr<webrtc::VideoEncoder> CreateVideoEncoder(const webrtc::SdpVideoFormat& format) override {
-        return std::make_unique<webrtc::SimulcastEncoderAdapter>(main_factory.get(), format);
+    std::unique_ptr<webrtc::VideoEncoder> Create(const webrtc::Environment& env, const webrtc::SdpVideoFormat& format) override {
+        return std::make_unique<webrtc::SimulcastEncoderAdapter>(env, main_factory.get(), nullptr, format);
     }
 
     CodecSupport QueryCodecSupport(
@@ -74,7 +74,7 @@ std::unique_ptr<webrtc::VideoEncoderFactory> AndroidInterface::makeVideoEncoderF
             webrtc::GetClass(env, "org/webrtc/DefaultVideoEncoderFactory");
     jmethodID factory_constructor = env->GetMethodID(
             factory_class.obj(), "<init>", "(Lorg/webrtc/EglBase$Context;ZZ)V");
-    webrtc::ScopedJavaLocalRef<jobject> factory_object(
+    webrtc::ScopedJavaLocalRef<jobject> factory_object = webrtc::ScopedJavaLocalRef<jobject>::Adopt(
             env, env->NewObject(factory_class.obj(), factory_constructor,
                                 eglContext /* shared_context */,
                                 false /* enable_intel_vp8_encoder */,
@@ -97,7 +97,7 @@ std::unique_ptr<webrtc::VideoDecoderFactory> AndroidInterface::makeVideoDecoderF
             webrtc::GetClass(env, "org/webrtc/DefaultVideoDecoderFactory");
     jmethodID factory_constructor = env->GetMethodID(
             factory_class.obj(), "<init>", "(Lorg/webrtc/EglBase$Context;)V");
-    webrtc::ScopedJavaLocalRef<jobject> factory_object(
+    webrtc::ScopedJavaLocalRef<jobject> factory_object = webrtc::ScopedJavaLocalRef<jobject>::Adopt(
             env, env->NewObject(factory_class.obj(), factory_constructor,
                                 eglContext /* shared_context */));
     return webrtc::JavaToNativeVideoDecoderFactory(env, factory_object.obj());
@@ -135,8 +135,8 @@ bool AndroidInterface::supportsEncoding(const std::string &codecName) {
                 webrtc::GetClass(env, "org/webrtc/HardwareVideoEncoderFactory");
         jmethodID factory_constructor = env->GetMethodID(
                 factory_class.obj(), "<init>", "(Lorg/webrtc/EglBase$Context;ZZ)V");
-        webrtc::ScopedJavaLocalRef<jobject> factory_object(
-                env, env->NewObject(factory_class.obj(), factory_constructor,
+        webrtc::ScopedJavaLocalRef<jobject> factory_object = webrtc::ScopedJavaLocalRef<jobject>::Adopt(
+            env, env->NewObject(factory_class.obj(), factory_constructor,
                                     eglContext,
                                     false,
                                     true));
