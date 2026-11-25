@@ -1,7 +1,90 @@
 #import <TgVoipWebrtc/OngoingCallThreadLocalContext.h>
 
 #import "MediaUtils.h"
+#include "BroadcastAudio/BroadcastAudioCore.h"
 #include "BroadcastAudio/BroadcastAudioCoreBridge.h"
+#include "AudioFrame.h"
+#include "modules/audio_device/include/audio_device_data_observer.h"
+#include "api/audio/create_audio_device_module.h"
+#include "api/environment/environment_factory.h"
+
+#include <array>
+#include <atomic>
+#include <mutex>
+
+namespace {
+
+class CaptionAudioTap {
+public:
+    void setSink(CallCaptionAudioSink sink) {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _sink = [sink copy];
+        _enabled.store(sink != nil, std::memory_order_relaxed);
+    }
+
+    void setMuted(bool muted) {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _muted = muted;
+    }
+
+    void emit(uint32_t ssrc, const int16_t *samples, size_t frames, size_t channels, uint32_t rate) {
+        if (!_enabled.load(std::memory_order_relaxed) || !samples || channels == 0 || channels > 2 || rate == 0) {
+            return;
+        }
+
+        const size_t outputFrames = frames * 16000 / rate;
+        std::array<float, 512> output;
+        if (outputFrames == 0 || outputFrames > output.size()) {
+            return;
+        }
+
+        for (size_t i = 0; i < outputFrames; ++i) {
+            const size_t start = i * rate / 16000;
+            const size_t end = std::max(start + 1, (i + 1) * rate / 16000);
+            int32_t sum = 0;
+            for (size_t j = start * channels; j < end * channels; ++j) {
+                sum += samples[j];
+            }
+            output[i] = static_cast<float>(sum) / ((end - start) * channels * 32768.0f);
+        }
+
+        std::lock_guard<std::mutex> lock(_mutex);
+        if (_sink && (ssrc != 0 || !_muted)) {
+            @autoreleasepool {
+                _sink(ssrc, [NSData dataWithBytes:output.data() length:outputFrames * sizeof(float)]);
+            }
+        }
+    }
+
+private:
+    std::atomic<bool> _enabled{false};
+    std::mutex _mutex;
+    CallCaptionAudioSink _sink = nil;
+    bool _muted = true;
+};
+
+class PrivateCallCaptionAudioObserver final : public webrtc::AudioDeviceDataObserver {
+public:
+    explicit PrivateCallCaptionAudioObserver(std::shared_ptr<CaptionAudioTap> tap) : _tap(std::move(tap)) {}
+
+    void OnCaptureData(const void *samples, size_t frames, size_t bytesPerFrame, size_t channels, uint32_t rate) override {
+        if (bytesPerFrame == channels * sizeof(int16_t)) {
+            _tap->emit(0, static_cast<const int16_t *>(samples), frames, channels, rate);
+        }
+    }
+
+    void OnRenderData(const void *samples, size_t frames, size_t bytesPerFrame, size_t channels, uint32_t rate) override {
+        if (bytesPerFrame == channels * sizeof(int16_t)) {
+            _tap->emit(1, static_cast<const int16_t *>(samples), frames, channels, rate);
+        }
+    }
+
+private:
+    std::shared_ptr<CaptionAudioTap> _tap;
+};
+
+}
+
 
 #import "Instance.h"
 #import "v2/InstanceV2Impl.h"
@@ -689,6 +772,7 @@ tgcalls::VideoCaptureInterfaceObject *GetVideoCaptureAssumingSameThread(tgcalls:
 
     
     std::unique_ptr<tgcalls::Instance> _tgVoip;
+    std::shared_ptr<CaptionAudioTap> _captionAudioTap;
     bool _didStop;
     
     OngoingCallStateWebrtc _state;
@@ -907,6 +991,7 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
         [OngoingCallThreadLocalContextWebrtc ensureRegisteredImplementations];
         
         __weak OngoingCallThreadLocalContextWebrtc *weakSelf = self;
+        _captionAudioTap = std::make_shared<CaptionAudioTap>();
         _tgVoip = tgcalls::Meta::Create([version UTF8String], (tgcalls::Descriptor){
             .version = [version UTF8String],
             .config = config,
@@ -1032,9 +1117,16 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
             },
             .initialInputDeviceId = inputDeviceId.UTF8String,
             .initialOutputDeviceId = outputDeviceId.UTF8String,
-//            .createAudioDeviceModule = [](webrtc::TaskQueueFactory *taskQueueFactory) -> webrtc::scoped_refptr<webrtc::AudioDeviceModule> {
-//                return webrtc::make_ref_counted<webrtc::tgcalls_ios_adm::AudioDeviceModuleIOS>(false, false, 1);
-//            }
+            // M159 wraps an existing module (the overload taking an audio layer and a task queue factory is gone):
+            // the platform's own, made in an environment that borrows the instance's task queue factory. Null (no
+            // platform module in the build) falls back to the instance's default.
+            .createAudioDeviceModule = [tap = _captionAudioTap](webrtc::TaskQueueFactory *taskQueueFactory) -> webrtc::scoped_refptr<webrtc::AudioDeviceModule> {
+                auto platformModule = webrtc::CreateAudioDeviceModule(webrtc::CreateEnvironment(taskQueueFactory), webrtc::AudioDeviceModule::kPlatformDefaultAudio);
+                if (!platformModule) {
+                    return nullptr;
+                }
+                return webrtc::CreateAudioDeviceWithDataObserver(platformModule, std::make_unique<PrivateCallCaptionAudioObserver>(tap));
+            }
         });
         _state = OngoingCallStateInitializing;
         _signalBars = 4;
@@ -1182,7 +1274,16 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
     }
 }
 
+- (void)setCaptionAudioSink:(CallCaptionAudioSink)sink {
+    if (_captionAudioTap) {
+        _captionAudioTap->setSink(sink);
+    }
+}
+
 - (void)setIsMuted:(bool)isMuted {
+    if (_captionAudioTap) {
+        _captionAudioTap->setMuted(isMuted);
+    }
     if (_tgVoip) {
         _tgVoip->setMuteMicrophone(isMuted);
     }
@@ -1343,6 +1444,9 @@ private:
     id<OngoingCallThreadLocalContextQueueWebrtc> _queue;
 
     std::unique_ptr<tgcalls::GroupInstanceInterface> _instance;
+    std::shared_ptr<CaptionAudioTap> _captionAudioTap;
+    dispatch_queue_t _captionDrainQueue;
+    dispatch_source_t _captionDrain;
     OngoingCallThreadLocalContextVideoCapturer *_videoCapturer;
 
     void (^_networkStateUpdated)(GroupCallNetworkState);
@@ -1364,6 +1468,9 @@ private:
 }
 
 - (void)dealloc {
+    if (_captionDrain) {
+        dispatch_source_cancel(_captionDrain);
+    }
     if (_broadcastAudioCore) {
         BroadcastAudioCoreRelease(_broadcastAudioCore);
     }
@@ -1475,6 +1582,7 @@ encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, boo
 
         __weak GroupCallThreadLocalContext *weakSelf = self;
         _broadcastAudioCore = BroadcastAudioCoreCreate();
+        _captionAudioTap = std::make_shared<CaptionAudioTap>();
         _instance.reset(new tgcalls::GroupInstanceCustomImpl((tgcalls::GroupInstanceDescriptor){
             .threads = tgcalls::StaticThreads::getThreads(),
             .config = config,
@@ -1513,6 +1621,11 @@ encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, boo
                     [result addObject:@(it.value.voice)];
                 }
                 audioLevelsUpdated(result);
+            },
+            .onAudioFrame = [tap = _captionAudioTap](uint32_t ssrc, const tgcalls::AudioFrame &frame) {
+                if (frame.bytes_per_sample == sizeof(int16_t)) {
+                    tap->emit(ssrc, frame.audio_samples, frame.num_samples, frame.num_channels, frame.samples_per_sec);
+                }
             },
             .ssrcActivityUpdated = [activityUpdated](tgcalls::GroupActivitiesUpdate const &update) {
                 NSMutableArray *result = [[NSMutableArray alloc] init];
@@ -1601,6 +1714,11 @@ encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, boo
             .isConference = isConference,
             .onPlayoutFrame = [core = BroadcastAudioCoreShared(_broadcastAudioCore)](int16_t *samples, size_t count, size_t channels, uint32_t rate) {
                 core->render(samples, count, channels, rate);
+            },
+            .onCaptureFrame = [tap = _captionAudioTap, disableAudioInput](const int16_t *samples, size_t count, size_t channels, uint32_t rate) {
+                if (!disableAudioInput) {
+                    tap->emit(0, samples, count, channels, rate);
+                }
             }
         }));
     }
@@ -1662,7 +1780,46 @@ encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, boo
     }
 }
 
+- (void)setCaptionAudioSink:(CallCaptionAudioSink)sink {
+    if (!_captionAudioTap) {
+        return;
+    }
+    _captionAudioTap->setSink(sink);
+    if (!_captionDrain && !sink) {
+        return;
+    }
+    auto core = BroadcastAudioCoreShared(_broadcastAudioCore);
+    if (_captionDrain) {
+        dispatch_source_cancel(_captionDrain);
+        _captionDrain = nil;
+    }
+    if (!_captionDrainQueue) {
+        _captionDrainQueue = dispatch_queue_create("Telegram.BroadcastCaptionDrain", DISPATCH_QUEUE_SERIAL);
+    }
+    dispatch_sync(_captionDrainQueue, ^{
+        core->setCaptionsEnabled(false);
+        if (sink) {
+            core->setCaptionsEnabled(true);
+        }
+    });
+    if (sink) {
+        auto tap = _captionAudioTap;
+        _captionDrain = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, _captionDrainQueue);
+        dispatch_source_set_timer(_captionDrain, DISPATCH_TIME_NOW, 30 * NSEC_PER_MSEC, 5 * NSEC_PER_MSEC);
+        dispatch_source_set_event_handler(_captionDrain, ^{
+            broadcast_audio::Core::CaptionAudioBlock block;
+            for (size_t i = 0; i < 256 && core->takeCaptionAudio(block); ++i) {
+                tap->emit(block.ssrc, block.samples, broadcast_audio::Core::kBlockSamples, 1, broadcast_audio::Core::kSampleRate);
+            }
+        });
+        dispatch_resume(_captionDrain);
+    }
+}
+
 - (void)setIsMuted:(bool)isMuted {
+    if (_captionAudioTap) {
+        _captionAudioTap->setMuted(isMuted);
+    }
     if (_instance) {
         _instance->setIsMuted(isMuted);
     }

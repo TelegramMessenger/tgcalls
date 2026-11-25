@@ -1974,6 +1974,7 @@ public:
 
                 if (_outgoingVideoChannel) {
                     _outgoingVideoChannel->setVideoCapture(nullptr);
+                    _outgoingVideoChannel.reset();
                 }
                 if (_outgoingVideoChannelId) {
                     _contentNegotiationContext->removeOutgoingChannel(_outgoingVideoChannelId.value());
@@ -1999,6 +2000,7 @@ public:
 
                 if (_outgoingScreencastChannel) {
                     _outgoingScreencastChannel->setVideoCapture(nullptr);
+                    _outgoingScreencastChannel.reset();
                 }
                 if (_outgoingScreencastChannelId) {
                     _contentNegotiationContext->removeOutgoingChannel(_outgoingScreencastChannelId.value());
@@ -2011,10 +2013,12 @@ public:
 
             if (_outgoingVideoChannel) {
                 _outgoingVideoChannel->setVideoCapture(nullptr);
+                _outgoingVideoChannel.reset();
             }
 
             if (_outgoingScreencastChannel) {
                 _outgoingScreencastChannel->setVideoCapture(nullptr);
+                _outgoingScreencastChannel.reset();
             }
 
             if (_outgoingVideoChannelId) {

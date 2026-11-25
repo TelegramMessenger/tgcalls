@@ -393,21 +393,30 @@ public:
     virtual void OnFrame(const webrtc::VideoFrame& frame) override {
         std::unique_lock<std::mutex> lock{ _mutex };
         int64_t timestamp = webrtc::TimeMillis();
-        if (_lastFrame) {
-            if (_lastFrame->video_frame_buffer()->width() != frame.video_frame_buffer()->width()) {
+        const int width = frame.video_frame_buffer()->width();
+        const int height = frame.video_frame_buffer()->height();
+        if (_hasLastFrameSize) {
+            if (_lastFrameWidth != width) {
                 int64_t deltaTime = std::abs(_lastFrameSizeChangeTimestamp - timestamp);
                 if (deltaTime < 200) {
-                    RTC_LOG(LS_WARNING) << "VideoSinkImpl: frequent frame size change detected for " << _endpointId << ": " << _lastFrameSizeChangeHeight << " -> " << _lastFrame->video_frame_buffer()->height() << " -> " << frame.video_frame_buffer()->height() << " in " << deltaTime << " ms";
+                    RTC_LOG(LS_WARNING) << "VideoSinkImpl: frequent frame size change detected for " << _endpointId << ": " << _lastFrameSizeChangeHeight << " -> " << _lastFrameHeight << " -> " << height << " in " << deltaTime << " ms";
                 }
 
-                _lastFrameSizeChangeHeight = _lastFrame->video_frame_buffer()->height();
+                _lastFrameSizeChangeHeight = _lastFrameHeight;
                 _lastFrameSizeChangeTimestamp = timestamp;
             }
         } else {
             _lastFrameSizeChangeHeight = 0;
             _lastFrameSizeChangeTimestamp = timestamp;
         }
+        _lastFrameWidth = width;
+        _lastFrameHeight = height;
+        _hasLastFrameSize = true;
+#ifndef WEBRTC_ANDROID
+        // Android texture frames are delivered one at a time: a retained frame
+        // holds the decoder's or capturer's only buffer and stops the source.
         _lastFrame = frame;
+#endif
         for (int i = (int)(_sinks.size()) - 1; i >= 0; i--) {
             auto strong = _sinks[i].lock();
             if (!strong) {
@@ -434,9 +443,11 @@ public:
         if (const auto strong = impl.lock()) {
             std::unique_lock<std::mutex> lock{ _mutex };
             _sinks.push_back(impl);
+#ifndef WEBRTC_ANDROID
             if (_lastFrame) {
                 strong->OnFrame(_lastFrame.value());
             }
+#endif
         }
     }
 
@@ -446,7 +457,12 @@ public:
 
 private:
     std::vector<std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>>> _sinks;
+#ifndef WEBRTC_ANDROID
     std::optional<webrtc::VideoFrame> _lastFrame;
+#endif
+    bool _hasLastFrameSize = false;
+    int _lastFrameWidth = 0;
+    int _lastFrameHeight = 0;
     std::mutex _mutex;
     int64_t _lastFrameSizeChangeTimestamp = 0;
     int _lastFrameSizeChangeHeight = 0;
@@ -901,12 +917,16 @@ private:
 
 // Hands every 10 ms playout frame to GroupInstanceDescriptor::onPlayoutFrame,
 // which may mix into it in place: Telegram-Mac's app-side broadcast player
-// renders through it. Attached only when the descriptor sets the hook; iOS
+// renders through it. Attached when the descriptor sets a frame hook; iOS
 // attaches its player below the shared audio device instead and never sets it.
-class PlayoutFrameObserver : public webrtc::AudioDeviceDataObserver {
+class AudioDeviceFrameObserver : public webrtc::AudioDeviceDataObserver {
 public:
-    explicit PlayoutFrameObserver(std::function<void(int16_t *, size_t, size_t, uint32_t)> onPlayoutFrame) :
-    _onPlayoutFrame(std::move(onPlayoutFrame)) {
+    AudioDeviceFrameObserver(
+        std::function<void(int16_t *, size_t, size_t, uint32_t)> onPlayoutFrame,
+        std::function<void(const int16_t *, size_t, size_t, uint32_t)> onCaptureFrame
+    ) :
+    _onPlayoutFrame(std::move(onPlayoutFrame)),
+    _onCaptureFrame(std::move(onCaptureFrame)) {
     }
 
     virtual void OnCaptureData(const void* audio_samples,
@@ -914,6 +934,9 @@ public:
                                const size_t bytes_per_sample,
                                const size_t num_channels,
                                const uint32_t samples_per_sec) override {
+        if (_onCaptureFrame && bytes_per_sample == num_channels * sizeof(int16_t)) {
+            _onCaptureFrame(static_cast<const int16_t *>(audio_samples), num_samples, num_channels, samples_per_sec);
+        }
     }
 
     virtual void OnRenderData(const void* audio_samples,
@@ -921,7 +944,7 @@ public:
                               const size_t bytes_per_sample,
                               const size_t num_channels,
                               const uint32_t samples_per_sec) override {
-        if (bytes_per_sample != num_channels * 2) {
+        if (!_onPlayoutFrame || bytes_per_sample != num_channels * sizeof(int16_t)) {
             return;
         }
         if (samples_per_sec % 100 != 0) {
@@ -935,6 +958,7 @@ public:
 
 private:
     const std::function<void(int16_t *, size_t, size_t, uint32_t)> _onPlayoutFrame;
+    const std::function<void(const int16_t *, size_t, size_t, uint32_t)> _onCaptureFrame;
 };
 
 class CustomNetEqFactory: public webrtc::NetEqFactory {
@@ -1030,6 +1054,7 @@ public:
     _activitiesUpdated(descriptor.ssrcActivityUpdated),
     _onAudioFrame(descriptor.onAudioFrame),
     _onPlayoutFrame(std::move(descriptor.onPlayoutFrame)),
+    _onCaptureFrame(std::move(descriptor.onCaptureFrame)),
     _requestMediaChannelDescriptions(descriptor.requestMediaChannelDescriptions),
     _dataChannelMessageReceived(descriptor.dataChannelMessageReceived),
     _videoCapture(descriptor.videoCapture),
@@ -3247,6 +3272,18 @@ public:
         if (!_sharedVideoInformation) {
             return;
         }
+        // A channel without a single ssrc would take the endpoint's slot and keep
+        // the real channel from being created when its ssrcs arrive.
+        bool hasSsrc = false;
+        for (const auto &group : videoInformation.ssrcGroups) {
+            if (!group.ssrcs.empty()) {
+                hasSsrc = true;
+                break;
+            }
+        }
+        if (!hasSsrc) {
+            return;
+        }
         if (_incomingVideoChannels.find(VideoChannelId(videoInformation.endpointId)) != _incomingVideoChannels.end()) {
             return;
         }
@@ -3410,12 +3447,13 @@ public:
 private:
     webrtc::scoped_refptr<WrappedAudioDeviceModule> createAudioDeviceModule() {
         auto onMutedSpeechActivityDetected = _onMutedSpeechActivityDetected;
-        const auto onPlayoutFrame = _onPlayoutFrame;
-        const auto withPlayoutObserver = [&](webrtc::scoped_refptr<webrtc::AudioDeviceModule> module) -> webrtc::scoped_refptr<webrtc::AudioDeviceModule> {
-            if (!onPlayoutFrame) {
+        const auto withFrameObserver = [&](webrtc::scoped_refptr<webrtc::AudioDeviceModule> module) -> webrtc::scoped_refptr<webrtc::AudioDeviceModule> {
+            if (!_onPlayoutFrame && !_onCaptureFrame) {
                 return module;
             }
-            return webrtc::CreateAudioDeviceWithDataObserver(module, std::make_unique<PlayoutFrameObserver>(onPlayoutFrame));
+            return webrtc::CreateAudioDeviceWithDataObserver(
+                module, std::make_unique<AudioDeviceFrameObserver>(_onPlayoutFrame, _onCaptureFrame)
+            );
         };
 #ifdef WEBRTC_IOS
         bool disableRecording = _disableAudioInput;
@@ -3441,7 +3479,7 @@ private:
                 return nullptr;
             }
 
-            const auto module = withPlayoutObserver(result);
+            const auto module = withFrameObserver(result);
             if (module->Init() == 0) {
                 return PlatformInterface::SharedInstance()->wrapAudioDeviceModule(module);
             } else {
@@ -3451,7 +3489,7 @@ private:
         if (_createWrappedAudioDeviceModule) {
             auto result = _createWrappedAudioDeviceModule(&_webrtcEnvironment.task_queue_factory());
             if (result) {
-                return webrtc::make_ref_counted<DefaultWrappedAudioDeviceModule>(withPlayoutObserver(result));
+                return webrtc::make_ref_counted<DefaultWrappedAudioDeviceModule>(withFrameObserver(result));
             }
         }
         if (_createAudioDeviceModule) {
@@ -3479,6 +3517,7 @@ private:
     std::function<void(GroupActivitiesUpdate const &)> _activitiesUpdated;
     std::function<void(uint32_t, const AudioFrame &)> _onAudioFrame;
     std::function<void(int16_t *, size_t, size_t, uint32_t)> _onPlayoutFrame;
+    std::function<void(const int16_t *, size_t, size_t, uint32_t)> _onCaptureFrame;
     std::function<std::shared_ptr<RequestMediaChannelDescriptionTask>(std::vector<uint32_t> const &, std::function<void(std::vector<MediaChannelDescription> &&)>)> _requestMediaChannelDescriptions;
     std::function<void(std::string const &)> _dataChannelMessageReceived;
     std::shared_ptr<VideoCaptureInterface> _videoCapture;

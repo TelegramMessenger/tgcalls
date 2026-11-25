@@ -4,20 +4,31 @@
 #include "PlatformContext.h"
 
 #include <jni.h>
+#include <group/GroupInstanceImpl.h>
 
 namespace tgcalls {
 
 class AndroidContext final : public PlatformContext {
 public:
-    AndroidContext(JNIEnv *env);
+    AndroidContext(JNIEnv *env, jobject peerInstance, jobject groupInstance, bool screencast);
     ~AndroidContext() override;
 
     jobject getJavaCapturer();
+    jobject getJavaPeerInstance();
+    jobject getJavaGroupInstance();
     jclass getJavaCapturerClass();
 
+    void setJavaPeerInstance(JNIEnv *env, jobject instance);
+    void setJavaGroupInstance(JNIEnv *env, jobject instance);
+
+    std::vector<std::shared_ptr<RequestMediaChannelDescriptionTask>> descriptionTasks;
+
 private:
-    jclass VideoCameraCapturerClass = nullptr;
+    jclass VideoCapturerDeviceClass = nullptr;
     jobject javaCapturer = nullptr;
+
+    jobject javaPeerInstance = nullptr;
+    jobject javaGroupInstance = nullptr;
 
 };
 
