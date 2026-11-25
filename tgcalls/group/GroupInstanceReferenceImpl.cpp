@@ -2,11 +2,11 @@
 
 #include "group/GroupAv1Decision.h"
 #include "group/GroupVideoPayloadTypes.h"
-#if defined(TGCALLS_ENABLE_AV1) && TGCALLS_ENABLE_AV1
-#include "av1/Av1TopLayerFactory.h"
 #include "api/audio/builtin_audio_processing_builder.h"
 #include "api/create_modular_peer_connection_factory.h"
 #include "api/environment/environment_factory.h"
+#if defined(TGCALLS_ENABLE_AV1) && TGCALLS_ENABLE_AV1
+#include "av1/Av1TopLayerFactory.h"
 #include "api/video_codecs/scalability_mode.h"
 #endif
 #include "LogSinkImpl.h"
@@ -742,6 +742,17 @@ public:
             RTC_LOG(LS_ERROR) << "GroupRef: Failed to create PeerConnectionFactory";
             return;
         }
+
+#ifdef WEBRTC_ANDROID
+        // Android hosts render the group broadcast over the call's playout (an ADM data observer), so playout must
+        // run before any RTP audio arrives, as CustomImpl starts it (setAudioOutputDevice at start). WebRTC itself
+        // starts playout only with a receive stream.
+        if (_audioDeviceModule && _videoContentType != VideoContentType::Screencast) {
+            _threads->getWorkerThread()->BlockingCall([adm = _audioDeviceModule]() {
+                SetAudioOutputDeviceById(adm.get(), "default");
+            });
+        }
+#endif
 
         // Allow loopback network interfaces (needed for localhost SFU).
         {
@@ -1733,8 +1744,28 @@ public:
         }
     }
 
+    // A participant's playout volume (the app's per-participant slider and "mute for me", 0), as CustomImpl's
+    // channel gain: the receive stream's output gain, through the remote track's source. Kept per SSRC and applied
+    // again when the SSRC's receiver appears (wireRemoteAudioLevelSinks), since the app sets it before that.
     void setVolume(uint32_t ssrc, double volume) {
-        // Could adjust receiver gain per SSRC. Not critical for audio-only test.
+        _ssrcVolumes[ssrc] = volume;
+        applyVolume(ssrc);
+    }
+
+    void applyVolume(uint32_t ssrc) {
+        const auto volume = _ssrcVolumes.find(ssrc);
+        const auto info = _remoteSsrcs.find(ssrc);
+        if (volume == _ssrcVolumes.end() || info == _remoteSsrcs.end() || !info->second.transceiver) {
+            return;
+        }
+        const auto receiver = info->second.transceiver->receiver();
+        const auto track = receiver ? receiver->track() : nullptr;
+        if (!track || track->kind() != webrtc::MediaStreamTrackInterface::kAudioKind) {
+            return;
+        }
+        if (const auto source = static_cast<webrtc::AudioTrackInterface *>(track.get())->GetSource()) {
+            source->SetVolume(volume->second);
+        }
     }
 
     void stop(std::function<void()> completion) {
@@ -2900,10 +2931,13 @@ private:
             info.levelSink = std::make_unique<GRAudioLevelSink>();
             info.levelSink->attachTo(audioTrack);
             RTC_LOG(LS_INFO) << "GroupRef: wired audio level sink for SSRC " << ssrc;
+            applyVolume(ssrc);
         }
     }
 
 private:
+    std::map<uint32_t, double> _ssrcVolumes;
+
     struct RemoteSsrcInfo {
         std::string mid;
         webrtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver;
