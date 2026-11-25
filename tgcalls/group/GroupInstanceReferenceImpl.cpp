@@ -207,6 +207,15 @@ private:
 // level for a known-but-silent SSRC.
 class GRAudioLevelSink : public webrtc::AudioTrackSinkInterface {
 public:
+    GRAudioLevelSink() = default;
+
+    // Also hands the decoded PCM to the descriptor's onAudioFrame under the SSRC, as CustomImpl's per-channel sink does
+    // (the app's live captions read it).
+    GRAudioLevelSink(uint32_t ssrc, std::function<void(uint32_t, const AudioFrame &)> onAudioFrame) :
+    _ssrc(ssrc),
+    _onAudioFrame(std::move(onAudioFrame)) {
+    }
+
     void OnData(const void* audio_data,
                 int bits_per_sample,
                 int sample_rate,
@@ -216,6 +225,18 @@ public:
         const int16_t* samples = static_cast<const int16_t*>(audio_data);
         const size_t total = number_of_channels * number_of_frames;
         if (total == 0) return;
+
+        if (_onAudioFrame) {
+            AudioFrame frame;
+            frame.audio_samples = samples;
+            frame.num_samples = number_of_frames;
+            frame.bytes_per_sample = 2;
+            frame.num_channels = number_of_channels;
+            frame.samples_per_sec = (uint32_t)sample_rate;
+            frame.elapsed_time_ms = 0;
+            frame.ntp_time_ms = 0;
+            _onAudioFrame(_ssrc, frame);
+        }
 
         if (!_loggedFirstSamples) {
             _loggedFirstSamples = true;
@@ -282,6 +303,8 @@ public:
     }
 
 private:
+    const uint32_t _ssrc = 0;
+    const std::function<void(uint32_t, const AudioFrame &)> _onAudioFrame;
     std::mutex _mu;
     int32_t _runningPeak{0};
     size_t _samplesAccumulated{0};
@@ -540,6 +563,8 @@ public:
         , _dataChannelMessageReceived(std::move(descriptor.dataChannelMessageReceived))
         , _minOutgoingVideoBitrateKbit(descriptor.minOutgoingVideoBitrateKbit)
         , _e2eEncryptDecrypt(std::move(descriptor.e2eEncryptDecrypt))
+        , _onAudioFrame(std::move(descriptor.onAudioFrame))
+        , _isConference(descriptor.isConference)
         , _userIds(std::make_shared<GRUserIdRegistry>())
     {
         if (_e2eEncryptDecrypt) {
@@ -890,7 +915,7 @@ public:
         if (_videoContentType != VideoContentType::None) {
             const int layerCount = _videoContentType == VideoContentType::Screencast
                 ? (groupAv1JoinsWithSingleLayer(av1Inputs()) ? 1 : 2)
-                : 3;
+                : (_isConference ? 1 : 3);
             for (int i = 0; i < layerCount; i++) {
                 SimulcastLayer layer;
                 layer.ssrc = webrtc::CreateRandomId();
@@ -1765,6 +1790,7 @@ public:
         }
         if (const auto source = static_cast<webrtc::AudioTrackInterface *>(track.get())->GetSource()) {
             source->SetVolume(volume->second);
+            RTC_LOG(LS_INFO) << "GroupRef: volume " << volume->second << " for SSRC " << ssrc;
         }
     }
 
@@ -2928,7 +2954,7 @@ private:
             if (!track || track->kind() != webrtc::MediaStreamTrackInterface::kAudioKind) continue;
 
             auto* audioTrack = static_cast<webrtc::AudioTrackInterface*>(track.get());
-            info.levelSink = std::make_unique<GRAudioLevelSink>();
+            info.levelSink = std::make_unique<GRAudioLevelSink>(ssrc, _onAudioFrame);
             info.levelSink->attachTo(audioTrack);
             RTC_LOG(LS_INFO) << "GroupRef: wired audio level sink for SSRC " << ssrc;
             applyVolume(ssrc);
@@ -3052,6 +3078,9 @@ private:
     std::shared_ptr<NoiseSuppressionConfiguration> _noiseSuppressionConfiguration;
     bool _isMuted = true;
     GroupEncryptDecryptFunction _e2eEncryptDecrypt;
+    std::function<void(uint32_t, const AudioFrame &)> _onAudioFrame;
+    // A conference sends its camera as one layer, as CustomImpl does.
+    bool _isConference = false;
     std::map<int32_t, FrameTransformerPayloadType> _payloadTypeMapping;
     std::shared_ptr<AudioLevelAndSpeechHolder> _myAudioLevelAndSpeech;
     int _nextMid = 10; // Start after reserved mids (0=audio, 1-9=reserved).
