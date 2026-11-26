@@ -55,6 +55,8 @@
 #ifdef WEBRTC_IOS
 #include "platform/darwin/iOS/tgcalls_audio_device_module_ios.h"
 #endif
+#include <algorithm>
+#include <cmath>
 #include <random>
 #include <sstream>
 
@@ -403,7 +405,9 @@ public:
     }
 
     void setVolume(double value) {
-        _audioChannel->receive_channel()->SetOutputVolume(_ssrc, value);
+        _threads->getWorkerThread()->BlockingCall([&]() {
+            _audioChannel->receive_channel()->SetOutputVolume(_ssrc, value);
+        });
     }
 
     void updateActivity() {
@@ -1518,6 +1522,9 @@ public:
                             _audioLevelUpdated,
                             _threads
                         ));
+                        if (_outputVolume != 1.0f) {
+                            _incomingAudioChannel->setVolume(_outputVolume);
+                        }
                     }
 
                     break;
@@ -2081,6 +2088,14 @@ public:
         });
     }
 
+    void setOutputVolume(float level) {
+        const float clamped = std::isfinite(level) ? std::max(0.0f, std::min(10.0f, level)) : 1.0f;
+        _outputVolume = clamped;
+        if (_incomingAudioChannel) {
+            _incomingAudioChannel->setVolume(_outputVolume);
+        }
+    }
+
     void setIsLowBatteryLevel(bool isLowBatteryLevel) {
         if (_isBatteryLow != isLowBatteryLevel) {
             _isBatteryLow = isLowBatteryLevel;
@@ -2270,6 +2285,7 @@ private:
     bool _isBatteryLow = false;
 
     std::unique_ptr<IncomingV2AudioChannel> _incomingAudioChannel;
+    float _outputVolume = 1.0f;
     std::unique_ptr<IncomingV2VideoChannel> _incomingVideoChannel;
     std::unique_ptr<IncomingV2VideoChannel> _incomingScreencastChannel;
 
@@ -2364,6 +2380,9 @@ void InstanceV2Impl::setInputVolume(float level) {
 }
 
 void InstanceV2Impl::setOutputVolume(float level) {
+    _internal->perform([level](InstanceV2ImplInternal *internal) {
+        internal->setOutputVolume(level);
+    });
 }
 
 void InstanceV2Impl::setAudioOutputDuckingEnabled(bool enabled) {

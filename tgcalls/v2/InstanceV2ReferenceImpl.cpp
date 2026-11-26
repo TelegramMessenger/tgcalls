@@ -69,6 +69,8 @@
 #ifdef WEBRTC_IOS
 #include "platform/darwin/iOS/tgcalls_audio_device_module_ios.h"
 #endif
+#include <algorithm>
+#include <cmath>
 #include <mutex>
 #include <random>
 #include <sstream>
@@ -717,6 +719,12 @@ public:
             std::string mid = transceiver->mid().value();
 
             switch (transceiver->media_type()) {
+                case webrtc::MediaType::AUDIO: {
+                    if (strong->_outputVolume != 1.0f) {
+                        strong->applyOutputVolumeToReceiver(transceiver->receiver());
+                    }
+                    break;
+                }
                 case webrtc::MediaType::VIDEO: {
                     if (strong->_incomingVideoTransceivers.find(mid) == strong->_incomingVideoTransceivers.end()) {
                         strong->_incomingVideoTransceivers.insert(std::make_pair(mid, transceiver));
@@ -2193,6 +2201,30 @@ public:
         SetAudioOutputDeviceById(_audioDeviceModule.get(), id);
     }
 
+    void applyOutputVolumeToReceiver(webrtc::scoped_refptr<webrtc::RtpReceiverInterface> receiver) {
+        if (!receiver) {
+            return;
+        }
+        auto track = receiver->track();
+        if (!track || track->kind() != webrtc::MediaStreamTrackInterface::kAudioKind) {
+            return;
+        }
+        auto *audioTrack = static_cast<webrtc::AudioTrackInterface *>(track.get());
+        if (auto *source = audioTrack->GetSource()) {
+            source->SetVolume(_outputVolume);
+        }
+    }
+
+    void setOutputVolume(float level) {
+        const float clamped = std::isfinite(level) ? std::max(0.0f, std::min(10.0f, level)) : 1.0f;
+        _outputVolume = clamped;
+        if (_peerConnection) {
+            for (const auto &receiver : _peerConnection->GetReceivers()) {
+                applyOutputVolumeToReceiver(receiver);
+            }
+        }
+    }
+
     void setIsLowBatteryLevel(bool isLowBatteryLevel) {
         if (_isBatteryLow != isLowBatteryLevel) {
             _isBatteryLow = isLowBatteryLevel;
@@ -2386,6 +2418,7 @@ private:
     webrtc::scoped_refptr<webrtc::RtpTransceiverInterface> _outgoingVideoTransceiver;
 
     std::map<std::string, webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>> _incomingVideoTransceivers;
+    float _outputVolume = 1.0f;
 
     std::vector<std::unique_ptr<webrtc::IceCandidate>> _pendingIceCandidates;
 
@@ -2530,6 +2563,9 @@ void InstanceV2ReferenceImpl::setInputVolume(float level) {
 }
 
 void InstanceV2ReferenceImpl::setOutputVolume(float level) {
+    _internal->perform([level](InstanceV2ReferenceImplInternal *internal) {
+        internal->setOutputVolume(level);
+    });
 }
 
 void InstanceV2ReferenceImpl::setAudioOutputDuckingEnabled(bool enabled) {

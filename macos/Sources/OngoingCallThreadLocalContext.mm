@@ -1289,6 +1289,12 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
     }
 }
 
+- (void)setOutputVolume:(float)volume {
+    if (_tgVoip) {
+        _tgVoip->setOutputVolume(volume);
+    }
+}
+
 - (void)setIsLowBatteryLevel:(bool)isLowBatteryLevel {
     if (_tgVoip) {
         _tgVoip->setIsLowBatteryLevel(isLowBatteryLevel);

@@ -254,6 +254,7 @@ typedef void (^CallCaptionAudioSink)(uint32_t ssrc, NSData * _Nonnull monoFloatP
 - (NSData * _Nonnull)getDerivedState;
 
 - (void)setIsMuted:(bool)isMuted;
+- (void)setOutputVolume:(float)volume;
 - (void)setIsLowBatteryLevel:(bool)isLowBatteryLevel;
 - (void)setNetworkType:(OngoingCallNetworkTypeWebrtc)networkType;
 - (void)makeIncomingVideoView:(void (^_Nonnull)(UIView<OngoingCallThreadLocalContextWebrtcVideoView> * _Nullable))completion;
