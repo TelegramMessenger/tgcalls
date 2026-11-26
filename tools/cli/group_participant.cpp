@@ -281,6 +281,7 @@ void setRequestedVideoMaxQuality(tgcalls::VideoChannelDescription::Quality quali
 }
 
 GroupScreencastOptions gGroupScreencast;
+GroupDredOptions gGroupDred;
 
 ParticipantState::~ParticipantState() {
     stopScreencastAudio(this);
@@ -591,6 +592,9 @@ std::unique_ptr<ParticipantState> createParticipant(
     }
 
     descriptor.outgoingAudioBitrateKbit = 32;
+    descriptor.dredFixedPacketLossPercent = gGroupDred.fixedPacketLossPercent;
+    descriptor.dredReceiveEnabled = gGroupDred.receive;
+    descriptor.opusDnnWeights = gGroupDred.opusDnnWeights;
     descriptor.disableIncomingChannels = false;
     descriptor.useDummyChannel = true;
 

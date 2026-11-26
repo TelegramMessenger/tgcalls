@@ -345,7 +345,8 @@ _fastPath(options.fastPath) {
         // signaling SCTP gets the t1 timer backoff cap fix (the stock
         // DcSctpSocket doesn't wire max_timer_backoff_duration to t1 timers).
         _sctpTransport = std::make_unique<webrtc::DcSctpTransport>(
-            webrtc::CreateEnvironment(),
+            options.fieldTrials ? webrtc::CreateEnvironment(options.fieldTrials->CreateCopy())
+                                : webrtc::CreateEnvironment(),
             _threads->getNetworkThread(),
             _packetTransport.get(),
             std::make_unique<CustomDcSctpSocketFactory>(options));

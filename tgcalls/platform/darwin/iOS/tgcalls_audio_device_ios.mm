@@ -14,6 +14,9 @@
 #include "tgcalls_audio_device_ios.h"
 
 #include <cmath>
+#include <cstdlib>
+#include <cstring>
+#include <thread>
 
 #include "api/array_view.h"
 #include "sdk/objc/native/src/audio/helpers.h"
@@ -24,7 +27,6 @@
 #include "rtc_base/thread.h"
 #include "rtc_base/thread_annotations.h"
 #include "rtc_base/time_utils.h"
-#include "api/environment/deprecated_global_field_trials.h"
 #include "system_wrappers/include/metrics.h"
 
 #import "base/RTCLogging.h"
@@ -120,6 +122,7 @@ AudioDeviceIOS::~AudioDeviceIOS() {
   LOGI() << "~dtor" << ios::GetCurrentThreadDescription();
   safety_->SetNotAlive();
   Terminate();
+  StopPlayoutRecording();
   audio_session_observer_ = nil;
 }
 
@@ -244,6 +247,7 @@ int32_t AudioDeviceIOS::StartPlayout() {
     }
     RTC_LOG(LS_INFO) << "Voice-Processing I/O audio unit is now started";
   }
+  StartPlayoutRecordingIfRequested();
   playing_.store(1, std::memory_order_release);
   num_playout_callbacks_ = 0;
   num_detected_playout_glitches_ = 0;
@@ -253,6 +257,7 @@ int32_t AudioDeviceIOS::StartPlayout() {
 int32_t AudioDeviceIOS::StopPlayout() {
   LOGI() << "StopPlayout";
   RTC_DCHECK_RUN_ON(thread_);
+  StopPlayoutRecording();
   if (!audio_is_initialized_ || !playing_.load()) {
     return 0;
   }
@@ -544,7 +549,67 @@ OSStatus AudioDeviceIOS::OnGetPlayoutData(AudioUnitRenderActionFlags* flags,
       }
   }
 
+  // Debug: TG_CALL_PLAYOUT_WAV=1 (StartPlayoutRecordingIfRequested). Sequentially consistent with
+  // StopPlayoutRecording: either the recorder is seen null here, or the stop waits for this push to end.
+  playout_recorder_users_.fetch_add(1);
+  if (tgcalls::CallPlayoutRecorder *recorder = playout_recorder_.load()) {
+    if (int(audio_buffer->mNumberChannels) == recorder->channels()) {
+      recorder->Push(static_cast<const int16_t*>(audio_buffer->mData), num_frames * audio_buffer->mNumberChannels);
+    }
+  }
+  playout_recorder_users_.fetch_sub(1);
+
   return noErr;
+}
+
+void AudioDeviceIOS::StartPlayoutRecordingIfRequested() {
+#ifndef NDEBUG
+  RTC_DCHECK_RUN_ON(thread_);
+  const char *value = getenv("TG_CALL_PLAYOUT_WAV");
+  if (value == nullptr || strcmp(value, "1") != 0 || playout_recorder_owner_) {
+    return;
+  }
+  NSString *documents = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+  if (documents == nil) {
+    return;
+  }
+  NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+  formatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+  formatter.dateFormat = @"yyyyMMdd-HHmmss";
+  NSString *path = [documents stringByAppendingPathComponent:
+      [NSString stringWithFormat:@"call-playout-%@.wav", [formatter stringFromDate:[NSDate date]]]];
+  const int sampleRate = playout_parameters_.sample_rate();
+  const int channels = int(playout_parameters_.channels());
+  playout_recorder_owner_ = tgcalls::CallPlayoutRecorder::Create(
+      path.UTF8String, sampleRate, channels, size_t(sampleRate) * size_t(channels) * 10, true);
+  if (playout_recorder_owner_) {
+    RTC_LOG(LS_INFO) << "CallPlayoutRecorder: recording playout (" << sampleRate << " Hz, " << channels
+                     << " channel(s)) to " << path.UTF8String;
+    playout_recorder_.store(playout_recorder_owner_.get());
+  } else {
+    RTC_LOG(LS_ERROR) << "CallPlayoutRecorder: could not create " << path.UTF8String;
+  }
+#endif
+}
+
+void AudioDeviceIOS::StopPlayoutRecording() {
+  if (!playout_recorder_owner_) {
+    return;
+  }
+  playout_recorder_.store(nullptr);
+  while (playout_recorder_users_.load() != 0) {
+    std::this_thread::yield();
+  }
+  std::unique_ptr<tgcalls::CallPlayoutRecorder> recorder = std::move(playout_recorder_owner_);
+  recorder->Drain();
+  const uint64_t written = recorder->writtenSamples();
+  const uint64_t dropped = recorder->droppedSamples();
+  const int sampleRate = recorder->sampleRate();
+  const int channels = recorder->channels();
+  recorder.reset();
+  RTC_LOG(LS_INFO) << "CallPlayoutRecorder: playout recording ended, "
+                   << double(written) / double(sampleRate * channels) << " s written, " << dropped
+                   << " samples dropped";
 }
 
 void AudioDeviceIOS::OnMutedSpeechStatusChanged(bool isDetectingSpeech) {
@@ -573,7 +638,10 @@ void AudioDeviceIOS::HandleInterruptionEnd() {
          is_interrupted_);
   is_interrupted_ = false;
   if (!audio_unit_) return;
-  if (webrtc::DeprecatedGlobalFieldTrials().IsEnabled("WebRTC-Audio-iOS-Holding")) {
+  // Always (WebRTC-Audio-iOS-Holding's behaviour, which every 1:1 engine asked for): the device is shared by the
+  // calls and outlives them, so it reads no call's field trials, and the process-wide string it read depended on
+  // which call had started last (the custom group engine's lacks the trial).
+  {
     // Work around an issue where audio does not restart properly after an interruption
     // by restarting the audio unit when the interruption ends.
     if (audio_unit_->GetState() == VoiceProcessingAudioUnit::kStarted) {

@@ -105,6 +105,14 @@ void TestTheRangeIsCapped() {
     CHECK_TRUE(isDefault(optionsFromJson(R"({"network_sctp_t1_init_ms": 60001, "network_sctp_t1_cookie_ms": 1500000, "network_sctp_max_backoff_ms": 2147483647})")));
 }
 
+// The field trials are the engine's to give (InstanceV2ReferenceImpl gives the call's own); the server's parameters
+// never set them, so the other engines keep the process-wide string.
+void TestFieldTrialsAreNotFromTheServer() {
+    CHECK_TRUE(SignalingSctpConnection::Options().fieldTrials == nullptr);
+    CHECK_TRUE(optionsFromJson("{}").fieldTrials == nullptr);
+    CHECK_TRUE(optionsFromJson(R"({"network_sctp_fast_path": true, "audio_dred": true})").fieldTrials == nullptr);
+}
+
 // Beyond int's range json11's int_value() is an unchecked static_cast from
 // double (undefined behaviour; INT_MAX on arm64, INT_MIN on x86_64).
 void TestNumbersBeyondIntKeepTheDefault() {
@@ -125,6 +133,7 @@ int main() {
     TestNumbersBeyondIntKeepTheDefault();
     TestSendBeforeConnectedIsOffUnlessTrue();
     TestFastPathIsOffUnlessTrue();
+    TestFieldTrialsAreNotFromTheServer();
 
     if (g_failures != 0) {
         std::printf("%d failure(s)\n", g_failures);

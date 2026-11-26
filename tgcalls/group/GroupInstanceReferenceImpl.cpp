@@ -55,6 +55,7 @@
 
 #include "group/GroupJoinPayloadInternal.h"
 #include "group/GroupFrameTransformer.h"
+#include "group/GroupOpusDred.h"
 #include "group/GroupAudioCapturePostProcessor.h"
 #include "group/GroupExternalAudio.h"
 #include "group/GroupReferenceFieldTrials.h"
@@ -68,6 +69,7 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <mutex>
 #include <set>
 #include <sstream>
 
@@ -551,6 +553,11 @@ public:
         , _onMutedSpeechActivityDetected(std::move(descriptor.onMutedSpeechActivityDetected))
         , _requestMediaChannelDescriptions(std::move(descriptor.requestMediaChannelDescriptions))
         , _outgoingAudioBitrateKbit(descriptor.outgoingAudioBitrateKbit)
+        , _dredFixedPacketLossPercent(groupDredFixedPacketLossPercent(descriptor.dredFixedPacketLossPercent,
+                                                                      groupOpusDnnWeightsUsable(descriptor.opusDnnWeights)))
+        , _dredReceiveEnabled(groupDredReceiveEnabled(descriptor.dredReceiveEnabled,
+                                                      groupOpusDnnWeightsUsable(descriptor.opusDnnWeights)))
+        , _opusDnnWeights(descriptor.opusDnnWeights)
         , _disableAudioInput(descriptor.disableAudioInput)
         , _enableSystemMute(descriptor.ios_enableSystemMute)
         , _videoContentType(descriptor.videoContentType)
@@ -696,7 +703,9 @@ public:
         webrtc::PeerConnectionFactoryDependencies deps;
         // M159: field trials and the task queue factory live in the factory's Environment; the network thread is
         // also the worker.
-        deps.env = webrtc::CreateEnvironment(std::make_unique<GroupReferenceFieldTrials>(_iosInAppScreencast), std::move(taskQueueFactory));
+        deps.env = webrtc::CreateEnvironment(std::make_unique<GroupReferenceFieldTrials>(_iosInAppScreencast, _dredReceiveEnabled, _dredFixedPacketLossPercent > 0), std::move(taskQueueFactory));
+        RTC_LOG(LS_INFO) << "GroupRef: Opus DRED "
+            << groupOpusDredDescription(_dredFixedPacketLossPercent, _dredReceiveEnabled, _opusDnnWeights);
         deps.network_thread = _threads->getNetworkThread();
         deps.signaling_thread = _threads->getMediaThread();
         deps.adm = _audioDeviceModule;
@@ -721,8 +730,9 @@ public:
 #endif
         deps.audio_processing_builder = webrtc::CustomAudioProcessing(builder.Build(*deps.env));
 
-        deps.audio_encoder_factory = webrtc::CreateAudioEncoderFactory<webrtc::AudioEncoderOpus>();
-        deps.audio_decoder_factory = webrtc::CreateAudioDecoderFactory<webrtc::AudioDecoderOpus>();
+        // Opus with the DRED weights (the decoders use them only with the receive trials on).
+        deps.audio_encoder_factory = CreateGroupAudioEncoderFactory(_dredFixedPacketLossPercent, _opusDnnWeights, false);
+        deps.audio_decoder_factory = CreateGroupAudioDecoderFactory(_opusDnnWeights, false);
 
         // As CustomImpl: preferHardwareEncoding selects the in-app screen capture's encoder
         // (DarwinInterface: VideoToolbox H264 at level 5.2, screen-content rate control), also
@@ -972,7 +982,10 @@ public:
             if (params.encodings.empty()) {
                 params.encodings.push_back(webrtc::RtpEncodingParameters());
             }
-            params.encodings[0].max_bitrate_bps = _outgoingAudioBitrateKbit * 1024;
+            // With DRED a fixed 40000 bps (WebRTC-Audio-Allocation pins it under congestion too), not the ×1024.
+            params.encodings[0].max_bitrate_bps = _dredFixedPacketLossPercent > 0
+                ? kGroupDredBitrateBps
+                : _outgoingAudioBitrateKbit * 1024;
             _outgoingAudioTransceiver->sender()->SetParameters(params);
 
             if (_e2eEncryptDecrypt) {
@@ -2993,6 +3006,10 @@ private:
     std::function<void(bool)> _onMutedSpeechActivityDetected;
     std::function<std::shared_ptr<RequestMediaChannelDescriptionTask>(std::vector<uint32_t> const &, std::function<void(std::vector<MediaChannelDescription> &&)>)> _requestMediaChannelDescriptions;
     int _outgoingAudioBitrateKbit = 32;
+    // See GroupInstanceDescriptor::dredFixedPacketLossPercent, dredReceiveEnabled, opusDnnWeights (GroupOpusDred.h).
+    int _dredFixedPacketLossPercent = 0;
+    bool _dredReceiveEnabled = false;
+    GroupOpusDnnWeights _opusDnnWeights;
     bool _disableAudioInput = false;
     bool _enableSystemMute = false;
 

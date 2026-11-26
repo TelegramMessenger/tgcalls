@@ -174,6 +174,20 @@ int runGroupMode(int customParticipants, int referenceParticipants, int duration
         groupLog("Group", "connection timeout: %d/%d connected", connectedCount, (int)states.size());
     }
 
+    if (gGroupDred.egressLoss > 0.0 || gGroupDred.ingressLoss > 0.0 || gGroupDred.ingressBandwidthBps > 0) {
+        for (const auto& s : states) {
+            if (gGroupDred.egressLoss > 0.0) {
+                sfuSetNetworkParams(sfuHandle, s->id, 1, 0, 0, gGroupDred.egressLoss, 0);
+            }
+            if (gGroupDred.ingressLoss > 0.0 || gGroupDred.ingressBandwidthBps > 0) {
+                sfuSetNetworkParams(sfuHandle, s->id, 0, 0, 0, gGroupDred.ingressLoss, gGroupDred.ingressBandwidthBps);
+            }
+        }
+        groupLog("Group", "SFU legs: %.0f%% lost to each participant, %.0f%% lost and %lld bps cap from each",
+                 gGroupDred.egressLoss * 100.0, gGroupDred.ingressLoss * 100.0,
+                 (long long)gGroupDred.ingressBandwidthBps);
+    }
+
     if (gGroupScreencast.sharerIngressLoss > 0.0) {
         for (const auto& s : states) {
             if (s->sharesScreen) {

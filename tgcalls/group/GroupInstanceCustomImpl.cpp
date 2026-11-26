@@ -12,6 +12,7 @@
 #include "StaticThreads.h"
 #include "GroupNetworkManager.h"
 #include "group/GroupFrameTransformer.h"
+#include "group/GroupOpusDred.h"
 #include "group/GroupAudioCapturePostProcessor.h"
 #include "group/ScreencastSendParameters.h"
 #include "group/GroupVideoPayloadTypes.h"
@@ -1062,7 +1063,16 @@ public:
     _getVideoSource(descriptor.getVideoSource),
     _disableIncomingChannels(descriptor.disableIncomingChannels),
     _useDummyChannel(descriptor.useDummyChannel),
-    _outgoingAudioBitrateKbit(descriptor.outgoingAudioBitrateKbit),
+    // With DRED a fixed 40 kbit/s (GroupOpusDred.h), whatever the app asks; no DRED without usable weights.
+    _outgoingAudioBitrateKbit(groupDredFixedPacketLossPercent(descriptor.dredFixedPacketLossPercent,
+                                                              groupOpusDnnWeightsUsable(descriptor.opusDnnWeights)) > 0
+                                  ? kGroupDredBitrateBps / 1000
+                                  : descriptor.outgoingAudioBitrateKbit),
+    _dredFixedPacketLossPercent(groupDredFixedPacketLossPercent(descriptor.dredFixedPacketLossPercent,
+                                                                groupOpusDnnWeightsUsable(descriptor.opusDnnWeights))),
+    _dredReceiveEnabled(groupDredReceiveEnabled(descriptor.dredReceiveEnabled,
+                                                groupOpusDnnWeightsUsable(descriptor.opusDnnWeights))),
+    _opusDnnWeights(descriptor.opusDnnWeights),
     _disableOutgoingAudioProcessing(descriptor.disableOutgoingAudioProcessing),
 #ifdef WEBRTC_IOS
     _disableAudioInput(descriptor.disableAudioInput),
@@ -1117,6 +1127,9 @@ public:
     }
 
     ~GroupInstanceCustomInternal() {
+        // A later screen share no longer takes this connection's DRED trials (groupCustomEngineFieldTrialsForConnection).
+        groupCustomEngineMainConnectionEnded(_mainConnectionTrialsToken);
+
         _incomingAudioChannels.clear();
         _incomingVideoChannels.clear();
         _serverBandwidthProbingVideoSsrc.reset();
@@ -1147,14 +1160,14 @@ public:
 
         const auto weak = std::weak_ptr<GroupInstanceCustomInternal>(shared_from_this());
 
-        webrtc::DeprecatedGlobalFieldTrials::Set(
-            "WebRTC-Audio-Allocation/min:32kbps,max:32kbps/"
-            "WebRTC-Audio-MinimizeResamplingOnMobile/Enabled/"
-            "WebRTC-BweLossExperiment/Enabled/"
-            "WebRTC-Video-DiscardPacketsWithUnknownSsrc/Enabled/"
-            // Top: the screen share's encodings name different codecs (setGroupAv1TopLayerCodecs).
-            "WebRTC-MixedCodecSimulcast/Enabled/"
-        );
+        // The audio allocation, DiscardPacketsWithUnknownSsrc, MixedCodecSimulcast (the screen share's Top mode) and,
+        // with Opus DRED, its receive trials and a 40 kbit/s allocation: groupCustomEngineFieldTrials.
+        // A screen share's connection keeps the call's DRED trials (groupCustomEngineFieldTrialsForConnection).
+        webrtc::DeprecatedGlobalFieldTrials::Set(groupCustomEngineFieldTrialsForConnection(
+            _videoContentType == VideoContentType::Screencast, _dredReceiveEnabled, _dredFixedPacketLossPercent > 0,
+            &_mainConnectionTrialsToken));
+        RTC_LOG(LS_INFO) << "GroupInstanceCustomImpl: Opus DRED "
+            << groupOpusDredDescription(_dredFixedPacketLossPercent, _dredReceiveEnabled, _opusDnnWeights);
 
         bool takeAudioLevelFromNetwork = _e2eEncryptDecrypt == nullptr;
 
@@ -1268,8 +1281,10 @@ public:
         peerConnectionFactoryDeps.network_thread = _threads->getNetworkThread();
         peerConnectionFactoryDeps.network_monitor_factory = PlatformInterface::SharedInstance()->createNetworkMonitorFactory();
 
-        peerConnectionFactoryDeps.audio_encoder_factory = webrtc::CreateAudioEncoderFactory<webrtc::AudioEncoderOpus, webrtc::AudioEncoderL16>();
-        peerConnectionFactoryDeps.audio_decoder_factory = webrtc::CreateAudioDecoderFactory<webrtc::AudioDecoderOpus, webrtc::AudioDecoderL16>();
+        // Opus with the DRED weights (the decoders use them only with the receive trials on).
+        peerConnectionFactoryDeps.audio_encoder_factory =
+            CreateGroupAudioEncoderFactory(_dredFixedPacketLossPercent, _opusDnnWeights, true);
+        peerConnectionFactoryDeps.audio_decoder_factory = CreateGroupAudioDecoderFactory(_opusDnnWeights, true);
 
         // preferHardwareEncoding is what selects the in-app screencast's encoder (DarwinInterface).
 #if defined(TGCALLS_ENABLE_AV1) && TGCALLS_ENABLE_AV1
@@ -3526,6 +3541,12 @@ private:
     bool _disableIncomingChannels = false;
     bool _useDummyChannel{true};
     int _outgoingAudioBitrateKbit{32};
+    // See GroupInstanceDescriptor::dredFixedPacketLossPercent, dredReceiveEnabled, opusDnnWeights (GroupOpusDred.h).
+    int _dredFixedPacketLossPercent{0};
+    bool _dredReceiveEnabled{false};
+    GroupOpusDnnWeights _opusDnnWeights;
+    // From groupCustomEngineFieldTrialsForConnection for a main connection (0 for a screen share's).
+    uint64_t _mainConnectionTrialsToken{0};
     bool _disableOutgoingAudioProcessing{false};
 #ifdef WEBRTC_IOS
     bool _disableAudioInput{false};

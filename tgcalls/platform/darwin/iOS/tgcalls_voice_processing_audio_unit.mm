@@ -10,6 +10,8 @@
 
 #import "tgcalls_voice_processing_audio_unit.h"
 
+#include <atomic>
+
 #include "rtc_base/checks.h"
 #include "system_wrappers/include/metrics.h"
 
@@ -45,6 +47,12 @@ static void LogStreamDescription(AudioStreamBasicDescription description) {
 
 namespace webrtc {
 namespace tgcalls_ios_adm {
+
+static std::atomic<bool> reducesOtherAudioDucking{false};
+
+void SetReducesOtherAudioDucking(bool reduces) {
+  reducesOtherAudioDucking.store(reduces);
+}
 
 // Calls to AudioUnitInitialize() can fail if called back-to-back on different
 // ADM instances. A fall-back solution is to allow multiple sequential calls
@@ -211,6 +219,20 @@ bool VoiceProcessingAudioUnit::Init() {
               }
           };
           result = AudioUnitSetProperty(vpio_unit_, kAUVoiceIOProperty_MutedSpeechActivityEventListener, kAudioUnitScope_Global, kInputBus, &listener, sizeof(AUVoiceIOMutedSpeechActivityEventListener));
+      }
+
+      if (reducesOtherAudioDucking.load()) {
+          if (@available(iOS 17.0, macOS 14.0, *)) {
+              AUVoiceIOOtherAudioDuckingConfiguration ducking_configuration;
+              ducking_configuration.mEnableAdvancedDucking = true;
+              ducking_configuration.mDuckingLevel = kAUVoiceIOOtherAudioDuckingLevelMin;
+              OSStatus ducking_result = AudioUnitSetProperty(vpio_unit_, kAUVoiceIOProperty_OtherAudioDuckingConfiguration, kAudioUnitScope_Global, 0, &ducking_configuration, sizeof(ducking_configuration));
+              if (ducking_result != noErr) {
+                  RTCLogError(@"Failed to set the other audio ducking configuration. Error=%ld", (long)ducking_result);
+              } else {
+                  RTCLog(@"Other audio ducking: advanced, minimum level");
+              }
+          }
       }
   }
     

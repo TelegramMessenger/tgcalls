@@ -37,6 +37,7 @@ let package = Package(
                       "tgcalls/v2/VideoStatsLogTest.cpp",
                       "tgcalls/group/GroupVideoPayloadTypesTest.cpp",
                       "tgcalls/group/GroupReferenceFieldTrialsTest.cpp",
+                      "tgcalls/group/GroupOpusDredTest.cpp",
                       "tgcalls/group/GroupReferenceLevelsTest.cpp",
                       "tgcalls/group/GroupAv1DecisionTest.cpp",
                       "README.md",

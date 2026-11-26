@@ -1,9 +1,9 @@
 #include "BroadcastAudioLevels.h"
 
+#include "api/audio/audio_view.h"
 #include "modules/audio_processing/agc2/cpu_features.h"
 #include "modules/audio_processing/agc2/vad_wrapper.h"
 #include "modules/audio_processing/audio_buffer.h"
-#include "modules/audio_processing/include/audio_frame_view.h"
 #include "modules/audio_processing/include/audio_processing.h"
 
 #include <algorithm>
@@ -46,9 +46,9 @@ public:
         if (buffer->num_channels() <= 0) {
             return _history.update(0.0f);
         }
-        webrtc::AudioFrameView<float> frameView(buffer->channels(), (int)buffer->num_channels(), (int)buffer->num_frames());
+        webrtc::DeinterleavedView<const float> frameView(buffer->channels(), buffer->num_frames(), buffer->num_channels());
         float peak = 0.0f;
-        for (const auto &x : frameView.channel(0)) {
+        for (const auto &x : frameView[0]) {
             peak = std::max(std::fabs(x), peak);
         }
         if (peak <= 0.01f) {

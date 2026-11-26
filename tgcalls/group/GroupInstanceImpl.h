@@ -149,6 +149,15 @@ struct GroupInstanceDescriptor {
     std::shared_ptr<VideoCaptureInterface> videoCapture; // deprecated
     std::function<webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface>()> getVideoSource;
     int outgoingAudioBitrateKbit{32};
+    // Opus DRED (GroupOpusDred.h): > 0 sends 1 s of DRED in every audio packet, libopus told this loss figure
+    // (percent) whatever the network reports, at a fixed 40 kbit/s (outgoingAudioBitrateKbit then unused), without
+    // in-band FEC; 0 sends none.
+    int dredFixedPacketLossPercent{0};
+    // Opus DRED: rebuild lost audio from incoming DRED and conceal the rest with Opus's concealment.
+    bool dredReceiveEnabled{false};
+    // Opus DRED: libopus's neural weights (GroupOpusDred.h, the blob //third-party/opus:opus_dnn_weights), which libopus
+    // is built without. None, or a malformed blob: no DRED, sending or receiving, whatever the two settings above say.
+    std::shared_ptr<const std::vector<uint8_t>> opusDnnWeights;
     bool disableOutgoingAudioProcessing{false};
     bool disableAudioInput{false};
     bool ios_enableSystemMute{false};

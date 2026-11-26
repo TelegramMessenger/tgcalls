@@ -150,6 +150,23 @@ struct GroupScreencastOptions {
 };
 extern GroupScreencastOptions gGroupScreencast;
 
+// Opus DRED and the SFU's per-leg loss (GroupOpusDred.h in tgcalls), for every participant.
+struct GroupDredOptions {
+    // --dred-loss N: GroupInstanceDescriptor::dredFixedPacketLossPercent (0: no DRED sent).
+    int fixedPacketLossPercent = 0;
+    // --dred-receive: GroupInstanceDescriptor::dredReceiveEnabled.
+    bool receive = false;
+    // --opus-dnn-weights PATH: GroupInstanceDescriptor::opusDnnWeights, libopus's weights blob
+    // (//third-party/opus:opus_dnn_weights). Without it neither DRED option has any effect.
+    std::shared_ptr<const std::vector<uint8_t>> opusDnnWeights;
+    // --egress-loss RATE: packets dropped on the SFU's leg to each participant (a listener on bad Wi-Fi).
+    double egressLoss = 0.0;
+    // --ingress-loss RATE / --ingress-bandwidth BPS: each participant's leg into the SFU.
+    double ingressLoss = 0.0;
+    int64_t ingressBandwidthBps = 0;
+};
+extern GroupDredOptions gGroupDred;
+
 struct ParticipantState {
     ~ParticipantState();
 

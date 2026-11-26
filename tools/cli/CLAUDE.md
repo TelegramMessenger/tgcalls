@@ -103,6 +103,34 @@ One side of a call per process, so two different builds (an M123 CLI and an M159
 - `--request-own-video`: `requestVideoFromEndpoints()` appends the participant's own endpoint to every request (the SFU's `ActiveVideoSsrcs` never names the receiver, but the app's roster includes the local participant and is handed to the engine unfiltered) and registers a sink for it. Validation reads `GoSfu_QueryRequestedLayer(receiver, receiver)` before the SFU is destroyed (`ParticipantState::sfuSelfRequestedLayer`) — any value ≥ 0 means the engine let a self-request through — and, for Capture* feeds, requires the own-endpoint sink to have received preview frames (`videoViaCapture` outlives the released `videoCapture`). The own-endpoint sink is never counted as a received pair.
 - Group mode source: `submodules/TgVoipWebrtc/tgcalls/tools/cli/group_mode.cpp`
 
+## Opus DRED in group mode (2026-11-26)
+
+`--dred-loss N` sets every participant's `dredFixedPacketLossPercent` (1 s of DRED in every packet, libopus told N%
+loss, a fixed 40 kbit/s, no in-band FEC; tgcalls `group/GroupOpusDred.h`), `--dred-receive` their `dredReceiveEnabled`
+(DRED recovery and Opus concealment). Both need `--opus-dnn-weights PATH`, libopus's weights blob
+(`bazel build //third-party/opus:opus_dnn_weights`, then `bazel-bin/third-party/opus/opus_dnn_weights.bin`): libopus is
+built without its weights, and without the blob the engines run without DRED (their log line says `no weights`). `--egress-loss RATE` drops packets on the SFU's leg to every participant (a
+listener on bad Wi-Fi), `--ingress-loss RATE` / `--ingress-bandwidth BPS` on every participant's leg into the SFU
+(host only in split runs). Nothing is validated; check under lldb (telegram-ios plan
+`docs/superpowers/plans/2026-11-26-opus-dred-group-calls.md`, Task 6): after connecting every `WebRtcOpus_SetBitRate`
+reads 40000 (the custom engine passes 32000 and 510000 in its first 30 ms, before anything is sent) and every
+`WebRtcOpus_SetPacketLossRate` 25, in both engines and with the uplink impaired; `WebRtcOpus_DredDecode` has hits. The
+fake device's 440 Hz tone carries DRED in only ~18% of packets (libopus codes little DRED for a pure tone), so the
+hits are few and no audio-level comparison is made.
+
+## Opus DRED in 1:1 calls (2026-11-26)
+
+`--opus-dnn-weights PATH` also gives every 1:1 instance the weights (`Descriptor::opusDnnWeights`, in
+`createInstance`; allowed with `--split caller|callee`). `InstanceV2ReferenceImpl` (10.0.0, 11.0.0) then runs DRED in
+libopus's adaptive mode unless its `--custom-params` / `--custom-params2` say `{"audio_dred":false}`; the other
+engines ignore the weights. Each side logs `InstanceV2ReferenceImpl: Opus DRED on, weights 1998208 bytes, audio
+48000-64000 bps (caller)` (or `off (audio_dred false)`, `off, no weights`, with `audio 32768 bps`), the encoders `Opus
+encoder with DRED: 1000 ms, loss figure 0%, …` and the decoders `Opus DRED receive …` lines. The bitrate allocator
+asks for 70400–86400 bps (`UpdateAllocationLimits`: the call's `WebRTC-Audio-Allocation` range plus 22.4 kbit/s of
+packet overhead); without DRED 55168 both. The 1:1 media goes host to host with no way to drop packets, so WebRTC
+measures 0% and no packet carries DRED here: the loss → DRED behaviour is `opus_dred_encoder_test`'s and
+`group_opus_dred_test`'s (on a simulated clock).
+
 ## The broadcast testbench (the emulated server and the baseline)
 
 tgcalls no longer plays broadcast: the app-side player (telegram-ios

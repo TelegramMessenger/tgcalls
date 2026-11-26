@@ -5,6 +5,7 @@
 #include "VideoCapturerInterface.h"
 #include "v2/InstanceNetworking.h"
 #include "v2/Signaling.h"
+#include "group/GroupOpusDred.h"
 #include "group/ScreencastSendParameters.h"
 
 
@@ -20,7 +21,7 @@
 #include "api/audio_codecs/L16/audio_encoder_L16.h"
 #include "api/task_queue/default_task_queue_factory.h"
 #include "media/engine/webrtc_media_engine.h"
-#include "api/environment/deprecated_global_field_trials.h"
+#include "api/field_trials_view.h"
 #include "api/video/builtin_video_bitrate_allocator_factory.h"
 #include "call/call.h"
 #include "api/call/audio_sink.h"
@@ -434,6 +435,7 @@ public:
     _eventLog(std::make_unique<webrtc::RtcEventLogNull>()),
     _taskQueueFactory(webrtc::CreateDefaultTaskQueueFactory()),
     _videoCapture(descriptor.videoCapture) {
+        _opusDnnWeights = std::move(descriptor.opusDnnWeights);
         if (!descriptor.config.customParameters.empty()) {
             std::string parsingError;
             auto customParametersJson = json11::Json::parse(descriptor.config.customParameters, parsingError);
@@ -441,6 +443,15 @@ public:
                 _customParameters = customParametersJson.object_items();
             }
         }
+
+        // Opus DRED in libopus's adaptive mode (group/GroupOpusDred.h): on unless the server sends false, and only
+        // with usable weights.
+        _dredRequested = getCustomParameterBoolDefaultTrue(_customParameters, "audio_dred");
+        _dred = p2pOpusDredEnabled(_dredRequested, _opusDnnWeights);
+        // The call's own field trials, for every Environment it creates. Nothing goes into the process-wide string,
+        // which WebRTC reads whenever an object asks: setting it here replaced a running custom-engine group call's
+        // trials (and that call's replaced ours).
+        _fieldTrials = CreateP2PFieldTrials(_dred);
 
         // Default on since 2026-10-12. With AddTransceiver the callee's own audio
         // transceiver is never associated with the caller's m=0, so every call
@@ -455,10 +466,6 @@ public:
         // failure chain against the backstop in sendLocalDescription().
         _immediateCaptureRenegotiation = getCustomParameterBool(_customParameters, "network_reference_immediate_capture_renegotiation");
 #endif
-
-        webrtc::DeprecatedGlobalFieldTrials::Set(
-            "WebRTC-Audio-iOS-Holding/Enabled/"
-        );
     }
 
     ~InstanceV2ReferenceImplInternal() {
@@ -487,7 +494,13 @@ public:
 
         RTC_DCHECK(_threads->getMediaThread()->IsCurrent());
 
+        RTC_LOG(LS_INFO) << "InstanceV2ReferenceImpl: Opus DRED " << p2pOpusDredDescription(_dredRequested, _opusDnnWeights)
+                         << ", audio " << (_dred ? std::to_string(kP2PDredMinBitrateBps) + "-" : std::string())
+                         << outgoingAudioMaxBitrateBps() << " bps (" << sideName() << ")";
+
         if (_signalingProtocolVersion == SignalingProtocolVersion::V2) {
+            auto signalingOptions = SignalingSctpConnection::Options::fromCustomParameters(_customParameters);
+            signalingOptions.fieldTrials = _fieldTrials;
             _signalingConnection = std::make_unique<SignalingSctpConnection>(
                 _threads,
                 [threads = _threads, weak](const std::vector<uint8_t> &data) {
@@ -504,7 +517,7 @@ public:
                     signalingDataEmitted(data);
                 },
                 _encryptionKey.isOutgoing,
-                SignalingSctpConnection::Options::fromCustomParameters(_customParameters)
+                signalingOptions
             );
         }
         if (!_signalingConnection) {
@@ -534,9 +547,10 @@ public:
         webrtc::PeerConnectionFactoryDependencies peerConnectionFactoryDependencies;
         peerConnectionFactoryDependencies.network_thread = _threads->getNetworkThread();
         peerConnectionFactoryDependencies.signaling_thread = _threads->getMediaThread();
-        // M159: the task queue factory and field trials (the process-wide string, DeprecatedGlobalFieldTrials) live
-        // in the factory's Environment; the network thread is also the worker.
-        peerConnectionFactoryDependencies.env = webrtc::CreateEnvironment(webrtc::CreateDefaultTaskQueueFactory());
+        // M159: the task queue factory and the field trials (the call's own, not the process-wide string) live in the
+        // factory's Environment; the network thread is also the worker.
+        peerConnectionFactoryDependencies.env = webrtc::CreateEnvironment(createFieldTrials(),
+                                                                          webrtc::CreateDefaultTaskQueueFactory());
         peerConnectionFactoryDependencies.network_monitor_factory = PlatformInterface::SharedInstance()->createNetworkMonitorFactory();
 
         peerConnectionFactoryDependencies.adm = _audioDeviceModule;
@@ -544,8 +558,11 @@ public:
         peerConnectionFactoryDependencies.audio_processing_builder = webrtc::CustomAudioProcessing(
             webrtc::BuiltinAudioProcessingBuilder().Build(*peerConnectionFactoryDependencies.env));
         
-        peerConnectionFactoryDependencies.audio_encoder_factory = webrtc::CreateAudioEncoderFactory<webrtc::AudioEncoderOpus>();
-        peerConnectionFactoryDependencies.audio_decoder_factory = webrtc::CreateAudioDecoderFactory<webrtc::AudioDecoderOpus>();
+        // Opus only, as webrtc::CreateAudio{En,De}coderFactory<AudioEncoderOpus/AudioDecoderOpus>; with DRED the
+        // encoders get its duration and the weights, the decoders the weights (group/GroupOpusDred.h).
+        peerConnectionFactoryDependencies.audio_encoder_factory = CreateP2PAudioEncoderFactory(_dred, _opusDnnWeights);
+        peerConnectionFactoryDependencies.audio_decoder_factory =
+            CreateGroupAudioDecoderFactory(_dred ? _opusDnnWeights : nullptr, false);
 
 #if TGCALLS_ENABLE_AV1
         // AV1 is offered (and decoded) unless the server's video_av1 is false; this side encodes it only where the
@@ -773,10 +790,10 @@ public:
         
         _networkMonitorFactory = PlatformInterface::SharedInstance()->createNetworkMonitorFactory();
         _socketFactory = std::make_unique<webrtc::BasicPacketSocketFactory>(_threads->getNetworkThread()->socketserver());
-        _networkManager = std::make_unique<webrtc::BasicNetworkManager>(webrtc::CreateEnvironment(), _threads->getNetworkThread()->socketserver(), _networkMonitorFactory.get());
+        _networkManager = std::make_unique<webrtc::BasicNetworkManager>(webrtc::CreateEnvironment(createFieldTrials()), _threads->getNetworkThread()->socketserver(), _networkMonitorFactory.get());
         _relayPortFactory = std::make_unique<ReflectorRelayPortFactory>(_rtcServers, false, 0, _threads->getNetworkThread()->socketserver(), getCustomParameterBoolDefaultTrue(_customParameters, "network_reflector_resolve_remote_candidate_ip"));
         
-        auto portAllocator = std::make_unique<webrtc::BasicPortAllocator>(webrtc::CreateEnvironment(), _networkManager.get(), _socketFactory.get(), nullptr, _relayPortFactory.get());
+        auto portAllocator = std::make_unique<webrtc::BasicPortAllocator>(webrtc::CreateEnvironment(createFieldTrials()), _networkManager.get(), _socketFactory.get(), nullptr, _relayPortFactory.get());
 
         if (getCustomParameterBool(_customParameters, "network_disable_stun_when_unconfigured")) {
             bool hasStunServer = false;
@@ -926,7 +943,7 @@ public:
                 if (parameters.encodings.empty()) {
                     parameters.encodings.push_back(webrtc::RtpEncodingParameters());
                 }
-                parameters.encodings[0].max_bitrate_bps = 32 * 1024;
+                parameters.encodings[0].max_bitrate_bps = outgoingAudioMaxBitrateBps();
                 _outgoingAudioTransceiver->sender()->SetParameters(parameters);
 
                 _outgoingAudioTrack->set_enabled(true);
@@ -1899,6 +1916,18 @@ public:
         return _encryptionKey.isOutgoing ? "caller" : "callee";
     }
 
+    // The audio sender's max bitrate: higher with DRED, whose bits come out of the same bitrate. Without DRED WebRTC's
+    // voice engine sends at it (min = max); with DRED the call's WebRTC-Audio-Allocation lowers the min to
+    // kP2PDredMinBitrateBps, so the audio floats between the two with the bandwidth estimate.
+    int outgoingAudioMaxBitrateBps() const {
+        return _dred ? kP2PDredMaxBitrateBps : 32 * 1024;
+    }
+
+    // A copy of the call's field trials for one Environment, which owns it.
+    std::unique_ptr<webrtc::FieldTrialsView> createFieldTrials() const {
+        return _fieldTrials->CreateCopy();
+    }
+
 #if TGCALLS_ENABLE_AV1
     // Pins the camera sender among the codecs the last negotiation round gave it (VideoSendCodecCandidates): AV1 when
     // this side may send it, else H.265, else H.264; nothing when AV1 was not negotiated, so a peer without AV1 gets
@@ -2373,6 +2402,10 @@ private:
     bool _pendingRenegotiation = false;
     bool _isPerformingConfiguration = false;
     bool _useAddTrack = false;
+    GroupOpusDnnWeights _opusDnnWeights;
+    bool _dredRequested = true;
+    bool _dred = false;
+    std::shared_ptr<const webrtc::FieldTrialsView> _fieldTrials;
     bool _immediateCaptureRenegotiation = false;
     // The peer answered one of our offers with setup:active (see sendLocalDescription).
     bool _peerAnsweredAsDtlsClient = false;
