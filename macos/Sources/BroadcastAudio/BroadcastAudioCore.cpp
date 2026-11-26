@@ -119,7 +119,7 @@ public:
     SpscQueue<Level, kLevelRecordCapacity> _levelRecords;
     std::atomic<bool> _active{false};
 
-    bool render(int16_t *samples, size_t frames, size_t channels, uint32_t sampleRate) {
+    bool render(int16_t *samples, size_t frames, size_t channels, uint32_t sampleRate, const Core::SourceAudio &sourceAudio) {
         // Taken even while inactive, so the control thread's commands (the app sets volumes on every participant
         // update) never fill the queue while the call's own playout is heard.
         drainCommands();
@@ -129,7 +129,7 @@ public:
         if (channels == 0 || channels > kMaxDeviceChannels || sampleRate == 0 || sampleRate % 100 != 0 || frames != sampleRate / 100) {
             return false;
         }
-        renderMono(_clock());
+        renderMono(_clock(), sourceAudio);
         writeOutput(samples, frames, channels, sampleRate);
         return true;
     }
@@ -292,7 +292,7 @@ private:
     // the clock only when it drifts more than the tolerance (devices pull in bursts). Each position plays from the
     // play it belongs to, at offset + (position - start), so a block straddles plays and segments played back to
     // back are heard without a gap.
-    void renderMono(int64_t now) {
+    void renderMono(int64_t now, const Core::SourceAudio &sourceAudio) {
         std::memset(_mono, 0, sizeof(_mono));
         const int64_t hostNow = hostSamples(now);
         if (!_hasCursor || std::llabs(_cursor - hostNow) > kResyncToleranceSamples) {
@@ -328,6 +328,9 @@ private:
             record.level = value.first;
             record.voice = value.second;
             _levelRecords.push(record);
+            if (sourceAudio && entry.ssrc != 0 && entry.gain > 0.0f) {
+                sourceAudio(entry.ssrc, entry.samples);
+            }
 
             webrtc::AudioFrame &frame = _frames[i];
             frame.UpdateFrame(0, entry.samples, Core::kBlockSamples, (int)Core::kSampleRate, webrtc::AudioFrame::SpeechType::kNormalSpeech, webrtc::AudioFrame::VADActivity::kVadActive);
@@ -513,8 +516,8 @@ int64_t Core::nowUs() const {
     return _clock();
 }
 
-bool Core::render(int16_t *samples, size_t frames, size_t channels, uint32_t sampleRate) {
-    return _device->render(samples, frames, channels, sampleRate);
+bool Core::render(int16_t *samples, size_t frames, size_t channels, uint32_t sampleRate, const SourceAudio &sourceAudio) {
+    return _device->render(samples, frames, channels, sampleRate, sourceAudio);
 }
 
 } // namespace broadcast_audio

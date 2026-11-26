@@ -26,7 +26,7 @@ public:
     uint64_t dropped() const;
 
 private:
-    std::atomic<bool> _enabled{false};
+    std::atomic<uint64_t> _generation{0};
     std::atomic<CallAudioTapRing *> _ring{nullptr};
     std::atomic_flag _producing = ATOMIC_FLAG_INIT;
     std::atomic<uint64_t> _dropped{0};

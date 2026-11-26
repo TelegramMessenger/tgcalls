@@ -1420,6 +1420,7 @@ private:
 @interface GroupCallThreadLocalContext () {
     BroadcastAudioCoreRef _broadcastAudioCore;
     std::shared_ptr<tgcalls_macos::CallAudioTapSlot> _incomingAudioSlot;
+    std::shared_ptr<std::atomic<bool>> _incomingAudioMuted;
     OngoingCallIncomingAudioPump *_incomingAudioPump;
     id<OngoingCallThreadLocalContextQueueWebrtc> _queue;
 
@@ -1557,7 +1558,11 @@ encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, boo
         __weak GroupCallThreadLocalContext *weakSelf = self;
         _broadcastAudioCore = BroadcastAudioCoreCreate();
         _incomingAudioSlot = std::make_shared<tgcalls_macos::CallAudioTapSlot>();
-        std::shared_ptr<tgcalls_macos::CallAudioTapSlot> incomingAudioSlot = _incomingAudioSlot;
+        _incomingAudioMuted = std::make_shared<std::atomic<bool>>(true);
+        const auto incomingAudioSlot = _incomingAudioSlot;
+        broadcast_audio::Core::SourceAudio broadcastSourceAudio = [incomingAudioSlot](uint32_t ssrc, const int16_t *samples) {
+            incomingAudioSlot->push(ssrc, samples, broadcast_audio::Core::kBlockSamples, 1, broadcast_audio::Core::kSampleRate);
+        };
         _instance.reset(new tgcalls::GroupInstanceCustomImpl((tgcalls::GroupInstanceDescriptor){
             .threads = tgcalls::StaticThreads::getThreads(),
             .config = config,
@@ -1685,8 +1690,13 @@ encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, boo
 //            .e2eEncryptDecrypt = mappedEncryptionKey,
             .e2eEncryptDecrypt = mappedEncryptDecrypt,
             .isConference = isConference,
-            .onPlayoutFrame = [core = BroadcastAudioCoreShared(_broadcastAudioCore)](int16_t *samples, size_t count, size_t channels, uint32_t rate) {
-                core->render(samples, count, channels, rate);
+            .onPlayoutFrame = [core = BroadcastAudioCoreShared(_broadcastAudioCore), sourceAudio = std::move(broadcastSourceAudio)](int16_t *samples, size_t count, size_t channels, uint32_t rate) {
+                core->render(samples, count, channels, rate, sourceAudio);
+            },
+            .onCaptureFrame = [incomingAudioSlot, muted = _incomingAudioMuted, disableAudioInput](const int16_t *samples, size_t count, size_t channels, uint32_t rate) {
+                if (!disableAudioInput && !muted->load(std::memory_order_relaxed)) {
+                    incomingAudioSlot->push(0, samples, count, channels, rate);
+                }
             }
         }));
     }
@@ -1740,6 +1750,7 @@ encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, boo
 }
 
 - (void)setIsMuted:(bool)isMuted {
+    _incomingAudioMuted->store(isMuted, std::memory_order_relaxed);
     if (_instance) {
         _instance->setIsMuted(isMuted);
     }
@@ -1973,10 +1984,10 @@ encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, boo
 }
 
 - (void)setIncomingAudioHandler:(void (^ _Nullable)(NSArray<OngoingCallIncomingAudio *> * _Nonnull))handler {
-    if (_incomingAudioPump == nil) {
-        if (handler == nil) {
-            return;
-        }
+    if (!_instance) {
+        return;
+    }
+    if (_incomingAudioPump == nil && handler != nil) {
         _incomingAudioPump = [[OngoingCallIncomingAudioPump alloc] initWithSlot:_incomingAudioSlot];
     }
     [_incomingAudioPump setHandler:handler];
@@ -1987,6 +1998,7 @@ encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, boo
 
 - (void)stop:(void (^ _Nullable __strong)())completion {
     auto instance = std::move(_instance);
+    _incomingAudioPump = nil;
     if (instance) {
         instance->stop([completion] {
             if (completion) {

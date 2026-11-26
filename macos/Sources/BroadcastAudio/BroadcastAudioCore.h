@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -76,7 +77,8 @@ public:
     // Device thread. Overwrites `samples` (`frames` × `channels` interleaved signed 16-bit at `sampleRate`) with the
     // audio due now, zeros where nothing is due. Returns false, leaving the buffer untouched, when inactive or when
     // the block is not 10 ms.
-    bool render(int16_t *samples, size_t frames, size_t channels, uint32_t sampleRate);
+    using SourceAudio = std::function<void(uint32_t, const int16_t *)>;
+    bool render(int16_t *samples, size_t frames, size_t channels, uint32_t sampleRate, const SourceAudio &sourceAudio = {});
 
 private:
     void collect();

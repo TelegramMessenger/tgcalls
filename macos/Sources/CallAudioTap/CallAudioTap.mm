@@ -34,8 +34,10 @@ namespace {
 
 constexpr size_t kChunkSamples = 480;
 constexpr size_t kRingChunks = 512;
+constexpr uint64_t kEnabledGenerationBit = 1;
 
 struct Chunk {
+    uint64_t generation = 0;
     uint32_t ssrc = 0;
     uint32_t sampleRate = 0;
     uint32_t count = 0;
@@ -57,7 +59,8 @@ CallAudioTapSlot::~CallAudioTapSlot() {
 }
 
 void CallAudioTapSlot::push(uint32_t ssrc, const int16_t *interleaved, size_t frames, size_t channels, uint32_t sampleRate) {
-    if (!_enabled.load(std::memory_order_relaxed)) {
+    const uint64_t generation = _generation.load(std::memory_order_acquire);
+    if ((generation & kEnabledGenerationBit) == 0) {
         return;
     }
     CallAudioTapRing *ring = _ring.load(std::memory_order_acquire);
@@ -77,6 +80,7 @@ void CallAudioTapSlot::push(uint32_t ssrc, const int16_t *interleaved, size_t fr
         return;
     }
     Chunk chunk;
+    chunk.generation = generation;
     chunk.ssrc = ssrc;
     chunk.sampleRate = sampleRate;
     size_t offset = 0;
@@ -108,7 +112,11 @@ void CallAudioTapSlot::setEnabled(bool enabled) {
     if (enabled && _ring.load(std::memory_order_acquire) == nullptr) {
         _ring.store(new CallAudioTapRing(), std::memory_order_release);
     }
-    _enabled.store(enabled, std::memory_order_relaxed);
+    const uint64_t generation = _generation.load(std::memory_order_relaxed);
+    const bool wasEnabled = (generation & kEnabledGenerationBit) != 0;
+    if (enabled != wasEnabled) {
+        _generation.store(generation + 1, std::memory_order_release);
+    }
 }
 
 NSArray<OngoingCallIncomingAudio *> *CallAudioTapSlot::drain() {
@@ -121,9 +129,13 @@ NSArray<OngoingCallIncomingAudio *> *CallAudioTapSlot::drain() {
         uint32_t sampleRate;
         NSMutableData *data;
     };
+    const uint64_t generation = _generation.load(std::memory_order_acquire);
     std::vector<Pending> pending;
     Chunk chunk;
     while (ring->queue.pop(chunk)) {
+        if (chunk.generation != generation) {
+            continue;
+        }
         Pending *target = nullptr;
         for (auto it = pending.rbegin(); it != pending.rend(); ++it) {
             if (it->ssrc == chunk.ssrc) {
@@ -188,6 +200,8 @@ uint64_t CallAudioTapSlot::dropped() const {
         if (strongSelf == nil) {
             return;
         }
+        slot->setEnabled(false);
+        slot->drain();
         strongSelf->_handler = copied;
         if (copied != nil) {
             slot->setEnabled(true);
@@ -207,13 +221,9 @@ uint64_t CallAudioTapSlot::dropped() const {
                 strongSelf->_timer = timer;
                 dispatch_resume(timer);
             }
-        } else {
-            slot->setEnabled(false);
-            if (strongSelf->_timer != nil) {
-                dispatch_source_cancel(strongSelf->_timer);
-                strongSelf->_timer = nil;
-            }
-            slot->drain();
+        } else if (strongSelf->_timer != nil) {
+            dispatch_source_cancel(strongSelf->_timer);
+            strongSelf->_timer = nil;
         }
     });
 }
