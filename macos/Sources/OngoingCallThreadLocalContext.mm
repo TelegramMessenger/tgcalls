@@ -17,6 +17,7 @@
 #ifndef WEBRTC_IOS
 #import "platform/darwin/VideoMetalViewMac.h"
 #import "platform/darwin/VideoSampleBufferViewMac.h"
+#include "modules/audio_device/include/audio_device_data_observer.h"
 #define UIViewContentModeScaleAspectFill kCAGravityResizeAspectFill
 #define UIViewContentModeScaleAspect kCAGravityResizeAspect
 
@@ -677,6 +678,35 @@ tgcalls::VideoCaptureInterfaceObject *GetVideoCaptureAssumingSameThread(tgcalls:
 
 @end
 
+#ifndef WEBRTC_IOS
+namespace {
+
+class PrivateCallAudioObserver final : public webrtc::AudioDeviceDataObserver {
+public:
+    PrivateCallAudioObserver(std::shared_ptr<tgcalls_macos::CallAudioTapSlot> slot, std::shared_ptr<std::atomic<bool>> muted)
+    : _slot(std::move(slot)), _muted(std::move(muted)) {
+    }
+
+    void OnCaptureData(const void *samples, size_t frames, size_t bytesPerFrame, size_t channels, uint32_t rate) override {
+        if (!_muted->load(std::memory_order_relaxed) && bytesPerFrame == channels * sizeof(int16_t)) {
+            _slot->push(0, static_cast<const int16_t *>(samples), frames, channels, rate);
+        }
+    }
+
+    void OnRenderData(const void *samples, size_t frames, size_t bytesPerFrame, size_t channels, uint32_t rate) override {
+        if (bytesPerFrame == channels * sizeof(int16_t)) {
+            _slot->push(1, static_cast<const int16_t *>(samples), frames, channels, rate);
+        }
+    }
+
+private:
+    std::shared_ptr<tgcalls_macos::CallAudioTapSlot> _slot;
+    std::shared_ptr<std::atomic<bool>> _muted;
+};
+
+}
+#endif
+
 @interface OngoingCallThreadLocalContextWebrtc () {
     NSString *_version;
     id<OngoingCallThreadLocalContextQueueWebrtc> _queue;
@@ -693,6 +723,11 @@ tgcalls::VideoCaptureInterfaceObject *GetVideoCaptureAssumingSameThread(tgcalls:
 
     
     std::unique_ptr<tgcalls::Instance> _tgVoip;
+#ifndef WEBRTC_IOS
+    std::shared_ptr<tgcalls_macos::CallAudioTapSlot> _captionAudioSlot;
+    std::shared_ptr<std::atomic<bool>> _captionAudioMuted;
+    OngoingCallIncomingAudioPump *_captionAudioPump;
+#endif
     bool _didStop;
     
     OngoingCallStateWebrtc _state;
@@ -896,6 +931,10 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
         
         std::vector<tgcalls::Endpoint> endpoints;
         
+#ifndef WEBRTC_IOS
+        _captionAudioSlot = std::make_shared<tgcalls_macos::CallAudioTapSlot>();
+        _captionAudioMuted = std::make_shared<std::atomic<bool>>(true);
+#endif
         tgcalls::Config config = {
             .initializationTimeout = _callConnectTimeout,
             .receiveTimeout = _callPacketTimeout,
@@ -1046,11 +1085,17 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
                     }
                 }];
             },
+#ifndef WEBRTC_IOS
+            .createAudioDeviceModule = [slot = _captionAudioSlot, muted = _captionAudioMuted](webrtc::TaskQueueFactory *taskQueueFactory) {
+                return webrtc::CreateAudioDeviceWithDataObserver(
+                    webrtc::AudioDeviceModule::kPlatformDefaultAudio,
+                    taskQueueFactory,
+                    std::make_unique<PrivateCallAudioObserver>(slot, muted)
+                );
+            },
+#endif
             .initialInputDeviceId = inputDeviceId.UTF8String,
             .initialOutputDeviceId = outputDeviceId.UTF8String,
-//            .createAudioDeviceModule = [](webrtc::TaskQueueFactory *taskQueueFactory) -> rtc::scoped_refptr<webrtc::AudioDeviceModule> {
-//                return rtc::make_ref_counted<webrtc::tgcalls_ios_adm::AudioDeviceModuleIOS>(false, false, 1);
-//            }
         });
         _state = OngoingCallStateInitializing;
         _signalBars = 4;
@@ -1092,6 +1137,9 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
 }
 
 - (void)stop:(void (^)(NSString *, int64_t, int64_t, int64_t, int64_t))completion {
+#ifndef WEBRTC_IOS
+    [_captionAudioPump setHandler:nil];
+#endif
     if (!_tgVoip) {
         return;
     }
@@ -1198,7 +1246,22 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
     }
 }
 
+- (void)setIncomingAudioHandler:(void (^ _Nullable)(NSArray<OngoingCallIncomingAudio *> * _Nonnull))handler {
+#ifndef WEBRTC_IOS
+    if (_didStop) {
+        return;
+    }
+    if (_captionAudioPump == nil && handler != nil) {
+        _captionAudioPump = [[OngoingCallIncomingAudioPump alloc] initWithSlot:_captionAudioSlot];
+    }
+    [_captionAudioPump setHandler:handler];
+#endif
+}
+
 - (void)setIsMuted:(bool)isMuted {
+#ifndef WEBRTC_IOS
+    _captionAudioMuted->store(isMuted, std::memory_order_relaxed);
+#endif
     if (_tgVoip) {
         _tgVoip->setMuteMicrophone(isMuted);
     }

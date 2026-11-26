@@ -257,6 +257,7 @@ typedef NS_ENUM(int32_t, OngoingCallDataSavingWebrtc) {
 - (NSString * _Nullable)version;
 - (NSData * _Nonnull)getDerivedState;
 
+- (void)setIncomingAudioHandler:(void (^ _Nullable)(NSArray<OngoingCallIncomingAudio *> * _Nonnull))handler;
 - (void)setIsMuted:(bool)isMuted;
 - (void)setIsLowBatteryLevel:(bool)isLowBatteryLevel;
 - (void)setNetworkType:(OngoingCallNetworkTypeWebrtc)networkType;
