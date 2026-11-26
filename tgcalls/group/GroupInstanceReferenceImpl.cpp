@@ -778,8 +778,8 @@ public:
             return;
         }
 
-#ifdef WEBRTC_ANDROID
-        // Android hosts render the group broadcast over the call's playout (an ADM data observer), so playout must
+#if defined(WEBRTC_ANDROID) || defined(WEBRTC_WIN)
+        // Android and Windows hosts render the group broadcast over the call's playout (an ADM data observer), so playout must
         // run before any RTP audio arrives, as CustomImpl starts it (setAudioOutputDevice at start). WebRTC itself
         // starts playout only with a receive stream.
         if (_audioDeviceModule && _videoContentType != VideoContentType::Screencast) {
@@ -1990,8 +1990,26 @@ public:
         }, webrtc::TimeDelta::Millis(1000));
     }
 
-    void setAudioOutputDevice(std::string) {}
-    void setAudioInputDevice(std::string) {}
+    void setAudioOutputDevice(const std::string &id) {
+#ifndef WEBRTC_IOS
+        _threads->getWorkerThread()->BlockingCall([&] {
+            if (_audioDeviceModule) {
+                SetAudioOutputDeviceById(_audioDeviceModule.get(), id);
+            }
+        });
+#endif // WEBRTC_IOS
+    }
+
+    void setAudioInputDevice(const std::string &id) {
+#ifndef WEBRTC_IOS
+        _threads->getWorkerThread()->BlockingCall([&] {
+            if (_audioDeviceModule) {
+                SetAudioInputDeviceById(_audioDeviceModule.get(), id);
+            }
+        });
+#endif // WEBRTC_IOS
+    }
+
     void addExternalAudioSamples(std::vector<uint8_t> &&samples) {
         if (_externalAudioRecorder) {
             appendGroupExternalAudioSamples(_externalAudioSamples, _externalAudioSamplesMutex, samples);
@@ -3234,8 +3252,16 @@ void GroupInstanceReferenceImpl::setVideoSource(std::function<webrtc::scoped_ref
         unwrapped->setVideoSource(std::move(getVideoSource));
     });
 }
-void GroupInstanceReferenceImpl::setAudioOutputDevice(std::string) {}
-void GroupInstanceReferenceImpl::setAudioInputDevice(std::string) {}
+void GroupInstanceReferenceImpl::setAudioOutputDevice(std::string id) {
+    _internal->perform([id = std::move(id)](GroupInstanceReferenceInternal *unwrapped) {
+        unwrapped->setAudioOutputDevice(id);
+    });
+}
+void GroupInstanceReferenceImpl::setAudioInputDevice(std::string id) {
+    _internal->perform([id = std::move(id)](GroupInstanceReferenceInternal *unwrapped) {
+        unwrapped->setAudioInputDevice(id);
+    });
+}
 void GroupInstanceReferenceImpl::addExternalAudioSamples(std::vector<uint8_t> &&samples) {
     // A screencast's app audio (the in-app share's screen audio), recorded by its FakeAudioDeviceModule.
     _internal->perform([samples = std::move(samples)](GroupInstanceReferenceInternal *unwrapped) mutable {
