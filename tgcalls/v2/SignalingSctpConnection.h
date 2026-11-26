@@ -12,6 +12,7 @@
 #include "media/base/media_channel.h"
 
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -30,6 +31,7 @@ class SctpTransportInternal;
 };
 
 #include "api/transport/data_channel_transport_interface.h"
+#include "api/field_trials_view.h"
 
 namespace tgcalls {
 
@@ -120,6 +122,10 @@ public:
         // Send messages on the fast path too until the association is up
         // (signaling_fast_path above).
         bool fastPath;
+        // The field trials of the connection's Environment: null, the
+        // process-wide string; else a copy of these (InstanceV2ReferenceImpl
+        // gives the call's own). Never from the server's parameters.
+        std::shared_ptr<const webrtc::FieldTrialsView> fieldTrials;
         Options() : t1InitTimeoutMs(400), t1CookieTimeoutMs(400), maxBackoffMs(750), sendBeforeConnected(false), fastPath(false) {}
 
         // The defaults above with the server's overrides applied

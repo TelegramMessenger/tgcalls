@@ -1,5 +1,6 @@
 #include "group/GroupReferenceFieldTrials.h"
 
+#include "group/GroupOpusDred.h"
 #include "group/ScreencastSendParameters.h"
 
 namespace tgcalls {
@@ -11,12 +12,19 @@ constexpr absl::string_view kMixedCodecSimulcast = "WebRTC-MixedCodecSimulcast";
 
 } // namespace
 
-GroupReferenceFieldTrials::GroupReferenceFieldTrials(bool iosInAppScreencast) : _iosInAppScreencast(iosInAppScreencast) {
+GroupReferenceFieldTrials::GroupReferenceFieldTrials(bool iosInAppScreencast, bool dredReceive, bool dredSend) :
+_iosInAppScreencast(iosInAppScreencast),
+_dredReceive(dredReceive),
+_dredSend(dredSend) {
 }
 
 std::string GroupReferenceFieldTrials::Lookup(absl::string_view key) const {
     if (key == kDiscardUnknownSsrcVideo || key == kMixedCodecSimulcast) {
         return "Enabled";
+    }
+    std::string dredValue = groupOpusDredFieldTrial(key, _dredReceive, _dredSend);
+    if (!dredValue.empty()) {
+        return dredValue;
     }
     if (_iosInAppScreencast) {
         std::string screencastValue = iosScreencastFieldTrial(std::string(key));
@@ -31,7 +39,7 @@ std::string GroupReferenceFieldTrials::Lookup(absl::string_view key) const {
 }
 
 std::unique_ptr<webrtc::FieldTrialsView> GroupReferenceFieldTrials::CreateCopy() const {
-    return std::make_unique<GroupReferenceFieldTrials>(_iosInAppScreencast);
+    return std::make_unique<GroupReferenceFieldTrials>(_iosInAppScreencast, _dredReceive, _dredSend);
 }
 
 } // namespace tgcalls

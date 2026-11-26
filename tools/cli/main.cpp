@@ -277,6 +277,8 @@ struct CallState {
 // version, which the registry cannot give (it maps 7.0.0-13.0.0 to InstanceV2Impl,
 // as the app does). This is CompatImpl against an unchanged peer of that version.
 static std::unique_ptr<tgcalls::Instance> createInstance(std::string const &version, tgcalls::Descriptor &&descriptor) {
+    // --opus-dnn-weights: libopus's weights for 1:1 DRED (InstanceV2ReferenceImpl reads them; the rest ignore them).
+    descriptor.opusDnnWeights = gGroupDred.opusDnnWeights;
     const std::string compatPrefix = "compat:";
     if (version.rfind(compatPrefix, 0) == 0) {
         descriptor.version = version.substr(compatPrefix.size());
@@ -678,7 +680,7 @@ static std::string validateSplitOptions(const std::string& mode, const std::stri
             return "--mode p2p --split takes caller or callee, got " + role;
         }
         for (const char* option : {"--version", "--wasm-core", "--custom-params", "--log-file", "--video-screencast",
-                                   "--delay", "--drop-rate"}) {
+                                   "--delay", "--drop-rate", "--opus-dnn-weights"}) {
             allowed.insert(option);
         }
     } else if (mode == "group") {
@@ -687,12 +689,16 @@ static std::string validateSplitOptions(const std::string& mode, const std::stri
         }
         for (const char* option : {"--participants", "--reference-participants", "--e2e", "--screencast-participants",
                                    "--av1-screencast", "--av1-screencast-layers", "--av1-test-encoder-fails",
-                                   "--video-quality", "--video-via-capture", "--video-via-capture-late"}) {
+                                   "--video-quality", "--video-via-capture", "--video-via-capture-late",
+                                   "--dred-loss", "--dred-receive", "--opus-dnn-weights"}) {
             allowed.insert(option);
         }
         if (role == "host") {
             allowed.insert("--sfu-av1");
             allowed.insert("--sfu-dd-id");
+            allowed.insert("--egress-loss");
+            allowed.insert("--ingress-loss");
+            allowed.insert("--ingress-bandwidth");
         } else {
             allowed.insert("--participant-id-offset");
             if (participantIdOffset <= 0) {
@@ -913,6 +919,31 @@ int main(int argc, char* argv[]) {
             gGroupScreencast.av1TestEncoderFails = true;
         } else if (std::string(argv[i]) == "--video-quality-switch" && i + 1 < argc) {
             gGroupScreencast.qualitySwitchMs = std::atoi(argv[++i]);
+        } else if (std::string(argv[i]) == "--dred-loss" && i + 1 < argc) {
+            gGroupDred.fixedPacketLossPercent = std::atoi(argv[++i]);
+        } else if (std::string(argv[i]) == "--dred-receive") {
+            gGroupDred.receive = true;
+        } else if (std::string(argv[i]) == "--opus-dnn-weights" && i + 1 < argc) {
+            const char* path = argv[++i];
+            FILE* file = std::fopen(path, "rb");
+            if (!file) {
+                fprintf(stderr, "--opus-dnn-weights: cannot open %s\n", path);
+                return 1;
+            }
+            auto weights = std::make_shared<std::vector<uint8_t>>();
+            uint8_t buffer[65536];
+            size_t count = 0;
+            while ((count = std::fread(buffer, 1, sizeof(buffer), file)) > 0) {
+                weights->insert(weights->end(), buffer, buffer + count);
+            }
+            std::fclose(file);
+            gGroupDred.opusDnnWeights = std::move(weights);
+        } else if (std::string(argv[i]) == "--egress-loss" && i + 1 < argc) {
+            gGroupDred.egressLoss = std::atof(argv[++i]);
+        } else if (std::string(argv[i]) == "--ingress-loss" && i + 1 < argc) {
+            gGroupDred.ingressLoss = std::atof(argv[++i]);
+        } else if (std::string(argv[i]) == "--ingress-bandwidth" && i + 1 < argc) {
+            gGroupDred.ingressBandwidthBps = std::atoll(argv[++i]);
         } else if (std::string(argv[i]) == "--sharer-ingress-loss" && i + 1 < argc) {
             gGroupScreencast.sharerIngressLoss = std::atof(argv[++i]);
         } else if (std::string(argv[i]) == "--video-via-capture") {

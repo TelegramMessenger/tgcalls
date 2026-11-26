@@ -31,11 +31,15 @@ namespace tgcalls {
 // An iOS in-app screen capture's connection also answers iosScreencastFieldTrial's keys (its periodic
 // bandwidth probes stop near the cap); being this factory's own view, it changes no other connection.
 //
+// Opus DRED: with `dredReceive` WebRTC-Audio-OpusDred and WebRTC-Audio-OpusGeneratePlc are on, with `dredSend`
+// WebRTC-Audio-Allocation pins the audio at 40 kbit/s (groupOpusDredFieldTrial).
+//
 // Every other key is unset: nothing comes from the process-wide trial string, which other engines rewrite (the custom
 // group engine of a ReplayKit share started during this call, the 1:1 engines). Test: group_reference_field_trials_test.
 class GroupReferenceFieldTrials final : public webrtc::FieldTrialsView {
 public:
-    explicit GroupReferenceFieldTrials(bool iosInAppScreencast);
+    // dredReceive / dredSend: Opus DRED (GroupOpusDred.h), receiving and sending.
+    explicit GroupReferenceFieldTrials(bool iosInAppScreencast, bool dredReceive = false, bool dredSend = false);
 
     std::string Lookup(absl::string_view key) const override;
 
@@ -44,6 +48,8 @@ public:
 
 private:
     bool _iosInAppScreencast = false;
+    bool _dredReceive = false;
+    bool _dredSend = false;
 };
 
 } // namespace tgcalls

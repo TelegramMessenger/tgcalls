@@ -57,12 +57,30 @@ void TestAnInAppScreenCaptureAnswersItsProbingKey() {
     CHECK_TRUE(trials.Lookup("WebRTC-Video-DiscardPacketsWithUnknownSsrc") == "Enabled");
 }
 
+// Opus DRED (docs/superpowers/specs/2026-11-26-opus-dred-group-calls-design.md): receiving turns DRED recovery and
+// Opus's concealment on, sending pins the audio allocation at 40 kbit/s; neither answers anything otherwise.
+void TestOpusDredKeys() {
+    tgcalls::GroupReferenceFieldTrials both(false, true, true);
+    CHECK_TRUE(both.Lookup("WebRTC-Audio-OpusDred") == "Enabled");
+    CHECK_TRUE(both.Lookup("WebRTC-Audio-OpusGeneratePlc") == "Enabled");
+    CHECK_TRUE(both.Lookup("WebRTC-Audio-Allocation") == "min:40kbps,max:40kbps");
+    CHECK_TRUE(both.CreateCopy()->Lookup("WebRTC-Audio-Allocation") == "min:40kbps,max:40kbps");
+    CHECK_TRUE(both.CreateCopy()->Lookup("WebRTC-Audio-OpusDred") == "Enabled");
+    CHECK_TRUE(both.Lookup("WebRTC-MixedCodecSimulcast") == "Enabled");
+
+    tgcalls::GroupReferenceFieldTrials neither(false, false, false);
+    CHECK_TRUE(neither.Lookup("WebRTC-Audio-OpusDred").empty());
+    CHECK_TRUE(neither.Lookup("WebRTC-Audio-OpusGeneratePlc").empty());
+    CHECK_TRUE(neither.Lookup("WebRTC-Audio-Allocation").empty());
+}
+
 }  // namespace
 
 int main() {
     TestTheProcessWideTrialsDoNotReachTheEngine();
     TestItsOwnKeysAreOn();
     TestAnInAppScreenCaptureAnswersItsProbingKey();
+    TestOpusDredKeys();
     if (g_failures != 0) {
         std::printf("%d failure(s)\n", g_failures);
         return 1;

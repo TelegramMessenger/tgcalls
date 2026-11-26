@@ -26,6 +26,7 @@
 #include "tgcalls_voice_processing_audio_unit.h"
 
 #include "platform/darwin/iOS/CallAudioTone.h"
+#include "platform/darwin/iOS/CallPlayoutRecorder.h"
 
 RTC_FWD_DECL_OBJC_CLASS(RTCNativeAudioSessionDelegateAdapter);
 
@@ -322,6 +323,15 @@ class AudioDeviceIOS : public AudioDeviceGeneric,
   bool isBufferRecording_ = false;
                            
   bool isMicrophoneMuted_ = false;
+
+  // Debug builds launched with TG_CALL_PLAYOUT_WAV=1: each playout, from StartPlayout to StopPlayout, written to a
+  // WAV in the app's Documents (CallPlayoutRecorder). The audio thread reads `playout_recorder_` inside a
+  // `playout_recorder_users_` count; StopPlayoutRecording clears it and waits for the count before destroying it.
+  void StartPlayoutRecordingIfRequested();
+  void StopPlayoutRecording();
+  std::unique_ptr<tgcalls::CallPlayoutRecorder> playout_recorder_owner_;
+  std::atomic<tgcalls::CallPlayoutRecorder*> playout_recorder_{nullptr};
+  std::atomic<int> playout_recorder_users_{0};
 };
 }  // namespace tgcalls_ios_adm
 }  // namespace webrtc

@@ -252,6 +252,9 @@ struct Descriptor {
     std::string initialInputDeviceId;
     std::string initialOutputDeviceId;
     std::shared_ptr<DirectConnectionChannel> directConnectionChannel;
+    // libopus's neural weights, for Opus DRED (InstanceV2ReferenceImpl only; group/GroupOpusDred.h): none, or a blob
+    // that is not well formed, means no DRED.
+    std::shared_ptr<const std::vector<uint8_t>> opusDnnWeights;
 };
 
 class Meta {
