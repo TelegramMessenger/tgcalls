@@ -564,6 +564,8 @@ public:
         , _disableAudioInput(descriptor.disableAudioInput)
         , _enableSystemMute(descriptor.ios_enableSystemMute)
         , _videoContentType(descriptor.videoContentType)
+        , _initialInputDeviceId(std::move(descriptor.initialInputDeviceId))
+        , _initialOutputDeviceId(std::move(descriptor.initialOutputDeviceId))
         , _iosInAppScreencast(descriptor.iosInAppScreencast && descriptor.videoContentType != VideoContentType::None)
         , _allowAv1ScreencastSending(descriptor.allowAv1ScreencastSending)
         , _av1ScreencastLayers(descriptor.av1ScreencastLayers)
@@ -786,13 +788,17 @@ public:
             return;
         }
 
-#if defined(WEBRTC_ANDROID) || defined(WEBRTC_WIN)
-        // Android and Windows hosts render the group broadcast over the call's playout (an ADM data observer), so playout must
-        // run before any RTP audio arrives, as CustomImpl starts it (setAudioOutputDevice at start). WebRTC itself
-        // starts playout only with a receive stream.
+#if !defined(WEBRTC_IOS)
+        // Android, Windows and macOS hosts render the group broadcast over the call's playout (an ADM data observer), so
+        // playout must run before any RTP audio arrives, as CustomImpl starts it (its initial devices at start). WebRTC
+        // itself starts playout only with a receive stream. The initial devices are applied here too, as CustomImpl does.
         if (_audioDeviceModule && _videoContentType != VideoContentType::Screencast) {
-            _threads->getWorkerThread()->BlockingCall([adm = _audioDeviceModule]() {
-                SetAudioOutputDeviceById(adm.get(), "default");
+            _threads->getWorkerThread()->BlockingCall([adm = _audioDeviceModule, input = _initialInputDeviceId, output = _initialOutputDeviceId]() {
+                if (!input.empty()) {
+                    SetAudioInputDeviceById(adm.get(), input);
+                }
+                SetAudioOutputDeviceById(adm.get(), output.empty() ? std::string("default") : output);
+                RTC_LOG(LS_INFO) << "GroupRef: audio devices at start: input '" << input << "', output '" << output << "', playout " << (adm->Playing() ? "started" : "not started");
             });
         }
 #endif
@@ -3041,6 +3047,8 @@ private:
 
     // Video configuration from descriptor.
     VideoContentType _videoContentType = VideoContentType::None;
+    std::string _initialInputDeviceId;
+    std::string _initialOutputDeviceId;
     // See GroupInstanceDescriptor::iosInAppScreencast. On this engine also a main connection
     // (Generic) whose camera video is the screen (the app's debug "screen share as camera").
     bool _iosInAppScreencast = false;
