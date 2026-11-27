@@ -7,18 +7,18 @@ namespace tgcalls {
 
 namespace {
 
-absl::optional<int32_t> parseInt(json11::Json::object const &object, std::string const &key) {
+std::optional<int32_t> parseInt(json11::Json::object const &object, std::string const &key) {
     const auto value = object.find(key);
     if (value == object.end() || !value->second.is_number()) {
-        return absl::nullopt;
+        return std::nullopt;
     }
     return value->second.int_value();
 }
 
-absl::optional<std::string> parseString(json11::Json::object const &object, std::string const &key) {
+std::optional<std::string> parseString(json11::Json::object const &object, std::string const &key) {
     const auto value = object.find(key);
     if (value == object.end() || !value->second.is_string()) {
-        return absl::nullopt;
+        return std::nullopt;
     }
     return value->second.string_value();
 }
@@ -38,28 +38,28 @@ std::vector<std::string> splitString(const std::string &s, char delim) {
     return elems;
 }
 
-absl::optional<GroupJoinTransportDescription> parseTransportDescription(json11::Json::object const &object) {
+std::optional<GroupJoinTransportDescription> parseTransportDescription(json11::Json::object const &object) {
     GroupJoinTransportDescription result;
 
     if (const auto pwd = parseString(object, "pwd")) {
         result.pwd = pwd.value();
     } else {
-        return absl::nullopt;
+        return std::nullopt;
     }
 
     if (const auto ufrag = parseString(object, "ufrag")) {
         result.ufrag = ufrag.value();
     } else {
-        return absl::nullopt;
+        return std::nullopt;
     }
 
     const auto fingerprints = object.find("fingerprints");
     if (fingerprints == object.end() || !fingerprints->second.is_array()) {
-        return absl::nullopt;
+        return std::nullopt;
     }
     for (const auto &fingerprint : fingerprints->second.array_items()) {
         if (!fingerprint.is_object()) {
-            return absl::nullopt;
+            return std::nullopt;
         }
 
         GroupJoinTransportDescription::Fingerprint parsedFingerprint;
@@ -67,19 +67,19 @@ absl::optional<GroupJoinTransportDescription> parseTransportDescription(json11::
         if (const auto hash = parseString(fingerprint.object_items(), "hash")) {
             parsedFingerprint.hash = hash.value();
         } else {
-            return absl::nullopt;
+            return std::nullopt;
         }
 
         if (const auto fingerprintValue = parseString(fingerprint.object_items(), "fingerprint")) {
             parsedFingerprint.fingerprint = fingerprintValue.value();
         } else {
-            return absl::nullopt;
+            return std::nullopt;
         }
 
         if (const auto setup = parseString(fingerprint.object_items(), "setup")) {
             parsedFingerprint.setup = setup.value();
         } else {
-            return absl::nullopt;
+            return std::nullopt;
         }
 
         result.fingerprints.push_back(std::move(parsedFingerprint));
@@ -87,11 +87,11 @@ absl::optional<GroupJoinTransportDescription> parseTransportDescription(json11::
 
     const auto candidates = object.find("candidates");
     if (candidates == object.end() || !candidates->second.is_array()) {
-        return absl::nullopt;
+        return std::nullopt;
     }
     for (const auto &candidate : candidates->second.array_items()) {
         if (!candidate.is_object()) {
-            return absl::nullopt;
+            return std::nullopt;
         }
 
         GroupJoinTransportDescription::Candidate parsedCandidate;
@@ -99,61 +99,61 @@ absl::optional<GroupJoinTransportDescription> parseTransportDescription(json11::
         if (const auto port = parseString(candidate.object_items(), "port")) {
             parsedCandidate.port = port.value();
         } else {
-            return absl::nullopt;
+            return std::nullopt;
         }
 
         if (const auto protocol = parseString(candidate.object_items(), "protocol")) {
             parsedCandidate.protocol = protocol.value();
         } else {
-            return absl::nullopt;
+            return std::nullopt;
         }
 
         if (const auto network = parseString(candidate.object_items(), "network")) {
             parsedCandidate.network = network.value();
         } else {
-            return absl::nullopt;
+            return std::nullopt;
         }
 
         if (const auto generation = parseString(candidate.object_items(), "generation")) {
             parsedCandidate.generation = generation.value();
         } else {
-            return absl::nullopt;
+            return std::nullopt;
         }
 
         if (const auto id = parseString(candidate.object_items(), "id")) {
             parsedCandidate.id = id.value();
         } else {
-            return absl::nullopt;
+            return std::nullopt;
         }
 
         if (const auto component = parseString(candidate.object_items(), "component")) {
             parsedCandidate.component = component.value();
         } else {
-            return absl::nullopt;
+            return std::nullopt;
         }
 
         if (const auto foundation = parseString(candidate.object_items(), "foundation")) {
             parsedCandidate.foundation = foundation.value();
         } else {
-            return absl::nullopt;
+            return std::nullopt;
         }
 
         if (const auto priority = parseString(candidate.object_items(), "priority")) {
             parsedCandidate.priority = priority.value();
         } else {
-            return absl::nullopt;
+            return std::nullopt;
         }
 
         if (const auto ip = parseString(candidate.object_items(), "ip")) {
             parsedCandidate.ip = ip.value();
         } else {
-            return absl::nullopt;
+            return std::nullopt;
         }
 
         if (const auto type = parseString(candidate.object_items(), "type")) {
             parsedCandidate.type = type.value();
         } else {
-            return absl::nullopt;
+            return std::nullopt;
         }
 
         if (const auto tcpType = parseString(candidate.object_items(), "tcptype")) {
@@ -174,19 +174,19 @@ absl::optional<GroupJoinTransportDescription> parseTransportDescription(json11::
     return result;
 }
 
-absl::optional<GroupJoinPayloadVideoPayloadType> parsePayloadType(json11::Json::object const &object) {
+std::optional<GroupJoinPayloadVideoPayloadType> parsePayloadType(json11::Json::object const &object) {
     GroupJoinPayloadVideoPayloadType result;
 
     if (const auto id = parseInt(object, "id")) {
         result.id = (uint32_t)id.value();
     } else {
-        return absl::nullopt;
+        return std::nullopt;
     }
 
     if (const auto name = parseString(object, "name")) {
         result.name = name.value();
     } else {
-        return absl::nullopt;
+        return std::nullopt;
     }
 
     if (const auto clockrate = parseInt(object, "clockrate")) {
@@ -245,7 +245,7 @@ absl::optional<GroupJoinPayloadVideoPayloadType> parsePayloadType(json11::Json::
     return result;
 }
 
-absl::optional<GroupJoinVideoInformation> parseVideoInformation(json11::Json::object const &object) {
+std::optional<GroupJoinVideoInformation> parseVideoInformation(json11::Json::object const &object) {
     GroupJoinVideoInformation result;
 
     const auto serverSources = object.find("server_sources");
@@ -343,23 +343,23 @@ std::string GroupJoinInternalPayload::serialize() {
     return json.dump();
 }
 
-absl::optional<GroupJoinResponsePayload> GroupJoinResponsePayload::parse(std::string const &data) {
+std::optional<GroupJoinResponsePayload> GroupJoinResponsePayload::parse(std::string const &data) {
     std::string parsingError;
     auto json = json11::Json::parse(std::string(data.begin(), data.end()), parsingError);
     if (json.type() != json11::Json::OBJECT) {
-        return absl::nullopt;
+        return std::nullopt;
     }
 
     tgcalls::GroupJoinResponsePayload result;
 
     const auto transport = json.object_items().find("transport");
     if (transport == json.object_items().end() || !transport->second.is_object()) {
-        return absl::nullopt;
+        return std::nullopt;
     }
     if (const auto parsedTransport = parseTransportDescription(transport->second.object_items())) {
         result.transport = parsedTransport.value();
     } else {
-        return absl::nullopt;
+        return std::nullopt;
     }
 
     const auto video = json.object_items().find("video");
@@ -368,6 +368,19 @@ absl::optional<GroupJoinResponsePayload> GroupJoinResponsePayload::parse(std::st
     }
 
     return result;
+}
+
+webrtc::IceCandidateType groupIceCandidateType(std::string const &type) {
+    if (type == "srflx") {
+        return webrtc::IceCandidateType::kSrflx;
+    }
+    if (type == "prflx") {
+        return webrtc::IceCandidateType::kPrflx;
+    }
+    if (type == "relay") {
+        return webrtc::IceCandidateType::kRelay;
+    }
+    return webrtc::IceCandidateType::kHost;
 }
 
 }

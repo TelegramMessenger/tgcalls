@@ -4,6 +4,7 @@
 #include "BroadcastSpscQueue.h"
 
 #include "api/audio/audio_frame.h"
+#include "api/audio/audio_view.h"
 #include "audio/utility/audio_frame_operations.h"
 #include "common_audio/resampler/include/push_resampler.h"
 #include "modules/audio_mixer/frame_combiner.h"
@@ -13,6 +14,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <span>
 
 namespace broadcast_audio {
 
@@ -346,7 +348,7 @@ private:
             }
             _mixList.push_back(&frame);
         }
-        _combiner.Combine(rtc::ArrayView<webrtc::AudioFrame *const>(_mixList.data(), _mixList.size()), 1, (int)Core::kSampleRate, _mixList.size(), &_mixed);
+        _combiner.Combine(std::span<webrtc::AudioFrame *const>(_mixList.data(), _mixList.size()), 1, (int)Core::kSampleRate, _mixList.size(), &_mixed);
         std::memcpy(_mono, _mixed.data(), sizeof(_mono));
     }
 
@@ -360,14 +362,12 @@ private:
         if (sampleRate == Core::kSampleRate) {
             return;
         }
-        if (_resampler.InitializeIfNeeded((int)Core::kSampleRate, (int)sampleRate, channels) != 0) {
+        // The resampler takes exactly 10 ms on each side.
+        if (frames * 100 != sampleRate) {
             std::memset(samples, 0, frames * channels * sizeof(int16_t));
             return;
         }
-        const int written = _resampler.Resample(_interleaved, Core::kBlockSamples * channels, samples, frames * channels);
-        if (written != (int)(frames * channels)) {
-            std::memset(samples, 0, frames * channels * sizeof(int16_t));
-        }
+        _resampler.Resample(webrtc::InterleavedView<const int16_t>(_interleaved, Core::kBlockSamples, channels), webrtc::InterleavedView<int16_t>(samples, frames, channels));
     }
 
     Clock const &_clock;

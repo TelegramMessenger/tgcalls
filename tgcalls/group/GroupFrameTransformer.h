@@ -57,18 +57,18 @@ enum class FrameTransformerPayloadType {
 // and reports through `headerSize` how many leading bytes must stay in the
 // clear for the SFU to parse the packet.
 std::vector<uint8_t> calculateH264FramePlaintextHeaderSize(
-    rtc::ArrayView<const uint8_t> frame, uint32_t &headerSize);
+    webrtc::ArrayView<const uint8_t> frame, uint32_t &headerSize);
 
 // VP8: 10 plaintext bytes for a key frame (full uncompressed header), 1 for a
 // delta frame.
 std::vector<uint8_t> calculateVp8FramePlaintextHeaderSize(
-    rtc::ArrayView<const uint8_t> frame, uint32_t &headerSize);
+    webrtc::ArrayView<const uint8_t> frame, uint32_t &headerSize);
 
 // H264/H265 ciphertext must not contain a 3- or 4-byte NAL start code, or the
 // packetizer misparses the frame and the receiver cannot decrypt it. Always
 // true for non-H264 payload types.
 bool ValidateEncryptedFrame(FrameTransformerPayloadType payloadType,
-                            rtc::ArrayView<uint8_t> frame,
+                            webrtc::ArrayView<uint8_t> frame,
                             int plaintextPrefix);
 
 // The four payload transforms, factored out of FrameTransformer so callers that
@@ -81,7 +81,7 @@ bool ValidateEncryptedFrame(FrameTransformerPayloadType payloadType,
 std::vector<uint8_t> encryptGroupAudioFrame(
     GroupEncryptDecryptFunction const &transform,
     int64_t userId,
-    rtc::ArrayView<const uint8_t> frame,
+    webrtc::ArrayView<const uint8_t> frame,
     uint8_t audioLevel,
     bool hasSpeech);
 
@@ -91,7 +91,7 @@ std::vector<uint8_t> encryptGroupVideoFrame(
     GroupEncryptDecryptFunction const &transform,
     int64_t userId,
     FrameTransformerPayloadType payloadType,
-    rtc::ArrayView<const uint8_t> frame);
+    webrtc::ArrayView<const uint8_t> frame);
 
 // Decrypts and strips the trailer. When the extension flag bit is set, reports
 // the level/speech through the out-parameters and strips two bytes; when it is
@@ -101,7 +101,7 @@ std::vector<uint8_t> encryptGroupVideoFrame(
 std::vector<uint8_t> decryptGroupAudioFrame(
     GroupEncryptDecryptFunction const &transform,
     int64_t userId,
-    rtc::ArrayView<const uint8_t> frame,
+    webrtc::ArrayView<const uint8_t> frame,
     uint8_t *audioLevel,
     bool *hasSpeech,
     bool *hadExtension);
@@ -109,7 +109,7 @@ std::vector<uint8_t> decryptGroupAudioFrame(
 std::vector<uint8_t> decryptGroupVideoFrame(
     GroupEncryptDecryptFunction const &transform,
     int64_t userId,
-    rtc::ArrayView<const uint8_t> frame);
+    webrtc::ArrayView<const uint8_t> frame);
 
 class FrameTransformer : public webrtc::FrameTransformerInterface {
 public:
@@ -132,9 +132,9 @@ public:
                      std::function<void(uint8_t, bool)> setAudioLevelAndSpeech);
 
     void RegisterTransformedFrameCallback(
-        rtc::scoped_refptr<webrtc::TransformedFrameCallback> callback) override;
+        webrtc::scoped_refptr<webrtc::TransformedFrameCallback> callback) override;
     void RegisterTransformedFrameSinkCallback(
-        rtc::scoped_refptr<webrtc::TransformedFrameCallback> callback, uint32_t ssrc) override;
+        webrtc::scoped_refptr<webrtc::TransformedFrameCallback> callback, uint32_t ssrc) override;
     void UnregisterTransformedFrameSinkCallback(uint32_t ssrc) override;
     void Transform(std::unique_ptr<webrtc::TransformableFrameInterface> frame) override;
 
@@ -147,8 +147,8 @@ private:
     std::function<std::pair<uint8_t, bool>()> _getAudioLevelAndSpeech;
     std::function<void(uint8_t, bool)> _setAudioLevelAndSpeech;
     webrtc::Mutex _mutex;
-    rtc::scoped_refptr<webrtc::TransformedFrameCallback> _sinkCallback;
-    std::map<uint32_t, rtc::scoped_refptr<webrtc::TransformedFrameCallback>> _sinkCallbackBySsrc;
+    webrtc::scoped_refptr<webrtc::TransformedFrameCallback> _sinkCallback;
+    std::map<uint32_t, webrtc::scoped_refptr<webrtc::TransformedFrameCallback>> _sinkCallbackBySsrc;
 };
 
 } // namespace tgcalls

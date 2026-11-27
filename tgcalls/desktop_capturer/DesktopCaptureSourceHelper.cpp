@@ -51,9 +51,9 @@ public:
     }
 };
 #else // WEBRTC_MAC
-rtc::Thread *GlobalCapturerThread() {
+webrtc::Thread *GlobalCapturerThread() {
     static auto result = [] {
-        auto thread = rtc::Thread::Create();
+        auto thread = webrtc::Thread::Create();
         thread->SetName("WebRTC-DesktopCapturer", nullptr);
         thread->Start();
         return thread;
@@ -74,7 +74,7 @@ public:
     }
 
 private:
-    rtc::Thread *_thread;
+    webrtc::Thread *_thread;
 
 };
 #endif // WEBRTC_MAC
@@ -87,16 +87,16 @@ public:
         webrtc::DesktopCapturer::Result result,
         std::unique_ptr<webrtc::DesktopFrame> frame) override;
 	void setOutput(
-		std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
+		std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
 	void setSecondaryOutput(
-		std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
+		std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
     void setOnFatalError(std::function<void ()>);
     void setOnPause(std::function<void (bool)>);
 private:
-    rtc::scoped_refptr<webrtc::I420Buffer> i420_buffer_;
-	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _sink;
+    webrtc::scoped_refptr<webrtc::I420Buffer> i420_buffer_;
+	std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> _sink;
 	std::shared_ptr<
-        rtc::VideoSinkInterface<webrtc::VideoFrame>> _secondarySink;
+        webrtc::VideoSinkInterface<webrtc::VideoFrame>> _secondarySink;
     DesktopSize size_;
     std::function<void ()> _onFatalError;
     std::function<void (bool)> _onPause;
@@ -111,8 +111,8 @@ public:
 
     void start();
     void stop();
-    void setOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
-    void setSecondaryOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
+    void setOutput(std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
+    void setSecondaryOutput(std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
     void loop();
     void setOnFatalError(std::function<void ()>);
     void setOnPause(std::function<void (bool)>);
@@ -232,7 +232,7 @@ void SourceFrameCallbackImpl::OnCaptureResult(
 }
 
 void SourceFrameCallbackImpl::setOutput(
-        std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+        std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
     _sink = std::move(sink);
 }
 
@@ -244,7 +244,7 @@ void SourceFrameCallbackImpl::setOnPause(std::function<void (bool)> pause) {
 }
 
 void SourceFrameCallbackImpl::setSecondaryOutput(
-        std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+        std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
     _secondarySink = std::move(sink);
 }
 
@@ -358,12 +358,12 @@ void DesktopSourceRenderer::setOnPause(std::function<void (bool)> pause) {
 }
 
 void DesktopSourceRenderer::setOutput(
-        std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+        std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
     _callback.setOutput(std::move(sink));
 }
 
 void DesktopSourceRenderer::setSecondaryOutput(
-        std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+        std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
     _callback.setSecondaryOutput(std::move(sink));
 }
 
@@ -422,7 +422,7 @@ DesktopCaptureSourceHelper::~DesktopCaptureSourceHelper() {
 
 void DesktopCaptureSourceHelper::setOutput(
     std::shared_ptr<
-        rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) const {
+        webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) const {
     _renderer->scheduler.runAsync([renderer = _renderer, sink] {
         renderer->renderer->setOutput(sink);
     });
@@ -430,7 +430,7 @@ void DesktopCaptureSourceHelper::setOutput(
 
 void DesktopCaptureSourceHelper::setSecondaryOutput(
     std::shared_ptr<
-        rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) const {
+        webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) const {
 	_renderer->scheduler.runAsync([renderer = _renderer, sink] {
 		renderer->renderer->setSecondaryOutput(sink);
 	});

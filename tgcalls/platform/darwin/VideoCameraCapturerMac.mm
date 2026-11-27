@@ -38,7 +38,7 @@ CameraFrameSize AspectFitted(CameraFrameSize from, CameraFrameSize to) {
 
 static const int64_t kNanosecondsPerSecond = 1000000000;
 
-static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> nativeSource) {
+static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> nativeSource) {
     webrtc::VideoTrackSourceProxy *proxy_source =
     static_cast<webrtc::VideoTrackSourceProxy *>(nativeSource.get());
     return static_cast<tgcalls::DarwinVideoTrackSource *>(proxy_source->internal());
@@ -169,7 +169,7 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
 
 
 @interface VideoCameraCapturer () <AVCaptureVideoDataOutputSampleBufferDelegate> {
-    rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _source;
+    webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _source;
 
     dispatch_queue_t _frameQueue;
     AVCaptureDevice *_currentDevice;
@@ -207,7 +207,7 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
     // Live on frameQueue;
     float _aspectRatio;
     std::vector<uint8_t> _croppingBuffer;
-    std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _uncroppedSink;
+    std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> _uncroppedSink;
     std::function<void ()> _onFatalError;
     int _warmupFrameCount;
 }
@@ -216,7 +216,7 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
 
 @implementation VideoCameraCapturer
 
-- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source isActiveUpdated:(void (^)(bool))isActiveUpdated {
+- (instancetype)initWithSource:(webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)source isActiveUpdated:(void (^)(bool))isActiveUpdated {
     self = [super init];
     if (self != nil) {
         _source = source;
@@ -325,7 +325,7 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
 }
 
 
-- (void)setUncroppedSink:(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)sink {
+- (void)setUncroppedSink:(std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>>)sink {
 	dispatch_async(self.frameQueue, ^{
         self->_uncroppedSink = sink;
     });
@@ -478,10 +478,10 @@ static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_ref
                                                             rotation:_rotation
                                                          timeStampNs:timeStampNs];
 
-        const int64_t timestamp_us = frame.timeStampNs / rtc::kNumNanosecsPerMicrosec;
+        const int64_t timestamp_us = frame.timeStampNs / webrtc::kNumNanosecsPerMicrosec;
 
-        rtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer;
-        buffer = new rtc::RefCountedObject<webrtc::ObjCFrameBuffer>(frame.buffer);
+        webrtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer;
+        buffer = new webrtc::RefCountedObject<webrtc::ObjCFrameBuffer>(frame.buffer);
 
         webrtc::VideoRotation rotation = static_cast<webrtc::VideoRotation>(frame.rotation);
 

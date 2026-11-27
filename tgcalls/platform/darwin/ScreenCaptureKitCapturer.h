@@ -25,7 +25,7 @@ API_AVAILABLE(macos(12.3))
 - (void)stop;
 - (void)setOnFatalError:(std::function<void()>)error;
 - (void)setOnPause:(std::function<void(bool)>)pause;
-- (void)setSecondaryOutput:(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)sink;
+- (void)setSecondaryOutput:(std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>>)sink;
 
 @end
 

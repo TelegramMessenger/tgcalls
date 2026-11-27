@@ -8,10 +8,13 @@
 #include "rtc_base/rtc_certificate_generator.h"
 #include "p2p/base/ice_credentials_iterator.h"
 #include "api/jsep_ice_candidate.h"
-#include "p2p/base/dtls_transport.h"
-#include "p2p/base/dtls_transport_factory.h"
+#include "p2p/dtls/dtls_transport.h"
+#include "p2p/dtls/dtls_transport_factory.h"
 #include "pc/dtls_srtp_transport.h"
 #include "pc/dtls_transport.h"
+#include "pc/ice_transport.h"
+#include "rtc_base/crypto_random.h"
+#include "rtc_base/time_utils.h"
 #include "modules/rtp_rtcp/source/rtp_util.h"
 #include "modules/rtp_rtcp/source/byte_io.h"
 #include "platform/PlatformInterface.h"
@@ -33,7 +36,7 @@ enum {
     kRtpMinParseLength = 12
 };
 
-static void updateHeaderWithVoiceActivity(rtc::CopyOnWriteBuffer *packet, const uint8_t* ptrRTPDataExtensionEnd, const uint8_t* ptr, bool voiceActivity, bool zeroAudioLevel) {
+static void updateHeaderWithVoiceActivity(webrtc::CopyOnWriteBuffer *packet, const uint8_t* ptrRTPDataExtensionEnd, const uint8_t* ptr, bool voiceActivity, bool zeroAudioLevel) {
     while (ptrRTPDataExtensionEnd - ptr > 0) {
         //  0
         //  0 1 2 3 4 5 6 7
@@ -138,7 +141,7 @@ static void readHeaderVoiceActivity(const uint8_t* ptrRTPDataExtensionEnd, const
 #endif
 
 
-static void maybeUpdateRtpVoiceActivity(rtc::CopyOnWriteBuffer *packet, bool voiceActivity, bool zeroAudioLevel) {
+static void maybeUpdateRtpVoiceActivity(webrtc::CopyOnWriteBuffer *packet, bool voiceActivity, bool zeroAudioLevel) {
     const uint8_t *_ptrRTPDataBegin = packet->data();
     const uint8_t *_ptrRTPDataEnd = packet->data() + packet->size();
 
@@ -214,7 +217,7 @@ static void maybeUpdateRtpVoiceActivity(rtc::CopyOnWriteBuffer *packet, bool voi
 }
 
 #if 0 // Currently unused.
-static void maybeReadRtpVoiceActivity(rtc::CopyOnWriteBuffer *packet, bool &didRead, uint32_t &ssrc, uint8_t &audioLevel, bool &voiceActivity) {
+static void maybeReadRtpVoiceActivity(webrtc::CopyOnWriteBuffer *packet, bool &didRead, uint32_t &ssrc, uint8_t &audioLevel, bool &voiceActivity) {
     const uint8_t *_ptrRTPDataBegin = packet->data();
     const uint8_t *_ptrRTPDataEnd = packet->data() + packet->size();
 
@@ -305,7 +308,7 @@ public:
     virtual ~WrappedDtlsSrtpTransport() {
     }
 
-    bool SendRtpPacket(rtc::CopyOnWriteBuffer *packet, const rtc::PacketOptions& options, int flags) override {
+    bool SendRtpPacket(webrtc::CopyOnWriteBuffer *packet, const webrtc::AsyncSocketPacketOptions& options, int flags) override {
         maybeUpdateRtpVoiceActivity(packet, _voiceActivity, _zeroAudioLevel);
         return webrtc::DtlsSrtpTransport::SendRtpPacket(packet, options, flags);
     }
@@ -327,7 +330,7 @@ webrtc::CryptoOptions GroupNetworkManager::getDefaulCryptoOptions() {
 }
 
 GroupNetworkManager::GroupNetworkManager(
-    const webrtc::FieldTrialsView &fieldTrials,
+    const webrtc::Environment &env,
     std::function<void(const State &)> stateUpdated,
     std::function<void(uint32_t, int)> unknownSsrcPacketReceived,
     std::function<void(bool)> dataChannelStateUpdated,
@@ -336,6 +339,7 @@ GroupNetworkManager::GroupNetworkManager(
     bool zeroAudioLevel,
     std::function<void(uint32_t)> anyActivityUpdated,
     std::shared_ptr<Threads> threads) :
+_env(env),
 _threads(std::move(threads)),
 _stateUpdated(std::move(stateUpdated)),
 _unknownSsrcPacketReceived(std::move(unknownSsrcPacketReceived)),
@@ -346,21 +350,20 @@ _zeroAudioLevel(zeroAudioLevel),
 _anyActivityUpdated(anyActivityUpdated) {
     assert(_threads->getNetworkThread()->IsCurrent());
 
-    _localIceParameters = PeerIceParameters(rtc::CreateRandomString(cricket::ICE_UFRAG_LENGTH), rtc::CreateRandomString(cricket::ICE_PWD_LENGTH), false);
+    _localIceParameters = PeerIceParameters(webrtc::CreateRandomString(webrtc::ICE_UFRAG_LENGTH), webrtc::CreateRandomString(webrtc::ICE_PWD_LENGTH), false);
 
-    _localCertificate = rtc::RTCCertificateGenerator::GenerateCertificate(rtc::KeyParams(rtc::KT_ECDSA), absl::nullopt);
+    _localCertificate = webrtc::RTCCertificateGenerator::GenerateCertificate(webrtc::KeyParams(webrtc::KT_ECDSA), std::nullopt);
 
     _networkMonitorFactory = PlatformInterface::SharedInstance()->createNetworkMonitorFactory();
 
-    _socketFactory.reset(new rtc::BasicPacketSocketFactory(_threads->getNetworkThread()->socketserver()));
-    _networkManager = std::make_unique<rtc::BasicNetworkManager>(_networkMonitorFactory.get(), _threads->getNetworkThread()->socketserver());
+    _socketFactory.reset(new webrtc::BasicPacketSocketFactory(_threads->getNetworkThread()->socketserver()));
+    _networkManager = std::make_unique<webrtc::BasicNetworkManager>(_env, _threads->getNetworkThread()->socketserver(), _networkMonitorFactory.get());
     _asyncResolverFactory = std::make_unique<webrtc::BasicAsyncDnsResolverFactory>();
 
-    _dtlsSrtpTransport = std::make_unique<WrappedDtlsSrtpTransport>(true, fieldTrials, [this](webrtc::RtpPacketReceived const &packet, bool isUnresolved) {
+    _dtlsSrtpTransport = std::make_unique<WrappedDtlsSrtpTransport>(true, _env.field_trials(), [this](webrtc::RtpPacketReceived const &packet, bool isUnresolved) {
         this->RtpPacketReceived_n(packet, isUnresolved);
     }, _zeroAudioLevel);
     _dtlsSrtpTransport->SetDtlsTransports(nullptr, nullptr);
-    _dtlsSrtpTransport->SetActiveResetSrtpParams(false);
     _dtlsSrtpTransport->SubscribeReadyToSend(this, [this](bool value) {
         this->DtlsReadyToSend(value);
     });
@@ -376,6 +379,7 @@ GroupNetworkManager::~GroupNetworkManager() {
     _dataChannelInterface.reset();
     _dtlsSrtpTransport.reset();
     _dtlsTransport.reset();
+    _iceTransport = nullptr;
     _transportChannel.reset();
     _asyncResolverFactory.reset();
     _portAllocator.reset();
@@ -384,32 +388,32 @@ GroupNetworkManager::~GroupNetworkManager() {
 }
 
 void GroupNetworkManager::resetDtlsSrtpTransport() {
-    std::unique_ptr<cricket::BasicPortAllocator> portAllocator = std::make_unique<cricket::BasicPortAllocator>(_networkManager.get(), _socketFactory.get(), _turnCustomizer.get(), nullptr);
+    std::unique_ptr<webrtc::BasicPortAllocator> portAllocator = std::make_unique<webrtc::BasicPortAllocator>(_env, _networkManager.get(), _socketFactory.get(), _turnCustomizer.get(), nullptr);
     
     uint32_t flags = portAllocator->flags();
     
     flags |=
-        cricket::PORTALLOCATOR_ENABLE_IPV6 |
-        cricket::PORTALLOCATOR_ENABLE_IPV6_ON_WIFI;
+        webrtc::PORTALLOCATOR_ENABLE_IPV6 |
+        webrtc::PORTALLOCATOR_ENABLE_IPV6_ON_WIFI;
     
     portAllocator->set_flags(flags);
     portAllocator->Initialize();
 
     portAllocator->SetConfiguration({}, {}, 2, webrtc::NO_PRUNE, _turnCustomizer.get());
 
-    webrtc::IceTransportInit iceTransportInit;
+    webrtc::IceTransportInit iceTransportInit(_env);
     iceTransportInit.set_port_allocator(portAllocator.get());
     iceTransportInit.set_async_dns_resolver_factory(_asyncResolverFactory.get());
 
-    auto transportChannel = cricket::P2PTransportChannel::Create("transport", 0, std::move(iceTransportInit));
+    auto transportChannel = webrtc::P2PTransportChannel::Create("transport", 0, std::move(iceTransportInit));
 
-    cricket::IceConfig iceConfig;
-    iceConfig.continual_gathering_policy = cricket::GATHER_CONTINUALLY;
+    webrtc::IceConfig iceConfig;
+    iceConfig.continual_gathering_policy = webrtc::GATHER_CONTINUALLY;
     iceConfig.prioritize_most_likely_candidate_pairs = true;
-    iceConfig.regather_on_failed_networks_interval = 2000;
+    iceConfig.regather_on_failed_networks_interval = webrtc::TimeDelta::Millis(2000);
     transportChannel->SetIceConfig(iceConfig);
 
-    cricket::IceParameters localIceParameters(
+    webrtc::IceParameters localIceParameters(
         _localIceParameters.ufrag,
         _localIceParameters.pwd,
         false
@@ -417,27 +421,36 @@ void GroupNetworkManager::resetDtlsSrtpTransport() {
 
     transportChannel->SetIceParameters(localIceParameters);
     const bool isOutgoing = false;
-    transportChannel->SetIceRole(isOutgoing ? cricket::ICEROLE_CONTROLLING : cricket::ICEROLE_CONTROLLED);
-    transportChannel->SetRemoteIceMode(cricket::ICEMODE_FULL);
+    transportChannel->SetIceRole(isOutgoing ? webrtc::ICEROLE_CONTROLLING : webrtc::ICEROLE_CONTROLLED);
+    transportChannel->SetRemoteIceMode(webrtc::ICEMODE_FULL);
 
-    transportChannel->SignalIceTransportStateChanged.connect(this, &GroupNetworkManager::transportStateChanged);
-    transportChannel->SignalReadPacket.connect(this, &GroupNetworkManager::transportPacketReceived);
+    transportChannel->SubscribeIceTransportStateChanged(this, [this](webrtc::IceTransportInternal *transport) {
+        transportStateChanged(transport);
+    });
+    transportChannel->RegisterReceivedPacketCallback(this, [this](webrtc::PacketTransportInternal *transport, const webrtc::ReceivedIpPacket &packet) {
+        transportPacketReceived(transport, packet);
+    });
 
     webrtc::CryptoOptions cryptoOptions = GroupNetworkManager::getDefaulCryptoOptions();
 
-    auto dtlsTransport = std::make_unique<cricket::DtlsTransport>(transportChannel.get(), cryptoOptions, nullptr);
+    webrtc::scoped_refptr<webrtc::IceTransportInterface> iceTransport = webrtc::make_ref_counted<webrtc::IceTransportWithPointer>(transportChannel.get());
+    auto dtlsTransport = std::make_unique<webrtc::DtlsTransportInternalImpl>(_env, iceTransport, cryptoOptions);
 
-    dtlsTransport->SignalWritableState.connect(
-        this, &GroupNetworkManager::OnTransportWritableState_n);
-    dtlsTransport->SignalReceivingState.connect(
-        this, &GroupNetworkManager::OnTransportReceivingState_n);
+    dtlsTransport->SubscribeWritableState(this, [this](webrtc::PacketTransportInternal *transport) {
+        OnTransportWritableState_n(transport);
+    });
+    dtlsTransport->SubscribeReceivingState(this, [this](webrtc::PacketTransportInternal *transport) {
+        OnTransportReceivingState_n(transport);
+    });
 
-    dtlsTransport->SetDtlsRole(rtc::SSLRole::SSL_SERVER);
+    dtlsTransport->SetDtlsRole(webrtc::SSLRole::SSL_SERVER);
     dtlsTransport->SetLocalCertificate(_localCertificate);
 
     _dtlsSrtpTransport->SetDtlsTransports(dtlsTransport.get(), nullptr);
 
+    // The previous DTLS transport goes before the ICE transport it uses.
     _dtlsTransport = std::move(dtlsTransport);
+    _iceTransport = std::move(iceTransport);
     _transportChannel = std::move(transportChannel);
     _portAllocator = std::move(portAllocator);
 }
@@ -451,8 +464,13 @@ void GroupNetworkManager::start() {
 void GroupNetworkManager::restartDataChannel() {
     _dataChannelStateUpdated(false);
 
+    // The old channel goes first: the DTLS transport holds a single close callback, which the new SCTP transport sets
+    // and the old one's destruction would clear.
+    _dataChannelInterface.reset();
+
     const auto weak = std::weak_ptr<GroupNetworkManager>(shared_from_this());
     _dataChannelInterface.reset(new SctpDataChannelProviderInterfaceImpl(
+        _env,
         _dtlsTransport.get(),
         true,
         [weak, threads = _threads](bool state) {
@@ -486,17 +504,18 @@ void GroupNetworkManager::restartDataChannel() {
 }
 
 void GroupNetworkManager::stop() {
-    _transportChannel->SignalIceTransportStateChanged.disconnect(this);
-    _transportChannel->SignalReadPacket.disconnect(this);
+    // The ICE transport's state callback cannot be removed (8154 has no unsubscribe for it); the transport goes in
+    // resetDtlsSrtpTransport() below, and transportStateChanged ignores any transport but the current one.
+    _transportChannel->DeregisterReceivedPacketCallback(this);
 
-    _dtlsTransport->SignalWritableState.disconnect(this);
-    _dtlsTransport->SignalReceivingState.disconnect(this);
+    _dtlsTransport->UnsubscribeWritableState(this);
+    _dtlsTransport->UnsubscribeReceivingState(this);
 
     _dataChannelInterface.reset();
 
-    _localIceParameters = PeerIceParameters(rtc::CreateRandomString(cricket::ICE_UFRAG_LENGTH), rtc::CreateRandomString(cricket::ICE_PWD_LENGTH), false);
+    _localIceParameters = PeerIceParameters(webrtc::CreateRandomString(webrtc::ICE_UFRAG_LENGTH), webrtc::CreateRandomString(webrtc::ICE_PWD_LENGTH), false);
 
-    _localCertificate = rtc::RTCCertificateGenerator::GenerateCertificate(rtc::KeyParams(rtc::KT_ECDSA), absl::nullopt);
+    _localCertificate = webrtc::RTCCertificateGenerator::GenerateCertificate(webrtc::KeyParams(webrtc::KT_ECDSA), std::nullopt);
 
     resetDtlsSrtpTransport();
 }
@@ -505,18 +524,18 @@ PeerIceParameters GroupNetworkManager::getLocalIceParameters() {
     return _localIceParameters;
 }
 
-std::unique_ptr<rtc::SSLFingerprint> GroupNetworkManager::getLocalFingerprint() {
+std::unique_ptr<webrtc::SSLFingerprint> GroupNetworkManager::getLocalFingerprint() {
     auto certificate = _localCertificate;
     if (!certificate) {
         return nullptr;
     }
-    return rtc::SSLFingerprint::CreateFromCertificate(*certificate);
+    return webrtc::SSLFingerprint::CreateFromCertificate(*certificate);
 }
 
-void GroupNetworkManager::setRemoteParams(PeerIceParameters const &remoteIceParameters, std::vector<cricket::Candidate> const &iceCandidates, rtc::SSLFingerprint *fingerprint) {
+void GroupNetworkManager::setRemoteParams(PeerIceParameters const &remoteIceParameters, std::vector<webrtc::Candidate> const &iceCandidates, webrtc::SSLFingerprint *fingerprint) {
     _remoteIceParameters = remoteIceParameters;
 
-    cricket::IceParameters parameters(
+    webrtc::IceParameters parameters(
         remoteIceParameters.ufrag,
         remoteIceParameters.pwd,
         true
@@ -529,7 +548,8 @@ void GroupNetworkManager::setRemoteParams(PeerIceParameters const &remoteIcePara
     }
 
     if (fingerprint) {
-        _dtlsTransport->SetRemoteFingerprint(fingerprint->algorithm, fingerprint->digest.data(), fingerprint->digest.size());
+        // The role is ours (SSL_SERVER, set when the transport was made).
+        _dtlsTransport->SetRemoteParameters(fingerprint->algorithm, fingerprint->digest.data(), fingerprint->digest.size(), std::nullopt);
     }
 }
 
@@ -557,7 +577,7 @@ void GroupNetworkManager::checkConnectionTimeout() {
             return;
         }
 
-        int64_t currentTimestamp = rtc::TimeMillis();
+        int64_t currentTimestamp = webrtc::TimeMillis();
         const int64_t maxTimeout = 20000;
 
         if (strong->_lastNetworkActivityMs + maxTimeout < currentTimestamp) {
@@ -571,20 +591,20 @@ void GroupNetworkManager::checkConnectionTimeout() {
     }, webrtc::TimeDelta::Millis(1000));
 }
 
-void GroupNetworkManager::candidateGathered(cricket::IceTransportInternal *transport, const cricket::Candidate &candidate) {
+void GroupNetworkManager::candidateGathered(webrtc::IceTransportInternal *transport, const webrtc::Candidate &candidate) {
     assert(_threads->getNetworkThread()->IsCurrent());
 }
 
-void GroupNetworkManager::candidateGatheringState(cricket::IceTransportInternal *transport) {
+void GroupNetworkManager::candidateGatheringState(webrtc::IceTransportInternal *transport) {
     assert(_threads->getNetworkThread()->IsCurrent());
 }
 
-void GroupNetworkManager::OnTransportWritableState_n(rtc::PacketTransportInternal *transport) {
+void GroupNetworkManager::OnTransportWritableState_n(webrtc::PacketTransportInternal *transport) {
     assert(_threads->getNetworkThread()->IsCurrent());
 
     UpdateAggregateStates_n();
 }
-void GroupNetworkManager::OnTransportReceivingState_n(rtc::PacketTransportInternal *transport) {
+void GroupNetworkManager::OnTransportReceivingState_n(webrtc::PacketTransportInternal *transport) {
     assert(_threads->getNetworkThread()->IsCurrent());
 
     UpdateAggregateStates_n();
@@ -605,28 +625,31 @@ void GroupNetworkManager::DtlsReadyToSend(bool isReadyToSend) {
     }
 }
 
-void GroupNetworkManager::transportStateChanged(cricket::IceTransportInternal *transport) {
+void GroupNetworkManager::transportStateChanged(webrtc::IceTransportInternal *transport) {
+    // 8154's IceTransportInternal cannot remove a state subscriber, so a replaced channel (stop()) or one being destroyed
+    // (stop(), the destructor: _transportChannel already points past it) may still report here.
+    if (transport != _transportChannel.get()) {
+        return;
+    }
     UpdateAggregateStates_n();
 }
 
-void GroupNetworkManager::transportReadyToSend(cricket::IceTransportInternal *transport) {
+void GroupNetworkManager::transportReadyToSend(webrtc::IceTransportInternal *transport) {
     assert(_threads->getNetworkThread()->IsCurrent());
 }
 
-void GroupNetworkManager::transportPacketReceived(rtc::PacketTransportInternal *transport, const char *bytes, size_t size, const int64_t &timestamp, int unused) {
+void GroupNetworkManager::transportPacketReceived(webrtc::PacketTransportInternal *transport, const webrtc::ReceivedIpPacket &packet) {
     assert(_threads->getNetworkThread()->IsCurrent());
 
-    _lastNetworkActivityMs = rtc::TimeMillis();
+    _lastNetworkActivityMs = webrtc::TimeMillis();
 }
 
 void GroupNetworkManager::RtpPacketReceived_n(webrtc::RtpPacketReceived const &packet, bool isUnresolved) {
-    if (packet.HasExtension(webrtc::kRtpExtensionAudioLevel)) {
-        uint8_t audioLevel = 0;
-        bool isSpeech = false;
-
-        if (packet.GetExtension<webrtc::AudioLevel>(&isSpeech, &audioLevel)) {
+    if (packet.HasExtension<webrtc::AudioLevelExtension>()) {
+        webrtc::AudioLevel level;
+        if (packet.GetExtension<webrtc::AudioLevelExtension>(&level)) {
             if (_audioActivityUpdated) {
-                _audioActivityUpdated(packet.Ssrc(), audioLevel, isSpeech);
+                _audioActivityUpdated(packet.Ssrc(), (uint8_t)level.level(), level.voice_activity());
             }
         }
     }
@@ -635,7 +658,10 @@ void GroupNetworkManager::RtpPacketReceived_n(webrtc::RtpPacketReceived const &p
         _anyActivityUpdated(packet.Ssrc());
     }
 
-    if (isUnresolved && _unknownSsrcPacketReceived) {
+    // Every packet, whatever isUnresolved says: the fork's RtpTransport::ProcessRtpPacket hook always passes true (as
+    // on M123), and the engine sorts known SSRCs from unknown ones itself (GroupInstanceCustomImpl's
+    // receiveUnknownSsrcPacket also keeps known audio channels' activity up to date from these).
+    if (_unknownSsrcPacketReceived) {
         uint32_t ssrc = packet.Ssrc();
         int payloadType = packet.PayloadType();
 

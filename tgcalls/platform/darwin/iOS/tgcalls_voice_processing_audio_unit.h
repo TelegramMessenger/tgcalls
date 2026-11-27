@@ -16,6 +16,12 @@
 namespace webrtc {
 namespace tgcalls_ios_adm {
 
+// Process-wide: Voice-Processing I/O units initialized afterwards duck the app's other audio as little
+// as the system allows, and only while there is voice activity in the call
+// (kAUVoiceIOProperty_OtherAudioDuckingConfiguration: advanced ducking, minimum level; iOS 17+). Off by
+// default, which keeps the system's default ducking.
+void SetReducesOtherAudioDucking(bool reduces);
+
 class VoiceProcessingAudioUnitObserver {
  public:
   // Callback function called on a real-time priority I/O thread from the audio

@@ -5,8 +5,8 @@
 #include <string>
 #include <vector>
 
-#include "absl/types/variant.h"
-#include "absl/types/optional.h"
+#include <variant>
+#include <optional>
 #include "api/rtp_parameters.h"
 
 namespace tgcalls {
@@ -58,9 +58,9 @@ struct InitialSetupMessage {
     std::string ufrag;
     std::string pwd;
     std::vector<DtlsFingerprint> fingerprints;
-    absl::optional<MediaContent> audio;
-    absl::optional<MediaContent> video;
-    absl::optional<MediaContent> screencast;
+    std::optional<MediaContent> audio;
+    std::optional<MediaContent> video;
+    std::optional<MediaContent> screencast;
 };
 
 struct CandidatesMessage {
@@ -90,13 +90,13 @@ struct MediaStateMessage {
 };
 
 struct Message {
-    absl::variant<
+    std::variant<
         InitialSetupMessage,
         CandidatesMessage,
         MediaStateMessage> data;
 
     std::vector<uint8_t> serialize() const;
-    static absl::optional<Message> parse(const std::vector<uint8_t> &data);
+    static std::optional<Message> parse(const std::vector<uint8_t> &data);
 };
 
 };

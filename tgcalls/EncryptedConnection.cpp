@@ -3,6 +3,7 @@
 #include "CryptoHelper.h"
 #include "rtc_base/logging.h"
 #include "rtc_base/byte_buffer.h"
+#include "api/array_view.h"
 #include "rtc_base/time_utils.h"
 
 namespace tgcalls {
@@ -35,28 +36,28 @@ static constexpr uint8_t kAckId = uint8_t(-1);
 static constexpr uint8_t kEmptyId = uint8_t(-2);
 static constexpr uint8_t kCustomId = uint8_t(127);
 
-void AppendSeq(rtc::CopyOnWriteBuffer &buffer, uint32_t seq) {
-    const auto bytes = rtc::HostToNetwork32(seq);
+void AppendSeq(webrtc::CopyOnWriteBuffer &buffer, uint32_t seq) {
+    const auto bytes = webrtc::HostToNetwork32(seq);
     buffer.AppendData(reinterpret_cast<const char*>(&bytes), sizeof(bytes));
 }
 
 void WriteSeq(void *bytes, uint32_t seq) {
-    *reinterpret_cast<uint32_t*>(bytes) = rtc::HostToNetwork32(seq);
+    *reinterpret_cast<uint32_t*>(bytes) = webrtc::HostToNetwork32(seq);
 }
 
 uint32_t ReadSeq(const void *bytes) {
-    return rtc::NetworkToHost32(*reinterpret_cast<const uint32_t*>(bytes));
+    return webrtc::NetworkToHost32(*reinterpret_cast<const uint32_t*>(bytes));
 }
 
 uint32_t CounterFromSeq(uint32_t seq) {
     return seq & ~kSingleMessagePacketSeqBit & ~kMessageRequiresAckSeqBit;
 }
 
-absl::nullopt_t LogError(
+std::nullopt_t LogError(
         const char *message,
         const std::string &additional = std::string()) {
     RTC_LOG(LS_ERROR) << "ERROR! " << message << additional;
-    return absl::nullopt;
+    return std::nullopt;
 }
 
 bool ConstTimeIsDifferent(const void *a, const void *b, size_t size) {
@@ -69,17 +70,17 @@ bool ConstTimeIsDifferent(const void *a, const void *b, size_t size) {
     return different;
 }
 
-rtc::CopyOnWriteBuffer SerializeRawMessageWithSeq(
-        const rtc::CopyOnWriteBuffer &message,
+webrtc::CopyOnWriteBuffer SerializeRawMessageWithSeq(
+        const webrtc::CopyOnWriteBuffer &message,
         uint32_t seq,
         bool singleMessagePacket) {
-    rtc::ByteBufferWriter writer;
+    webrtc::ByteBufferWriter writer;
     writer.WriteUInt32(seq);
     writer.WriteUInt8(kCustomId);
     writer.WriteUInt32((uint32_t)message.size());
-    writer.WriteBytes((const uint8_t *)message.data(), message.size());
+    writer.Write(std::span<const uint8_t>((const uint8_t *)message.data(), message.size()));
 
-    auto result = rtc::CopyOnWriteBuffer();
+    auto result = webrtc::CopyOnWriteBuffer();
     result.AppendData(writer.Data(), writer.Length());
 
     return result;
@@ -98,27 +99,27 @@ _requestSendService(std::move(requestSendService)) {
     assert(_key.value != nullptr);
 }
 
-absl::optional<rtc::CopyOnWriteBuffer> EncryptedConnection::encryptRawPacket(rtc::CopyOnWriteBuffer const &buffer) {
+std::optional<webrtc::CopyOnWriteBuffer> EncryptedConnection::encryptRawPacket(webrtc::CopyOnWriteBuffer const &buffer) {
     auto seq = ++_counter;
 
-    rtc::ByteBufferWriter writer;
+    webrtc::ByteBufferWriter writer;
     writer.WriteUInt32(seq);
 
-    auto result = rtc::CopyOnWriteBuffer();
+    auto result = webrtc::CopyOnWriteBuffer();
     result.AppendData(writer.Data(), writer.Length());
 
     result.AppendData(buffer);
 
     auto encryptedPacket = encryptPrepared(result);
 
-    rtc::CopyOnWriteBuffer encryptedBuffer;
+    webrtc::CopyOnWriteBuffer encryptedBuffer;
     encryptedBuffer.AppendData(encryptedPacket.bytes.data(), encryptedPacket.bytes.size());
     return encryptedBuffer;
 }
 
-absl::optional<rtc::CopyOnWriteBuffer> EncryptedConnection::decryptRawPacket(rtc::CopyOnWriteBuffer const &buffer) {
+std::optional<webrtc::CopyOnWriteBuffer> EncryptedConnection::decryptRawPacket(webrtc::CopyOnWriteBuffer const &buffer) {
     if (buffer.size() < 21 || buffer.size() > kMaxIncomingPacketSize) {
-        return absl::nullopt;
+        return std::nullopt;
     }
 
     const auto x = (_key.isOutgoing ? 8 : 0) + (_type == Type::Signaling ? 128 : 0);
@@ -129,7 +130,7 @@ absl::optional<rtc::CopyOnWriteBuffer> EncryptedConnection::decryptRawPacket(rtc
 
     auto aesKeyIv = PrepareAesKeyIv(key, msgKey, x);
 
-    auto decryptionBuffer = rtc::Buffer(dataSize);
+    auto decryptionBuffer = webrtc::Buffer(dataSize);
     AesProcessCtr(
         MemorySpan{ encryptedData, dataSize },
         decryptionBuffer.data(),
@@ -139,34 +140,34 @@ absl::optional<rtc::CopyOnWriteBuffer> EncryptedConnection::decryptRawPacket(rtc
         MemorySpan{ key + 88 + x, 32 },
         MemorySpan{ decryptionBuffer.data(), decryptionBuffer.size() });
     if (ConstTimeIsDifferent(msgKeyLarge.data() + 8, msgKey, 16)) {
-        return absl::nullopt;
+        return std::nullopt;
     }
 
     const auto incomingSeq = ReadSeq(decryptionBuffer.data());
     const auto incomingCounter = CounterFromSeq(incomingSeq);
     if (!registerIncomingCounter(incomingCounter)) {
         // We've received that packet already.
-        return absl::nullopt;
+        return std::nullopt;
     }
 
-    rtc::CopyOnWriteBuffer resultBuffer;
+    webrtc::CopyOnWriteBuffer resultBuffer;
     resultBuffer.AppendData(decryptionBuffer.data() + 4, decryptionBuffer.size() - 4);
     return resultBuffer;
 }
 
-absl::optional<rtc::CopyOnWriteBuffer> EncryptedConnection::encryptFullPlaintextPacket(rtc::CopyOnWriteBuffer const &packet) {
+std::optional<webrtc::CopyOnWriteBuffer> EncryptedConnection::encryptFullPlaintextPacket(webrtc::CopyOnWriteBuffer const &packet) {
     if (packet.size() < 5) {
-        return absl::nullopt;
+        return std::nullopt;
     }
     auto encryptedPacket = encryptPrepared(packet);
-    rtc::CopyOnWriteBuffer encryptedBuffer;
+    webrtc::CopyOnWriteBuffer encryptedBuffer;
     encryptedBuffer.AppendData(encryptedPacket.bytes.data(), encryptedPacket.bytes.size());
     return encryptedBuffer;
 }
 
-absl::optional<rtc::CopyOnWriteBuffer> EncryptedConnection::decryptFullPlaintextPacket(rtc::CopyOnWriteBuffer const &buffer) {
+std::optional<webrtc::CopyOnWriteBuffer> EncryptedConnection::decryptFullPlaintextPacket(webrtc::CopyOnWriteBuffer const &buffer) {
     if (buffer.size() < 21 || buffer.size() > kMaxIncomingPacketSize) {
-        return absl::nullopt;
+        return std::nullopt;
     }
 
     const auto x = (_key.isOutgoing ? 8 : 0) + (_type == Type::Signaling ? 128 : 0);
@@ -177,7 +178,7 @@ absl::optional<rtc::CopyOnWriteBuffer> EncryptedConnection::decryptFullPlaintext
 
     auto aesKeyIv = PrepareAesKeyIv(key, msgKey, x);
 
-    auto decryptionBuffer = rtc::Buffer(dataSize);
+    auto decryptionBuffer = webrtc::Buffer(dataSize);
     AesProcessCtr(
         MemorySpan{ encryptedData, dataSize },
         decryptionBuffer.data(),
@@ -187,24 +188,24 @@ absl::optional<rtc::CopyOnWriteBuffer> EncryptedConnection::decryptFullPlaintext
         MemorySpan{ key + 88 + x, 32 },
         MemorySpan{ decryptionBuffer.data(), decryptionBuffer.size() });
     if (ConstTimeIsDifferent(msgKeyLarge.data() + 8, msgKey, 16)) {
-        return absl::nullopt;
+        return std::nullopt;
     }
 
     const auto incomingSeq = ReadSeq(decryptionBuffer.data());
     const auto incomingCounter = CounterFromSeq(incomingSeq);
     if (!registerIncomingCounter(incomingCounter)) {
         // We've received that packet already.
-        return absl::nullopt;
+        return std::nullopt;
     }
 
-    rtc::CopyOnWriteBuffer resultBuffer;
+    webrtc::CopyOnWriteBuffer resultBuffer;
     resultBuffer.AppendData(decryptionBuffer.data(), decryptionBuffer.size());
     return resultBuffer;
 }
 
 auto EncryptedConnection::prepareForSending(const Message &message)
--> absl::optional<EncryptedPacket> {
-    const auto messageRequiresAck = absl::visit([](const auto &data) {
+-> std::optional<EncryptedPacket> {
+    const auto messageRequiresAck = std::visit([](const auto &data) {
         return std::decay_t<decltype(data)>::kRequiresAck;
     }, message.data);
     
@@ -213,7 +214,7 @@ auto EncryptedConnection::prepareForSending(const Message &message)
     const auto singleMessagePacket = !haveAdditionalMessages() && !messageRequiresAck;
     const auto maybeSeq = computeNextSeq(messageRequiresAck, singleMessagePacket);
     if (!maybeSeq) {
-        return absl::nullopt;
+        return std::nullopt;
     }
     const auto seq = *maybeSeq;
     auto serialized = SerializeMessageWithSeq(message, seq, singleMessagePacket);
@@ -221,13 +222,13 @@ auto EncryptedConnection::prepareForSending(const Message &message)
     return prepareForSendingMessageInternal(serialized, seq, messageRequiresAck);
 }
 
-absl::optional<EncryptedConnection::EncryptedPacket> EncryptedConnection::prepareForSendingRawMessage(rtc::CopyOnWriteBuffer &message, bool messageRequiresAck) {
+std::optional<EncryptedConnection::EncryptedPacket> EncryptedConnection::prepareForSendingRawMessage(webrtc::CopyOnWriteBuffer &message, bool messageRequiresAck) {
     // If message requires ack, then we can't serialize it as a single
     // message packet, because later it may be sent as a part of big packet.
     const auto singleMessagePacket = !haveAdditionalMessages() && !messageRequiresAck;
     const auto maybeSeq = computeNextSeq(messageRequiresAck, singleMessagePacket);
     if (!maybeSeq) {
-        return absl::nullopt;
+        return std::nullopt;
     }
     const auto seq = *maybeSeq;
     auto serialized = SerializeRawMessageWithSeq(message, seq, singleMessagePacket);
@@ -235,13 +236,13 @@ absl::optional<EncryptedConnection::EncryptedPacket> EncryptedConnection::prepar
     return prepareForSendingMessageInternal(serialized, seq, messageRequiresAck);
 }
     
-absl::optional<EncryptedConnection::EncryptedPacket> EncryptedConnection::prepareForSendingMessageInternal(rtc::CopyOnWriteBuffer &serialized, uint32_t seq, bool messageRequiresAck) {
+std::optional<EncryptedConnection::EncryptedPacket> EncryptedConnection::prepareForSendingMessageInternal(webrtc::CopyOnWriteBuffer &serialized, uint32_t seq, bool messageRequiresAck) {
     if (!enoughSpaceInPacket(serialized, 0)) {
         return LogError("Too large packet: ", std::to_string(serialized.size()));
     }
     const auto notYetAckedCopy = messageRequiresAck
         ? serialized
-        : rtc::CopyOnWriteBuffer();
+        : webrtc::CopyOnWriteBuffer();
     if (!messageRequiresAck) {
         appendAdditionalMessages(serialized);
         return encryptPrepared(serialized);
@@ -260,7 +261,7 @@ absl::optional<EncryptedConnection::EncryptedPacket> EncryptedConnection::prepar
             << "Add SEND:type" << type << "#" << CounterFromSeq(seq);
         appendAdditionalMessages(serialized);
     }
-    _myNotYetAckedMessages.push_back({ notYetAckedCopy, rtc::TimeMillis() });
+    _myNotYetAckedMessages.push_back({ notYetAckedCopy, webrtc::TimeMillis() });
     if (!sendEnqueued) {
         return encryptPrepared(serialized);
     }
@@ -271,20 +272,20 @@ absl::optional<EncryptedConnection::EncryptedPacket> EncryptedConnection::prepar
 }
 
 auto EncryptedConnection::prepareForSendingService(int cause)
--> absl::optional<EncryptedPacket> {
+-> std::optional<EncryptedPacket> {
     if (cause == kServiceCauseAcks) {
         _sendAcksTimerActive = false;
     } else if (cause == kServiceCauseResend) {
         _resendTimerActive = false;
     }
     if (!haveAdditionalMessages()) {
-        return absl::nullopt;
+        return std::nullopt;
     }
     const auto messageRequiresAck = false;
     const auto singleMessagePacket = false;
     const auto seq = computeNextSeq(messageRequiresAck, singleMessagePacket);
     if (!seq) {
-        return absl::nullopt;
+        return std::nullopt;
     }
     auto serialized = SerializeEmptyMessageWithSeq(*seq);
     assert(enoughSpaceInPacket(serialized, 0));
@@ -300,7 +301,7 @@ bool EncryptedConnection::haveAdditionalMessages() const {
     return !_myNotYetAckedMessages.empty() || !_acksToSendSeqs.empty();
 }
 
-absl::optional<uint32_t> EncryptedConnection::computeNextSeq(
+std::optional<uint32_t> EncryptedConnection::computeNextSeq(
         bool messageRequiresAck,
         bool singleMessagePacket) {
     if (messageRequiresAck && _myNotYetAckedMessages.size() >= kNotAckedMessagesLimit) {
@@ -323,13 +324,13 @@ size_t EncryptedConnection::packetLimit() const {
     }
 }
 
-bool EncryptedConnection::enoughSpaceInPacket(const rtc::CopyOnWriteBuffer &buffer, size_t amount) const {
+bool EncryptedConnection::enoughSpaceInPacket(const webrtc::CopyOnWriteBuffer &buffer, size_t amount) const {
     const auto limit = packetLimit();
     return (amount < limit)
         && (16 + buffer.size() + amount <= limit);
 }
 
-void EncryptedConnection::appendAcksToSend(rtc::CopyOnWriteBuffer &buffer) {
+void EncryptedConnection::appendAcksToSend(webrtc::CopyOnWriteBuffer &buffer) {
     auto i = _acksToSendSeqs.begin();
     while ((i != _acksToSendSeqs.end())
         && enoughSpaceInPacket(
@@ -361,14 +362,14 @@ size_t EncryptedConnection::fullNotAckedLength() const {
     return result;
 }
 
-void EncryptedConnection::appendAdditionalMessages(rtc::CopyOnWriteBuffer &buffer) {
+void EncryptedConnection::appendAdditionalMessages(webrtc::CopyOnWriteBuffer &buffer) {
     appendAcksToSend(buffer);
 
     if (_myNotYetAckedMessages.empty()) {
         return;
     }
 
-    const auto now = rtc::TimeMillis();
+    const auto now = webrtc::TimeMillis();
     for (auto &resending : _myNotYetAckedMessages) {
         const auto sent = resending.lastSent;
         const auto when = sent
@@ -403,7 +404,7 @@ void EncryptedConnection::appendAdditionalMessages(rtc::CopyOnWriteBuffer &buffe
     }
 }
 
-auto EncryptedConnection::encryptPrepared(const rtc::CopyOnWriteBuffer &buffer)
+auto EncryptedConnection::encryptPrepared(const webrtc::CopyOnWriteBuffer &buffer)
 -> EncryptedPacket {
     auto result = EncryptedPacket();
     result.counter = CounterFromSeq(ReadSeq(buffer.data()));
@@ -453,7 +454,7 @@ bool EncryptedConnection::registerIncomingCounter(uint32_t incomingCounter) {
 }
 
 auto EncryptedConnection::handleIncomingPacket(const char *bytes, size_t size)
--> absl::optional<DecryptedPacket> {
+-> std::optional<DecryptedPacket> {
     if (size < 21 || size > kMaxIncomingPacketSize) {
         return LogError("Bad incoming packet size: ", std::to_string(size));
     }
@@ -466,7 +467,7 @@ auto EncryptedConnection::handleIncomingPacket(const char *bytes, size_t size)
 
     auto aesKeyIv = PrepareAesKeyIv(key, msgKey, x);
 
-    auto decryptionBuffer = rtc::Buffer(dataSize);
+    auto decryptionBuffer = webrtc::Buffer(dataSize);
     AesProcessCtr(
         MemorySpan{ encryptedData, dataSize },
         decryptionBuffer.data(),
@@ -488,7 +489,7 @@ auto EncryptedConnection::handleIncomingPacket(const char *bytes, size_t size)
     return processPacket(decryptionBuffer, incomingSeq);
 }
 
-absl::optional<EncryptedConnection::DecryptedRawPacket> EncryptedConnection::handleIncomingRawPacket(const char *bytes, size_t size) {
+std::optional<EncryptedConnection::DecryptedRawPacket> EncryptedConnection::handleIncomingRawPacket(const char *bytes, size_t size) {
     if (size < 21 || size > kMaxIncomingPacketSize) {
         return LogError("Bad incoming packet size: ", std::to_string(size));
     }
@@ -501,7 +502,7 @@ absl::optional<EncryptedConnection::DecryptedRawPacket> EncryptedConnection::han
 
     auto aesKeyIv = PrepareAesKeyIv(key, msgKey, x);
 
-    auto decryptionBuffer = rtc::Buffer(dataSize);
+    auto decryptionBuffer = webrtc::Buffer(dataSize);
     AesProcessCtr(
         MemorySpan{ encryptedData, dataSize },
         decryptionBuffer.data(),
@@ -524,9 +525,9 @@ absl::optional<EncryptedConnection::DecryptedRawPacket> EncryptedConnection::han
 }
 
 auto EncryptedConnection::processPacket(
-    const rtc::Buffer &fullBuffer,
+    const webrtc::Buffer &fullBuffer,
     uint32_t packetSeq)
--> absl::optional<DecryptedPacket> {
+-> std::optional<DecryptedPacket> {
     assert(fullBuffer.size() >= 5);
 
     auto additionalMessage = false;
@@ -536,11 +537,11 @@ auto EncryptedConnection::processPacket(
     const auto packetCounter = CounterFromSeq(packetSeq);
     auto currentSeq = packetSeq;
     auto currentCounter = CounterFromSeq(currentSeq);
-    rtc::ByteBufferReader reader(rtc::ArrayView<const uint8_t>(
+    webrtc::ByteBufferReader reader(webrtc::ArrayView<const uint8_t>(
         reinterpret_cast<const uint8_t *>(fullBuffer.data() + 4), // Skip seq.
         fullBuffer.size() - 4));
 
-    auto result = absl::optional<DecryptedPacket>();
+    auto result = std::optional<DecryptedPacket>();
     while (true) {
         const auto type = uint8_t(*reader.Data());
         const auto singleMessagePacket = ((currentSeq & kSingleMessagePacketSeqBit) != 0);
@@ -613,9 +614,9 @@ auto EncryptedConnection::processPacket(
 }
 
 auto EncryptedConnection::processRawPacket(
-    const rtc::Buffer &fullBuffer,
+    const webrtc::Buffer &fullBuffer,
     uint32_t packetSeq)
--> absl::optional<DecryptedRawPacket> {
+-> std::optional<DecryptedRawPacket> {
     assert(fullBuffer.size() >= 5);
 
     auto additionalMessage = false;
@@ -625,11 +626,11 @@ auto EncryptedConnection::processRawPacket(
     const auto packetCounter = CounterFromSeq(packetSeq);
     auto currentSeq = packetSeq;
     auto currentCounter = CounterFromSeq(currentSeq);
-    rtc::ByteBufferReader reader(rtc::ArrayView<const uint8_t>(
+    webrtc::ByteBufferReader reader(webrtc::ArrayView<const uint8_t>(
         reinterpret_cast<const uint8_t *>(fullBuffer.data() + 4), // Skip seq.
         fullBuffer.size() - 4));
 
-    auto result = absl::optional<DecryptedRawPacket>();
+    auto result = std::optional<DecryptedRawPacket>();
     while (true) {
         const auto type = uint8_t(*reader.Data());
         const auto singleMessagePacket = ((currentSeq & kSingleMessagePacketSeqBit) != 0);
@@ -708,7 +709,7 @@ auto EncryptedConnection::processRawPacket(
 }
 
 void EncryptedConnection::appendReceivedMessage(
-        absl::optional<DecryptedPacket> &to,
+        std::optional<DecryptedPacket> &to,
         Message &&message,
         uint32_t incomingSeq) {
     auto decrypted = DecryptedMessage{
@@ -723,8 +724,8 @@ void EncryptedConnection::appendReceivedMessage(
 }
 
 void EncryptedConnection::appendReceivedRawMessage(
-        absl::optional<DecryptedRawPacket> &to,
-        rtc::CopyOnWriteBuffer &&message,
+        std::optional<DecryptedRawPacket> &to,
+        webrtc::CopyOnWriteBuffer &&message,
         uint32_t incomingSeq) {
     auto decrypted = DecryptedRawMessage{
         std::move(message),
@@ -797,8 +798,8 @@ auto EncryptedConnection::DelayIntervalsByType(Type type) -> DelayIntervals {
     return result;
 }
 
-rtc::CopyOnWriteBuffer EncryptedConnection::SerializeEmptyMessageWithSeq(uint32_t seq) {
-    auto result = rtc::CopyOnWriteBuffer(5);
+webrtc::CopyOnWriteBuffer EncryptedConnection::SerializeEmptyMessageWithSeq(uint32_t seq) {
+    auto result = webrtc::CopyOnWriteBuffer(5);
     auto bytes = result.MutableData();
     WriteSeq(bytes, seq);
     bytes[4] = kEmptyId;

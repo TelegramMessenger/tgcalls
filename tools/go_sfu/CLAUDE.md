@@ -15,7 +15,7 @@ The `go_binary` with `linkmode = "c-archive"` compiles Go code (including the Go
 The Go runtime (GC, goroutine scheduler) runs inside the C++ process. This adds ~10MB memory overhead. `GoSfu_Init()` must be called before any other Go functions.
 
 ## Key Files
-- `submodules/TgVoipWebrtc/tgcalls/tools/go_sfu/sfu.go` — SFU core: participant registry, join/leave/response flow, audio+video RTP forwarding, SSRC registry (audio/video/video-rtx with layer index), Colibri `ReceiverVideoConstraints`/`SenderVideoConstraints` handling, PLI/FIR forwarding, `ActiveVideoSsrcs` broadcasting, `//export` C bindings (`GoSfu_Init`, `GoSfu_Create`, `GoSfu_Destroy`, `GoSfu_Join`, `GoSfu_Leave`, `GoSfu_QuerySsrc`, `GoSfu_QueryVideoSsrcs`, `GoSfu_QueryRequestedLayer` — the layer a receiver asked the SFU to forward from a sender, -1 if none; with receiver == sender it tells the harness whether an engine let a request for its OWN video through — `GoSfu_Free`, `GoSfu_Shutdown`)
+- `submodules/TgVoipWebrtc/tgcalls/tools/go_sfu/sfu.go` — SFU core: participant registry, join/leave/response flow, audio+video RTP forwarding, SSRC registry (audio/video/video-rtx with layer index), Colibri `ReceiverVideoConstraints`/`SenderVideoConstraints` handling, PLI/FIR forwarding, `ActiveVideoSsrcs` broadcasting, `//export` C bindings (`GoSfu_Init`, `GoSfu_Create`, `GoSfu_Destroy`, `GoSfu_Join`, `GoSfu_Leave`, `GoSfu_QuerySsrc`, `GoSfu_QueryVideoSsrcs`, `GoSfu_QueryRequestedLayer` — the layer a receiver asked the SFU to forward from a sender, -1 if none; with receiver == sender it tells the harness whether an engine let a request for its OWN video through — `GoSfu_SetListAv1` — later join responses also list AV1 106 with RTX 107 (`videoPayloadTypesJSON`), what the group screen share's AV1 top layer needs from an SFU — `GoSfu_SetDependencyDescriptorId` — later join responses list the AV1 Dependency Descriptor at that ID (`rtp_extensions.go`) — `GoSfu_QueryPayloadTypeStats` — per sender, `{"<layer>": {"<payload type>": {packets, dd, frames, firstMs, lastMs}}}` of the video and RTX packets it received (a frame is a new RTP timestamp; `dd` the packets carrying the Dependency Descriptor at the listed ID, else 11, `rtpHasExtension`), so a run can assert which codec each layer carried and with what; payload types and header extensions are forwarded unchanged — `GoSfu_Free`, `GoSfu_Shutdown`)
 - `submodules/TgVoipWebrtc/tgcalls/tools/go_sfu/participant.go` — per-participant transport stack (ICE agent, DTLS conn, SRTP session, SRTCP contexts for manual RTCP decrypt/encrypt, SCTP association, data channel send/receive, per-receiver video layer selection)
 - `submodules/TgVoipWebrtc/tgcalls/tools/go_sfu/mux.go` — packet demuxer: three-way split of ICE traffic into DTLS handshake, SRTP (RTP), and SRTCP (RTCP) channels per RFC 7983 + RFC 5761
 - `submodules/TgVoipWebrtc/tgcalls/tools/go_sfu/go.mod` / `go.sum` — Go module with Pion dependencies
@@ -49,6 +49,10 @@ A request that maps to no layer (off-scale, a `maxHeight` of 0, or an endpoint d
 The SFU forwards exactly one simulcast layer per (receiver, sender) pair. Before `ReceiverVideoConstraints` arrives, the SFU uses `requestedLayer` as the cap and forwards at `maxActiveLayer` (the highest layer the encoder actually produces). After constraints arrive, `ensureLayerSelector` sets `selectedLayer` clamped to `maxActiveLayer`.
 
 When forwarding a non-base layer, the SFU rewrites the RTP SSRC to the primary (layer 0) SSRC. This is necessary because `IncomingVideoChannel` in CustomImpl attaches its `VideoSinkImpl` to `_mainVideoSsrc` (the first SSRC in the SIM group, i.e., layer 0). Without SSRC rewriting, packets from higher layers are delivered to the wrong receive stream and never decoded. RTX SSRCs are similarly rewritten to the layer 0 FID SSRC.
+
+**Sequence numbers and timestamps are translated too** (`layer_forwarder.go`, one `layerForwarder` per (receiver, sender)): each simulcast layer has its own sequence space and its own random timestamp base, and a receiver drops any frame that looks older than the last one it decoded, keyframes included: forwarded as they are, a switch to a layer whose timestamps run behind stalls the receiver for good. `--network-scenario step-down-up` cannot show that (its validation needs one frame per pair); `--video-quality-switch` does. On the first packet of a new layer the forwarder continues the sequence one past the last forwarded and the timestamp one frame (3000 ticks) after it; RTX keeps its own sequence continuity and has its original sequence number rewritten with the media offset of its layer. Tests: `TestLayerForwarder*`.
+
+**A raised request upswitches at once without REMB** (`LayerSelector.SetMaxLayer`): a tile going back from thumbnail to full gets the highest layer the sender has (a screen share has two) with a keyframe request on it, as a lowered request downswitches at once; with a fresh REMB estimate the state machine still decides. Live runs carry no REMB, so this is the only way a receiver comes back up. The selector also starts at most at the sender's top layer. Tests: `TestLayerSelectorRaisedRequest*`.
 
 ### Testing on Localhost
 Use `--network-scenario step-down-up` to exercise the full adaptation path via per-client network simulation (replaces the old REMB-override `--bw-scenario`).
@@ -110,3 +114,62 @@ Per-client network simulation with independent ingress (from client) and egress 
 ### Key Files
 - `submodules/TgVoipWebrtc/tgcalls/tools/go_sfu/network_sim.go` — `NetworkSimulator` (token bucket, delay, jitter, drop)
 - `submodules/TgVoipWebrtc/tgcalls/tools/go_sfu/participant.go` — `ingressSim`, `egressSim` on each `Participant`
+
+## Broadcast server
+
+The SFU also emulates Telegram's **broadcast server** (2026-11-01): what a broadcast listener (an RTMP stream's, or
+a large chat's listener that gets 1-second parts instead of WebRTC) is answered when it asks for parts, the server
+time or a stream's newest part. The old engine's baseline was recorded against it, and telegram-ios's
+`Tests/BroadcastRunner` drives it now (see `tools/cli/CLAUDE.md`, "The broadcast testbench"). Files: `broadcast_server.go` (rules, link, events, stats), `broadcast_audio.go` (listener audio from
+live RTP), `broadcast_ogg.go` (the Ogg Opus part writer), `broadcast_fixtures.go` (video and unified parts),
+`broadcast_libopus.go` (cgo libopus), `broadcast_exports.go` (`GoSfu_Broadcast*`). Formats are what the old engine's part
+decoders read (they left tgcalls with broadcast; a test-only copy is in telegram-ios's
+`submodules/TgVoipWebrtc/BroadcastMedia/Tests/EngineReference`); telegram-ios's
+`//Tests/BroadcastRunner:broadcast_part_format_test` decodes the server's parts with them.
+
+- **Rules**: parts are 1000 ms on the Unix-millisecond grid. A part `[T, T+1000)` is available from
+  `T + 1000 + availabilityDelayMs` (default 300; the real server's delay is unknown, device parity calibrates it):
+  earlier is NotReady, off the grid or older than the retained window (30 s) is ResyncNeeded. A request is decided when
+  it reaches the server. Scripted events per client: `notready-burst@S` (2 s of NotReady), `resync@S`,
+  `join-missing@S` (once each), timed from `GoSfu_BroadcastAddClient` on the precise clock.
+- **Link**: each client's responses go through `DebugNetworkShaper`'s model (telegram-ios
+  `submodules/TelegramCore/Sources/Network/DebugNetworkShaper.swift`) with its profiles: a response's bytes start one
+  round trip after the request, or when the link is done with the responses before it, at the profile's bandwidth.
+  `GoSfu_BroadcastFetch` blocks for that time. Not the packet `NetworkSimulator`: parts are whole responses. The
+  response timestamp it returns is the answer's time (when the request was decided), not the delivery's: the app's
+  `responseTimestamp` is MTProto's message time, the server's clock when it answered, and the engine re-anchors a
+  resync at it (until the Plan 1 review it was the delivery time, seconds late on a backlogged 3g link).
+- **Listener audio**: the group engine sends 60 ms Opus frames, which cannot be cut into 1-second parts, so every
+  speaker's audio RTP (tapped in `processIncomingRTP`) is decoded with libopus onto a 48 kHz timeline taken from its
+  RTP timestamps (anchored at the first packet's arrival), and each part's 20 ms slots are re-encoded per channel
+  (fresh encoder per part, 32 kbit/s). A part is cached once built. Channels: speakers in join order, at most 8 (the
+  old decoder ends a part with more); a leaver keeps its channel, empty, until the next part; a second nobody spoke in
+  is a part with one silent channel listing none (NotReady there would stall the old engine for good). Empty slots
+  carry a CELT silence frame (`F8 FF FE`), not a zero-length frame (libopus conceals that as a loss).
+- **Ogg Opus layout**: family 255, one uncoupled stream per channel; `TG_META` (channel → ssrc), `ACTIVE_MASK` and
+  `ENDPOINTS` (video channels) as OpusTags comments. **The head's mapping table undoes a reorder**: FFmpeg's libopus
+  wrapper (`libavcodec/libopusdec.c`, what tgcalls decodes with) reorders 3-8 channels from Vorbis to FFmpeg order
+  whatever the family, and the old client's channel index is that decoder's output order, so stream `c` is placed at
+  `mapping[ff_vorbis_channel_layout_offsets[N-1][c]]`. FFmpeg's native opus decoder (the one Homebrew's `ffmpeg`
+  uses) does not reorder, so a part looks swapped there and right in tgcalls; a new decoder of these parts has to
+  reproduce the libopus wrapper's order.
+- **Video and unified parts** come from fixture slices (`testdata/broadcast/`, made by `make-broadcast-fixtures.sh`
+  with Homebrew `ffmpeg`, committed so builds never run it): 10 s of `testsrc2` at 320x180, 640x360, 1280x720 (H.264
+  baseline, 150/500/1500 kbit/s), one 1 s GOP per file, AAC 1000 Hz tone in the `unified_*` ones, a 16-bit frame
+  counter burned into the top 16 rows. Part T shows slice `broadcastFixtureSliceAt(T / 1000)` behind the video-part
+  header (signature `0xa12e810d`, TL string `"mp4"`, one event: endpoint, rotation 0). **The slices are not shown in
+  loop order**: a counter alone tells media time only modulo 10 s, and with `(T / 1000) % 10` (until the Plan 1 review)
+  every listener further behind live read as 10 s less (the old engine's tiles after the step-down: 3–8 s instead of
+  13–18 s). The order is `s_n = s_(n-1) + 1 + d_(n mod 81) (mod 10)`, `d` the de Bruijn sequence B(9, 2): every step
+  changes slice and three consecutive parts locate a part modulo 162 s. The CLI's `broadcast_signals` builds the same
+  order (`fixtureSliceAt`, `locateFixturePart`), and the runner's `broadcast_part_format_test` decodes parts of both
+  halves of the period to prove the two agree. Video channel `c + 1` is the endpoint of the
+  participant on audio channel `c` of the same second. Unified parts name endpoint `""` (a stream's player shows
+  them as `"unified"` whatever the part names). Fixtures rather than the speakers' live H.264: stable part sizes
+  per quality (the quality-selection comparison is otherwise the senders' bandwidth-estimation noise), whole GOPs, and
+  a readable media time. (Live layer 2 does occur on the host: a 30 s two-participant video run produced 720p SSRCs.)
+- **libopus under Bazel only**: `broadcast_libopus.go` builds with the go tag `tgcalls_vendored_opus` and
+  `cdeps = ["//third-party/opus:opus"]` (the library webrtc links, one copy in the CLI); `go test` builds without the
+  tag (`broadcast_libopus_none.go`) and injects a fake codec. Tests: `go test ./...` here, and telegram-ios's
+  `//Tests/BroadcastRunner:broadcast_part_format_test` and `:harness_test` under Bazel.
+

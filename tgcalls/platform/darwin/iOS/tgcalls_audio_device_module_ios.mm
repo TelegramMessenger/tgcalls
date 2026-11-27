@@ -10,8 +10,7 @@
 
 #include "tgcalls_audio_device_module_ios.h"
 
-#include "api/task_queue/default_task_queue_factory.h"
-#include "modules/audio_device/audio_device_config.h"
+#include "api/environment/environment_factory.h"
 #include "modules/audio_device/audio_device_generic.h"
 #include "rtc_base/checks.h"
 #include "rtc_base/logging.h"
@@ -41,14 +40,7 @@
 namespace webrtc {
 
 webrtc::scoped_refptr<AudioDeviceModule> CreateAudioDeviceModule(bool bypass_voice_processing) {
-    return rtc::make_ref_counted<webrtc::tgcalls_ios_adm::AudioDeviceModuleIOS>(bypass_voice_processing, false, false, 1);
-}
-
-webrtc::scoped_refptr<AudioDeviceModule> AudioDeviceModule::Create(
-    AudioLayer audio_layer,
-    TaskQueueFactory* task_queue_factory) {
-  RTC_DLOG(LS_INFO) << __FUNCTION__;
-    return CreateAudioDeviceModule(false);
+    return webrtc::make_ref_counted<webrtc::tgcalls_ios_adm::AudioDeviceModuleIOS>(bypass_voice_processing, false, false, 1);
 }
 
 }
@@ -61,7 +53,7 @@ AudioDeviceModuleIOS::AudioDeviceModuleIOS(bool bypass_voice_processing, bool di
       disable_recording_(disable_recording),
       enableSystemMute_(enableSystemMute),
       numChannels_(numChannels),
-      task_queue_factory_(CreateDefaultTaskQueueFactory()) {
+      env_(CreateEnvironment()) {
   RTC_LOG(LS_INFO) << "current platform is IOS";
   RTC_LOG(LS_INFO) << "iPhone Audio APIs will be utilized.";
 }
@@ -91,7 +83,7 @@ AudioDeviceModuleIOS::AudioDeviceModuleIOS(bool bypass_voice_processing, bool di
     if (initialized_)
       return 0;
 
-    audio_device_buffer_.reset(new webrtc::AudioDeviceBuffer(task_queue_factory_.get()));
+    audio_device_buffer_.reset(new webrtc::AudioDeviceBuffer(env_));
     audio_device_.reset(new tgcalls_ios_adm::AudioDeviceIOS(bypass_voice_processing_, disable_recording_, enableSystemMute_, numChannels_));
     RTC_CHECK(audio_device_);
       

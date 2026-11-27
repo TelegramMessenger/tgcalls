@@ -56,43 +56,39 @@ private:
 };
 
 class ThreadsImpl : public Threads {
-  using Thread = std::unique_ptr<rtc::Thread>;
+  using Thread = std::unique_ptr<webrtc::Thread>;
 public:
   explicit ThreadsImpl(size_t i) {
     auto suffix = i == 0 ? "" : "#" + std::to_string(i);
     media_ = create("tgc-media" + suffix);
-    worker_ = create("tgc-work" + suffix);
     network_ = create_network("tgc-net" + suffix);
-      
-    media_->AllowInvokesToThread(worker_.get());
+
     media_->AllowInvokesToThread(network_.get());
-    worker_->AllowInvokesToThread(network_.get());
-      
-    //network_->DisallowAllInvokes();
-    //worker_->DisallowAllInvokes();
-    //worker_->AllowInvokesToThread(network_.get());
   }
 
-  rtc::Thread *getNetworkThread() override {
+  webrtc::Thread *getNetworkThread() override {
     return network_.get();
   }
-  rtc::Thread *getMediaThread() override {
+  webrtc::Thread *getMediaThread() override {
     return media_.get();
   }
-  rtc::Thread *getWorkerThread() override {
-    return worker_.get();
+  // WebRTC has no worker thread distinct from the network thread any more
+  // (PeerConnectionFactoryDependencies::worker_thread is gone, M159): its
+  // ConnectionContext does the worker's work on the network thread. Every
+  // engine hands WebRTC this thread as both, so its objects stay on one thread.
+  webrtc::Thread *getWorkerThread() override {
+    return network_.get();
   }
 
 private:
   Thread network_;
   Thread media_;
-  Thread worker_;
 
   static Thread create(const std::string &name) {
-    return init(std::unique_ptr<rtc::Thread>(rtc::Thread::Create()), name);
+    return init(std::unique_ptr<webrtc::Thread>(webrtc::Thread::Create()), name);
   }
   static Thread create_network(const std::string &name) {
-    return init(std::unique_ptr<rtc::Thread>(rtc::Thread::CreateWithSocketServer()), name);
+    return init(std::unique_ptr<webrtc::Thread>(webrtc::Thread::CreateWithSocketServer()), name);
   }
 
   static Thread init(Thread value, const std::string &name) {
@@ -123,15 +119,15 @@ std::shared_ptr<Threads> Threads::getThreads(){
 
 namespace StaticThreads {
 
-rtc::Thread *getNetworkThread() {
+webrtc::Thread *getNetworkThread() {
   return getThreads()->getNetworkThread();
 }
 
-rtc::Thread *getMediaThread() {
+webrtc::Thread *getMediaThread() {
   return getThreads()->getMediaThread();
 }
 
-rtc::Thread *getWorkerThread() {
+webrtc::Thread *getWorkerThread() {
   return getThreads()->getWorkerThread();
 }
 

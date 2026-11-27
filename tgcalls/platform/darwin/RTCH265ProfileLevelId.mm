@@ -13,6 +13,15 @@
 
 #include "media/base/media_constants.h"
 
-NSString *const kRTCVideoCodecH265Name = @(cricket::kH265CodecName);
+NSString *const kRTCVideoCodecH265Name = @(webrtc::kH265CodecName);
 // TODO(jianjunz): This is value is not correct.
 NSString *const kRTCLevel31Main = @"4d001f";
+
+NSDictionary<NSString *, NSString *> *TGRTCH265StandardParameters(void) {
+  return @{
+    @(webrtc::kH265FmtpProfileId) : @"1",
+    @(webrtc::kH265FmtpTierFlag) : @"0",
+    @(webrtc::kH265FmtpLevelId) : @"93",
+    @(webrtc::kH265FmtpTxMode) : @"SRST",
+  };
+}

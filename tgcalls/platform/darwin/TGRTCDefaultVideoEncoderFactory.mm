@@ -23,13 +23,47 @@
 #import "TGRTCVideoEncoderH265.h"
 #endif
 
-#import "sdk/objc/api/video_codec/RTCWrappedNativeVideoEncoder.h"
+#import "sdk/objc/api/video_codec/RTCNativeVideoEncoder.h"
+#import "sdk/objc/api/video_codec/RTCNativeVideoEncoderBuilder+Native.h"
 #import "modules/video_coding/codecs/h264/include/h264.h"
 #import "h264_encoder_impl.h"
 
+// The software H.264 encoder, built by CustomObjCVideoEncoderFactory with the call's environment.
+@interface TGRTCSoftwareH264EncoderBuilder : RTC_OBJC_TYPE(RTCNativeVideoEncoder) <RTC_OBJC_TYPE(RTCNativeVideoEncoderBuilder)>
+- (instancetype)initWithX264:(bool)x264;
+@end
+
+@implementation TGRTCSoftwareH264EncoderBuilder {
+    bool _x264;
+}
+
+- (instancetype)initWithX264:(bool)x264 {
+    self = [super init];
+    if (self) {
+        _x264 = x264;
+    }
+    return self;
+}
+
+- (std::unique_ptr<webrtc::VideoEncoder>)build:(const webrtc::Environment &)env {
+    return [self buildWithEnvironment:env format:webrtc::SdpVideoFormat::H264()];
+}
+
+- (std::unique_ptr<webrtc::VideoEncoder>)buildWithEnvironment:(const webrtc::Environment &)env format:(const webrtc::SdpVideoFormat &)format {
+#ifdef TGCALLS_ENABLE_X264
+    if (_x264) {
+        return std::make_unique<webrtc::H264EncoderX264Impl>(webrtc::CreateVideoCodec(format));
+    }
+#endif
+    return webrtc::CreateH264Encoder(env, webrtc::H264EncoderSettings::Parse(format));
+}
+
+@end
 @interface TGRTCDefaultVideoEncoderFactory () {
     bool _preferHardwareH264;
     bool _preferX264;
+    bool _highestH264Level;
+    bool _screenContent;
 }
 
 @end
@@ -39,12 +73,34 @@
 @synthesize preferredCodec;
 
 - (instancetype)initWithPreferHardwareH264:(bool)preferHardwareH264 preferX264:(bool)preferX264 {
+    return [self initWithPreferHardwareH264:preferHardwareH264 preferX264:preferX264 highestH264Level:false];
+}
+
+- (instancetype)initWithPreferHardwareH264:(bool)preferHardwareH264 preferX264:(bool)preferX264 highestH264Level:(bool)highestH264Level {
+    return [self initWithPreferHardwareH264:preferHardwareH264 preferX264:preferX264 highestH264Level:highestH264Level screenContent:false];
+}
+
+- (instancetype)initWithPreferHardwareH264:(bool)preferHardwareH264 preferX264:(bool)preferX264 highestH264Level:(bool)highestH264Level screenContent:(bool)screenContent {
     self = [super init];
     if (self != nil) {
         _preferHardwareH264 = preferHardwareH264;
         _preferX264 = preferX264;
+        _highestH264Level = highestH264Level;
+        _screenContent = screenContent;
     }
     return self;
+}
+
+// Constrained high, level 5.2 (level_idc 52 = 0x34). One entry on purpose: the group
+// engine keeps the first H264 format after sorting them, and its priority ranks only the
+// level-3.1 strings, so two level-5.2 entries would tie.
+static RTCVideoCodecInfo *highestLevelH264CodecInfo() {
+  NSDictionary<NSString *, NSString *> *parameters = @{
+    @"profile-level-id" : @"640c34",
+    @"level-asymmetry-allowed" : @"1",
+    @"packetization-mode" : @"1",
+  };
+  return [[RTCVideoCodecInfo alloc] initWithName:kRTCVideoCodecH264Name parameters:parameters];
 }
 
 + (NSArray<RTCVideoCodecInfo *> *)supportedCodecs {
@@ -73,7 +129,7 @@
 #endif
 
 #if !defined(WEBRTC_DISABLE_H265)
-  RTCVideoCodecInfo *h265Info = [[RTCVideoCodecInfo alloc] initWithName:kRTCVideoCodecH265Name];
+  RTCVideoCodecInfo *h265Info = [[RTCVideoCodecInfo alloc] initWithName:kRTCVideoCodecH265Name parameters:TGRTCH265StandardParameters()];
 #endif
 
   NSMutableArray *result = [[NSMutableArray alloc] initWithArray:@[
@@ -107,25 +163,10 @@
 - (id<RTCVideoEncoder>)createEncoder:(RTCVideoCodecInfo *)info {
   if ([info.name isEqualToString:kRTCVideoCodecH264Name]) {
       if (_preferHardwareH264) {
-          return [[TGRTCVideoEncoderH264 alloc] initWithCodecInfo:info];
+          return [[TGRTCVideoEncoderH264 alloc] initWithCodecInfo:info screenContent:_screenContent];
       } else {
           
-          webrtc::SdpVideoFormat videoFormat(info.name.UTF8String);
-          for (NSString *key in info.parameters) {
-              videoFormat.parameters.insert(std::make_pair(key.UTF8String, info.parameters[key].UTF8String));
-          }
-          
-          cricket::VideoCodec videoCodec = cricket::CreateVideoCodec(videoFormat);
-          
-#ifdef TGCALLS_ENABLE_X264
-          if (_preferX264) {
-              return [[RTC_OBJC_TYPE(RTCWrappedNativeVideoEncoder) alloc] initWithNativeEncoder:std::make_unique<webrtc::H264EncoderX264Impl>(videoCodec)];
-          } else {
-#endif
-              return [[RTC_OBJC_TYPE(RTCWrappedNativeVideoEncoder) alloc] initWithNativeEncoder:std::unique_ptr<webrtc::VideoEncoder>(webrtc::H264Encoder::Create(videoCodec))];
-#ifdef TGCALLS_ENABLE_X264
-          }
-#endif
+          return [[TGRTCSoftwareH264EncoderBuilder alloc] initWithX264:_preferX264];
       }
   } else if ([info.name isEqualToString:kRTCVideoCodecVp8Name]) {
     return [RTCVideoEncoderVP8 vp8Encoder];
@@ -157,6 +198,23 @@
 
 - (NSArray<RTCVideoCodecInfo *> *)supportedCodecs {
   NSMutableArray<RTCVideoCodecInfo *> *codecs = [[[self class] supportedCodecs] mutableCopy];
+
+  if (_highestH264Level) {
+    NSUInteger firstH264Index = NSNotFound;
+    for (NSUInteger i = 0; i < codecs.count; i++) {
+      if ([codecs[i].name isEqualToString:kRTCVideoCodecH264Name]) {
+        firstH264Index = i;
+        break;
+      }
+    }
+    if (firstH264Index != NSNotFound) {
+      NSIndexSet *h264Indices = [codecs indexesOfObjectsPassingTest:^BOOL(RTCVideoCodecInfo *codec, NSUInteger idx, BOOL *stop) {
+        return [codec.name isEqualToString:kRTCVideoCodecH264Name];
+      }];
+      [codecs removeObjectsAtIndexes:h264Indices];
+      [codecs insertObject:highestLevelH264CodecInfo() atIndex:firstH264Index];
+    }
+  }
 
   NSMutableArray<RTCVideoCodecInfo *> *orderedCodecs = [NSMutableArray array];
   NSUInteger index = [codecs indexOfObject:self.preferredCodec];

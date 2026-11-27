@@ -33,31 +33,31 @@ json11::Json::object SsrcGroup_serialize(SsrcGroup const &ssrcGroup) {
     return object;
 }
 
-absl::optional<SsrcGroup> SsrcGroup_parse(json11::Json::object const &object) {
+std::optional<SsrcGroup> SsrcGroup_parse(json11::Json::object const &object) {
     SsrcGroup result;
 
     const auto semantics = object.find("semantics");
     if (semantics == object.end() || !semantics->second.is_string()) {
-        return absl::nullopt;
+        return std::nullopt;
     }
     result.semantics = semantics->second.string_value();
 
     const auto ssrcs = object.find("ssrcs");
     if (ssrcs == object.end() || !ssrcs->second.is_array()) {
-        return absl::nullopt;
+        return std::nullopt;
     }
     for (const auto &ssrc : ssrcs->second.array_items()) {
         if (ssrc.is_string()) {
             uint32_t parsedSsrc = stringToUInt32(ssrc.string_value());
             if (parsedSsrc == 0) {
-                return absl::nullopt;
+                return std::nullopt;
             }
             result.ssrcs.push_back(parsedSsrc);
         } else if (ssrc.is_number()) {
             uint32_t parsedSsrc = (uint32_t)ssrc.number_value();
             result.ssrcs.push_back(parsedSsrc);
         } else {
-            return absl::nullopt;
+            return std::nullopt;
         }
     }
 
@@ -73,18 +73,18 @@ json11::Json::object FeedbackType_serialize(FeedbackType const &feedbackType) {
     return object;
 }
 
-absl::optional<FeedbackType> FeedbackType_parse(json11::Json::object const &object) {
+std::optional<FeedbackType> FeedbackType_parse(json11::Json::object const &object) {
     FeedbackType result;
 
     const auto type = object.find("type");
     if (type == object.end() || !type->second.is_string()) {
-        return absl::nullopt;
+        return std::nullopt;
     }
     result.type = type->second.string_value();
 
     const auto subtype = object.find("subtype");
     if (subtype == object.end() || !subtype->second.is_string()) {
-        return absl::nullopt;
+        return std::nullopt;
     }
     result.subtype = subtype->second.string_value();
 
@@ -100,15 +100,15 @@ json11::Json::object RtpExtension_serialize(webrtc::RtpExtension const &rtpExten
     return object;
 }
 
-absl::optional<webrtc::RtpExtension> RtpExtension_parse(json11::Json::object const &object) {
+std::optional<webrtc::RtpExtension> RtpExtension_parse(json11::Json::object const &object) {
     const auto id = object.find("id");
     if (id == object.end() || !id->second.is_number()) {
-        return absl::nullopt;
+        return std::nullopt;
     }
 
     const auto uri = object.find("uri");
     if (uri == object.end() || !uri->second.is_string()) {
-        return absl::nullopt;
+        return std::nullopt;
     }
 
     return webrtc::RtpExtension(uri->second.string_value(), id->second.int_value());
@@ -137,31 +137,31 @@ json11::Json::object PayloadType_serialize(PayloadType const &payloadType) {
     return object;
 }
 
-absl::optional<PayloadType> PayloadType_parse(json11::Json::object const &object) {
+std::optional<PayloadType> PayloadType_parse(json11::Json::object const &object) {
     PayloadType result;
 
     const auto id = object.find("id");
     if (id == object.end() || !id->second.is_number()) {
-        return absl::nullopt;
+        return std::nullopt;
     }
     result.id = id->second.int_value();
 
     const auto name = object.find("name");
     if (name == object.end() || !name->second.is_string()) {
-        return absl::nullopt;
+        return std::nullopt;
     }
     result.name = name->second.string_value();
 
     const auto clockrate = object.find("clockrate");
     if (clockrate == object.end() || !clockrate->second.is_number()) {
-        return absl::nullopt;
+        return std::nullopt;
     }
     result.clockrate = clockrate->second.int_value();
 
     const auto channels = object.find("channels");
     if (channels != object.end()) {
         if (!channels->second.is_number()) {
-            return absl::nullopt;
+            return std::nullopt;
         }
         result.channels = channels->second.int_value();
     }
@@ -169,16 +169,16 @@ absl::optional<PayloadType> PayloadType_parse(json11::Json::object const &object
     const auto feedbackTypes = object.find("feedbackTypes");
     if (feedbackTypes != object.end()) {
         if (!feedbackTypes->second.is_array()) {
-            return absl::nullopt;
+            return std::nullopt;
         }
         for (const auto &feedbackType : feedbackTypes->second.array_items()) {
             if (!feedbackType.is_object()) {
-                return absl::nullopt;
+                return std::nullopt;
             }
             if (const auto parsedFeedbackType = FeedbackType_parse(feedbackType.object_items())) {
                 result.feedbackTypes.push_back(parsedFeedbackType.value());
             } else {
-                return absl::nullopt;
+                return std::nullopt;
             }
         }
     }
@@ -186,11 +186,11 @@ absl::optional<PayloadType> PayloadType_parse(json11::Json::object const &object
     const auto parameters = object.find("parameters");
     if (parameters != object.end()) {
         if (!parameters->second.is_object()) {
-            return absl::nullopt;
+            return std::nullopt;
         }
         for (const auto &item : parameters->second.object_items()) {
             if (!item.second.is_string()) {
-                return absl::nullopt;
+                return std::nullopt;
             }
             result.parameters.push_back(std::make_pair(item.first, item.second.string_value()));
         }
@@ -229,34 +229,34 @@ json11::Json::object MediaContent_serialize(MediaContent const &mediaContent) {
     return object;
 }
 
-absl::optional<MediaContent> MediaContent_parse(json11::Json::object const &object) {
+std::optional<MediaContent> MediaContent_parse(json11::Json::object const &object) {
     MediaContent result;
 
     const auto ssrc = object.find("ssrc");
     if (ssrc == object.end()) {
-        return absl::nullopt;
+        return std::nullopt;
     }
     if (ssrc->second.is_string()) {
         result.ssrc = stringToUInt32(ssrc->second.string_value());
     } else if (ssrc->second.is_number()) {
         result.ssrc = (uint32_t)ssrc->second.number_value();
     } else {
-        return absl::nullopt;
+        return std::nullopt;
     }
 
     const auto ssrcGroups = object.find("ssrcGroups");
     if (ssrcGroups != object.end()) {
         if (!ssrcGroups->second.is_array()) {
-            return absl::nullopt;
+            return std::nullopt;
         }
         for (const auto &ssrcGroup : ssrcGroups->second.array_items()) {
             if (!ssrcGroup.is_object()) {
-                return absl::nullopt;
+                return std::nullopt;
             }
             if (const auto parsedSsrcGroup = SsrcGroup_parse(ssrcGroup.object_items())) {
                 result.ssrcGroups.push_back(parsedSsrcGroup.value());
             } else {
-                return absl::nullopt;
+                return std::nullopt;
             }
         }
     }
@@ -264,16 +264,16 @@ absl::optional<MediaContent> MediaContent_parse(json11::Json::object const &obje
     const auto payloadTypes = object.find("payloadTypes");
     if (payloadTypes != object.end()) {
         if (!payloadTypes->second.is_array()) {
-            return absl::nullopt;
+            return std::nullopt;
         }
         for (const auto &payloadType : payloadTypes->second.array_items()) {
             if (!payloadType.is_object()) {
-                return absl::nullopt;
+                return std::nullopt;
             }
             if (const auto parsedPayloadType = PayloadType_parse(payloadType.object_items())) {
                 result.payloadTypes.push_back(parsedPayloadType.value());
             } else {
-                return absl::nullopt;
+                return std::nullopt;
             }
         }
     }
@@ -281,16 +281,16 @@ absl::optional<MediaContent> MediaContent_parse(json11::Json::object const &obje
     const auto rtpExtensions = object.find("rtpExtensions");
     if (rtpExtensions != object.end()) {
         if (!rtpExtensions->second.is_array()) {
-            return absl::nullopt;
+            return std::nullopt;
         }
         for (const auto &rtpExtension : rtpExtensions->second.array_items()) {
             if (!rtpExtension.is_object()) {
-                return absl::nullopt;
+                return std::nullopt;
             }
             if (const auto parsedRtpExtension = RtpExtension_parse(rtpExtension.object_items())) {
                 result.rtpExtensions.push_back(parsedRtpExtension.value());
             } else {
-                return absl::nullopt;
+                return std::nullopt;
             }
         }
     }
@@ -332,35 +332,35 @@ std::vector<uint8_t> InitialSetupMessage_serialize(const InitialSetupMessage * c
     return std::vector<uint8_t>(result.begin(), result.end());
 }
 
-absl::optional<InitialSetupMessage> InitialSetupMessage_parse(json11::Json::object const &object) {
+std::optional<InitialSetupMessage> InitialSetupMessage_parse(json11::Json::object const &object) {
     const auto ufrag = object.find("ufrag");
     if (ufrag == object.end() || !ufrag->second.is_string()) {
-        return absl::nullopt;
+        return std::nullopt;
     }
     const auto pwd = object.find("pwd");
     if (pwd == object.end() || !pwd->second.is_string()) {
-        return absl::nullopt;
+        return std::nullopt;
     }
     const auto fingerprints = object.find("fingerprints");
     if (fingerprints == object.end() || !fingerprints->second.is_array()) {
-        return absl::nullopt;
+        return std::nullopt;
     }
     std::vector<DtlsFingerprint> parsedFingerprints;
     for (const auto &fingerprintObject : fingerprints->second.array_items()) {
         if (!fingerprintObject.is_object()) {
-            return absl::nullopt;
+            return std::nullopt;
         }
         const auto hash = fingerprintObject.object_items().find("hash");
         if (hash == fingerprintObject.object_items().end() || !hash->second.is_string()) {
-            return absl::nullopt;
+            return std::nullopt;
         }
         const auto setup = fingerprintObject.object_items().find("setup");
         if (setup == fingerprintObject.object_items().end() || !setup->second.is_string()) {
-            return absl::nullopt;
+            return std::nullopt;
         }
         const auto fingerprint = fingerprintObject.object_items().find("fingerprint");
         if (fingerprint == fingerprintObject.object_items().end() || !fingerprint->second.is_string()) {
-            return absl::nullopt;
+            return std::nullopt;
         }
         
         DtlsFingerprint parsedFingerprint;
@@ -379,36 +379,36 @@ absl::optional<InitialSetupMessage> InitialSetupMessage_parse(json11::Json::obje
     const auto audio = object.find("audio");
     if (audio != object.end()) {
         if (!audio->second.is_object()) {
-            return absl::nullopt;
+            return std::nullopt;
         }
         if (const auto parsedAudio = MediaContent_parse(audio->second.object_items())) {
             message.audio = parsedAudio.value();
         } else {
-            return absl::nullopt;
+            return std::nullopt;
         }
     }
 
     const auto video = object.find("video");
     if (video != object.end()) {
         if (!video->second.is_object()) {
-            return absl::nullopt;
+            return std::nullopt;
         }
         if (const auto parsedVideo = MediaContent_parse(video->second.object_items())) {
             message.video = parsedVideo.value();
         } else {
-            return absl::nullopt;
+            return std::nullopt;
         }
     }
 
     const auto screencast = object.find("screencast");
     if (screencast != object.end()) {
         if (!screencast->second.is_object()) {
-            return absl::nullopt;
+            return std::nullopt;
         }
         if (const auto parsedScreencast = MediaContent_parse(screencast->second.object_items())) {
             message.screencast = parsedScreencast.value();
         } else {
-            return absl::nullopt;
+            return std::nullopt;
         }
     }
 
@@ -424,15 +424,15 @@ json11::Json::object ConnectionAddress_serialize(ConnectionAddress const &connec
     return object;
 }
 
-absl::optional<ConnectionAddress> ConnectionAddress_parse(json11::Json::object const &object) {
+std::optional<ConnectionAddress> ConnectionAddress_parse(json11::Json::object const &object) {
     const auto ip = object.find("ip");
     if (ip == object.end() || !ip->second.is_string()) {
-        return absl::nullopt;
+        return std::nullopt;
     }
 
     const auto port = object.find("port");
     if (port == object.end() || !port->second.is_number()) {
-        return absl::nullopt;
+        return std::nullopt;
     }
 
     ConnectionAddress address;
@@ -461,23 +461,23 @@ std::vector<uint8_t> CandidatesMessage_serialize(const CandidatesMessage * const
     return std::vector<uint8_t>(result.begin(), result.end());
 }
 
-absl::optional<CandidatesMessage> CandidatesMessage_parse(json11::Json::object const &object) {
+std::optional<CandidatesMessage> CandidatesMessage_parse(json11::Json::object const &object) {
     const auto candidates = object.find("candidates");
     if (candidates == object.end() || !candidates->second.is_array()) {
-        return absl::nullopt;
+        return std::nullopt;
     }
 
     std::vector<IceCandidate> parsedCandidates;
     for (const auto &candidateObject : candidates->second.array_items()) {
         if (!candidateObject.is_object()) {
-            return absl::nullopt;
+            return std::nullopt;
         }
 
         IceCandidate candidate;
 
         const auto sdpString = candidateObject.object_items().find("sdpString");
         if (sdpString == candidateObject.object_items().end() || !sdpString->second.is_string()) {
-            return absl::nullopt;
+            return std::nullopt;
         }
         candidate.sdpString = sdpString->second.string_value();
 
@@ -569,13 +569,13 @@ std::vector<uint8_t> MediaStateMessage_serialize(const MediaStateMessage * const
     return std::vector<uint8_t>(result.begin(), result.end());
 }
 
-absl::optional<MediaStateMessage> MediaStateMessage_parse(json11::Json::object const &object) {
+std::optional<MediaStateMessage> MediaStateMessage_parse(json11::Json::object const &object) {
     MediaStateMessage message;
 
     const auto muted = object.find("muted");
     if (muted != object.end()) {
         if (!muted->second.is_bool()) {
-            return absl::nullopt;
+            return std::nullopt;
         }
         message.isMuted = muted->second.bool_value();
     }
@@ -583,7 +583,7 @@ absl::optional<MediaStateMessage> MediaStateMessage_parse(json11::Json::object c
     const auto lowBattery = object.find("lowBattery");
     if (lowBattery != object.end()) {
         if (!lowBattery->second.is_bool()) {
-            return absl::nullopt;
+            return std::nullopt;
         }
         message.isBatteryLow = lowBattery->second.bool_value();
     }
@@ -591,7 +591,7 @@ absl::optional<MediaStateMessage> MediaStateMessage_parse(json11::Json::object c
     const auto videoState = object.find("videoState");
     if (videoState != object.end()) {
         if (!videoState->second.is_string()) {
-            return absl::nullopt;
+            return std::nullopt;
         }
         if (videoState->second.string_value() == "inactive") {
             message.videoState = MediaStateMessage::VideoState::Inactive;
@@ -607,7 +607,7 @@ absl::optional<MediaStateMessage> MediaStateMessage_parse(json11::Json::object c
     const auto screencastState = object.find("screencastState");
     if (screencastState != object.end()) {
         if (!screencastState->second.is_string()) {
-            return absl::nullopt;
+            return std::nullopt;
         }
         if (screencastState->second.string_value() == "inactive") {
             message.screencastState = MediaStateMessage::VideoState::Inactive;
@@ -623,7 +623,7 @@ absl::optional<MediaStateMessage> MediaStateMessage_parse(json11::Json::object c
     const auto videoRotation = object.find("videoRotation");
     if (videoRotation != object.end()) {
         if (!videoRotation->second.is_number()) {
-            return absl::nullopt;
+            return std::nullopt;
         }
         if (videoRotation->second.int_value() == 0) {
             message.videoRotation = MediaStateMessage::VideoRotation::Rotation0;
@@ -644,35 +644,35 @@ absl::optional<MediaStateMessage> MediaStateMessage_parse(json11::Json::object c
 }
 
 std::vector<uint8_t> Message::serialize() const {
-    if (const auto initialSetup = absl::get_if<InitialSetupMessage>(&data)) {
+    if (const auto initialSetup = std::get_if<InitialSetupMessage>(&data)) {
         return InitialSetupMessage_serialize(initialSetup);
-    } else if (const auto candidates = absl::get_if<CandidatesMessage>(&data)) {
+    } else if (const auto candidates = std::get_if<CandidatesMessage>(&data)) {
         return CandidatesMessage_serialize(candidates);
-    } else if (const auto mediaState = absl::get_if<MediaStateMessage>(&data)) {
+    } else if (const auto mediaState = std::get_if<MediaStateMessage>(&data)) {
         return MediaStateMessage_serialize(mediaState);
     } else {
         return {};
     }
 }
 
-absl::optional<Message> Message::parse(const std::vector<uint8_t> &data) {
+std::optional<Message> Message::parse(const std::vector<uint8_t> &data) {
     std::string parsingError;
     auto json = json11::Json::parse(std::string(data.begin(), data.end()), parsingError);
     if (json.type() != json11::Json::OBJECT) {
-        return absl::nullopt;
+        return std::nullopt;
     }
 
     auto type = json.object_items().find("@type");
     if (type == json.object_items().end()) {
-        return absl::nullopt;
+        return std::nullopt;
     }
     if (!type->second.is_string()) {
-        return absl::nullopt;
+        return std::nullopt;
     }
     if (type->second.string_value() == "InitialSetup") {
         auto parsed = InitialSetupMessage_parse(json.object_items());
         if (!parsed) {
-            return absl::nullopt;
+            return std::nullopt;
         }
         Message message;
         message.data = std::move(parsed.value());
@@ -680,7 +680,7 @@ absl::optional<Message> Message::parse(const std::vector<uint8_t> &data) {
     } else if (type->second.string_value() == "Candidates") {
         auto parsed = CandidatesMessage_parse(json.object_items());
         if (!parsed) {
-            return absl::nullopt;
+            return std::nullopt;
         }
         Message message;
         message.data = std::move(parsed.value());
@@ -688,13 +688,13 @@ absl::optional<Message> Message::parse(const std::vector<uint8_t> &data) {
     } else if (type->second.string_value() == "MediaState") {
         auto parsed = MediaStateMessage_parse(json.object_items());
         if (!parsed) {
-            return absl::nullopt;
+            return std::nullopt;
         }
         Message message;
         message.data = std::move(parsed.value());
         return message;
     } else {
-        return absl::nullopt;
+        return std::nullopt;
     }
 }
 

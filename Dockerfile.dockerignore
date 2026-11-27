@@ -1,0 +1,12 @@
+# The build context of Dockerfile (beside it; BuildKit reads <Dockerfile>.dockerignore): the superproject checkout.
+# The image builds only //submodules/TgVoipWebrtc/tgcalls/tools/cli:tgcalls_cli, so these stay out:
+# - build-input: the app's build configuration (API credentials, provisioning profiles), the codesigning checkout and
+#   the host's Bazel binary. The Dockerfile writes the empty build_configuration module MODULE.bazel needs.
+# - git metadata, bazel's output symlinks, the agents' scratch directories.
+build-input
+.git
+**/.git
+bazel-*
+.superpowers
+.claude
+**/xcuserdata

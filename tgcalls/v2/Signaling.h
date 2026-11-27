@@ -5,8 +5,8 @@
 #include <string>
 #include <vector>
 
-#include "absl/types/variant.h"
-#include "absl/types/optional.h"
+#include <variant>
+#include <optional>
 #include "api/rtp_parameters.h"
 #include "pc/session_description.h"
 
@@ -176,18 +176,18 @@ struct MediaStateMessage {
 };
 
 struct Message {
-    absl::variant<
+    std::variant<
         InitialSetupMessage,
         NegotiateChannelsMessage,
         CandidatesMessage,
         MediaStateMessage> data;
 
     std::vector<uint8_t> serialize() const;
-    static absl::optional<Message> parse(const std::vector<uint8_t> &data);
+    static std::optional<Message> parse(const std::vector<uint8_t> &data);
 };
 
-MediaContent convertContentInfoToSignalingContent(cricket::ContentInfo const &content);
-cricket::ContentInfo convertSignalingContentToContentInfo(std::string const &contentId, MediaContent const &content, webrtc::RtpTransceiverDirection direction);
+MediaContent convertContentInfoToSignalingContent(webrtc::ContentInfo const &content);
+webrtc::ContentInfo convertSignalingContentToContentInfo(std::string const &contentId, MediaContent const &content, webrtc::RtpTransceiverDirection direction);
 
 };
 

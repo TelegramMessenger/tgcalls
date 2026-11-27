@@ -1,4 +1,5 @@
 #include "group_participant.h"
+#include "cli_audio_device.h"
 
 #include <chrono>
 #include <cmath>
@@ -13,7 +14,7 @@
 
 #include <algorithm>
 
-#include "rtc_base/helpers.h"
+#include "rtc_base/crypto_random.h"
 #include "third-party/json11.hpp"
 
 // ---------------------------------------------------------------------------
@@ -42,24 +43,32 @@ void groupLog(const char* tag, const char* fmt, ...) {
 // GroupSineRecorder
 // ---------------------------------------------------------------------------
 
-GroupSineRecorder::GroupSineRecorder() {
+GroupSineRecorder::GroupSineRecorder(broadcast::SpeakerTone tone) :
+tone_(tone) {
     buffer_.resize(kFrameSamples * kChannels);
 }
 
 tgcalls::AudioFrame GroupSineRecorder::Record() {
+    // The marker's pitch is read off the wall clock (the broadcast listener decodes generation times from it).
+    int64_t frameStartMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
     for (size_t i = 0; i < kFrameSamples; ++i) {
-        double t = static_cast<double>(phase_) / kSampleRate;
-        int16_t sample = static_cast<int16_t>(kAmplitude * std::sin(2.0 * M_PI * kFrequency * t));
+        double frequency = tone_.frequencyAt(frameStartMs + (int64_t)(i * 1000 / kSampleRate));
+        int16_t sample = static_cast<int16_t>(kAmplitude * std::sin(phase_));
+        phase_ += 2.0 * M_PI * frequency / kSampleRate;
+        if (phase_ > 2.0 * M_PI) {
+            phase_ -= 2.0 * M_PI;
+        }
         for (size_t ch = 0; ch < kChannels; ++ch) {
             buffer_[i * kChannels + ch] = sample;
         }
-        ++phase_;
     }
 
     tgcalls::AudioFrame frame;
     frame.audio_samples = buffer_.data();
     frame.num_samples = kFrameSamples;
-    frame.bytes_per_sample = sizeof(int16_t);
+    // WebRTC's AudioTransport counts the bytes of one sample of every channel.
+    frame.bytes_per_sample = sizeof(int16_t) * kChannels;
     frame.num_channels = kChannels;
     frame.samples_per_sec = kSampleRate;
     frame.elapsed_time_ms = 0;
@@ -68,7 +77,8 @@ tgcalls::AudioFrame GroupSineRecorder::Record() {
 }
 
 int32_t GroupSineRecorder::WaitForUs() {
-    return 10000; // 10ms
+    // Real-time frames: a fixed 10 ms wait after each frame would run the microphone slow by each frame's cost.
+    return pacer_.nextWaitUs();
 }
 
 // ---------------------------------------------------------------------------
@@ -82,6 +92,97 @@ bool GroupNoOpRenderer::Render(const tgcalls::AudioFrame&) { return true; }
 // ---------------------------------------------------------------------------
 
 void SimpleRequestMediaChannelDescriptionTask::cancel() {}
+
+// ---------------------------------------------------------------------------
+// The SFU, here or in the other process of a split call
+// ---------------------------------------------------------------------------
+
+namespace {
+
+std::mutex gRemoteMutex;
+std::vector<SplitParticipantInfo> gRemoteParticipants;
+std::shared_ptr<RemoteSfu> gRemoteSfu;
+
+std::shared_ptr<RemoteSfu> remoteSfu() {
+    std::lock_guard<std::mutex> lock(gRemoteMutex);
+    return gRemoteSfu;
+}
+
+std::string takeGoString(char* raw) {
+    if (!raw) return std::string();
+    std::string value(raw);
+    GoSfu_Free(raw);
+    return value;
+}
+
+} // namespace
+
+void addRemoteParticipant(const SplitParticipantInfo& info) {
+    std::lock_guard<std::mutex> lock(gRemoteMutex);
+    gRemoteParticipants.push_back(info);
+}
+
+std::vector<SplitParticipantInfo> remoteParticipants() {
+    std::lock_guard<std::mutex> lock(gRemoteMutex);
+    return gRemoteParticipants;
+}
+
+void setRemoteSfu(std::shared_ptr<RemoteSfu> sfu) {
+    std::lock_guard<std::mutex> lock(gRemoteMutex);
+    gRemoteSfu = std::move(sfu);
+}
+
+std::string sfuJoin(GoInt handle, int participantId, const std::string& payload, bool iceControlling,
+                    const SplitParticipantInfo& info) {
+    if (auto remote = remoteSfu()) return remote->join(participantId, payload, iceControlling, info);
+    return takeGoString(GoSfu_Join(handle, (GoInt)participantId, const_cast<char*>(payload.c_str()), iceControlling ? 1 : 0));
+}
+
+int64_t sfuQuerySsrc(GoInt handle, uint32_t ssrc) {
+    if (auto remote = remoteSfu()) return remote->querySsrc(ssrc);
+    return (int64_t)GoSfu_QuerySsrc(handle, (GoUint)ssrc);
+}
+
+std::string sfuQueryVideoSsrcs(GoInt handle, int participantId) {
+    if (auto remote = remoteSfu()) return remote->queryVideoSsrcs(participantId);
+    return takeGoString(GoSfu_QueryVideoSsrcs(handle, (GoInt)participantId));
+}
+
+int sfuQueryRequestedLayer(GoInt handle, int receiverId, int senderId) {
+    if (auto remote = remoteSfu()) return remote->queryRequestedLayer(receiverId, senderId);
+    return (int)GoSfu_QueryRequestedLayer(handle, (GoInt)receiverId, (GoInt)senderId);
+}
+
+int64_t sfuQuerySsrcPackets(GoInt handle, uint32_t ssrc) {
+    if (auto remote = remoteSfu()) return remote->querySsrcPackets(ssrc);
+    return (int64_t)GoSfu_QuerySsrcPackets(handle, ssrc);
+}
+
+std::string sfuQueryPayloadTypeStats(GoInt handle, int senderId) {
+    if (auto remote = remoteSfu()) return remote->queryPayloadTypeStats(senderId);
+    return takeGoString(GoSfu_QueryPayloadTypeStats(handle, (GoInt)senderId));
+}
+
+void sfuSetNetworkParams(GoInt handle, int participantId, int direction, int delayMs, int jitterMs, double dropRate,
+                         int64_t bandwidthBps) {
+    if (auto remote = remoteSfu()) {
+        remote->setNetworkParams(participantId, direction, delayMs, jitterMs, dropRate, bandwidthBps);
+        return;
+    }
+    GoSfu_SetNetworkParams(handle, participantId, direction, delayMs, jitterMs, dropRate, bandwidthBps);
+}
+
+SplitParticipantInfo splitParticipantInfo(const ParticipantState& state) {
+    SplitParticipantInfo info;
+    info.id = state.id;
+    info.isReference = state.isReference;
+    info.audioSsrc = state.audioSsrc;
+    info.muted = state.muted;
+    info.sharesScreen = state.sharesScreen;
+    info.sendsVideo = state.sendsVideo;
+    info.endpointId = state.endpointId;
+    return info;
+}
 
 // ---------------------------------------------------------------------------
 // churnVideoSinks
@@ -104,7 +205,7 @@ void churnVideoSinks(const std::vector<std::unique_ptr<ParticipantState>>& state
             auto fresh = std::make_shared<FakeVideoSink>();
             state->instance->addIncomingVideoOutput(
                 endpointId,
-                std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>(fresh));
+                std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>>(fresh));
 
             std::shared_ptr<FakeVideoSink> old;
             {
@@ -179,6 +280,46 @@ void setRequestedVideoMaxQuality(tgcalls::VideoChannelDescription::Quality quali
     gRequestedVideoMaxQuality = quality;
 }
 
+GroupScreencastOptions gGroupScreencast;
+GroupDredOptions gGroupDred;
+
+ParticipantState::~ParticipantState() {
+    stopScreencastAudio(this);
+}
+
+void stopScreencastAudio(ParticipantState* state) {
+    if (!state) return;
+    state->externalAudioRunning.store(false);
+    if (state->externalAudioThread.joinable()) {
+        state->externalAudioThread.join();
+    }
+}
+
+void setRequestedVideoQualityFor(
+    const std::vector<std::unique_ptr<ParticipantState>>& states,
+    const std::set<std::string>& endpoints,
+    tgcalls::VideoChannelDescription::Quality quality
+) {
+    for (const auto& state : states) {
+        if (!state || !state->instance) continue;
+        std::vector<tgcalls::VideoChannelDescription> fullSet;
+        bool changed = false;
+        {
+            std::lock_guard<std::mutex> lock(state->videoSinksMutex);
+            for (auto& desc : state->requestedVideoChannels) {
+                if (endpoints.count(desc.endpointId) == 0) continue;
+                desc.maxQuality = quality;
+                desc.minQuality = tgcalls::VideoChannelDescription::Quality::Thumbnail;
+                changed = true;
+            }
+            fullSet = state->requestedVideoChannels;
+        }
+        if (changed) {
+            state->instance->setRequestedVideoChannels(std::move(fullSet));
+        }
+    }
+}
+
 void requestVideoFromEndpoints(
     ParticipantState* state,
     GoInt sfuHandle,
@@ -210,10 +351,8 @@ void requestVideoFromEndpoints(
         int remoteId = 0;
         if (sscanf(endpointId.c_str(), "%d", &remoteId) != 1) continue;
 
-        char* ssrcsRaw = GoSfu_QueryVideoSsrcs(sfuHandle, (GoInt)remoteId);
-        if (!ssrcsRaw) continue;
-        std::string ssrcsJson(ssrcsRaw);
-        GoSfu_Free(ssrcsRaw);
+        const std::string ssrcsJson = sfuQueryVideoSsrcs(sfuHandle, remoteId);
+        if (ssrcsJson.empty()) continue;
 
         std::string err;
         auto layers = json11::Json::parse(ssrcsJson, err);
@@ -255,7 +394,7 @@ void requestVideoFromEndpoints(
         }
         state->instance->addIncomingVideoOutput(
             endpointId,
-            std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>(sink));
+            std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>>(sink));
 
         groupLog(tag.c_str(), "requesting video from endpoint %s", endpointId.c_str());
         added = true;
@@ -297,7 +436,7 @@ tgcalls::GroupEncryptDecryptFunction makeFakeE2eTransform(int64_t ownUserId) {
             if (data.size() < prefix) {
                 return {};
             }
-            const uint32_t nonce = (uint32_t)rtc::CreateRandomId();
+            const uint32_t nonce = (uint32_t)webrtc::CreateRandomId();
             std::vector<uint8_t> out;
             out.reserve(data.size() + 6);
             out.assign(data.begin(), data.end());
@@ -360,7 +499,8 @@ std::unique_ptr<ParticipantState> createParticipant(
     bool earlyVideoRequest,
     bool e2e,
     VideoFeed videoFeed,
-    bool requestOwnVideo
+    bool requestOwnVideo,
+    broadcast::SpeakerTone tone
 ) {
     auto state = std::make_unique<ParticipantState>();
     state->id = id;
@@ -371,7 +511,7 @@ std::unique_ptr<ParticipantState> createParticipant(
 
     std::string tag = "P" + std::to_string(id);
 
-    auto recorder = std::make_shared<GroupSineRecorder>();
+    auto recorder = std::make_shared<GroupSineRecorder>(tone);
     auto renderer = std::make_shared<GroupNoOpRenderer>();
 
     ParticipantState* statePtr = state.get();
@@ -406,7 +546,7 @@ std::unique_ptr<ParticipantState> createParticipant(
     };
     descriptor.createAudioDeviceModule = tgcalls::FakeAudioDeviceModule::Creator(
         renderer, recorder,
-        tgcalls::FakeAudioDeviceModule::Options{.samples_per_sec = 48000, .num_channels = 2}
+        cliAudioDeviceOptions()
     );
 
     descriptor.requestMediaChannelDescriptions = [sfuH, tag, allStates](
@@ -417,9 +557,13 @@ std::unique_ptr<ParticipantState> createParticipant(
         for (const auto& s : *allStates) {
             if (s->audioSsrc != 0) audioSsrcs.insert(s->audioSsrc);
         }
+        // A split call's other process's participants (--split).
+        for (const auto& remote : remoteParticipants()) {
+            if (remote.audioSsrc != 0) audioSsrcs.insert(remote.audioSsrc);
+        }
         std::vector<tgcalls::MediaChannelDescription> descriptions;
         for (uint32_t ssrc : ssrcs) {
-            GoInt ownerID = GoSfu_QuerySsrc(sfuH, (GoUint)ssrc);
+            const int64_t ownerID = sfuQuerySsrc(sfuH, ssrc);
             bool isAudio = audioSsrcs.count(ssrc) > 0;
             groupLog(tag.c_str(), "requestMediaChannelDescriptions: ssrc=%u -> owner=%lld type=%s",
                      ssrc, (long long)ownerID, isAudio ? "audio" : "video");
@@ -448,8 +592,15 @@ std::unique_ptr<ParticipantState> createParticipant(
     }
 
     descriptor.outgoingAudioBitrateKbit = 32;
+    descriptor.dredFixedPacketLossPercent = gGroupDred.fixedPacketLossPercent;
+    descriptor.dredReceiveEnabled = gGroupDred.receive;
+    descriptor.opusDnnWeights = gGroupDred.opusDnnWeights;
     descriptor.disableIncomingChannels = false;
     descriptor.useDummyChannel = true;
+
+    descriptor.allowAv1ScreencastSending = gGroupScreencast.allowAv1;
+    descriptor.av1ScreencastLayers = gGroupScreencast.av1Layers;
+    descriptor.av1TestEncoderFails = gGroupScreencast.av1TestEncoderFails;
 
     // Video configuration
     if (video) {
@@ -457,6 +608,17 @@ std::unique_ptr<ParticipantState> createParticipant(
         state->endpointId = std::to_string(id);
         descriptor.videoContentType = tgcalls::VideoContentType::Generic;
         descriptor.videoCodecPreferences = {tgcalls::VideoCodecName::H264};
+        if (gGroupScreencast.sharers.count(id) > 0) {
+            // The in-app screen share's instance (ScreencastInProcessIPCContext(capturesInApp: true)): screen-sized
+            // frames at up to 60 fps, screen audio from the capture, no microphone. No createAudioDeviceModule: the
+            // engine then records from the external audio buffer (its own FakeAudioDeviceModule).
+            state->sharesScreen = true;
+            descriptor.videoContentType = tgcalls::VideoContentType::Screencast;
+            descriptor.iosInAppScreencast = true;
+            descriptor.disableAudioInput = true;
+            descriptor.createAudioDeviceModule = nullptr;
+            groupLog(tag.c_str(), "shares a screen (in-app screencast instance)");
+        }
         // Set the outgoing video min bitrate to 600 kbps so the sender's
         // BWE floor is high enough to activate all 3 simulcast layers
         // (audio 32k + L0 min 50k + L1 min 100k + L2 min 300k = 482k).
@@ -467,7 +629,7 @@ std::unique_ptr<ParticipantState> createParticipant(
 
         switch (videoFeed) {
         case VideoFeed::Source: {
-            auto videoSource = FakeVideoTrackSource::Create(id);
+            auto videoSource = FakeVideoTrackSource::Create(id, state->sharesScreen ? 60 : 30);
             state->videoSource = videoSource;
             descriptor.getVideoSource = [videoSource]() -> webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> {
                 return videoSource;
@@ -515,8 +677,35 @@ std::unique_ptr<ParticipantState> createParticipant(
         state->instance = std::make_unique<tgcalls::GroupInstanceReferenceImpl>(std::move(descriptor));
         groupLog(tag.c_str(), "created GroupInstanceReferenceImpl");
     } else {
+#if TGCALLS_ENABLE_CUSTOM_GROUP_ENGINE
         state->instance = std::make_unique<tgcalls::GroupInstanceCustomImpl>(std::move(descriptor));
         groupLog(tag.c_str(), "created GroupInstanceCustomImpl");
+#else
+        fprintf(stderr, "Error: participant %d: the custom group engine is not built (TGCALLS_ENABLE_CUSTOM_GROUP_ENGINE)\n", id);
+        return nullptr;
+#endif
+    }
+
+    // Screen audio: a 440 Hz tone, 10 ms at a time, as the app hands over the capture's audio.
+    if (state->sharesScreen) {
+        state->externalAudioRunning.store(true);
+        state->externalAudioThread = std::thread([statePtr] {
+            constexpr int kSamplesPer10Ms = 480;
+            const double step = 2.0 * M_PI * 440.0 / 48000.0;
+            double phase = 0.0;
+            auto next = std::chrono::steady_clock::now();
+            while (statePtr->externalAudioRunning.load()) {
+                std::vector<uint8_t> bytes(kSamplesPer10Ms * sizeof(int16_t));
+                int16_t *samples = reinterpret_cast<int16_t *>(bytes.data());
+                for (int i = 0; i < kSamplesPer10Ms; i++) {
+                    samples[i] = (int16_t)(3000.0 * std::sin(phase));
+                    phase += step;
+                }
+                statePtr->instance->addExternalAudioSamples(std::move(bytes));
+                next += std::chrono::milliseconds(10);
+                std::this_thread::sleep_until(next);
+            }
+        });
     }
 
     // Set connection mode
@@ -570,14 +759,12 @@ std::unique_ptr<ParticipantState> createParticipant(
     groupLog(tag.c_str(), "join payload ready: ssrc=%u, json=%zu bytes", joinSsrc, joinJson.size());
 
     // Join SFU
-    GoInt iceControlling = isReference ? 0 : 1;
-    char* responseRaw = GoSfu_Join(sfuHandle, (GoInt)id, const_cast<char*>(joinJson.c_str()), iceControlling);
-    if (!responseRaw) {
+    const bool iceControlling = !isReference;
+    const std::string response = sfuJoin(sfuHandle, id, joinJson, iceControlling, splitParticipantInfo(*state));
+    if (response.empty()) {
         fprintf(stderr, "Error: GoSfu_Join returned null for participant %d\n", id);
         return nullptr;
     }
-    std::string response(responseRaw);
-    GoSfu_Free(responseRaw);
 
     if (response.find("\"error\"") != std::string::npos) {
         fprintf(stderr, "Error: GoSfu_Join failed for participant %d: %s\n", id, response.c_str());
@@ -607,6 +794,11 @@ void stopParticipant(ParticipantState* state, GoInt sfuHandle) {
     if (!state || !state->instance) return;
 
     std::string tag = "P" + std::to_string(state->id);
+
+    // A broadcast listener's fetches in flight must not call into the engine being stopped.
+    if (state->broadcastAlive) {
+        state->broadcastAlive->store(false);
+    }
 
     // Remove from SFU first so broadcasts go out to remaining participants.
     GoInt rc = GoSfu_Leave(sfuHandle, (GoInt)state->id);
@@ -670,15 +862,26 @@ GroupValidationResult validateGroupState(
 
     for (const auto& s : states) {
         if (s->wasConnected.load()) result.connectedCount++;
+        // A screen sharer is the app's share connection: it sends the screen audio, and listens to no one (see
+        // GroupValidationResult::audioReceivedCount).
+        if (s->sharesScreen) continue;
+        result.audioListeners++;
         if (s->receivedAudio.load()) result.audioReceivedCount++;
     }
+
+    // A split call's other process's participants (--split): senders this process's participants must hear and see.
+    const std::vector<SplitParticipantInfo> remote = remoteParticipants();
 
     if (video) {
         int videoParticipants = 0;
         for (const auto& s : states) {
             if (s->sendsVideo) videoParticipants++;
         }
-        result.videoExpectedPairs = videoParticipants * (videoParticipants - 1);
+        int remoteVideoParticipants = 0;
+        for (const auto& r : remote) {
+            if (r.sendsVideo) remoteVideoParticipants++;
+        }
+        result.videoExpectedPairs = videoParticipants * (videoParticipants - 1 + remoteVideoParticipants);
 
         for (const auto& s : states) {
             std::lock_guard<std::mutex> lock(s->videoSinksMutex);
@@ -755,7 +958,7 @@ GroupValidationResult validateGroupState(
     int unmutedReceived = 0;
     int unmutedTotal = 0;
     for (const auto& s : states) {
-        if (!s->muted) {
+        if (!s->muted && !s->sharesScreen) {
             unmutedTotal++;
             if (s->receivedAudio.load()) unmutedReceived++;
         }
@@ -844,13 +1047,20 @@ GroupValidationResult validateGroupState(
     // track; a receiver whose packets are stolen by a stray catch-all stream
     // still plays audio (the catch-all decodes it) but never reports a level,
     // so the app would never show that participant as speaking.
-    for (const auto& sender : states) {
-        if (sender->muted || sender->audioSsrc == 0) continue;
+    std::vector<SplitParticipantInfo> senders;
+    for (const auto& s : states) {
+        senders.push_back(splitParticipantInfo(*s));
+    }
+    senders.insert(senders.end(), remote.begin(), remote.end());
+    for (const auto& sender : senders) {
+        if (sender.muted || sender.audioSsrc == 0) continue;
         for (const auto& peer : states) {
-            if (peer.get() == sender.get()) continue;
+            // A screen sharer reports no levels (see GroupValidationResult::audioReceivedCount); everyone else must
+            // report its screen audio.
+            if (peer->id == sender.id || peer->sharesScreen) continue;
             result.audioLevelExpectedPairs++;
             std::lock_guard<std::mutex> lock(peer->audioLevelsMutex);
-            auto it = peer->maxAudioLevelPerSsrc.find(sender->audioSsrc);
+            auto it = peer->maxAudioLevelPerSsrc.find(sender.audioSsrc);
             float maxLevel = (it != peer->maxAudioLevelPerSsrc.end()) ? it->second : 0.0f;
             if (maxLevel >= kMutedLevelThreshold) {
                 result.audioLevelHeardPairs++;
@@ -858,7 +1068,7 @@ GroupValidationResult validateGroupState(
                 groupLog("Validate",
                          "FAIL: P%d (%s) never reported a level for P%d (ssrc=%u), max %.3f",
                          peer->id, peer->isReference ? "ref" : "custom",
-                         sender->id, sender->audioSsrc, maxLevel);
+                         sender.id, sender.audioSsrc, maxLevel);
             }
         }
     }
@@ -895,7 +1105,7 @@ GroupValidationResult validateGroupState(
                           mutedInvariantHeld);
     } else {
         result.success = (result.connectedCount == result.totalParticipants &&
-                          result.audioReceivedCount == result.totalParticipants);
+                          result.audioReceivedCount == result.audioListeners);
     }
     if (video && result.videoExpectedPairs > 0) {
         result.success = result.success && (result.videoReceivedPairs >= result.videoExpectedPairs);
@@ -927,7 +1137,8 @@ bool printGroupSummary(
     int duration,
     bool video,
     const GroupValidationResult& result,
-    bool anyFailed
+    bool anyFailed,
+    const std::string& split
 ) {
     bool success = result.success && !anyFailed;
 
@@ -936,9 +1147,13 @@ bool printGroupSummary(
     printf("Reference participants: %d\n", referenceParticipants);
     printf("Total participants:     %d\n", result.totalParticipants);
     printf("Duration:               %ds\n", duration);
-    printf("SFU:                    Go/Pion (in-process)\n");
+    if (split.empty()) {
+        printf("SFU:                    Go/Pion (in-process)\n");
+    } else {
+        printf("Split:                  %s\n", split.c_str());
+    }
     printf("Connected:              %d/%d\n", result.connectedCount, result.totalParticipants);
-    printf("Audio received:         %d/%d\n", result.audioReceivedCount, result.totalParticipants);
+    printf("Audio received:         %d/%d\n", result.audioReceivedCount, result.audioListeners);
     printf("Audio levels heard:     %d/%d pairs\n", result.audioLevelHeardPairs, result.audioLevelExpectedPairs);
     printf("Unsignaled audio:       %d stream(s) (must be 0)\n", result.unsignaledAudioStreams);
     if (video) {

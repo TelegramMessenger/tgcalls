@@ -1,6 +1,8 @@
 #include "FakeAudioDeviceModule.h"
 
+#include "api/scoped_refptr.h"
 #include "modules/audio_device/include/audio_device_default.h"
+#include "rtc_base/checks.h"
 #include "rtc_base/ref_counted_object.h"
 #include "rtc_base/platform_thread.h"
 #include "rtc_base/time_utils.h"
@@ -17,13 +19,14 @@ class FakeAudioDeviceModuleImpl : public webrtc::webrtc_impl::AudioDeviceModuleD
                                                               std::shared_ptr<FakeAudioDeviceModule::Recorder> recorder,
                                                               FakeAudioDeviceModule::Options options) {
     return webrtc::scoped_refptr<webrtc::AudioDeviceModule>(
-        new rtc::RefCountedObject<FakeAudioDeviceModuleImpl>(taskQueueFactory, options, std::move(renderer), std::move(recorder)));
+        new webrtc::RefCountedObject<FakeAudioDeviceModuleImpl>(taskQueueFactory, options, std::move(renderer), std::move(recorder)));
   }
 
   FakeAudioDeviceModuleImpl(webrtc::TaskQueueFactory*, FakeAudioDeviceModule::Options options,
                             std::shared_ptr<FakeAudioDeviceModule::Renderer> renderer,
                             std::shared_ptr<FakeAudioDeviceModule::Recorder> recorder)
       : num_channels_{options.num_channels}, samples_per_sec_{options.samples_per_sec}, scheduler_(options.scheduler_),
+        reports_builtin_processing_(options.reports_builtin_processing),
         renderer_(std::move(renderer)), recorder_(std::move(recorder)) {
     if (!scheduler_) {
       scheduler_ = [](auto f)  {
@@ -154,6 +157,26 @@ class FakeAudioDeviceModuleImpl : public webrtc::webrtc_impl::AudioDeviceModuleD
     return recording_;
   }
 
+  // AudioDeviceModuleDefault's answers (false, -1) unless the options ask for built-in processing.
+  bool BuiltInAECIsAvailable() const override {
+    return reports_builtin_processing_;
+  }
+  int32_t EnableBuiltInAEC(bool) override {
+    return reports_builtin_processing_ ? 0 : -1;
+  }
+  bool BuiltInAGCIsAvailable() const override {
+    return reports_builtin_processing_;
+  }
+  int32_t EnableBuiltInAGC(bool) override {
+    return reports_builtin_processing_ ? 0 : -1;
+  }
+  bool BuiltInNSIsAvailable() const override {
+    return reports_builtin_processing_;
+  }
+  int32_t EnableBuiltInNS(bool) override {
+    return reports_builtin_processing_ ? 0 : -1;
+  }
+
 private:
 
   int32_t Render() {
@@ -224,18 +247,19 @@ private:
   size_t samples_per_frame_{0};
 
   std::function<void(FakeAudioDeviceModule::Task)> scheduler_;
+  const bool reports_builtin_processing_;
 
   mutable std::mutex render_mutex_;
   std::atomic<bool> need_rendering_{false};
   std::atomic<bool> rendering_{false};
   std::condition_variable render_cond_;
-  std::unique_ptr<rtc::PlatformThread> renderThread_;
+  std::unique_ptr<webrtc::PlatformThread> renderThread_;
 
   mutable std::mutex record_mutex_;
   std::atomic<bool> need_recording_{false};
   std::atomic<bool> recording_{false};
   std::condition_variable record_cond_;
-  std::unique_ptr<rtc::PlatformThread> recordThread_;
+  std::unique_ptr<webrtc::PlatformThread> recordThread_;
 
 
   webrtc::AudioTransport* audio_callback_{nullptr};

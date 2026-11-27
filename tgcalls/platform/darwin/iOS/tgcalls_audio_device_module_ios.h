@@ -15,7 +15,7 @@
 
 #include "tgcalls_audio_device_ios.h"
 
-#include "api/task_queue/task_queue_factory.h"
+#include "api/environment/environment.h"
 #include "modules/audio_device/audio_device_buffer.h"
 #include "modules/audio_device/include/audio_device.h"
 #include "rtc_base/checks.h"
@@ -149,7 +149,9 @@ class AudioDeviceModuleIOS : public AudioDeviceModule {
   bool internalIsPlaying_ = false;
   bool audioBufferPlayoutStarted_ = false;
   bool audioBufferRecordingStarted_ = false;
-  const std::unique_ptr<TaskQueueFactory> task_queue_factory_;
+  // Its own environment (the default task queue factory, clock and field trials), as the M123 ADM had its own task
+  // queue factory: AudioDeviceBuffer runs its task queue on it.
+  const Environment env_;
   std::unique_ptr<AudioDeviceIOS> audio_device_;
   std::unique_ptr<AudioDeviceBuffer> audio_device_buffer_;
     

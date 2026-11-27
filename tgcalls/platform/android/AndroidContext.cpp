@@ -4,21 +4,50 @@
 
 namespace tgcalls {
 
-AndroidContext::AndroidContext(JNIEnv *env) {
-    VideoCameraCapturerClass = (jclass) env->NewGlobalRef(env->FindClass("org/telegram/messenger/voip/VideoCameraCapturer"));
-    jmethodID initMethodId = env->GetMethodID(VideoCameraCapturerClass, "<init>", "()V");
-    javaCapturer = env->NewGlobalRef(env->NewObject(VideoCameraCapturerClass, initMethodId));
+AndroidContext::AndroidContext(JNIEnv *env, jobject peerInstance, jobject groupInstance, bool screencast) {
+    VideoCapturerDeviceClass = (jclass) env->NewGlobalRef(env->FindClass("org/telegram/messenger/voip/VideoCapturerDevice"));
+    jmethodID initMethodId = env->GetMethodID(VideoCapturerDeviceClass, "<init>", "(Z)V");
+    javaCapturer = env->NewGlobalRef(env->NewObject(VideoCapturerDeviceClass, initMethodId, screencast));
+    if (peerInstance) {
+        javaPeerInstance = env->NewGlobalRef(peerInstance);
+    }
+    if (groupInstance) {
+        javaGroupInstance = env->NewGlobalRef(groupInstance);
+    }
 }
 
 AndroidContext::~AndroidContext() {
     JNIEnv *env = webrtc::AttachCurrentThreadIfNeeded();
 
-    jmethodID onDestroyMethodId = env->GetMethodID(VideoCameraCapturerClass, "onDestroy", "()V");
+    jmethodID onDestroyMethodId = env->GetMethodID(VideoCapturerDeviceClass, "onDestroy", "()V");
     env->CallVoidMethod(javaCapturer, onDestroyMethodId);
     env->DeleteGlobalRef(javaCapturer);
     javaCapturer = nullptr;
 
-    env->DeleteGlobalRef(VideoCameraCapturerClass);
+    env->DeleteGlobalRef(VideoCapturerDeviceClass);
+
+    if (javaPeerInstance) {
+        env->DeleteGlobalRef(javaPeerInstance);
+    }
+    if (javaGroupInstance) {
+        env->DeleteGlobalRef(javaGroupInstance);
+    }
+}
+
+void AndroidContext::setJavaPeerInstance(JNIEnv *env, jobject instance) {
+    javaPeerInstance = env->NewGlobalRef(instance);
+}
+
+void AndroidContext::setJavaGroupInstance(JNIEnv *env, jobject instance) {
+    javaGroupInstance = env->NewGlobalRef(instance);
+}
+
+jobject AndroidContext::getJavaPeerInstance() {
+    return javaPeerInstance;
+}
+
+jobject AndroidContext::getJavaGroupInstance() {
+    return javaGroupInstance;
 }
 
 jobject AndroidContext::getJavaCapturer() {
@@ -26,7 +55,7 @@ jobject AndroidContext::getJavaCapturer() {
 }
 
 jclass AndroidContext::getJavaCapturerClass() {
-    return VideoCameraCapturerClass;
+    return VideoCapturerDeviceClass;
 }
 
 }  // namespace tgcalls

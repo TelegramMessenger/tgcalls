@@ -267,6 +267,19 @@ func (ls *LayerSelector) SetMaxLayer(maxLayer int) {
 	// If current layer exceeds new max, downswitch immediately.
 	if ls.currentLayer > maxLayer {
 		ls.switchLayer(maxLayer)
+		return
+	}
+	// A raised request (a tile back to full) with a stale estimate (no REMB: every live run) upswitches at once to the
+	// highest layer the sender has, as a downswitch follows the request at once; with a fresh estimate the state
+	// machine decides. Without this a receiver that once went down never came back up.
+	if ls.callbacks.GetEffectiveBW() < 0 {
+		target := maxLayer
+		if top := len(ls.callbacks.GetSenderVideoLayers()) - 1; top >= 0 && target > top {
+			target = top
+		}
+		if target > ls.currentLayer {
+			ls.switchLayer(target)
+		}
 	}
 }
 

@@ -79,7 +79,7 @@ static void tg_h265DecompressionOutputCallback(void* decoder,
   RTCVideoFrame* decodedFrame = [[RTCVideoFrame alloc]
       initWithBuffer:frameBuffer
             rotation:RTCVideoRotation_0
-         timeStampNs:CMTimeGetSeconds(timestamp) * rtc::kNumNanosecsPerSec];
+         timeStampNs:CMTimeGetSeconds(timestamp) * webrtc::kNumNanosecsPerSec];
   decodedFrame.timeStamp = (int32_t)decodeParams->timestamp;
   decodeParams->callback(decodedFrame);
 }
@@ -167,8 +167,8 @@ static void tg_h265DecompressionOutputCallback(void* decoder,
     return WEBRTC_VIDEO_CODEC_ERROR;
   }
 
-  rtc::ScopedCFTypeRef<CMVideoFormatDescriptionRef> inputFormat =
-      rtc::ScopedCF(webrtc::CreateH265VideoFormatDescription(
+  webrtc::ScopedCFTypeRef<CMVideoFormatDescriptionRef> inputFormat =
+      webrtc::ScopedCF(webrtc::CreateH265VideoFormatDescription(
           (uint8_t*)inputImage.buffer.bytes, inputImage.buffer.length));
   if (inputFormat) {
     CMVideoDimensions dimensions =

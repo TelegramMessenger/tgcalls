@@ -12,7 +12,7 @@
 #include "media/engine/webrtc_media_engine.h"
 #include "modules/audio_device/include/audio_device_default.h"
 #include "rtc_base/task_utils/repeating_task.h"
-#include "system_wrappers/include/field_trial.h"
+#include "api/environment/deprecated_global_field_trials.h"
 #include "api/video/builtin_video_bitrate_allocator_factory.h"
 #include "api/video/video_bitrate_allocation.h"
 
@@ -293,7 +293,7 @@
 #endif
 }
 
-- (void)setUncroppedSink:(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)sink {
+- (void)setUncroppedSink:(std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>>)sink {
 #ifdef WEBRTC_IOS
     if (_videoCameraCapturer) {
         [_videoCameraCapturer setUncroppedSink:sink];
@@ -422,7 +422,7 @@ void VideoCapturerInterfaceImpl::withNativeImplementation(std::function<void(voi
     });
 }
 
-void VideoCapturerInterfaceImpl::setUncroppedOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+void VideoCapturerInterfaceImpl::setUncroppedOutput(std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
     VideoCapturerInterfaceImplHolder *implReference = _implReference;
     dispatch_async(dispatch_get_main_queue(), ^{
         if (implReference.reference != nil) {
