@@ -917,10 +917,10 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
 }
 
 - (instancetype _Nonnull)initWithVersion:(NSString * _Nonnull)version queue:(id<OngoingCallThreadLocalContextQueueWebrtc> _Nonnull)queue proxy:(VoipProxyServerWebrtc * _Nullable)proxy networkType:(OngoingCallNetworkTypeWebrtc)networkType dataSaving:(OngoingCallDataSavingWebrtc)dataSaving derivedState:(NSData * _Nonnull)derivedState key:(NSData * _Nonnull)key isOutgoing:(bool)isOutgoing connections:(NSArray<OngoingCallConnectionDescriptionWebrtc *> * _Nonnull)connections maxLayer:(int32_t)maxLayer allowP2P:(BOOL)allowP2P allowTCP:(BOOL)allowTCP enableStunMarking:(BOOL)enableStunMarking logPath:(NSString * _Nonnull)logPath statsLogPath:(NSString * _Nonnull)statsLogPath sendSignalingData:(void (^)(NSData * _Nonnull))sendSignalingData videoCapturer:(OngoingCallThreadLocalContextVideoCapturer * _Nullable)videoCapturer preferredVideoCodec:(NSString * _Nullable)preferredVideoCodec inputDeviceId: (NSString * _Nonnull)inputDeviceId outputDeviceId: (NSString * _Nonnull)outputDeviceId {
-    return [self initWithVersion:version queue:queue proxy:proxy networkType:networkType dataSaving:dataSaving derivedState:derivedState key:key isOutgoing:isOutgoing connections:connections maxLayer:maxLayer allowP2P:allowP2P allowTCP:allowTCP enableStunMarking:enableStunMarking logPath:logPath statsLogPath:statsLogPath sendSignalingData:sendSignalingData videoCapturer:videoCapturer preferredVideoCodec:preferredVideoCodec inputDeviceId:inputDeviceId outputDeviceId:outputDeviceId opusDnnWeights:nil];
+    return [self initWithVersion:version queue:queue proxy:proxy networkType:networkType dataSaving:dataSaving derivedState:derivedState key:key isOutgoing:isOutgoing connections:connections maxLayer:maxLayer allowP2P:allowP2P allowTCP:allowTCP enableStunMarking:enableStunMarking logPath:logPath statsLogPath:statsLogPath sendSignalingData:sendSignalingData videoCapturer:videoCapturer preferredVideoCodec:preferredVideoCodec inputDeviceId:inputDeviceId outputDeviceId:outputDeviceId customParameters:nil opusDnnWeights:nil];
 }
 
-- (instancetype _Nonnull)initWithVersion:(NSString * _Nonnull)version queue:(id<OngoingCallThreadLocalContextQueueWebrtc> _Nonnull)queue proxy:(VoipProxyServerWebrtc * _Nullable)proxy networkType:(OngoingCallNetworkTypeWebrtc)networkType dataSaving:(OngoingCallDataSavingWebrtc)dataSaving derivedState:(NSData * _Nonnull)derivedState key:(NSData * _Nonnull)key isOutgoing:(bool)isOutgoing connections:(NSArray<OngoingCallConnectionDescriptionWebrtc *> * _Nonnull)connections maxLayer:(int32_t)maxLayer allowP2P:(BOOL)allowP2P allowTCP:(BOOL)allowTCP enableStunMarking:(BOOL)enableStunMarking logPath:(NSString * _Nonnull)logPath statsLogPath:(NSString * _Nonnull)statsLogPath sendSignalingData:(void (^)(NSData * _Nonnull))sendSignalingData videoCapturer:(OngoingCallThreadLocalContextVideoCapturer * _Nullable)videoCapturer preferredVideoCodec:(NSString * _Nullable)preferredVideoCodec inputDeviceId: (NSString * _Nonnull)inputDeviceId outputDeviceId: (NSString * _Nonnull)outputDeviceId opusDnnWeights:(NSData * _Nullable)opusDnnWeights {
+- (instancetype _Nonnull)initWithVersion:(NSString * _Nonnull)version queue:(id<OngoingCallThreadLocalContextQueueWebrtc> _Nonnull)queue proxy:(VoipProxyServerWebrtc * _Nullable)proxy networkType:(OngoingCallNetworkTypeWebrtc)networkType dataSaving:(OngoingCallDataSavingWebrtc)dataSaving derivedState:(NSData * _Nonnull)derivedState key:(NSData * _Nonnull)key isOutgoing:(bool)isOutgoing connections:(NSArray<OngoingCallConnectionDescriptionWebrtc *> * _Nonnull)connections maxLayer:(int32_t)maxLayer allowP2P:(BOOL)allowP2P allowTCP:(BOOL)allowTCP enableStunMarking:(BOOL)enableStunMarking logPath:(NSString * _Nonnull)logPath statsLogPath:(NSString * _Nonnull)statsLogPath sendSignalingData:(void (^)(NSData * _Nonnull))sendSignalingData videoCapturer:(OngoingCallThreadLocalContextVideoCapturer * _Nullable)videoCapturer preferredVideoCodec:(NSString * _Nullable)preferredVideoCodec inputDeviceId: (NSString * _Nonnull)inputDeviceId outputDeviceId: (NSString * _Nonnull)outputDeviceId customParameters:(NSString * _Nullable)customParameters opusDnnWeights:(NSData * _Nullable)opusDnnWeights {
     self = [super init];
     if (self != nil) {
         _version = version;
@@ -997,6 +997,11 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
         
         std::vector<tgcalls::Endpoint> endpoints;
         
+        std::string customParametersString = "{}";
+        if (customParameters && customParameters.length != 0) {
+            customParametersString = std::string(customParameters.UTF8String);
+        }
+        
         tgcalls::Config config = {
             .initializationTimeout = _callConnectTimeout,
             .receiveTimeout = _callPacketTimeout,
@@ -1012,7 +1017,8 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
             .statsLogPath = std::string(statsLogPath.length == 0 ? "" : statsLogPath.UTF8String),
             .maxApiLayer = [OngoingCallThreadLocalContextWebrtc maxLayer],
             .enableHighBitrateVideo = true,
-            .preferredVideoCodecs = preferredVideoCodecs
+            .preferredVideoCodecs = preferredVideoCodecs,
+            .customParameters = customParametersString
         };
         
         auto encryptionKeyValue = std::make_shared<std::array<uint8_t, 256>>();
