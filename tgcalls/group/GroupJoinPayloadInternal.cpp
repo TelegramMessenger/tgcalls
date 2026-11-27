@@ -1,6 +1,7 @@
 #include "GroupJoinPayloadInternal.h"
 
 #include "third-party/json11.hpp"
+#include <iterator>
 #include <sstream>
 
 namespace tgcalls {
