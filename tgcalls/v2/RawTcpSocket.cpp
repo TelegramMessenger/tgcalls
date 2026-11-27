@@ -29,7 +29,7 @@
 #include <errno.h>
 #endif  // WEBRTC_POSIX
 
-namespace rtc {
+namespace webrtc {
 
 static const size_t kMaxPacketSize = 64 * 1024;
 
@@ -39,19 +39,12 @@ static const size_t kBufSize = kMaxPacketSize + 4;
 // Binds and connects `socket` and creates RawTcpSocket for
 // it. Takes ownership of `socket`. Returns null if bind() or
 // connect() fail (`socket` is destroyed in that case).
-RawTcpSocket* RawTcpSocket::Create(Socket* socket,
-                                       const SocketAddress& bind_address,
-                                       const SocketAddress& remote_address) {
-  return new RawTcpSocket(
-      AsyncTCPSocketBase::ConnectSocket(socket, bind_address, remote_address));
-}
-
-RawTcpSocket::RawTcpSocket(Socket* socket)
-    : AsyncTCPSocketBase(socket, kBufSize) {}
+RawTcpSocket::RawTcpSocket(std::unique_ptr<Socket> socket)
+    : AsyncTCPSocketBase(std::move(socket), kBufSize) {}
 
 int RawTcpSocket::Send(const void* pv,
                          size_t cb,
-                         const rtc::PacketOptions& options) {
+                         const webrtc::AsyncSocketPacketOptions& options) {
   if (cb > kBufSize) {
     SetError(EMSGSIZE);
     return -1;
@@ -78,16 +71,16 @@ int RawTcpSocket::Send(const void* pv,
     return res;
   }
 
-  rtc::SentPacket sent_packet(options.packet_id, rtc::TimeMillis(),
-                              options.info_signaled_after_sent);
-  CopySocketInformationToPacketInfo(cb, *this, false, &sent_packet.info);
-  SignalSentPacket(this, sent_packet);
+  webrtc::SentPacketInfo sent_packet(options.packet_id, webrtc::TimeMillis(),
+                                     options.info_signaled_after_sent);
+  CopySocketInformationToPacketInfo(cb, *this, &sent_packet.info);
+  NotifySentPacket(this, sent_packet);
 
   // We claim to have sent the whole thing, even if we only sent partial
   return static_cast<int>(cb);
 }
 
-size_t RawTcpSocket::ProcessInput(rtc::ArrayView<const uint8_t> data) {
+size_t RawTcpSocket::ProcessInput(std::span<const uint8_t> data) {
   SocketAddress remote_addr(GetRemoteAddress());
 
   size_t processed_bytes = 0;
@@ -96,16 +89,16 @@ size_t RawTcpSocket::ProcessInput(rtc::ArrayView<const uint8_t> data) {
     if (bytes_left < 4)
       return processed_bytes;
 
-    uint32_t pkt_len = rtc::GetLE32(data.data() + processed_bytes);
+    uint32_t pkt_len = webrtc::GetLE32(data.subspan(processed_bytes, 4));
     if (bytes_left < 4 + pkt_len)
       return processed_bytes;
 
-    rtc::ReceivedPacket received_packet(
-        data.subview(processed_bytes + 4, pkt_len), remote_addr,
-        webrtc::Timestamp::Micros(rtc::TimeMicros()));
+    webrtc::ReceivedIpPacket received_packet(
+        data.subspan(processed_bytes + 4, pkt_len), remote_addr,
+        webrtc::Timestamp::Micros(webrtc::TimeMicros()));
     NotifyPacketReceived(received_packet);
     processed_bytes += 4 + pkt_len;
   }
 }
 
-}  // namespace rtc
+}  // namespace webrtc

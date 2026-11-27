@@ -2,7 +2,6 @@
 
 
 #import "Instance.h"
-#import "InstanceImpl.h"
 #import "v2/InstanceV2Impl.h"
 #include "StaticThreads.h"
 
@@ -40,13 +39,13 @@
 
 @interface CallVideoFrameI420Buffer (Initialization)
 
-- (instancetype _Nonnull)initWithBuffer:(rtc::scoped_refptr<webrtc::I420BufferInterface>)i420Buffer;
+- (instancetype _Nonnull)initWithBuffer:(webrtc::scoped_refptr<webrtc::I420BufferInterface>)i420Buffer;
 
 @end
 
 @interface CallVideoFrameNV12Buffer (Initialization)
 
-- (instancetype _Nonnull)initWithBuffer:(rtc::scoped_refptr<webrtc::NV12BufferInterface>)nv12Buffer;
+- (instancetype _Nonnull)initWithBuffer:(webrtc::scoped_refptr<webrtc::NV12BufferInterface>)nv12Buffer;
 
 @end
 

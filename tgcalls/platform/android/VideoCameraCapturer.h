@@ -20,16 +20,16 @@ class VideoCameraCapturer;
 class VideoCameraCapturer {
 
 public:
-	VideoCameraCapturer(rtc::scoped_refptr<webrtc::JavaVideoTrackSourceInterface> source, std::string deviceId, std::function<void(VideoState)> stateUpdated, std::shared_ptr<PlatformContext> platformContext);
+	VideoCameraCapturer(webrtc::scoped_refptr<webrtc::JavaVideoTrackSourceInterface> source, std::string deviceId, std::function<void(VideoState)> stateUpdated, std::shared_ptr<PlatformContext> platformContext);
 
 	void setState(VideoState state);
 	void setPreferredCaptureAspectRatio(float aspectRatio);
-	void setUncroppedSink(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
+	void setUncroppedSink(std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
 
     webrtc::ScopedJavaLocalRef<jobject> GetJavaVideoCapturerObserver(JNIEnv* env);
 
 private:
-	rtc::scoped_refptr<webrtc::JavaVideoTrackSourceInterface> _source;
+	webrtc::scoped_refptr<webrtc::JavaVideoTrackSourceInterface> _source;
 
 	std::function<void(VideoState)> _stateUpdated;
 	VideoState _state;
@@ -37,7 +37,7 @@ private:
 	std::shared_ptr<PlatformContext> _platformContext;
 
 	float _aspectRatio;
-	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _uncroppedSink;
+	std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> _uncroppedSink;
 };
 
 }  // namespace tgcalls

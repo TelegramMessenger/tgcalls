@@ -30,13 +30,13 @@ static RTCVideoFrame *customToObjCVideoFrame(const webrtc::VideoFrame &frame, RT
   RTCVideoFrame *videoFrame =
       [[RTCVideoFrame alloc] initWithBuffer:webrtc::ToObjCVideoFrameBuffer(frame.video_frame_buffer())
                                    rotation:rotation
-                                timeStampNs:frame.timestamp_us() * rtc::kNumNanosecsPerMicrosec];
-  videoFrame.timeStamp = frame.timestamp();
+                                timeStampNs:frame.timestamp_us() * webrtc::kNumNanosecsPerMicrosec];
+  videoFrame.timeStamp = frame.rtp_timestamp();
 
   return videoFrame;
 }
 
-class VideoRendererAdapterImpl : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
+class VideoRendererAdapterImpl : public webrtc::VideoSinkInterface<webrtc::VideoFrame> {
  public:
     VideoRendererAdapterImpl(void (^frameReceived)(CGSize, RTCVideoFrame *, RTCVideoRotation)) {
         _frameReceived = [frameReceived copy];
@@ -417,7 +417,7 @@ private:
     _videoFrame = frame;
 }
 
-- (std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)getSink {
+- (std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>>)getSink {
     assert([NSThread isMainThread]);
     
     return _sink;

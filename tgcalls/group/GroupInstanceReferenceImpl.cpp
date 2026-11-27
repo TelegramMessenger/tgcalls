@@ -3,6 +3,15 @@
 #endif
 #include "group/GroupInstanceReferenceImpl.h"
 
+#include "group/GroupAv1Decision.h"
+#include "group/GroupVideoPayloadTypes.h"
+#include "api/audio/builtin_audio_processing_builder.h"
+#include "api/create_modular_peer_connection_factory.h"
+#include "api/environment/environment_factory.h"
+#if defined(TGCALLS_ENABLE_AV1) && TGCALLS_ENABLE_AV1
+#include "av1/Av1TopLayerFactory.h"
+#include "api/video_codecs/scalability_mode.h"
+#endif
 #include "LogSinkImpl.h"
 #include "FakeAudioDeviceModule.h"
 #include "StaticThreads.h"
@@ -20,7 +29,7 @@
 #include "api/enable_media.h"
 #include "api/rtc_event_log/rtc_event_log_factory.h"
 #include "api/jsep.h"
-#include "api/jsep_session_description.h"
+#include "api/jsep.h"
 #include "api/jsep_ice_candidate.h"
 #include "api/candidate.h"
 #include "api/units/time_delta.h"
@@ -37,7 +46,7 @@
 #include "p2p/base/basic_packet_socket_factory.h"
 #include "rtc_base/network.h"
 #include "rtc_base/rtc_certificate_generator.h"
-#include "rtc_base/helpers.h"
+#include "rtc_base/crypto_random.h"
 #include "rtc_base/time_utils.h"
 
 #include "modules/audio_processing/audio_buffer.h"
@@ -49,16 +58,21 @@
 
 #include "group/GroupJoinPayloadInternal.h"
 #include "group/GroupFrameTransformer.h"
+#include "group/GroupOpusDred.h"
 #include "group/GroupAudioCapturePostProcessor.h"
+#include "group/GroupExternalAudio.h"
+#include "group/GroupReferenceFieldTrials.h"
+#include "group/ScreencastSendParameters.h"
 #include "modules/rtp_rtcp/source/rtp_packet_received.h"
+#include "rtc_base/strings/string_builder.h"
 #include "api/field_trials_view.h"
-#include "FieldTrialsConfig.h"
 
 #include "third-party/json11.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <mutex>
 #include <set>
 #include <sstream>
 
@@ -67,57 +81,34 @@ namespace tgcalls {
 namespace {
 
 // SFU JSON uses RFC 5245 ICE candidate type names ("host", "srflx", "prflx",
-// "relay"). cricket::Candidate stores its type using WebRTC-internal names
+// "relay"). webrtc::Candidate stores its type using WebRTC-internal names
 // ("local", "stun", "prflx", "relay" — see api/candidate.cc). Without this
 // mapping, "host"/"srflx" candidates trip RTC_DCHECK(c.is_relay()) in
 // p2p/base/connection.cc:86 (GetRtcEventLogCandidateType) because none of
 // is_local()/is_stun()/is_prflx()/is_relay() returns true.
-absl::string_view mapIceCandidateTypeToInternal(const std::string &type) {
-    if (type == "host") return cricket::LOCAL_PORT_TYPE;
-    if (type == "srflx") return cricket::STUN_PORT_TYPE;
-    if (type == "prflx") return cricket::PRFLX_PORT_TYPE;
-    if (type == "relay") return cricket::RELAY_PORT_TYPE;
-    return type;
-}
-
-// Field trials for this engine's PeerConnectionFactory.
-//
-// Video packets whose SSRC no m-section signals must be dropped, never turned
-// into a default (unsignaled) receive stream. A packet the network thread has
-// already handed to the worker when the worker removes an endpoint's receive
-// stream (the app requested fewer endpoints) is otherwise received as unknown
-// and creates such a stream on the old, still-open transceiver's channel.
-// That channel's remote content never changes again, so the stream is never
-// reset, and it keeps the SSRC's binding in the Call's demuxer: when the same
-// endpoint is requested again, the new transceiver's receive stream cannot
-// register for the SSRC, the old stream decodes every frame into a sink that
-// was detached with the endpoint ("VideoReceiveStreamInterface not connected
-// to a VideoSink"), and the participant's tile stays frozen for the rest of
-// the call. Signaled SSRCs are always available here: buildRemoteAnswer puts
-// every requested endpoint's SSRC groups into its m-section.
-//
-// CustomImpl enables the same trial process-wide from its start(), which used
-// to make this engine's behaviour depend on whether a CustomImpl call had run
-// earlier in the process. Everything else still resolves through tgcalls'
-// shared FieldTrialBasedConfig (the global trial string), exactly as before.
-class GRFieldTrials final : public webrtc::FieldTrialsView {
-public:
-    static constexpr absl::string_view kDiscardUnknownSsrcVideo = "WebRTC-Video-DiscardPacketsWithUnknownSsrc";
-
-    std::string Lookup(absl::string_view key) const override {
-        if (key == kDiscardUnknownSsrcVideo) {
-            return "Enabled";
-        }
-        return fieldTrialsBasedConfig.Lookup(key);
+// The profile-level-id of the H264 entry (payload type 104, mungeVideoCodecsInOffer) of a local m-line,
+// or fallback when it has none.
+std::string offeredH264ProfileLevelId(const webrtc::MediaContentDescription *localMedia, std::string const &fallback) {
+    if (!localMedia) {
+        return fallback;
     }
-};
+    for (const auto &codec : localMedia->codecs()) {
+        if (codec.id == 104 && absl::EqualsIgnoreCase(codec.name, webrtc::kH264CodecName)) {
+            std::string profileLevelId;
+            if (codec.GetParam(webrtc::kH264FmtpProfileLevelId, &profileLevelId) && !profileLevelId.empty()) {
+                return profileLevelId;
+            }
+        }
+    }
+    return fallback;
+}
 
 // --- PeerConnection observer adapter ---
 
 class GRPeerConnectionObserver : public webrtc::PeerConnectionObserver {
 public:
     std::function<void()> onRenegotiationNeeded;
-    std::function<void(const webrtc::IceCandidateInterface *)> onIceCandidate;
+    std::function<void(const webrtc::IceCandidate *)> onIceCandidate;
     std::function<void(webrtc::PeerConnectionInterface::IceConnectionState)> onConnectionChange;
     std::function<void(webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>)> onTrack;
     std::function<void(webrtc::scoped_refptr<webrtc::DataChannelInterface>)> onDataChannel;
@@ -148,12 +139,11 @@ public:
     void OnConnectionChange(webrtc::PeerConnectionInterface::PeerConnectionState) override {}
     void OnIceGatheringChange(webrtc::PeerConnectionInterface::IceGatheringState) override {}
 
-    void OnIceCandidate(const webrtc::IceCandidateInterface *candidate) override {
+    void OnIceCandidate(const webrtc::IceCandidate *candidate) override {
         if (onIceCandidate) onIceCandidate(candidate);
     }
 
-    void OnIceCandidatesRemoved(const std::vector<cricket::Candidate>&) override {}
-    void OnIceSelectedCandidatePairChanged(const cricket::CandidatePairChangeEvent&) override {}
+    void OnIceSelectedCandidatePairChanged(const webrtc::CandidatePairChangeEvent&) override {}
     void OnAddTrack(webrtc::scoped_refptr<webrtc::RtpReceiverInterface>, const std::vector<webrtc::scoped_refptr<webrtc::MediaStreamInterface>>&) override {}
     void OnRemoveTrack(webrtc::scoped_refptr<webrtc::RtpReceiverInterface>) override {}
 
@@ -204,13 +194,13 @@ private:
 
 class GRStatsObserver : public webrtc::RTCStatsCollectorCallback {
 public:
-    explicit GRStatsObserver(std::function<void(rtc::scoped_refptr<const webrtc::RTCStatsReport>)> cb)
+    explicit GRStatsObserver(std::function<void(webrtc::scoped_refptr<const webrtc::RTCStatsReport>)> cb)
         : _cb(std::move(cb)) {}
-    void OnStatsDelivered(const rtc::scoped_refptr<const webrtc::RTCStatsReport>& report) override {
+    void OnStatsDelivered(const webrtc::scoped_refptr<const webrtc::RTCStatsReport>& report) override {
         if (_cb) _cb(report);
     }
 private:
-    std::function<void(rtc::scoped_refptr<const webrtc::RTCStatsReport>)> _cb;
+    std::function<void(webrtc::scoped_refptr<const webrtc::RTCStatsReport>)> _cb;
 };
 
 // --- Per-receiver audio level sink ---
@@ -222,6 +212,15 @@ private:
 // level for a known-but-silent SSRC.
 class GRAudioLevelSink : public webrtc::AudioTrackSinkInterface {
 public:
+    GRAudioLevelSink() = default;
+
+    // Also hands the decoded PCM to the descriptor's onAudioFrame under the SSRC, as CustomImpl's per-channel sink does
+    // (the app's live captions read it).
+    GRAudioLevelSink(uint32_t ssrc, std::function<void(uint32_t, const AudioFrame &)> onAudioFrame) :
+    _ssrc(ssrc),
+    _onAudioFrame(std::move(onAudioFrame)) {
+    }
+
     void OnData(const void* audio_data,
                 int bits_per_sample,
                 int sample_rate,
@@ -231,6 +230,18 @@ public:
         const int16_t* samples = static_cast<const int16_t*>(audio_data);
         const size_t total = number_of_channels * number_of_frames;
         if (total == 0) return;
+
+        if (_onAudioFrame) {
+            AudioFrame frame;
+            frame.audio_samples = samples;
+            frame.num_samples = number_of_frames;
+            frame.bytes_per_sample = 2;
+            frame.num_channels = number_of_channels;
+            frame.samples_per_sec = (uint32_t)sample_rate;
+            frame.elapsed_time_ms = 0;
+            frame.ntp_time_ms = 0;
+            _onAudioFrame(_ssrc, frame);
+        }
 
         if (!_loggedFirstSamples) {
             _loggedFirstSamples = true;
@@ -297,6 +308,8 @@ public:
     }
 
 private:
+    const uint32_t _ssrc = 0;
+    const std::function<void(uint32_t, const AudioFrame &)> _onAudioFrame;
     std::mutex _mu;
     int32_t _runningPeak{0};
     size_t _samplesAccumulated{0};
@@ -414,7 +427,7 @@ public:
     void Transform(std::unique_ptr<webrtc::TransformableFrameInterface> frame) override {
         if (!frame) return;
         const uint32_t ssrc = frame->GetSsrc();
-        rtc::scoped_refptr<webrtc::TransformedFrameCallback> sink;
+        webrtc::scoped_refptr<webrtc::TransformedFrameCallback> sink;
         bool logFirst = false;
         {
             webrtc::MutexLock lock(&_mu);
@@ -432,14 +445,14 @@ public:
     }
 
     void RegisterTransformedFrameCallback(
-            rtc::scoped_refptr<webrtc::TransformedFrameCallback> cb) override {
+            webrtc::scoped_refptr<webrtc::TransformedFrameCallback> cb) override {
         RTC_LOG(LS_WARNING) << "GroupRef perRecv[" << this << "]: Register callback="
                             << cb.get();
         webrtc::MutexLock lock(&_mu);
         _sink = std::move(cb);
     }
     void RegisterTransformedFrameSinkCallback(
-            rtc::scoped_refptr<webrtc::TransformedFrameCallback> cb,
+            webrtc::scoped_refptr<webrtc::TransformedFrameCallback> cb,
             uint32_t ssrc) override {
         RTC_LOG(LS_WARNING) << "GroupRef perRecv[" << this << "]: RegisterSink ssrc="
                             << ssrc << " callback=" << cb.get();
@@ -455,7 +468,7 @@ public:
 
 private:
     webrtc::Mutex _mu;
-    rtc::scoped_refptr<webrtc::TransformedFrameCallback> _sink RTC_GUARDED_BY(_mu);
+    webrtc::scoped_refptr<webrtc::TransformedFrameCallback> _sink RTC_GUARDED_BY(_mu);
     bool _loggedFirstTransform RTC_GUARDED_BY(_mu) = false;
 };
 
@@ -463,15 +476,15 @@ private:
 //
 // One per remote endpoint, owned by the engine, and the ONLY object ever
 // registered on the receiver track (AddOrUpdateSink takes a raw pointer that
-// the track's rtc::VideoBroadcaster keeps until RemoveSink). The app hands
+// the track's webrtc::VideoBroadcaster keeps until RemoveSink). The app hands
 // the engine weak_ptrs because a tile's view owns its sink and is recreated
 // on every quality switch; registering those sinks on the track directly
 // left a dangling pointer behind and the next decoded frame crashed in
-// rtc::VideoBroadcaster::OnFrame. The proxy locks each weak sink per frame
+// webrtc::VideoBroadcaster::OnFrame. The proxy locks each weak sink per frame
 // and prunes the dead ones — the same shape as GroupInstanceCustomImpl's
 // VideoSinkImpl. Frames arrive on the decoder/incoming-video queue while
 // sinks are added on the media thread, hence the mutex.
-class GRVideoSinkProxy : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
+class GRVideoSinkProxy : public webrtc::VideoSinkInterface<webrtc::VideoFrame> {
 public:
     void OnFrame(const webrtc::VideoFrame& frame) override {
         std::lock_guard<std::mutex> lock(_mu);
@@ -495,7 +508,7 @@ public:
         }
     }
 
-    void addSink(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+    void addSink(std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
         auto incoming = sink.lock();
         if (!incoming) return;
         std::lock_guard<std::mutex> lock(_mu);
@@ -520,7 +533,7 @@ public:
 
 private:
     std::mutex _mu;
-    std::vector<std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>> _sinks;
+    std::vector<std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>>> _sinks;
 };
 
 } // anonymous namespace
@@ -543,14 +556,29 @@ public:
         , _onMutedSpeechActivityDetected(std::move(descriptor.onMutedSpeechActivityDetected))
         , _requestMediaChannelDescriptions(std::move(descriptor.requestMediaChannelDescriptions))
         , _outgoingAudioBitrateKbit(descriptor.outgoingAudioBitrateKbit)
+        , _dredFixedPacketLossPercent(groupDredFixedPacketLossPercent(descriptor.dredFixedPacketLossPercent,
+                                                                      groupOpusDnnWeightsUsable(descriptor.opusDnnWeights)))
+        , _dredReceiveEnabled(groupDredReceiveEnabled(descriptor.dredReceiveEnabled,
+                                                      groupOpusDnnWeightsUsable(descriptor.opusDnnWeights)))
+        , _opusDnnWeights(descriptor.opusDnnWeights)
         , _disableAudioInput(descriptor.disableAudioInput)
         , _enableSystemMute(descriptor.ios_enableSystemMute)
         , _videoContentType(descriptor.videoContentType)
+#if defined(WEBRTC_MAC) && !defined(WEBRTC_IOS)
+        , _initialInputDeviceId(std::move(descriptor.initialInputDeviceId))
+        , _currentOutputDeviceId(descriptor.initialOutputDeviceId.empty() ? std::string("default") : std::move(descriptor.initialOutputDeviceId))
+#endif
+        , _iosInAppScreencast(descriptor.iosInAppScreencast && descriptor.videoContentType != VideoContentType::None)
+        , _allowAv1ScreencastSending(descriptor.allowAv1ScreencastSending)
+        , _av1ScreencastLayers(descriptor.av1ScreencastLayers)
+        , _av1TestEncoderFails(descriptor.av1TestEncoderFails)
         , _videoCodecPreferences(std::move(descriptor.videoCodecPreferences))
         , _getVideoSource(std::move(descriptor.getVideoSource))
         , _dataChannelMessageReceived(std::move(descriptor.dataChannelMessageReceived))
         , _minOutgoingVideoBitrateKbit(descriptor.minOutgoingVideoBitrateKbit)
         , _e2eEncryptDecrypt(std::move(descriptor.e2eEncryptDecrypt))
+        , _onAudioFrame(std::move(descriptor.onAudioFrame))
+        , _isConference(descriptor.isConference)
         , _userIds(std::make_shared<GRUserIdRegistry>())
     {
         if (_e2eEncryptDecrypt) {
@@ -558,6 +586,18 @@ public:
         }
 
         _myAudioLevel = std::make_shared<GRMyAudioLevelHolder>();
+
+        if (_videoContentType == VideoContentType::Screencast) {
+            // A screencast connection has no microphone: its audio is the app audio from
+            // addExternalAudioSamples, recorded by a FakeAudioDeviceModule (createAudioDeviceModule),
+            // and it sends from the start, as CustomImpl's does (it unmutes itself in start()). Its own
+            // level is that audio's, measured by the recorder: an encrypted call's CustomImpl peers read
+            // it from the frame trailer only (pollAudioLevels stamps it).
+            _isMuted = false;
+            _externalAudioRecorder = std::make_shared<ExternalAudioRecorder>(&_externalAudioSamples, &_externalAudioSamplesMutex, [myAudioLevel = _myAudioLevel](float level) {
+                myAudioLevel->set(GroupLevelValue{ level, false });
+            });
+        }
         _noiseSuppressionConfiguration =
             std::make_shared<NoiseSuppressionConfiguration>(descriptor.initialEnableNoiseSuppression);
 
@@ -594,10 +634,12 @@ public:
     // RegisterAudioCallback. Without that registration, the PeerConnection's
     // audio output sink is never wired into NeedMorePlayData and playout stays
     // silent (Finding 3 in the real-call audio investigation). Falls back to
-    // raw `_createAudioDeviceModule` (then Init + wrapAudioDeviceModule) and,
-    // ultimately, to the platform-default ADM. AudioDeviceDataObserver and the
-    // screencast `_externalAudioRecorder` branches from CustomImpl have no
-    // counterpart here and are intentionally omitted.
+    // raw `_createAudioDeviceModule` (then Init + wrapAudioDeviceModule), then, for
+    // a screencast, to a FakeAudioDeviceModule recording the app audio
+    // (`_externalAudioRecorder`, as CustomImpl; the iOS wrapper leaves both hooks
+    // unset for a screencast so this branch is reached) and, ultimately, to the
+    // platform-default ADM. CustomImpl's AudioDeviceDataObserver branch has no
+    // counterpart here.
     webrtc::scoped_refptr<WrappedAudioDeviceModule> createAudioDeviceModule(webrtc::TaskQueueFactory *taskQueueFactory) {
         auto onMutedSpeechActivityDetected = _onMutedSpeechActivityDetected;
 #ifdef WEBRTC_IOS
@@ -606,7 +648,7 @@ public:
 #endif
         const auto create = [&](webrtc::AudioDeviceModule::AudioLayer layer) {
 #ifdef WEBRTC_IOS
-            auto result = rtc::make_ref_counted<webrtc::tgcalls_ios_adm::AudioDeviceModuleIOS>(false, disableRecording, enableSystemMute, disableRecording ? 2 : 1);
+            auto result = webrtc::make_ref_counted<webrtc::tgcalls_ios_adm::AudioDeviceModuleIOS>(false, disableRecording, enableSystemMute, disableRecording ? 2 : 1);
             if (result) {
                 result->mutedSpeechDetectionChanged = ^(bool value) {
                     if (onMutedSpeechActivityDetected) {
@@ -616,7 +658,7 @@ public:
             }
             return result;
 #else
-            return webrtc::AudioDeviceModule::Create(layer, taskQueueFactory);
+            return webrtc::scoped_refptr<webrtc::AudioDeviceModule>() /* no platform ADM: WebRTC's own is not built; hosts pass createAudioDeviceModule */;
 #endif
         };
         const auto check = [&](const webrtc::scoped_refptr<webrtc::AudioDeviceModule> &result) -> webrtc::scoped_refptr<WrappedAudioDeviceModule> {
@@ -639,6 +681,13 @@ public:
             if (const auto result = check(_createAudioDeviceModule(taskQueueFactory))) {
                 return result;
             }
+        } else if (_externalAudioRecorder) {
+            FakeAudioDeviceModule::Options options;
+            options.num_channels = 1;
+            if (const auto result = check(FakeAudioDeviceModule::Creator(nullptr, _externalAudioRecorder, options)(taskQueueFactory))) {
+                RTC_LOG(LS_INFO) << "GroupRef: screencast audio from addExternalAudioSamples";
+                return result;
+            }
         }
         return check(create(webrtc::AudioDeviceModule::kPlatformDefaultAudio));
     }
@@ -659,20 +708,24 @@ public:
 
         // 2. Create PeerConnectionFactory.
         webrtc::PeerConnectionFactoryDependencies deps;
-        deps.trials = std::make_unique<GRFieldTrials>();
+        // M159: field trials and the task queue factory live in the factory's Environment; the network thread is
+        // also the worker.
+        deps.env = webrtc::CreateEnvironment(std::make_unique<GroupReferenceFieldTrials>(_iosInAppScreencast, _dredReceiveEnabled, _dredFixedPacketLossPercent > 0), std::move(taskQueueFactory));
+        RTC_LOG(LS_INFO) << "GroupRef: Opus DRED "
+            << groupOpusDredDescription(_dredFixedPacketLossPercent, _dredReceiveEnabled, _opusDnnWeights);
         deps.network_thread = _threads->getNetworkThread();
         deps.signaling_thread = _threads->getMediaThread();
-        deps.worker_thread = _threads->getWorkerThread();
-        deps.task_queue_factory = std::move(taskQueueFactory);
         deps.adm = _audioDeviceModule;
 
-        webrtc::AudioProcessingBuilder builder;
+        webrtc::BuiltinAudioProcessingBuilder builder;
 #if USE_RNNOISE
         // Mirrors CustomImpl: the capture post-processor is the only source of a
         // local audio level, which the outgoing encryptor stamps into every Opus
         // frame's trailer — with encryption on, that trailer is how a CustomImpl
         // peer learns we are speaking (it sets takeAudioLevelFromNetwork = false).
-        if (_audioLevelsUpdated) {
+        // Not for a screencast: its audio is the app's (music, video), which noise
+        // suppression would mangle, and CustomImpl installs no such processor there.
+        if (_audioLevelsUpdated && _videoContentType != VideoContentType::Screencast) {
             builder.SetCapturePostProcessing(std::make_unique<AudioCapturePostProcessor>(
                 [myAudioLevel = _myAudioLevel](GroupLevelValue const &level) {
                     if (myAudioLevel) {
@@ -682,28 +735,84 @@ public:
                 _noiseSuppressionConfiguration, nullptr, nullptr));
         }
 #endif
-        deps.audio_processing = builder.Create();
+        deps.audio_processing_builder = webrtc::CustomAudioProcessing(builder.Build(*deps.env));
 
-        deps.audio_encoder_factory = webrtc::CreateAudioEncoderFactory<webrtc::AudioEncoderOpus>();
-        deps.audio_decoder_factory = webrtc::CreateAudioDecoderFactory<webrtc::AudioDecoderOpus>();
+        // Opus with the DRED weights (the decoders use them only with the receive trials on).
+        deps.audio_encoder_factory = CreateGroupAudioEncoderFactory(_dredFixedPacketLossPercent, _opusDnnWeights, false);
+        deps.audio_decoder_factory = CreateGroupAudioDecoderFactory(_opusDnnWeights, false);
 #if defined(WEBRTC_MAC) && __has_include("CallsRemoteAudio.hpp")
         const bool sandboxAudio = calls::audio::enabled();
-        deps.audio_decoder_factory = calls::audio::wrapFactory(deps.audio_decoder_factory, sandboxAudio);
+        deps.audio_decoder_factory = calls::audio::wrapFactory(deps.audio_decoder_factory, sandboxAudio, _opusDnnWeights);
         if (sandboxAudio) deps.audio_mixer = calls::audio::makeMixer();
 #endif
 
-        deps.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory(false, false);
+        // As CustomImpl: preferHardwareEncoding selects the in-app screen capture's encoder
+        // (DarwinInterface: VideoToolbox H264 at level 5.2, screen-content rate control), also
+        // for a main connection that sends the screen as its camera video.
+#if defined(TGCALLS_ENABLE_AV1) && TGCALLS_ENABLE_AV1
+        if (_allowAv1ScreencastSending && isAv1ScreenShare()) {
+            // The in-app share may send AV1 (decideAv1Sending turns the switch on); without the Debug Settings switch
+            // the factory is today's.
+            _av1TopLayer = std::make_shared<Av1TopLayerSwitch>();
+#if defined(TGCALLS_ALLOW_TEST_KNOBS) && TGCALLS_ALLOW_TEST_KNOBS
+            _av1TopLayer->setTestAv1Fails(_av1TestEncoderFails);
+#endif
+            const auto threads = _threads;
+            _av1TopLayer->setOnFallback([weak, threads] {
+                threads->getMediaThread()->PostTask([weak] {
+                    if (const auto strong = weak.lock()) {
+                        strong->onAv1TopLayerFailed();
+                    }
+                });
+            });
+            deps.video_encoder_factory = PlatformInterface::SharedInstance()->makeScreencastVideoEncoderFactoryWithAv1TopLayer(_iosInAppScreencast, _av1TopLayer);
+        } else {
+            deps.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory(_iosInAppScreencast, _videoContentType == VideoContentType::Screencast || _iosInAppScreencast);
+        }
+#else
+        deps.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory(_iosInAppScreencast, _videoContentType == VideoContentType::Screencast || _iosInAppScreencast);
+#endif
+#if defined(TGCALLS_ENABLE_AV1) && TGCALLS_ENABLE_AV1
+        // Every group call receives AV1 (106/107 on every recvonly video m-line, GroupVideoPayloadTypes). The decoder
+        // factory must list it: WebRTC refuses a whole receive codec list holding one codec it cannot decode.
+        deps.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactoryWithAv1();
+#else
         deps.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactory();
+#endif
 
         webrtc::EnableMedia(deps);
 
-        deps.event_log_factory = std::make_unique<webrtc::RtcEventLogFactory>(deps.task_queue_factory.get());
+        deps.event_log_factory = std::make_unique<webrtc::RtcEventLogFactory>();
 
         _peerConnectionFactory = webrtc::CreateModularPeerConnectionFactory(std::move(deps));
         if (!_peerConnectionFactory) {
             RTC_LOG(LS_ERROR) << "GroupRef: Failed to create PeerConnectionFactory";
             return;
         }
+
+#if defined(WEBRTC_ANDROID) || defined(WEBRTC_WIN)
+        // Android and Windows hosts render the group broadcast over the call's playout (an ADM data observer), so playout must
+        // run before any RTP audio arrives, as CustomImpl starts it (setAudioOutputDevice at start). WebRTC itself
+        // starts playout only with a receive stream.
+        if (_audioDeviceModule && _videoContentType != VideoContentType::Screencast) {
+            _threads->getWorkerThread()->BlockingCall([adm = _audioDeviceModule]() {
+                SetAudioOutputDeviceById(adm.get(), "default");
+            });
+        }
+#endif
+#if defined(WEBRTC_MAC) && !defined(WEBRTC_IOS)
+        // macOS renders the group broadcast over the call's playout too (the bridge's data observer), and CustomImpl
+        // applies the initial devices at start: do both here.
+        if (_audioDeviceModule && _videoContentType != VideoContentType::Screencast) {
+            _threads->getWorkerThread()->BlockingCall([adm = _audioDeviceModule, input = _initialInputDeviceId, output = _currentOutputDeviceId]() {
+                if (!input.empty()) {
+                    SetAudioInputDeviceById(adm.get(), input);
+                }
+                SetAudioOutputDeviceById(adm.get(), output);
+                RTC_LOG(LS_INFO) << "GroupRef: audio devices at start: input '" << input << "', output '" << output << "', playout " << (adm->Playing() ? "started" : "not started");
+            });
+        }
+#endif
 
         // Allow loopback network interfaces (needed for localhost SFU).
         {
@@ -739,6 +848,12 @@ public:
         config.bundle_policy = webrtc::PeerConnectionInterface::kBundlePolicyMaxBundle;
         config.rtcp_mux_policy = webrtc::PeerConnectionInterface::RtcpMuxPolicy::kRtcpMuxPolicyRequire;
         config.continual_gathering_policy = webrtc::PeerConnectionInterface::ContinualGatheringPolicy::GATHER_CONTINUALLY;
+        if (_iosInAppScreencast) {
+            // Periodic bandwidth probes while the screen capture sends below its estimate, stopping near
+            // the cap (GroupReferenceFieldTrials): see iosScreencastFieldTrial.
+            config.media_config.video.periodic_alr_bandwidth_probing = true;
+            RTC_LOG(LS_INFO) << "GroupRef: in-app screen capture, periodic bandwidth probing on, skipped within 10% of the cap";
+        }
         config.audio_jitter_buffer_fast_accelerate = true;
         // Every audio SSRC is received through an m-line that signals it, and
         // unknown SSRCs are learned from the packets the demuxer drops (the tap
@@ -805,9 +920,9 @@ public:
         }
 
         _networkMonitorFactory = PlatformInterface::SharedInstance()->createNetworkMonitorFactory();
-        _socketFactory = std::make_unique<rtc::BasicPacketSocketFactory>(_threads->getNetworkThread()->socketserver());
-        _networkManager = std::make_unique<rtc::BasicNetworkManager>(_networkMonitorFactory.get(), _threads->getNetworkThread()->socketserver());
-        pcDeps.allocator = std::make_unique<cricket::BasicPortAllocator>(_networkManager.get(), _socketFactory.get());
+        _socketFactory = std::make_unique<webrtc::BasicPacketSocketFactory>(_threads->getNetworkThread()->socketserver());
+        _networkManager = std::make_unique<webrtc::BasicNetworkManager>(webrtc::CreateEnvironment(), _threads->getNetworkThread()->socketserver(), _networkMonitorFactory.get());
+        pcDeps.allocator = std::make_unique<webrtc::BasicPortAllocator>(webrtc::CreateEnvironment(), _networkManager.get(), _socketFactory.get());
 
         auto pcOrError = _peerConnectionFactory->CreatePeerConnectionOrError(config, std::move(pcDeps));
         if (!pcOrError.ok()) {
@@ -816,12 +931,30 @@ public:
         }
         _peerConnection = pcOrError.value();
 
-        // 3.5. Pre-allocate video simulcast SSRCs if video is configured.
+        if (_iosInAppScreencast) {
+            // CustomImpl's bitrate preferences for the in-app screen capture (adjustBitratePreferences):
+            // the 2 Mbit/s video cap plus the audio headroom.
+            webrtc::BitrateSettings bitrateSettings;
+            bitrateSettings.min_bitrate_bps = _minOutgoingVideoBitrateKbit * 1024;
+            bitrateSettings.start_bitrate_bps = std::max(_minOutgoingVideoBitrateKbit * 1024, 400 * 1000);
+            bitrateSettings.max_bitrate_bps = std::max(_minOutgoingVideoBitrateKbit * 1024, iosScreencastTotalMaxBitrateBps());
+            const auto bitrateResult = _peerConnection->SetBitrate(bitrateSettings);
+            RTC_LOG(LS_INFO) << "GroupRef: in-app screen capture encoding, max " << *bitrateSettings.max_bitrate_bps << " bps"
+                << (bitrateResult.ok() ? "" : std::string(", SetBitrate failed: ") + bitrateResult.message());
+            scheduleScreencastEncodingCheck();
+        }
+
+        // 3.5. Pre-allocate video simulcast SSRCs if video is configured: three
+        // layers, two for a screencast (as CustomImpl), one for an AV1 share in Single: the SSRCs go into the join
+        // request, before the server's answer says whether it takes AV1 (GroupAv1Decision).
         if (_videoContentType != VideoContentType::None) {
-            for (int i = 0; i < 3; i++) {
+            const int layerCount = _videoContentType == VideoContentType::Screencast
+                ? (groupAv1JoinsWithSingleLayer(av1Inputs()) ? 1 : 2)
+                : (_isConference ? 1 : 3);
+            for (int i = 0; i < layerCount; i++) {
                 SimulcastLayer layer;
-                layer.ssrc = rtc::CreateRandomId();
-                layer.fidSsrc = rtc::CreateRandomId();
+                layer.ssrc = webrtc::CreateRandomId();
+                layer.fidSsrc = webrtc::CreateRandomId();
                 _outgoingVideoSsrcs.push_back(layer);
             }
         }
@@ -835,7 +968,14 @@ public:
         }
 
         // 5. Add outgoing audio transceiver.
-        cricket::AudioOptions audioOpts;
+        webrtc::AudioOptions audioOpts;
+        if (_videoContentType == VideoContentType::Screencast) {
+            // App audio, not a microphone: no voice processing (as CustomImpl).
+            audioOpts.echo_cancellation = false;
+            audioOpts.noise_suppression = false;
+            audioOpts.auto_gain_control = false;
+            audioOpts.highpass_filter = false;
+        }
         auto audioSource = _peerConnectionFactory->CreateAudioSource(audioOpts);
         auto audioTrack = _peerConnectionFactory->CreateAudioTrack("audio0", audioSource.get());
 
@@ -867,7 +1007,10 @@ public:
             if (params.encodings.empty()) {
                 params.encodings.push_back(webrtc::RtpEncodingParameters());
             }
-            params.encodings[0].max_bitrate_bps = _outgoingAudioBitrateKbit * 1024;
+            // With DRED a fixed 40000 bps (WebRTC-Audio-Allocation pins it under congestion too), not the ×1024.
+            params.encodings[0].max_bitrate_bps = _dredFixedPacketLossPercent > 0
+                ? kGroupDredBitrateBps
+                : _outgoingAudioBitrateKbit * 1024;
             _outgoingAudioTransceiver->sender()->SetParameters(params);
 
             if (_e2eEncryptDecrypt) {
@@ -875,7 +1018,7 @@ public:
                 // SetSsrc, so installing before negotiation is fine.
                 auto myAudioLevelAndSpeech = _myAudioLevelAndSpeech;
                 _outgoingAudioTransceiver->sender()->SetEncoderToPacketizerFrameTransformer(
-                    rtc::make_ref_counted<FrameTransformer>(
+                    webrtc::make_ref_counted<FrameTransformer>(
                         true, _e2eEncryptDecrypt, int64_t(), _payloadTypeMapping,
                         [myAudioLevelAndSpeech]() -> std::pair<uint8_t, bool> {
                             if (myAudioLevelAndSpeech) {
@@ -901,7 +1044,7 @@ public:
             videoInit.direction = webrtc::RtpTransceiverDirection::kSendOnly;
             videoInit.stream_ids = {"video"};
 
-            auto videoResult = _peerConnection->AddTransceiver(cricket::MEDIA_TYPE_VIDEO, videoInit);
+            auto videoResult = _peerConnection->AddTransceiver(webrtc::MediaType::VIDEO, videoInit);
             if (videoResult.ok()) {
                 _outgoingVideoTransceiver = videoResult.value();
                 if (_e2eEncryptDecrypt) {
@@ -910,7 +1053,7 @@ public:
                     // StreamParams::first_ssrc() only, and FrameTransformer routes
                     // per-layer sinks through _sinkCallbackBySsrc.
                     _outgoingVideoTransceiver->sender()->SetEncoderToPacketizerFrameTransformer(
-                        rtc::make_ref_counted<FrameTransformer>(
+                        webrtc::make_ref_counted<FrameTransformer>(
                             true, _e2eEncryptDecrypt, int64_t(), _payloadTypeMapping,
                             nullptr, nullptr));
                 }
@@ -919,13 +1062,18 @@ public:
         }
 
         RTC_LOG(LS_INFO) << "GroupRef: PeerConnection created successfully";
+
+        // Levels from the start, connected or not, as CustomImpl reports them (every 100 ms in any mode, its own level
+        // at least): the app's call state waits for the first report, and a voice chat's stream listener never gets a
+        // connection (its join answers with a stream). Test: group_reference_levels_test.
+        startAudioLevelPolling();
     }
 
     void emitJoinPayload(std::function<void(GroupJoinPayload const &)> completion) {
         _joinCompletion = std::move(completion);
 
         // Create offer to get local SDP with ICE/DTLS params.
-        auto observer = rtc::make_ref_counted<GRCreateSDPObserver>(
+        auto observer = webrtc::make_ref_counted<GRCreateSDPObserver>(
             [weak = std::weak_ptr<GroupInstanceReferenceInternal>(shared_from_this())](
                 webrtc::SessionDescriptionInterface* desc) {
                 auto strong = weak.lock();
@@ -952,7 +1100,7 @@ public:
 
         // Set local description.
         auto* rawOffer = offer.release();
-        auto observer = rtc::make_ref_counted<GRSetSDPObserver>(
+        auto observer = webrtc::make_ref_counted<GRSetSDPObserver>(
             [weak = std::weak_ptr<GroupInstanceReferenceInternal>(shared_from_this())](webrtc::RTCError error) {
                 if (!error.ok()) {
                     RTC_LOG(LS_ERROR) << "GroupRef: SetLocalDescription failed: " << error.message();
@@ -985,7 +1133,7 @@ public:
         }
 
         const auto& firstContent = cricketDesc->contents()[0];
-        const auto* transportInfo = cricketDesc->GetTransportInfoByName(firstContent.name);
+        const auto* transportInfo = cricketDesc->GetTransportInfoByName(firstContent.mid());
         if (!transportInfo) {
             RTC_LOG(LS_ERROR) << "GroupRef: no transport info in local description";
             return;
@@ -1029,13 +1177,15 @@ public:
         if (_videoContentType != VideoContentType::None && !_outgoingVideoSsrcs.empty()) {
             GroupParticipantVideoInformation videoInfo;
 
-            // SIM group: primary SSRCs from all layers.
-            GroupJoinPayloadVideoSourceGroup simGroup;
-            simGroup.semantics = "SIM";
-            for (const auto& layer : _outgoingVideoSsrcs) {
-                simGroup.ssrcs.push_back(layer.ssrc);
+            // SIM group: primary SSRCs from all layers; none for one layer (an AV1 share in Single), as CustomImpl.
+            if (_outgoingVideoSsrcs.size() > 1) {
+                GroupJoinPayloadVideoSourceGroup simGroup;
+                simGroup.semantics = "SIM";
+                for (const auto& layer : _outgoingVideoSsrcs) {
+                    simGroup.ssrcs.push_back(layer.ssrc);
+                }
+                videoInfo.ssrcGroups.push_back(std::move(simGroup));
             }
-            videoInfo.ssrcGroups.push_back(std::move(simGroup));
 
             // FID groups: primary + RTX per layer.
             for (const auto& layer : _outgoingVideoSsrcs) {
@@ -1056,6 +1206,9 @@ public:
             _joinCompletion(payload);
             _joinCompletion = nullptr;
         }
+
+        // The local description gave the sender its simulcast encodings.
+        applyScreencastEncodingIfNeeded();
     }
 
     void setJoinResponsePayload(std::string const &payload) {
@@ -1077,6 +1230,26 @@ public:
         _ownVideoEndpointId = parsed->videoInformation ? parsed->videoInformation->endpointId : std::string();
         updateOwnPreviewOutput();
 
+        // What the AV1 screen share needs from the server: whether it lists AV1, and the Dependency Descriptor's ID.
+        // Decided before the first answer, which carries the outgoing m-line's send codecs and extensions.
+        _serverVideoPayloadTypes = parsed->videoInformation ? parsed->videoInformation->payloadTypes : std::vector<GroupJoinPayloadVideoPayloadType>();
+#if defined(TGCALLS_ENABLE_AV1) && TGCALLS_ENABLE_AV1
+        if (_av1TopLayer) {
+            _dependencyDescriptorId = groupDependencyDescriptorExtensionId(parsed->videoInformation ? parsed->videoInformation->extensionMap : std::vector<std::pair<uint32_t, std::string>>());
+            if (_dependencyDescriptorId != 0) {
+                if (const auto taken = localVideoExtensionAt(_dependencyDescriptorId)) {
+                    // The first offer gave that ID to another extension, and an ID can't be re-mapped once negotiated.
+                    RTC_LOG(LS_WARNING) << "GroupRef: no dependency descriptor: extension " << _dependencyDescriptorId
+                        << " is " << *taken << " here";
+                    _dependencyDescriptorId = 0;
+                }
+            }
+        }
+#endif
+        if (_videoContentType != VideoContentType::None && !_outgoingVideoSsrcs.empty()) {
+            decideAv1Sending();
+        }
+
         // Build remote answer SDP from the parsed transport.
         auto remoteAnswer = buildRemoteAnswer();
         if (!remoteAnswer) {
@@ -1084,7 +1257,7 @@ public:
             return;
         }
 
-        auto observer = rtc::make_ref_counted<GRSetSDPObserver>(
+        auto observer = webrtc::make_ref_counted<GRSetSDPObserver>(
             [weak = std::weak_ptr<GroupInstanceReferenceInternal>(shared_from_this())](webrtc::RTCError error) {
                 if (!error.ok()) {
                     RTC_LOG(LS_ERROR) << "GroupRef: SetRemoteDescription failed: " << error.message();
@@ -1092,6 +1265,7 @@ public:
                 }
                 auto strong = weak.lock();
                 if (!strong) return;
+                strong->ensurePlayout("remote description");
                 strong->_threads->getMediaThread()->PostTask([weak]() {
                     if (auto s = weak.lock()) {
                         s->addRemoteIceCandidates();
@@ -1109,7 +1283,7 @@ public:
         std::string bundleMid = "0";
         auto localDesc = _peerConnection->local_description();
         if (localDesc && !localDesc->description()->contents().empty()) {
-            bundleMid = localDesc->description()->contents()[0].name;
+            bundleMid = localDesc->description()->contents()[0].mid();
         }
 
         for (const auto& candidate : _remoteTransport.candidates) {
@@ -1118,13 +1292,13 @@ public:
             int priority = 0;
             try { priority = std::stoi(candidate.priority); } catch (...) {}
 
-            cricket::Candidate c;
+            webrtc::Candidate c;
             c.set_foundation(candidate.foundation);
             c.set_component(std::stoi(candidate.component));
             c.set_protocol(candidate.protocol);
             c.set_priority(priority);
-            c.set_address(rtc::SocketAddress(candidate.ip, port));
-            c.set_type(mapIceCandidateTypeToInternal(candidate.type));
+            c.set_address(webrtc::SocketAddress(candidate.ip, port));
+            c.set_type(groupIceCandidateType(candidate.type));
 
             auto iceCandidate = webrtc::CreateIceCandidate(bundleMid, 0, c);
             if (iceCandidate) {
@@ -1141,6 +1315,9 @@ public:
         if (_getVideoSource && _videoContentType != VideoContentType::None && !_outgoingVideoTrack) {
             setVideoSource(_getVideoSource);
         }
+        // The answer set the send codec: an AV1 share on every layer needs its scalability modes now, or WebRTC sends
+        // AV1 as one stream until the next check (also when the track was attached before the join).
+        applyScreencastEncodingIfNeeded();
 
         onJoined();
     }
@@ -1161,6 +1338,117 @@ public:
         }
     }
 
+    // A share connection fed by the in-app capture: what may send AV1. Not a main connection that sends the screen as
+    // its camera video (the app's debug "screen share as camera", also _iosInAppScreencast here), which CustomImpl never
+    // runs and which keeps its three H264 layers.
+    bool isAv1ScreenShare() const {
+        return _iosInAppScreencast && _videoContentType == VideoContentType::Screencast;
+    }
+
+    // What GroupAv1Decision reads that is known before the join: the switch, the mode, the share, encryption, the chip.
+    GroupAv1TopLayerInputs av1Inputs() const {
+        GroupAv1TopLayerInputs inputs;
+        inputs.allowed = _allowAv1ScreencastSending;
+        inputs.layers = _av1ScreencastLayers;
+        inputs.deviceCanEncode = _allowAv1ScreencastSending && PlatformInterface::SharedInstance()->canEncodeAv1Realtime();
+        inputs.inAppScreencast = isAv1ScreenShare();
+        inputs.encrypted = (bool)_e2eEncryptDecrypt;
+        return inputs;
+    }
+
+    // Whether the screen share sends AV1 (GroupAv1Decision), and the log lines that say so, as CustomImpl's. At the join
+    // response, before the first answer: its outgoing m-line carries the send codecs (H264, this engine's only base
+    // codec) and the descriptor.
+    void decideAv1Sending() {
+        auto inputs = av1Inputs();
+        inputs.serverListsAv1 = groupPayloadTypesListAv1(_serverVideoPayloadTypes);
+        inputs.baseCodecName = webrtc::kH264CodecName;
+        inputs.layerCount = (int)_outgoingVideoSsrcs.size();
+        auto decision = decideGroupAv1TopLayer(inputs);
+#if defined(TGCALLS_ENABLE_AV1) && TGCALLS_ENABLE_AV1
+        if (decision.useAv1 && !_av1TopLayer) {
+            decision.useAv1 = false;
+            decision.reason = "no AV1 encoder factory";
+        }
+        _av1InUse = decision.useAv1;
+        if (_av1TopLayer) {
+            _av1TopLayer->setLayers(_av1ScreencastLayers);
+            _av1TopLayer->setEnabled(decision.useAv1);
+        }
+#else
+        if (decision.useAv1) {
+            decision.useAv1 = false;
+            decision.reason = "no AV1 in this build";
+        }
+#endif
+        if (decision.useAv1) {
+            std::string layers;
+            for (int i = 0; i + 1 < inputs.layerCount; i++) {
+                layers += (_av1ScreencastLayers == GroupAv1ScreencastLayers::Every ? std::string("AV1") : inputs.baseCodecName) + ", ";
+            }
+            RTC_LOG(LS_INFO) << "GroupAv1: screen share layers: " << layers << "AV1";
+            if (_dependencyDescriptorId != 0) {
+                RTC_LOG(LS_INFO) << "GroupAv1: dependency descriptor as header extension " << _dependencyDescriptorId;
+            } else {
+                RTC_LOG(LS_WARNING) << "GroupAv1: no dependency descriptor (the server gives extension "
+                    << kGroupDependencyDescriptorDefaultExtensionId << " to another header extension, or this side does)";
+            }
+        } else if (_allowAv1ScreencastSending) {
+            RTC_LOG(LS_INFO) << "GroupAv1: not sending AV1: " << decision.reason
+                << " (layers: " << inputs.layerCount << ", " << inputs.baseCodecName << ")";
+        }
+    }
+
+#if defined(TGCALLS_ENABLE_AV1) && TGCALLS_ENABLE_AV1
+    // The AV1 encoder failed and H264 took over for good (Single and Every: WebRTC's encoder switch, the answer listing
+    // H264 after AV1; Top: the top stream's own fallback). The next answers send H264 only and no descriptor.
+    void onAv1TopLayerFailed() {
+        if (!_av1InUse) {
+            return;
+        }
+        _av1InUse = false;
+        if (_av1TopLayer) {
+            _av1TopLayer->setEnabled(false);
+        }
+        RTC_LOG(LS_WARNING) << "GroupAv1: the AV1 encoder failed; the "
+            << (_av1ScreencastLayers == GroupAv1ScreencastLayers::Top ? "layer" : "share") << " goes on in H264";
+        // Every's scalability modes go with AV1.
+        applyScreencastEncodingIfNeeded();
+    }
+
+    // The table's AV1 106 (with L1T1/L1T3 and the group feedback) and its RTX 107.
+    static void addGroupAv1Codecs(webrtc::VideoContentDescription *videoContent) {
+        for (const auto &payloadType : assignGroupVideoPayloadTypes({})) {
+            if (payloadType.videoCodec.name == webrtc::kAv1CodecName) {
+                videoContent->AddCodec(payloadType.videoCodec);
+                if (payloadType.rtxCodec) {
+                    videoContent->AddCodec(payloadType.rtxCodec.value());
+                }
+            }
+        }
+    }
+
+    // The URI of an extension other than the descriptor that a video m-line of the local description has at `id`.
+    std::optional<std::string> localVideoExtensionAt(uint32_t id) const {
+        const auto localDesc = _peerConnection ? _peerConnection->local_description() : nullptr;
+        if (!localDesc || !localDesc->description()) {
+            return std::nullopt;
+        }
+        for (const auto &content : localDesc->description()->contents()) {
+            const auto media = content.media_description();
+            if (!media || media->type() != webrtc::MediaType::VIDEO) {
+                continue;
+            }
+            for (const auto &extension : media->rtp_header_extensions()) {
+                if (extension.id.value() == (int)id && extension.uri != kGroupDependencyDescriptorUri) {
+                    return extension.uri;
+                }
+            }
+        }
+        return std::nullopt;
+    }
+#endif
+
     std::unique_ptr<webrtc::SessionDescriptionInterface> buildRemoteAnswer() {
         auto localDesc = _peerConnection->local_description();
         if (!localDesc || !localDesc->description()) {
@@ -1169,23 +1457,23 @@ public:
         }
 
         auto* localCricketDesc = localDesc->description();
-        auto cricketDesc = std::make_unique<cricket::SessionDescription>();
+        auto cricketDesc = std::make_unique<webrtc::SessionDescription>();
         std::vector<std::string> bundleMids;
 
         // Build TransportDescription from SFU response.
-        cricket::TransportDescription transportDesc;
+        webrtc::TransportDescription transportDesc;
         transportDesc.ice_ufrag = _remoteTransport.ufrag;
         transportDesc.ice_pwd = _remoteTransport.pwd;
-        transportDesc.ice_mode = cricket::ICEMODE_LITE;
+        transportDesc.ice_mode = webrtc::ICEMODE_LITE;
 
         if (!_remoteTransport.fingerprints.empty()) {
             auto& fp = _remoteTransport.fingerprints[0];
-            auto fingerprint = rtc::SSLFingerprint::CreateUniqueFromRfc4572(fp.hash, fp.fingerprint);
+            auto fingerprint = webrtc::SSLFingerprint::CreateUniqueFromRfc4572(fp.hash, fp.fingerprint);
             if (fingerprint) {
                 transportDesc.identity_fingerprint = std::move(fingerprint);
             }
             // SFU sends setup=active (DTLS client).
-            transportDesc.connection_role = cricket::CONNECTIONROLE_ACTIVE;
+            transportDesc.connection_role = webrtc::CONNECTIONROLE_ACTIVE;
         }
 
         // Build a map from mid -> SSRC for remote audio m-lines.
@@ -1204,30 +1492,28 @@ public:
         // create a matching content in the remote answer with the SAME mid.
         bool isFirstAudio = true;
         for (const auto& localContent : localCricketDesc->contents()) {
-            const std::string& mid = localContent.name;
+            const std::string& mid = localContent.mid();
             auto* localMedia = localContent.media_description();
             if (!localMedia) continue;
 
-            if (localMedia->type() == cricket::MEDIA_TYPE_DATA) {
+            if (localMedia->type() == webrtc::MediaType::DATA) {
                 // --- Data channel: clone from local offer ---
                 auto dataContent = localMedia->Clone();
                 dataContent->set_direction(webrtc::RtpTransceiverDirection::kSendRecv);
 
-                cricket::ContentInfo ci(localContent.type);
-                ci.name = mid;
+                webrtc::ContentInfo ci(localContent.type, mid, std::move(dataContent));
                 ci.rejected = false;
                 ci.bundle_only = false;
-                ci.set_media_description(std::move(dataContent));
 
                 cricketDesc->AddContent(std::move(ci));
-                cricketDesc->AddTransportInfo(cricket::TransportInfo(mid, transportDesc));
+                cricketDesc->AddTransportInfo(webrtc::TransportInfo(mid, transportDesc));
                 bundleMids.push_back(mid);
 
-            } else if (localMedia->type() == cricket::MEDIA_TYPE_AUDIO) {
-                auto audioContent = std::make_unique<cricket::AudioContentDescription>();
+            } else if (localMedia->type() == webrtc::MediaType::AUDIO) {
+                auto audioContent = std::make_unique<webrtc::AudioContentDescription>();
 
                 // Opus codec.
-                cricket::AudioCodec opus = cricket::CreateAudioCodec(111, "opus", 48000, 2);
+                webrtc::Codec opus = webrtc::CreateAudioCodec(111, "opus", 48000, 2);
                 opus.params["minptime"] = "10";
                 opus.params["useinbandfec"] = "1";
                 // Frame duration of OUR outgoing audio: WebRTC derives the send
@@ -1279,64 +1565,105 @@ public:
                     // others' RemoteAudioSource never receives PCM and our
                     // GRAudioLevelSink::OnData never fires. MID is excluded from
                     // the m-line below so BUNDLE demux falls back to SSRC.
-                    audioContent->AddRtpHeaderExtension(webrtc::RtpExtension(webrtc::RtpExtension::kAudioLevelUri, 1));
-                    audioContent->AddRtpHeaderExtension(webrtc::RtpExtension(webrtc::RtpExtension::kAbsSendTimeUri, 2));
-                    audioContent->AddRtpHeaderExtension(webrtc::RtpExtension(webrtc::RtpExtension::kTransportSequenceNumberUri, 3));
+                    audioContent->AddRtpHeaderExtension(webrtc::RtpExtension(webrtc::RtpExtension::kAudioLevelUri, webrtc::RtpHeaderExtensionId(1)));
+                    audioContent->AddRtpHeaderExtension(webrtc::RtpExtension(webrtc::RtpExtension::kAbsSendTimeUri, webrtc::RtpHeaderExtensionId(2)));
+                    audioContent->AddRtpHeaderExtension(webrtc::RtpExtension(webrtc::RtpExtension::kTransportSequenceNumberUri, webrtc::RtpHeaderExtensionId(3)));
 
                     audioContent->set_direction(webrtc::RtpTransceiverDirection::kSendOnly);
 
                     auto ssrcIt = midToSsrc.find(mid);
                     if (ssrcIt != midToSsrc.end()) {
-                        cricket::StreamParams stream;
+                        webrtc::StreamParams stream;
                         stream.cname = "sfu-audio";
                         stream.add_ssrc(ssrcIt->second);
                         audioContent->AddStream(stream);
                     }
                 }
 
-                cricket::ContentInfo ci(cricket::MediaProtocolType::kRtp);
-                ci.name = mid;
+                webrtc::ContentInfo ci(webrtc::MediaProtocolType::kRtp, mid, std::move(audioContent));
                 ci.rejected = false;
                 ci.bundle_only = false;
-                ci.set_media_description(std::move(audioContent));
 
                 cricketDesc->AddContent(std::move(ci));
-                cricketDesc->AddTransportInfo(cricket::TransportInfo(mid, transportDesc));
+                cricketDesc->AddTransportInfo(webrtc::TransportInfo(mid, transportDesc));
                 bundleMids.push_back(mid);
 
-            } else if (localMedia->type() == cricket::MEDIA_TYPE_VIDEO) {
-                auto videoContent = std::make_unique<cricket::VideoContentDescription>();
-
-                // H264 codec: PT 104 (primary).
-                cricket::VideoCodec h264 = cricket::CreateVideoCodec(104, "H264");
-                h264.SetParam("level-asymmetry-allowed", "1");
-                h264.SetParam("packetization-mode", "1");
-                h264.SetParam("profile-level-id", "42e01f");
-                h264.AddFeedbackParam(cricket::FeedbackParam("nack"));
-                h264.AddFeedbackParam(cricket::FeedbackParam("nack", "pli"));
-                h264.AddFeedbackParam(cricket::FeedbackParam("ccm", "fir"));
-                h264.AddFeedbackParam(cricket::FeedbackParam("goog-remb"));
-                h264.AddFeedbackParam(cricket::FeedbackParam("transport-cc"));
-
-                // RTX codec: PT 105 (apt=104).
-                cricket::VideoCodec rtx = cricket::CreateVideoCodec(105, "rtx");
-                rtx.SetParam("apt", "104");
-
-                videoContent->AddCodec(h264);
-                videoContent->AddCodec(rtx);
-                videoContent->set_rtcp_mux(true);
+            } else if (localMedia->type() == webrtc::MediaType::VIDEO) {
+                auto videoContent = std::make_unique<webrtc::VideoContentDescription>();
 
                 // Determine if this is our outgoing video or an incoming recvonly.
                 bool isOutgoing = (_outgoingVideoTransceiver &&
                                    _outgoingVideoTransceiver->mid().has_value() &&
                                    _outgoingVideoTransceiver->mid().value() == mid);
 
+                // H264 codec: PT 104 (primary). Our outgoing m-line answers with the profile it
+                // offered: an answer naming another H264 profile negotiates no H264 at all, and the
+                // in-app screen capture's encoder offers constrained high at level 5.2 only.
+                webrtc::Codec h264 = webrtc::CreateVideoCodec(104, "H264");
+                h264.SetParam("level-asymmetry-allowed", "1");
+                h264.SetParam("packetization-mode", "1");
+                h264.SetParam("profile-level-id", isOutgoing ? offeredH264ProfileLevelId(localMedia, "42e01f") : "42e01f");
+                if (isOutgoing && _iosInAppScreencast) {
+                    RTC_LOG(LS_INFO) << "GroupRef: Screencast video codec: H264, profile-level-id: " << offeredH264ProfileLevelId(localMedia, "none");
+                }
+                h264.AddFeedbackParam(webrtc::FeedbackParam("nack"));
+                h264.AddFeedbackParam(webrtc::FeedbackParam("nack", "pli"));
+                h264.AddFeedbackParam(webrtc::FeedbackParam("ccm", "fir"));
+                h264.AddFeedbackParam(webrtc::FeedbackParam("goog-remb"));
+                h264.AddFeedbackParam(webrtc::FeedbackParam("transport-cc"));
+
+                // RTX codec: PT 105 (apt=104).
+                webrtc::Codec rtx = webrtc::CreateVideoCodec(105, "rtx");
+                rtx.SetParam("apt", "104");
+
+#if defined(TGCALLS_ENABLE_AV1) && TGCALLS_ENABLE_AV1
+                // Our AV1 screen share (decideAv1Sending): the answer's first codec is the send codec. Single and Every
+                // send AV1, with H264 after it for WebRTC's encoder switch if AV1 fails (the factory's selector); Top
+                // sends H264 and lists AV1 after it, the codec its top encoding names (setGroupAv1TopLayerCodecs,
+                // WebRTC's mixed-codec simulcast). The table's entry lists L1T3, which Every sets on each encoding.
+                const bool outgoingAv1 = isOutgoing && _av1InUse;
+                const bool av1First = outgoingAv1 && _av1ScreencastLayers != GroupAv1ScreencastLayers::Top;
+                if (av1First) {
+                    addGroupAv1Codecs(videoContent.get());
+                }
+#endif
+                videoContent->AddCodec(h264);
+                videoContent->AddCodec(rtx);
+#if defined(TGCALLS_ENABLE_AV1) && TGCALLS_ENABLE_AV1
+                if (outgoingAv1 && !av1First) {
+                    addGroupAv1Codecs(videoContent.get());
+                }
+                // AV1 106/107 on every incoming m-line whose local offer lists it (mungeVideoCodecsInOffer pins it
+                // there): any sender's top screen-share layer may be AV1 (GroupVideoPayloadTypes).
+                if (!isOutgoing && localOfferListsGroupAv1(localMedia)) {
+                    webrtc::Codec av1 = webrtc::CreateVideoCodec(groupAv1VideoFormat());
+                    av1.id = kGroupAv1PayloadType;
+                    av1.AddFeedbackParam(webrtc::FeedbackParam("nack"));
+                    av1.AddFeedbackParam(webrtc::FeedbackParam("nack", "pli"));
+                    av1.AddFeedbackParam(webrtc::FeedbackParam("ccm", "fir"));
+                    av1.AddFeedbackParam(webrtc::FeedbackParam("goog-remb"));
+                    av1.AddFeedbackParam(webrtc::FeedbackParam("transport-cc"));
+                    videoContent->AddCodec(av1);
+                    videoContent->AddCodec(webrtc::CreateVideoRtxCodec(kGroupAv1RtxPayloadType, kGroupAv1PayloadType));
+                }
+#endif
+                videoContent->set_rtcp_mux(true);
+
                 // RTP header extensions: copy from the local offer's video m-line.
                 // Exclude MID from ALL video m-lines. The SFU forwards raw RTP
                 // with the sender's MID value, and the transport-level demuxer would
                 // route packets to the wrong channel. Without MID negotiated for
                 // video, PeerConnection uses SSRC/PT-based routing instead.
-                for (const auto& ext : localMedia->rtp_header_extensions()) {
+                std::vector<webrtc::RtpExtension> videoExtensions = localMedia->rtp_header_extensions();
+#if defined(TGCALLS_ENABLE_AV1) && TGCALLS_ENABLE_AV1
+                if (isOutgoing && _av1TopLayer) {
+                    // An AV1 share's send extensions are this answer's: the Dependency Descriptor goes out with AV1 only,
+                    // as from CustomImpl (after a fallback the H264 encoder may describe its frames too). Other
+                    // instances answer with their offer's extensions, as before.
+                    videoExtensions = groupReferenceVideoHeaderExtensions(videoExtensions, _av1InUse ? _dependencyDescriptorId : 0);
+                }
+#endif
+                for (const auto& ext : videoExtensions) {
                     if (ext.uri == webrtc::RtpExtension::kMidUri) {
                         continue;
                     }
@@ -1351,18 +1678,18 @@ public:
 
                     // Include remote SSRCs for SSRC-based demux. Required: the
                     // factory discards video packets with unsignaled SSRCs (see
-                    // GRFieldTrials), so an endpoint is only received through
+                    // GroupReferenceFieldTrials), so an endpoint is only received through
                     // the SSRC groups signaled here.
                     for (const auto& [epId, ep] : _remoteVideoEndpoints) {
                         if (ep.transceiver && ep.transceiver->mid().has_value() &&
                             ep.transceiver->mid().value() == mid) {
 
-                            cricket::StreamParams stream;
+                            webrtc::StreamParams stream;
                             stream.cname = "sfu-video";
                             std::vector<uint32_t> allSsrcs;
 
                             for (const auto& group : ep.ssrcGroups) {
-                                cricket::SsrcGroup cricketGroup(group.semantics, group.ssrcs);
+                                webrtc::SsrcGroup cricketGroup(group.semantics, group.ssrcs);
                                 stream.ssrc_groups.push_back(cricketGroup);
                                 for (uint32_t s : group.ssrcs) {
                                     if (std::find(allSsrcs.begin(), allSsrcs.end(), s) == allSsrcs.end()) {
@@ -1380,31 +1707,27 @@ public:
                     }
                 }
 
-                cricket::ContentInfo ci(cricket::MediaProtocolType::kRtp);
-                ci.name = mid;
+                webrtc::ContentInfo ci(webrtc::MediaProtocolType::kRtp, mid, std::move(videoContent));
                 ci.rejected = false;
                 ci.bundle_only = false;
-                ci.set_media_description(std::move(videoContent));
 
                 cricketDesc->AddContent(std::move(ci));
-                cricketDesc->AddTransportInfo(cricket::TransportInfo(mid, transportDesc));
+                cricketDesc->AddTransportInfo(webrtc::TransportInfo(mid, transportDesc));
                 bundleMids.push_back(mid);
             }
         }
 
         // Bundle group.
         if (!bundleMids.empty()) {
-            cricket::ContentGroup bundleGroup(cricket::GROUP_TYPE_BUNDLE);
+            webrtc::ContentGroup bundleGroup(webrtc::GROUP_TYPE_BUNDLE);
             for (const auto& name : bundleMids) {
                 bundleGroup.AddContentName(name);
             }
             cricketDesc->AddGroup(bundleGroup);
         }
 
-        auto jsepAnswer = std::make_unique<webrtc::JsepSessionDescription>(
-            webrtc::SdpType::kAnswer,
-            std::move(cricketDesc),
-            "0", "0");
+        auto jsepAnswer = webrtc::CreateSessionDescription(
+            webrtc::SdpType::kAnswer, "0", "0", std::move(cricketDesc));
 
         // Add ICE candidates.
         if (!bundleMids.empty()) {
@@ -1413,13 +1736,13 @@ public:
                 int priority = 0;
                 try { priority = std::stoi(candidate.priority); } catch (...) {}
 
-                cricket::Candidate c;
+                webrtc::Candidate c;
                 c.set_foundation(candidate.foundation);
                 c.set_component(std::stoi(candidate.component));
                 c.set_protocol(candidate.protocol);
                 c.set_priority(priority);
-                c.set_address(rtc::SocketAddress(candidate.ip, port));
-                c.set_type(mapIceCandidateTypeToInternal(candidate.type));
+                c.set_address(webrtc::SocketAddress(candidate.ip, port));
+                c.set_type(groupIceCandidateType(candidate.type));
 
                 // Add to the first transport (bundled).
                 auto iceCandidate = webrtc::CreateIceCandidate(bundleMids[0], 0, c);
@@ -1433,7 +1756,28 @@ public:
     }
 
     void setConnectionMode(GroupConnectionMode mode) {
-        // No-op: PeerConnection manages its own connection state.
+        ensurePlayout("connection mode");
+    }
+
+    // WebRTC stops playout when the last receive stream goes away (AudioState::RemoveReceivingStream), and macOS
+    // renders the broadcast core over that playout, so a call whose streams ended (or that became a broadcast
+    // listener) would stay silent until a device switch. Restart it after every remote description and mode change.
+    void ensurePlayout(const char *reason) {
+#if defined(WEBRTC_MAC) && !defined(WEBRTC_IOS)
+        if (!_audioDeviceModule || _videoContentType == VideoContentType::Screencast) {
+            return;
+        }
+        _threads->getWorkerThread()->PostTask([weak = std::weak_ptr<GroupInstanceReferenceInternal>(shared_from_this()), adm = _audioDeviceModule, output = _currentOutputDeviceId, reason]() {
+            if (!weak.lock() || adm->Playing()) {
+                return;
+            }
+            if (!adm->PlayoutIsInitialized()) {
+                adm->InitPlayout();
+            }
+            adm->StartPlayout();
+            RTC_LOG(LS_INFO) << "GroupRef: playout restarted (" << reason << "): output '" << output << "', playout " << (adm->Playing() ? "started" : "not started");
+        });
+#endif
     }
 
     void setIsMuted(bool isMuted) {
@@ -1485,13 +1829,35 @@ public:
         }
     }
 
+    // A participant's playout volume (the app's per-participant slider and "mute for me", 0), as CustomImpl's
+    // channel gain: the receive stream's output gain, through the remote track's source. Kept per SSRC and applied
+    // again when the SSRC's receiver appears (wireRemoteAudioLevelSinks), since the app sets it before that.
     void setVolume(uint32_t ssrc, double volume) {
-        // Could adjust receiver gain per SSRC. Not critical for audio-only test.
+        _ssrcVolumes[ssrc] = volume;
+        applyVolume(ssrc);
+    }
+
+    void applyVolume(uint32_t ssrc) {
+        const auto volume = _ssrcVolumes.find(ssrc);
+        const auto info = _remoteSsrcs.find(ssrc);
+        if (volume == _ssrcVolumes.end() || info == _remoteSsrcs.end() || !info->second.transceiver) {
+            return;
+        }
+        const auto receiver = info->second.transceiver->receiver();
+        const auto track = receiver ? receiver->track() : nullptr;
+        if (!track || track->kind() != webrtc::MediaStreamTrackInterface::kAudioKind) {
+            return;
+        }
+        if (const auto source = static_cast<webrtc::AudioTrackInterface *>(track.get())->GetSource()) {
+            source->SetVolume(volume->second);
+            RTC_LOG(LS_INFO) << "GroupRef: volume " << volume->second << " for SSRC " << ssrc;
+        }
     }
 
     void stop(std::function<void()> completion) {
         _isPollingAudioLevels = false;
         _isLoggingStats = false;
+        _isScreencastEncodingCheckStopped = true;
         if (_videoCapture) {
             _videoCapture->setOutput(nullptr);
         }
@@ -1548,12 +1914,159 @@ public:
         // Just attach track — transceiver was already added in start(),
         // and SSRCs were munged into the initial offer.
         _outgoingVideoTransceiver->sender()->SetTrack(videoTrack.get());
+        applyScreencastEncodingIfNeeded();
     }
-    void setAudioOutputDevice(std::string) {}
-    void setAudioInputDevice(std::string) {}
-    void addExternalAudioSamples(std::vector<uint8_t>&&) {}
-    void addOutgoingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>) {}
-    void addIncomingVideoOutput(std::string const &endpointId, std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+    // The outgoing track's frame size before adaptation, or (0, 0) while no frame has arrived.
+    std::pair<int, int> currentOutgoingVideoFrameSize() const {
+        if (!_outgoingVideoTrack || !_outgoingVideoTrack->GetSource()) {
+            return std::make_pair(0, 0);
+        }
+        webrtc::VideoTrackSourceInterface::Stats stats;
+        if (!_outgoingVideoTrack->GetSource()->GetStats(&stats)) {
+            return std::make_pair(0, 0);
+        }
+        return std::make_pair(stats.input_width, stats.input_height);
+    }
+
+    // The in-app screen capture's encodings (iosScreencastLayerParameters for the frame size: top layer
+    // at most 1 Mpx and 2 Mbit/s, low layer 240p, every layer up to 60 fps), applied whenever the
+    // sender's differ: after every negotiation step and once a second, since folding or rotating the
+    // phone changes the frame size. CustomImpl does the same through its send channel
+    // (adjustVideoSendParams); the encodings exist only once a local description assigned the SSRCs.
+    void applyScreencastEncodingIfNeeded() {
+        if (!_iosInAppScreencast || !_outgoingVideoTransceiver) {
+            return;
+        }
+        auto sender = _outgoingVideoTransceiver->sender();
+        webrtc::RtpParameters parameters = sender->GetParameters();
+        if (parameters.encodings.empty()) {
+            return;
+        }
+        const auto frameSize = currentOutgoingVideoFrameSize();
+        const auto layers = iosScreencastLayerParameters((int)parameters.encodings.size(), frameSize.first, frameSize.second);
+        // AV1 on every layer is WebRTC's AV1 simulcast: a scalability mode (with the scale) on each encoding, else
+        // WebRTC sends AV1 as one stream (IsCodecDisabledForSimulcast). L1T3: three temporal layers in each stream,
+        // described by the dependency descriptor (SvtAv1Encoder). Cleared otherwise, also after AV1 failed.
+        std::optional<std::string> scalabilityMode;
+#if defined(TGCALLS_ENABLE_AV1) && TGCALLS_ENABLE_AV1
+        if (_av1InUse && _av1ScreencastLayers == GroupAv1ScreencastLayers::Every) {
+            scalabilityMode = std::string(webrtc::ScalabilityModeToString(webrtc::ScalabilityMode::kL1T3));
+        }
+#endif
+        bool changed = false;
+        for (size_t i = 0; i < parameters.encodings.size() && i < layers.size(); i++) {
+            auto &encoding = parameters.encodings[i];
+            const auto &layer = layers[i];
+            const std::optional<int> minBitrateBps = layer.minBitrateBps > 0 ? std::optional<int>(layer.minBitrateBps) : encoding.min_bitrate_bps;
+            if (encoding.min_bitrate_bps != minBitrateBps
+                || encoding.max_bitrate_bps != layer.maxBitrateBps
+                || encoding.max_framerate != (double)layer.maxFramerate
+                || encoding.scale_resolution_down_by != layer.scaleResolutionDownBy
+                || encoding.scalability_mode != scalabilityMode) {
+                changed = true;
+                encoding.min_bitrate_bps = minBitrateBps;
+                encoding.max_bitrate_bps = layer.maxBitrateBps;
+                encoding.max_framerate = (double)layer.maxFramerate;
+                encoding.scale_resolution_down_by = layer.scaleResolutionDownBy;
+                encoding.scalability_mode = scalabilityMode;
+            }
+        }
+#if defined(TGCALLS_ENABLE_AV1) && TGCALLS_ENABLE_AV1
+        // Top: AV1 on the top layer, H264 below it; H264 on every layer once AV1 failed. Set once the sender has its
+        // negotiated codecs (the check runs every second).
+        if (_av1ScreencastLayers == GroupAv1ScreencastLayers::Top && (_av1InUse || _av1TopLayerCodecsSet)) {
+            std::vector<std::optional<webrtc::RtpCodec>> codecsBefore;
+            for (const auto &encoding : parameters.encodings) {
+                codecsBefore.push_back(encoding.codec);
+            }
+            if (setGroupAv1TopLayerCodecs(parameters, _av1InUse)) {
+                _av1TopLayerCodecsSet = true;
+                for (size_t i = 0; i < parameters.encodings.size(); i++) {
+                    if (parameters.encodings[i].codec != codecsBefore[i]) {
+                        changed = true;
+                    }
+                }
+            }
+        }
+#endif
+        if (!changed) {
+            return;
+        }
+        const auto result = sender->SetParameters(parameters);
+        const auto applied = sender->GetParameters();
+        webrtc::StringBuilder description;
+        for (size_t i = 0; i < applied.encodings.size(); i++) {
+            const auto &encoding = applied.encodings[i];
+            description << " {" << i << ": max " << encoding.max_bitrate_bps.value_or(-1)
+                << ", min " << encoding.min_bitrate_bps.value_or(-1)
+                << ", scale " << encoding.scale_resolution_down_by.value_or(-1.0)
+                << ", fps " << encoding.max_framerate.value_or(-1.0)
+                << ", active " << (encoding.active ? 1 : 0)
+                << (encoding.scalability_mode ? ", " + *encoding.scalability_mode : std::string())
+                << (encoding.codec ? ", " + encoding.codec->name : std::string()) << "}";
+        }
+        if (result.ok()) {
+            RTC_LOG(LS_INFO) << "GroupRef: Screencast send parameters for " << frameSize.first << "x" << frameSize.second
+                << ", applied:" << description.str();
+        } else {
+            // The sender keeps its previous parameters, so the next check (in a second) sees the change again and
+            // retries it; until one is accepted the share sends with the previous encodings (after an AV1 failure in
+            // Top: a silent top layer, the lower layers unaffected).
+            RTC_LOG(LS_WARNING) << "GroupRef: Screencast send parameters for " << frameSize.first << "x" << frameSize.second
+                << " rejected: " << result.message() << ", applied:" << description.str();
+        }
+    }
+
+    void scheduleScreencastEncodingCheck() {
+        if (!_iosInAppScreencast || _isScreencastEncodingCheckScheduled || _isScreencastEncodingCheckStopped) {
+            return;
+        }
+        _isScreencastEncodingCheckScheduled = true;
+        const auto weak = std::weak_ptr<GroupInstanceReferenceInternal>(shared_from_this());
+        _threads->getMediaThread()->PostDelayedTask([weak]() {
+            auto strong = weak.lock();
+            if (!strong) {
+                return;
+            }
+            strong->_isScreencastEncodingCheckScheduled = false;
+            if (!strong->_peerConnection || strong->_isScreencastEncodingCheckStopped) {
+                return;
+            }
+            strong->applyScreencastEncodingIfNeeded();
+            strong->scheduleScreencastEncodingCheck();
+        }, webrtc::TimeDelta::Millis(1000));
+    }
+
+    void setAudioOutputDevice(const std::string &id) {
+#if defined(WEBRTC_MAC) && !defined(WEBRTC_IOS)
+        _currentOutputDeviceId = id;
+#endif
+#ifndef WEBRTC_IOS
+        _threads->getWorkerThread()->BlockingCall([&] {
+            if (_audioDeviceModule) {
+                SetAudioOutputDeviceById(_audioDeviceModule.get(), id);
+            }
+        });
+#endif // WEBRTC_IOS
+    }
+
+    void setAudioInputDevice(const std::string &id) {
+#ifndef WEBRTC_IOS
+        _threads->getWorkerThread()->BlockingCall([&] {
+            if (_audioDeviceModule) {
+                SetAudioInputDeviceById(_audioDeviceModule.get(), id);
+            }
+        });
+#endif // WEBRTC_IOS
+    }
+
+    void addExternalAudioSamples(std::vector<uint8_t> &&samples) {
+        if (_externalAudioRecorder) {
+            appendGroupExternalAudioSamples(_externalAudioSamples, _externalAudioSamplesMutex, samples);
+        }
+    }
+    void addOutgoingVideoOutput(std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>>) {}
+    void addIncomingVideoOutput(std::string const &endpointId, std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
         auto& entry = _videoSinkProxies[endpointId];
         if (!entry.proxy) {
             entry.proxy = std::make_shared<GRVideoSinkProxy>();
@@ -1664,7 +2177,7 @@ public:
             init.direction = webrtc::RtpTransceiverDirection::kRecvOnly;
             init.stream_ids = {"video-" + ch.endpointId};
 
-            auto result = _peerConnection->AddTransceiver(cricket::MEDIA_TYPE_VIDEO, init);
+            auto result = _peerConnection->AddTransceiver(webrtc::MediaType::VIDEO, init);
             if (!result.ok()) {
                 RTC_LOG(LS_ERROR) << "GroupRef: Failed to add video transceiver for endpoint "
                                   << ch.endpointId << ": " << result.error().message();
@@ -1679,7 +2192,7 @@ public:
                 // the resolver already has the userId before the first frame.
                 auto userIds = _userIds;
                 ep.transceiver->receiver()->SetDepacketizerToDecoderFrameTransformer(
-                    rtc::make_ref_counted<FrameTransformer>(
+                    webrtc::make_ref_counted<FrameTransformer>(
                         false, _e2eEncryptDecrypt,
                         [userIds](uint32_t frameSsrc) -> int64_t {
                             return userIds->userIdForSsrc(frameSsrc);
@@ -1717,8 +2230,8 @@ public:
             return;
         }
         const auto weak = std::weak_ptr<GroupInstanceReferenceInternal>(shared_from_this());
-        auto observer = rtc::make_ref_counted<GRStatsObserver>(
-            [weak, completion = std::move(completion)](rtc::scoped_refptr<const webrtc::RTCStatsReport> report) {
+        auto observer = webrtc::make_ref_counted<GRStatsObserver>(
+            [weak, completion = std::move(completion)](webrtc::scoped_refptr<const webrtc::RTCStatsReport> report) {
                 if (auto strong = weak.lock()) {
                     strong->logAudioStatsFromReport(std::move(report));
                 }
@@ -1825,7 +2338,7 @@ private:
                 init.direction = webrtc::RtpTransceiverDirection::kRecvOnly;
                 init.stream_ids = {std::to_string(ssrc)};
 
-                auto result = _peerConnection->AddTransceiver(cricket::MEDIA_TYPE_AUDIO, init);
+                auto result = _peerConnection->AddTransceiver(webrtc::MediaType::AUDIO, init);
                 if (result.ok()) {
                     info.transceiver = result.value();
                     // Install a per-receiver pass-through transformer BEFORE SDP negotiation
@@ -1843,7 +2356,7 @@ private:
                         auto userIds = _userIds;
                         auto threads = _threads;
                         const auto weakSelf = std::weak_ptr<GroupInstanceReferenceInternal>(shared_from_this());
-                        info.perReceiverTransformer = rtc::make_ref_counted<FrameTransformer>(
+                        info.perReceiverTransformer = webrtc::make_ref_counted<FrameTransformer>(
                             false, _e2eEncryptDecrypt,
                             [userIds, threads, weakSelf](uint32_t frameSsrc) -> int64_t {
                                 if (!userIds->isKnown(frameSsrc)) {
@@ -1866,7 +2379,7 @@ private:
                             _payloadTypeMapping, nullptr, nullptr);
                     } else {
                         info.perReceiverTransformer =
-                            rtc::make_ref_counted<GRPerReceiverAudioTransformer>();
+                            webrtc::make_ref_counted<GRPerReceiverAudioTransformer>();
                     }
                     info.transceiver->receiver()
                         ->SetDepacketizerToDecoderFrameTransformer(info.perReceiverTransformer);
@@ -1878,7 +2391,7 @@ private:
         }
 
         // Create a new offer.
-        auto observer = rtc::make_ref_counted<GRCreateSDPObserver>(
+        auto observer = webrtc::make_ref_counted<GRCreateSDPObserver>(
             [weak = std::weak_ptr<GroupInstanceReferenceInternal>(shared_from_this())](
                 webrtc::SessionDescriptionInterface* desc) {
                 auto strong = weak.lock();
@@ -1917,7 +2430,7 @@ private:
 
         for (auto& content : cricketDesc->contents()) {
             if (!content.media_description() ||
-                content.media_description()->type() != cricket::MEDIA_TYPE_VIDEO ||
+                content.media_description()->type() != webrtc::MediaType::VIDEO ||
                 content.media_description()->direction() != webrtc::RtpTransceiverDirection::kSendOnly) {
                 continue;
             }
@@ -1925,7 +2438,7 @@ private:
             auto* videoDesc = content.media_description()->as_video();
             if (!videoDesc) break;
 
-            cricket::StreamParams stream;
+            webrtc::StreamParams stream;
             stream.id = _outgoingVideoTransceiver->sender()->id();
 
             // Copy CNAME from existing audio stream if available.
@@ -1933,7 +2446,7 @@ private:
             if (localDesc) {
                 for (const auto& c : localDesc->description()->contents()) {
                     auto* media = c.media_description();
-                    if (media && media->type() == cricket::MEDIA_TYPE_AUDIO && !media->streams().empty()) {
+                    if (media && media->type() == webrtc::MediaType::AUDIO && !media->streams().empty()) {
                         stream.cname = media->streams()[0].cname;
                         break;
                     }
@@ -1944,7 +2457,7 @@ private:
             if (stream.cname.empty()) {
                 for (const auto& c : cricketDesc->contents()) {
                     auto* media = c.media_description();
-                    if (media && media->type() == cricket::MEDIA_TYPE_AUDIO && !media->streams().empty()) {
+                    if (media && media->type() == webrtc::MediaType::AUDIO && !media->streams().empty()) {
                         stream.cname = media->streams()[0].cname;
                         break;
                     }
@@ -1960,10 +2473,12 @@ private:
                 stream.add_ssrc(layer.fidSsrc);
                 simSsrcs.push_back(layer.ssrc);
                 stream.ssrc_groups.push_back(
-                    cricket::SsrcGroup(cricket::kFidSsrcGroupSemantics, {layer.ssrc, layer.fidSsrc}));
+                    webrtc::SsrcGroup(webrtc::kFidSsrcGroupSemantics, {layer.ssrc, layer.fidSsrc}));
             }
-            stream.ssrc_groups.push_back(
-                cricket::SsrcGroup(cricket::kSimSsrcGroupSemantics, simSsrcs));
+            if (simSsrcs.size() > 1) {
+                stream.ssrc_groups.push_back(
+                    webrtc::SsrcGroup(webrtc::kSimSsrcGroupSemantics, simSsrcs));
+            }
             stream.set_stream_ids({"video"});
 
             videoDesc->mutable_streams().clear();
@@ -1987,6 +2502,17 @@ private:
     // are copied from the engine's own codec list so the feedback parameters
     // stay what it supports; the synthesized remote answer already speaks this
     // table (buildRemoteAnswer).
+#if defined(TGCALLS_ENABLE_AV1) && TGCALLS_ENABLE_AV1
+    static bool localOfferListsGroupAv1(const webrtc::MediaContentDescription* localMedia) {
+        for (const auto& codec : localMedia->codecs()) {
+            if (codec.id == kGroupAv1PayloadType && absl::EqualsIgnoreCase(codec.name, webrtc::kAv1CodecName)) {
+                return true;
+            }
+        }
+        return false;
+    }
+#endif
+
     void mungeVideoCodecsInOffer(webrtc::SessionDescriptionInterface* offer) {
         auto* cricketDesc = offer->description();
         if (!cricketDesc) return;
@@ -1996,35 +2522,51 @@ private:
             int payloadType;
         };
         static constexpr Slot kSlots[] = {
-            {cricket::kVp8CodecName, 100},
-            {cricket::kVp9CodecName, 102},
-            {cricket::kH264CodecName, 104},
+            {webrtc::kVp8CodecName, 100},
+            {webrtc::kVp9CodecName, 102},
+            {webrtc::kH264CodecName, 104},
+#if defined(TGCALLS_ENABLE_AV1) && TGCALLS_ENABLE_AV1
+            // Received on every recvonly m-line (GroupVideoPayloadTypes); present only where the local
+            // description lists AV1, i.e. where the AV1-capable decoder factory put it.
+            {webrtc::kAv1CodecName, kGroupAv1PayloadType},
+#endif
         };
 
         for (auto& content : cricketDesc->contents()) {
             auto* media = content.media_description();
-            if (!media || media->type() != cricket::MEDIA_TYPE_VIDEO) continue;
+            if (!media || media->type() != webrtc::MediaType::VIDEO) continue;
             auto* videoDesc = media->as_video();
             if (!videoDesc) continue;
 
-            const std::vector<cricket::Codec> original = videoDesc->codecs();
-            std::vector<cricket::Codec> pinned;
+#if defined(TGCALLS_ENABLE_AV1) && TGCALLS_ENABLE_AV1
+            if (_av1TopLayer) {
+                // An in-app share that may send AV1: no stream IDs on any video m-line, from the first offer on (unused
+                // here, and 11 is the descriptor's default ID; an ID can't be re-mapped once negotiated). The
+                // descriptor itself goes only into the answer's outgoing m-line (buildRemoteAnswer). Other instances
+                // keep PeerConnection's extensions: viewers do not register the descriptor (registering it made the
+                // harness's quality switches stall, cause not found).
+                videoDesc->set_rtp_header_extensions(groupReferenceVideoHeaderExtensions(videoDesc->rtp_header_extensions(), 0));
+            }
+#endif
+
+            const std::vector<webrtc::Codec> original = videoDesc->codecs();
+            std::vector<webrtc::Codec> pinned;
 
             for (const auto& slot : kSlots) {
-                const cricket::Codec* chosen = nullptr;
+                const webrtc::Codec* chosen = nullptr;
                 for (const auto& codec : original) {
                     if (!absl::EqualsIgnoreCase(codec.name, slot.name)) continue;
 
                     bool preferred = true;
-                    if (absl::EqualsIgnoreCase(codec.name, cricket::kH264CodecName)) {
+                    if (absl::EqualsIgnoreCase(codec.name, webrtc::kH264CodecName)) {
                         // The constrained-baseline, packetization-mode 1 entry:
                         // what the answer advertises and every platform decodes.
                         std::string profile;
                         std::string mode;
-                        codec.GetParam(cricket::kH264FmtpProfileLevelId, &profile);
-                        codec.GetParam(cricket::kH264FmtpPacketizationMode, &mode);
+                        codec.GetParam(webrtc::kH264FmtpProfileLevelId, &profile);
+                        codec.GetParam(webrtc::kH264FmtpPacketizationMode, &mode);
                         preferred = absl::StartsWithIgnoreCase(profile, "42e0") && mode == "1";
-                    } else if (absl::EqualsIgnoreCase(codec.name, cricket::kVp9CodecName)) {
+                    } else if (absl::EqualsIgnoreCase(codec.name, webrtc::kVp9CodecName)) {
                         std::string profile;
                         preferred = !codec.GetParam("profile-id", &profile) || profile == "0";
                     }
@@ -2036,10 +2578,10 @@ private:
                 }
                 if (!chosen) continue;
 
-                cricket::Codec codec = *chosen;
+                webrtc::Codec codec = *chosen;
                 codec.id = slot.payloadType;
                 pinned.push_back(codec);
-                pinned.push_back(cricket::CreateVideoRtxCodec(slot.payloadType + 1, slot.payloadType));
+                pinned.push_back(webrtc::CreateVideoRtxCodec(slot.payloadType + 1, slot.payloadType));
             }
 
             if (pinned.empty()) continue;
@@ -2052,7 +2594,7 @@ private:
         mungeVideoCodecsInOffer(offer.get());
 
         auto* rawOffer = offer.release();
-        auto observer = rtc::make_ref_counted<GRSetSDPObserver>(
+        auto observer = webrtc::make_ref_counted<GRSetSDPObserver>(
             [weak = std::weak_ptr<GroupInstanceReferenceInternal>(shared_from_this())](webrtc::RTCError error) {
                 if (!error.ok()) {
                     RTC_LOG(LS_ERROR) << "GroupRef: Renegotiation SetLocalDescription failed: " << error.message();
@@ -2108,7 +2650,7 @@ private:
             return;
         }
 
-        auto observer = rtc::make_ref_counted<GRSetSDPObserver>(
+        auto observer = webrtc::make_ref_counted<GRSetSDPObserver>(
             [weak = std::weak_ptr<GroupInstanceReferenceInternal>(shared_from_this())](webrtc::RTCError error) {
                 if (!error.ok()) {
                     RTC_LOG(LS_ERROR) << "GroupRef: Renegotiation SetRemoteDescription failed: " << error.message();
@@ -2121,6 +2663,7 @@ private:
                 }
                 auto strong = weak.lock();
                 if (!strong) return;
+                strong->ensurePlayout("renegotiation");
                 strong->_threads->getMediaThread()->PostTask([weak]() {
                     if (auto s = weak.lock()) {
                         s->onRenegotiationComplete();
@@ -2137,6 +2680,7 @@ private:
                             << " pending=" << _pendingRenegotiation << ")";
         wirePendingVideoSinks();
         wireRemoteAudioLevelSinks();
+        applyScreencastEncodingIfNeeded();
 
         _isRenegotiating = false;
         if (_pendingRenegotiation) {
@@ -2189,7 +2733,7 @@ private:
 
         webrtc::scoped_refptr<webrtc::VideoTrackInterface> videoTrack(
             static_cast<webrtc::VideoTrackInterface*>(receiver->track().get()));
-        videoTrack->AddOrUpdateSink(entry.proxy.get(), rtc::VideoSinkWants());
+        videoTrack->AddOrUpdateSink(entry.proxy.get(), webrtc::VideoSinkWants());
         entry.attachedTrack = videoTrack;
         RTC_LOG(LS_INFO) << "GroupRef: Attached video sink proxy for endpoint " << endpointId;
     }
@@ -2259,7 +2803,7 @@ private:
         };
 
         std::string msgStr = msg.dump();
-        webrtc::DataBuffer buffer(rtc::CopyOnWriteBuffer(msgStr.data(), msgStr.size()), false);
+        webrtc::DataBuffer buffer(webrtc::CopyOnWriteBuffer(std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(msgStr.data()), msgStr.size())), false);
         _dataChannel->Send(buffer);
         // The whole message, not a count: when an endpoint receives no video,
         // the log must show exactly what the SFU was asked for.
@@ -2304,7 +2848,7 @@ private:
         }
     }
 
-    void logAudioStatsFromReport(rtc::scoped_refptr<const webrtc::RTCStatsReport> report) {
+    void logAudioStatsFromReport(webrtc::scoped_refptr<const webrtc::RTCStatsReport> report) {
         for (const auto& stats : *report) {
             if (stats.type() != std::string("inbound-rtp")) continue;
             const auto& inbound = stats.cast_to<webrtc::RTCInboundRtpStreamStats>();
@@ -2344,8 +2888,8 @@ private:
     void pollStatsForLogging() {
         if (!_peerConnection) return;
         const auto weak = std::weak_ptr<GroupInstanceReferenceInternal>(shared_from_this());
-        auto observer = rtc::make_ref_counted<GRStatsObserver>(
-            [weak](rtc::scoped_refptr<const webrtc::RTCStatsReport> report) {
+        auto observer = webrtc::make_ref_counted<GRStatsObserver>(
+            [weak](webrtc::scoped_refptr<const webrtc::RTCStatsReport> report) {
                 if (auto strong = weak.lock()) {
                     strong->logAudioStatsFromReport(std::move(report));
                 }
@@ -2492,18 +3036,21 @@ private:
             if (!track || track->kind() != webrtc::MediaStreamTrackInterface::kAudioKind) continue;
 
             auto* audioTrack = static_cast<webrtc::AudioTrackInterface*>(track.get());
-            info.levelSink = std::make_unique<GRAudioLevelSink>();
+            info.levelSink = std::make_unique<GRAudioLevelSink>(ssrc, _onAudioFrame);
             info.levelSink->attachTo(audioTrack);
             RTC_LOG(LS_INFO) << "GroupRef: wired audio level sink for SSRC " << ssrc;
+            applyVolume(ssrc);
         }
     }
 
 private:
+    std::map<uint32_t, double> _ssrcVolumes;
+
     struct RemoteSsrcInfo {
         std::string mid;
         webrtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver;
         std::unique_ptr<GRAudioLevelSink> levelSink;
-        rtc::scoped_refptr<webrtc::FrameTransformerInterface> perReceiverTransformer;
+        webrtc::scoped_refptr<webrtc::FrameTransformerInterface> perReceiverTransformer;
     };
 
     // Remote video endpoints.
@@ -2528,11 +3075,44 @@ private:
     std::function<void(bool)> _onMutedSpeechActivityDetected;
     std::function<std::shared_ptr<RequestMediaChannelDescriptionTask>(std::vector<uint32_t> const &, std::function<void(std::vector<MediaChannelDescription> &&)>)> _requestMediaChannelDescriptions;
     int _outgoingAudioBitrateKbit = 32;
+    // See GroupInstanceDescriptor::dredFixedPacketLossPercent, dredReceiveEnabled, opusDnnWeights (GroupOpusDred.h).
+    int _dredFixedPacketLossPercent = 0;
+    bool _dredReceiveEnabled = false;
+    GroupOpusDnnWeights _opusDnnWeights;
     bool _disableAudioInput = false;
     bool _enableSystemMute = false;
 
     // Video configuration from descriptor.
     VideoContentType _videoContentType = VideoContentType::None;
+#if defined(WEBRTC_MAC) && !defined(WEBRTC_IOS)
+    std::string _initialInputDeviceId;
+    std::string _currentOutputDeviceId;
+#endif
+    // See GroupInstanceDescriptor::iosInAppScreencast. On this engine also a main connection
+    // (Generic) whose camera video is the screen (the app's debug "screen share as camera").
+    bool _iosInAppScreencast = false;
+    // See GroupInstanceDescriptor::allowAv1ScreencastSending, av1ScreencastLayers, av1TestEncoderFails.
+    bool _allowAv1ScreencastSending = false;
+    GroupAv1ScreencastLayers _av1ScreencastLayers = GroupAv1ScreencastLayers::Every;
+    bool _av1TestEncoderFails = false;
+    // From the join response: the SFU's video payload types (whether it lists AV1) and, for an AV1 share, the
+    // Dependency Descriptor's header extension ID (groupDependencyDescriptorExtensionId; 0: none, also without AV1).
+    std::vector<GroupJoinPayloadVideoPayloadType> _serverVideoPayloadTypes;
+    uint32_t _dependencyDescriptorId = 0;
+    // Whether the screen share sends AV1 (decideAv1Sending; false again after the AV1 encoder failed).
+    bool _av1InUse = false;
+    // The outgoing sender's encodings name their codecs (Top, setGroupAv1TopLayerCodecs).
+    bool _av1TopLayerCodecsSet = false;
+#if defined(TGCALLS_ENABLE_AV1) && TGCALLS_ENABLE_AV1
+    // The AV1 screen-share encoder factory's switch: set only for an in-app share with the Debug switch on.
+    std::shared_ptr<Av1TopLayerSwitch> _av1TopLayer;
+#endif
+    bool _isScreencastEncodingCheckScheduled = false;
+    bool _isScreencastEncodingCheckStopped = false;
+    // A screencast's app audio (addExternalAudioSamples) and its recorder.
+    std::vector<float> _externalAudioSamples;
+    webrtc::Mutex _externalAudioSamplesMutex;
+    std::shared_ptr<ExternalAudioRecorder> _externalAudioRecorder;
     std::vector<VideoCodecName> _videoCodecPreferences;
     std::function<webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface>()> _getVideoSource;
     std::function<void(std::string const &)> _dataChannelMessageReceived;
@@ -2567,9 +3147,9 @@ private:
     webrtc::scoped_refptr<webrtc::PeerConnectionInterface> _peerConnection;
     webrtc::scoped_refptr<WrappedAudioDeviceModule> _audioDeviceModule;
 
-    std::unique_ptr<rtc::NetworkMonitorFactory> _networkMonitorFactory;
-    std::unique_ptr<rtc::BasicPacketSocketFactory> _socketFactory;
-    std::unique_ptr<rtc::BasicNetworkManager> _networkManager;
+    std::unique_ptr<webrtc::NetworkMonitorFactory> _networkMonitorFactory;
+    std::unique_ptr<webrtc::BasicPacketSocketFactory> _socketFactory;
+    std::unique_ptr<webrtc::BasicNetworkManager> _networkManager;
 
     // Audio.
     webrtc::scoped_refptr<webrtc::AudioTrackInterface> _outgoingAudioTrack;
@@ -2588,6 +3168,9 @@ private:
     std::shared_ptr<NoiseSuppressionConfiguration> _noiseSuppressionConfiguration;
     bool _isMuted = true;
     GroupEncryptDecryptFunction _e2eEncryptDecrypt;
+    std::function<void(uint32_t, const AudioFrame &)> _onAudioFrame;
+    // A conference sends its camera as one layer, as CustomImpl does.
+    bool _isConference = false;
     std::map<int32_t, FrameTransformerPayloadType> _payloadTypeMapping;
     std::shared_ptr<AudioLevelAndSpeechHolder> _myAudioLevelAndSpeech;
     int _nextMid = 10; // Start after reserved mids (0=audio, 1-9=reserved).
@@ -2643,13 +3226,13 @@ GroupInstanceReferenceImpl::GroupInstanceReferenceImpl(GroupInstanceDescriptor &
     // destructor's RemoveLogToStream was removing a stream that was never added).
     if (descriptor.config.need_log) {
         _logSink = std::make_unique<LogSinkImpl>(descriptor.config.logPath);
-        rtc::LogMessage::SetLogToStderr(true);
+        webrtc::LogMessage::SetLogToStderr(true);
     } else {
-        rtc::LogMessage::SetLogToStderr(false);
+        webrtc::LogMessage::SetLogToStderr(false);
     }
-    rtc::LogMessage::LogToDebug(rtc::LS_INFO);
+    webrtc::LogMessage::LogToDebug(webrtc::LS_INFO);
     if (_logSink) {
-        rtc::LogMessage::AddLogToStream(_logSink.get(), rtc::LS_INFO);
+        webrtc::LogMessage::AddLogToStream(_logSink.get(), webrtc::LS_INFO);
     }
 
     _threads = descriptor.threads;
@@ -2664,7 +3247,7 @@ GroupInstanceReferenceImpl::GroupInstanceReferenceImpl(GroupInstanceDescriptor &
 
 GroupInstanceReferenceImpl::~GroupInstanceReferenceImpl() {
     if (_logSink) {
-        rtc::LogMessage::RemoveLogToStream(_logSink.get());
+        webrtc::LogMessage::RemoveLogToStream(_logSink.get());
     }
     _internal.reset();
     _threads->getMediaThread()->BlockingCall([] {});
@@ -2724,13 +3307,26 @@ void GroupInstanceReferenceImpl::setVideoSource(std::function<webrtc::scoped_ref
         unwrapped->setVideoSource(std::move(getVideoSource));
     });
 }
-void GroupInstanceReferenceImpl::setAudioOutputDevice(std::string) {}
-void GroupInstanceReferenceImpl::setAudioInputDevice(std::string) {}
-void GroupInstanceReferenceImpl::addExternalAudioSamples(std::vector<uint8_t>&&) {}
-void GroupInstanceReferenceImpl::addOutgoingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>) {
+void GroupInstanceReferenceImpl::setAudioOutputDevice(std::string id) {
+    _internal->perform([id = std::move(id)](GroupInstanceReferenceInternal *unwrapped) {
+        unwrapped->setAudioOutputDevice(id);
+    });
+}
+void GroupInstanceReferenceImpl::setAudioInputDevice(std::string id) {
+    _internal->perform([id = std::move(id)](GroupInstanceReferenceInternal *unwrapped) {
+        unwrapped->setAudioInputDevice(id);
+    });
+}
+void GroupInstanceReferenceImpl::addExternalAudioSamples(std::vector<uint8_t> &&samples) {
+    // A screencast's app audio (the in-app share's screen audio), recorded by its FakeAudioDeviceModule.
+    _internal->perform([samples = std::move(samples)](GroupInstanceReferenceInternal *unwrapped) mutable {
+        unwrapped->addExternalAudioSamples(std::move(samples));
+    });
+}
+void GroupInstanceReferenceImpl::addOutgoingVideoOutput(std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>>) {
     // Preview sink — not needed for test validation.
 }
-void GroupInstanceReferenceImpl::addIncomingVideoOutput(std::string const &endpointId, std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+void GroupInstanceReferenceImpl::addIncomingVideoOutput(std::string const &endpointId, std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
     _internal->perform([endpointId, sink](GroupInstanceReferenceInternal *unwrapped) {
         unwrapped->addIncomingVideoOutput(endpointId, sink);
     });

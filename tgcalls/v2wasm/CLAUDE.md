@@ -121,6 +121,16 @@ the `exp0` ping/pong demo).
   the same deferral. Verify: `tgcalls_cli --mode p2p --version 19.0.0
   --version2 19.0.0 --video` → 4 `SetLocalDescription` per call, none failed.
 
+- **On iOS the host tells the core every capture is a camera** (`video_capture`
+  with `screencast: false`, `config.hasInitialVideoCapture` for any capture;
+  `kIosPrivateCallScreencast` in `group/ScreencastSendParameters.h`, also on in
+  the CLI build). The core still drops a screencast, as stock did; the host sends
+  a screen capture on `video0` and, in `executeAddTransceiver`, replaces the
+  core's camera encoding with the screencast one as init encodings, so a rollback
+  keeps it. Other platforms report screen captures as before (the core drops
+  them). Verify: `tgcalls_cli --mode p2p --version 19.0.0 --video
+  --video-screencast` → frames both ways.
+
 - **Wire parity is frozen.** Signaling JSON keys/values are copied verbatim
   from stock (`InstanceV2ReferenceImpl.cpp` / `Signaling.cpp`); both sides use
   json11 (std::map-backed → key-sorted dump), so identical keys ⇒ identical

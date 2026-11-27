@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <csignal>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -13,6 +14,7 @@
 #include <random>
 #include <fstream>
 #include <algorithm>
+#include <map>
 #include <set>
 #include <string>
 #include <thread>
@@ -23,12 +25,17 @@
 #include "group_churn_mode.h"
 #include "group_participant.h"
 #include "fake_video_sink.h"
+#include "split_channel.h"
+#include "cli_signals.h"
 #include "platform/fake/FakeInterface.h"
 #include "Instance.h"
 #include "FakeAudioDeviceModule.h"
+#include "cli_audio_device.h"
 #include "VideoCaptureInterface.h"
 #include "StaticThreads.h"
+#if TGCALLS_ENABLE_CUSTOM_P2P_ENGINE
 #include "v2/InstanceV2Impl.h"
+#endif
 #include "v2/InstanceV2CompatImpl.h"
 #include "v2/InstanceV2ReferenceImpl.h"
 #include "v2wasm/InstanceV2PumpImpl.h"
@@ -37,16 +44,8 @@
 
 #include "modules/audio_device/include/audio_device.h"
 #include "api/task_queue/task_queue_factory.h"
+#include "rtc_base/logging.h"
 
-// Stub: AudioDeviceModule::Create is referenced by InstanceV2Impl as a fallback
-// but never called when createAudioDeviceModule is provided in the Descriptor.
-namespace webrtc {
-rtc::scoped_refptr<AudioDeviceModule> AudioDeviceModule::Create(
-    AudioDeviceModule::AudioLayer audio_layer,
-    TaskQueueFactory* task_queue_factory) {
-    return nullptr;
-}
-} // namespace webrtc
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -126,7 +125,8 @@ public:
         tgcalls::AudioFrame frame;
         frame.audio_samples = buffer_.data();
         frame.num_samples = kFrameSamples;
-        frame.bytes_per_sample = sizeof(int16_t);
+        // WebRTC's AudioTransport counts the bytes of one sample of every channel.
+        frame.bytes_per_sample = sizeof(int16_t) * kChannels;
         frame.num_channels = kChannels;
         frame.samples_per_sec = kSampleRate;
         frame.elapsed_time_ms = 0;
@@ -159,13 +159,50 @@ public:
 };
 
 // ---------------------------------------------------------------------------
+// ToneRenderer - what one p2p side hears: the 10 ms playout frames that carry
+// the peer's tone (peak at or above kAudibleThreshold; the tone is sent at
+// 3000, silence and packet-loss concealment play out far below) and when the
+// first of them played.
+// ---------------------------------------------------------------------------
+
+class ToneRenderer : public tgcalls::FakeAudioDeviceModule::Renderer {
+public:
+    bool Render(const tgcalls::AudioFrame &frame) override {
+        int peak = 0;
+        // num_samples is the interleaved total (AudioTransport's nSamplesOut).
+        for (size_t i = 0; i < frame.num_samples; ++i) {
+            peak = std::max(peak, std::abs((int)frame.audio_samples[i]));
+        }
+        if (peak >= kAudibleThreshold) {
+            if (audibleFrames_.fetch_add(1, std::memory_order_relaxed) == 0) {
+                firstAudibleAt_.store(elapsed(), std::memory_order_relaxed);
+            }
+        }
+        return true;
+    }
+    int audibleFrames() const { return audibleFrames_.load(std::memory_order_relaxed); }
+    // Seconds since start, -1 if nothing was heard.
+    double firstAudibleAt() const { return firstAudibleAt_.load(std::memory_order_relaxed); }
+
+private:
+    static constexpr int kAudibleThreshold = 1000;
+    std::atomic<int> audibleFrames_{0};
+    std::atomic<double> firstAudibleAt_{-1.0};
+};
+
+// ---------------------------------------------------------------------------
 // SignalingBridge
 // ---------------------------------------------------------------------------
 
-struct SignalingBridge {
+struct SignalingBridge : std::enable_shared_from_this<SignalingBridge> {
     std::mutex mutex;
     std::shared_ptr<tgcalls::Instance> caller;
     std::shared_ptr<tgcalls::Instance> callee;
+    // Packets for a side main() has not wired yet. The caller starts emitting
+    // while the callee is still being created, so its first INIT can be due
+    // before `callee` is set; main() hands these over once both are wired.
+    std::vector<std::vector<uint8_t>> pendingToCaller;
+    std::vector<std::vector<uint8_t>> pendingToCallee;
 
     // Network simulation
     double dropRate = 0.0;
@@ -173,8 +210,11 @@ struct SignalingBridge {
     int delayMaxMs = 0;
     std::mt19937 rng{std::random_device{}()};
 
-    void deliver(const char* fromRole, const std::vector<uint8_t>& data,
-                 std::shared_ptr<tgcalls::Instance>& target) {
+    // Called with `mutex` held. The target side is looked up when the packet
+    // arrives, not when it is emitted: a packet emitted before the wiring used
+    // to find no target and vanish without a log line, which cost the call an
+    // SCTP INIT retransmission (0.4 s) in some runs.
+    void deliver(const char* fromRole, const std::vector<uint8_t>& data, bool toCallee) {
         if (dropRate > 0.0) {
             std::uniform_real_distribution<double> dropDist(0.0, 1.0);
             if (dropDist(rng) < dropRate) {
@@ -188,18 +228,30 @@ struct SignalingBridge {
             if (delayMs > 0) {
                 logMsg(fromRole, "signaling delayed %dms (%zu bytes)", delayMs, data.size());
                 auto dataCopy = data;
-                auto targetWeak = std::weak_ptr<tgcalls::Instance>(target);
-                std::thread([dataCopy, targetWeak, delayMs]() {
+                auto weakSelf = weak_from_this();
+                std::thread([dataCopy, weakSelf, toCallee, delayMs]() {
                     std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
-                    if (auto t = targetWeak.lock()) {
-                        t->receiveSignalingData(dataCopy);
+                    if (auto self = weakSelf.lock()) {
+                        std::shared_ptr<tgcalls::Instance> target;
+                        {
+                            std::lock_guard<std::mutex> lock(self->mutex);
+                            target = toCallee ? self->callee : self->caller;
+                            if (!target) {
+                                (toCallee ? self->pendingToCallee : self->pendingToCaller).push_back(dataCopy);
+                                return;
+                            }
+                        }
+                        target->receiveSignalingData(dataCopy);
                     }
                 }).detach();
                 return;
             }
         }
+        auto &target = toCallee ? callee : caller;
         if (target) {
             target->receiveSignalingData(data);
+        } else {
+            (toCallee ? pendingToCallee : pendingToCaller).push_back(data);
         }
     }
 };
@@ -221,6 +273,20 @@ struct CallState {
 
 // Merges the optional --custom-params JSON object with the wasm_core_path entry the CLI
 // synthesises, so a test can set engine custom parameters without losing --wasm-core.
+// --version / --version2 "compat:<version>": InstanceV2CompatImpl under that call
+// version, which the registry cannot give (it maps 7.0.0-13.0.0 to InstanceV2Impl,
+// as the app does). This is CompatImpl against an unchanged peer of that version.
+static std::unique_ptr<tgcalls::Instance> createInstance(std::string const &version, tgcalls::Descriptor &&descriptor) {
+    // --opus-dnn-weights: libopus's weights for 1:1 DRED (InstanceV2ReferenceImpl reads them; the rest ignore them).
+    descriptor.opusDnnWeights = gGroupDred.opusDnnWeights;
+    const std::string compatPrefix = "compat:";
+    if (version.rfind(compatPrefix, 0) == 0) {
+        descriptor.version = version.substr(compatPrefix.size());
+        return std::make_unique<tgcalls::InstanceV2CompatImpl>(std::move(descriptor));
+    }
+    return tgcalls::Meta::Create(version, std::move(descriptor));
+}
+
 static std::string buildCustomParameters(std::string const &wasmCorePath, std::string const &extraJson) {
     json11::Json::object params;
 
@@ -244,11 +310,422 @@ static std::string buildCustomParameters(std::string const &wasmCorePath, std::s
     return json11::Json(params).dump();
 }
 
+// What a side's stats log holds: its bitrate records, and whether any carried a non-zero estimate.
+struct StatsResult {
+    int bitrateRecords = 0;
+    bool hasNonZeroBwe = false;
+};
+
+static StatsResult parseStatsLog(const std::string& path) {
+    StatsResult result;
+    std::ifstream f(path);
+    if (!f.is_open()) return result;
+    std::string content((std::istreambuf_iterator<char>(f)),
+                         std::istreambuf_iterator<char>());
+    size_t pos = 0;
+    while ((pos = content.find("\"b\":", pos)) != std::string::npos) {
+        pos += 4;
+        result.bitrateRecords++;
+        // Parse the integer value after "b":
+        int val = std::atoi(content.c_str() + pos);
+        if (val > 0) {
+            result.hasNonZeroBwe = true;
+        }
+    }
+    return result;
+}
+
+// "H264 520, VP8 3": frames decoded per codec (the fake platform's count, over the whole process), "none" without any.
+static std::string formatDecodedFrames(const std::map<std::string, int>& counts) {
+    std::string text;
+    for (const auto& entry : counts) {
+        if (!text.empty()) text += ", ";
+        text += entry.first + " " + std::to_string(entry.second);
+    }
+    return text.empty() ? "none" : text;
+}
+
+// ---------------------------------------------------------------------------
+// Split p2p: one side of the call per process (--split caller|callee)
+// ---------------------------------------------------------------------------
+
+struct SplitP2pOptions {
+    std::string role;
+    std::string socketPath;
+    std::string version;
+    std::string wasmCore;
+    std::string customParams;
+    std::string logFile;
+    int duration = 10;
+    bool video = false;
+    bool videoScreencast = false;
+    double dropRate = 0.0;
+    int delayMinMs = 0;
+    int delayMaxMs = 0;
+};
+
+// The caller listens on the socket and the callee connects; the hello each way (the split protocol, and the caller's
+// call key) is the start barrier, so both instances are created at about the same moment, as in one process. Then
+// the signaling packets cross the socket, with --drop-rate and --delay applied by their sender. The side prints its
+// own summary and exits 0 when it connected, heard the other side's tone and (with --video) decoded its frames.
+static int runSplitP2p(const SplitP2pOptions& o) {
+    signal(SIGPIPE, SIG_IGN);
+    constexpr int kConnectTimeoutMs = 60000;
+    constexpr int kHelloTimeoutMs = 15000;
+    const bool isCaller = o.role == "caller";
+    const char* role = isCaller ? "Caller" : "Callee";
+
+    std::string error;
+    std::shared_ptr<SplitChannel> channel;
+    if (isCaller) {
+        std::unique_ptr<SplitChannel> listening = SplitChannel::listen(o.socketPath, error);
+        if (!listening || !listening->accept(kConnectTimeoutMs, error)) {
+            fprintf(stderr, "Error: --split caller: %s\n", error.c_str());
+            return 1;
+        }
+        channel = std::move(listening);
+    } else {
+        channel = SplitChannel::connect(o.socketPath, kConnectTimeoutMs, error);
+        if (!channel) {
+            fprintf(stderr, "Error: --split callee: %s\n", error.c_str());
+            return 1;
+        }
+    }
+
+    auto keyData = std::make_shared<std::array<uint8_t, 256>>();
+    static const char kHex[] = "0123456789abcdef";
+    if (isCaller) {
+        // The in-process call's key, sent to the callee rather than derived again there.
+        std::mt19937 rng(42);
+        std::uniform_int_distribution<int> dist(0, 255);
+        std::string keyHex;
+        for (auto& b : *keyData) {
+            b = static_cast<uint8_t>(dist(rng));
+            keyHex += kHex[b >> 4];
+            keyHex += kHex[b & 15];
+        }
+        const std::string hello = json11::Json(json11::Json::object{
+            {"protocol", kSplitProtocolVersion}, {"role", "caller"}, {"key", keyHex}}).dump();
+        std::string reply;
+        if (!channel->send(hello) || !channel->receive(reply, kHelloTimeoutMs)) {
+            fprintf(stderr, "Error: --split caller: no hello from the callee\n");
+            return 1;
+        }
+        std::string parseError;
+        const auto json = json11::Json::parse(reply, parseError);
+        if (json["protocol"].int_value() != kSplitProtocolVersion || json["role"].string_value() != "callee") {
+            fprintf(stderr, "Error: --split caller: the other process is not a split callee of protocol %d: %s\n",
+                    kSplitProtocolVersion, reply.c_str());
+            return 1;
+        }
+    } else {
+        std::string hello;
+        if (!channel->receive(hello, kHelloTimeoutMs)) {
+            fprintf(stderr, "Error: --split callee: no hello from the caller\n");
+            return 1;
+        }
+        std::string parseError;
+        const auto json = json11::Json::parse(hello, parseError);
+        const std::string keyHex = json["key"].string_value();
+        if (json["protocol"].int_value() != kSplitProtocolVersion || json["role"].string_value() != "caller" ||
+            keyHex.size() != keyData->size() * 2) {
+            fprintf(stderr, "Error: --split callee: the other process is not a split caller of protocol %d: %s\n",
+                    kSplitProtocolVersion, hello.substr(0, 200).c_str());
+            return 1;
+        }
+        auto nibble = [](char c) { return (uint8_t)(c <= '9' ? c - '0' : c - 'a' + 10); };
+        for (size_t i = 0; i < keyData->size(); ++i) {
+            (*keyData)[i] = (uint8_t)((nibble(keyHex[2 * i]) << 4) | nibble(keyHex[2 * i + 1]));
+        }
+        channel->send(json11::Json(json11::Json::object{{"protocol", kSplitProtocolVersion}, {"role", "callee"}}).dump());
+    }
+    logMsg(role, "split: the other process is there (protocol %d)", kSplitProtocolVersion);
+
+    // Incoming signaling: delivered to the instance, or held until it exists.
+    struct Incoming {
+        std::mutex mutex;
+        std::shared_ptr<tgcalls::Instance> instance;
+        std::vector<std::vector<uint8_t>> pending;
+    };
+    auto incoming = std::make_shared<Incoming>();
+    std::thread reader([channel, incoming, role]() {
+        std::vector<uint8_t> frame;
+        while (channel->receive(frame, -1)) {
+            std::shared_ptr<tgcalls::Instance> target;
+            {
+                std::lock_guard<std::mutex> lock(incoming->mutex);
+                target = incoming->instance;
+                if (!target) {
+                    incoming->pending.push_back(frame);
+                    continue;
+                }
+            }
+            target->receiveSignalingData(frame);
+        }
+        logMsg(role, "split: the signaling channel closed");
+    });
+
+    // Outgoing signaling, through the network simulation (as SignalingBridge::deliver).
+    struct Outgoing {
+        std::mutex mutex;
+        std::mt19937 rng{std::random_device{}()};
+    };
+    auto outgoing = std::make_shared<Outgoing>();
+    auto sendSignaling = [channel, outgoing, o, role](const std::vector<uint8_t>& data) {
+        int delayMs = 0;
+        {
+            std::lock_guard<std::mutex> lock(outgoing->mutex);
+            if (o.dropRate > 0.0) {
+                std::uniform_real_distribution<double> dropDist(0.0, 1.0);
+                if (dropDist(outgoing->rng) < o.dropRate) {
+                    logMsg(role, "signaling DROPPED (%zu bytes)", data.size());
+                    return;
+                }
+            }
+            if (o.delayMaxMs > 0) {
+                std::uniform_int_distribution<int> delayDist(o.delayMinMs, o.delayMaxMs);
+                delayMs = delayDist(outgoing->rng);
+            }
+        }
+        if (delayMs > 0) {
+            logMsg(role, "signaling delayed %dms (%zu bytes)", delayMs, data.size());
+            std::thread([channel, data, delayMs]() {
+                std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+                channel->send(data);
+            }).detach();
+            return;
+        }
+        channel->send(data);
+    };
+
+    struct SideState {
+        std::mutex mutex;
+        tgcalls::State state = tgcalls::State::WaitInit;
+        double establishedAt = -1.0;
+        int remoteMediaStates = 0;
+        std::vector<std::string> errors;
+    };
+    auto sideState = std::make_shared<SideState>();
+    auto recorder = std::make_shared<SineRecorder>();
+    auto renderer = std::make_shared<ToneRenderer>();
+    auto videoSink = std::make_shared<FakeVideoSink>();
+    std::shared_ptr<tgcalls::VideoCaptureInterface> videoCapture;
+    if (o.video) {
+        videoCapture = tgcalls::VideoCaptureInterface::Create(tgcalls::StaticThreads::getThreads(), isCaller ? "caller" : "callee", o.videoScreencast);
+    }
+    const std::string statsPath = std::string("/tmp/tgcalls_cli_") + (isCaller ? "caller_" : "callee_") + std::to_string(getpid()) + ".json";
+
+#if TGCALLS_ENABLE_CUSTOM_P2P_ENGINE
+    tgcalls::Register<tgcalls::InstanceV2Impl>();
+#endif
+    tgcalls::Register<tgcalls::InstanceV2CompatImpl>();
+    tgcalls::Register<tgcalls::InstanceV2ReferenceImpl>();
+    tgcalls::Register<tgcalls::InstanceV2PumpImpl>();
+
+    auto descriptor = (tgcalls::Descriptor){
+        .version = o.version,
+        .config = {
+            .initializationTimeout = 10.0,
+            .receiveTimeout = 10.0,
+            .enableP2P = true,
+            .logPath = {o.logFile},
+            .statsLogPath = {statsPath},
+            .customParameters = buildCustomParameters(o.wasmCore, o.customParams),
+        },
+        .encryptionKey = tgcalls::EncryptionKey(keyData, isCaller),
+        .videoCapture = videoCapture,
+        .stateUpdated = [sideState, role](tgcalls::State state) {
+            logMsg(role, "state -> %s", stateName(state));
+            std::lock_guard<std::mutex> lock(sideState->mutex);
+            sideState->state = state;
+            if (state == tgcalls::State::Established && sideState->establishedAt < 0) {
+                sideState->establishedAt = elapsed();
+            }
+            if (state == tgcalls::State::Failed) {
+                sideState->errors.push_back(std::string(role) + " entered Failed state");
+            }
+        },
+        .remoteMediaStateUpdated = [sideState, role](tgcalls::AudioState audioState, tgcalls::VideoState videoState) {
+            logMsg(role, "remote media state: audio %d video %d", (int)audioState, (int)videoState);
+            std::lock_guard<std::mutex> lock(sideState->mutex);
+            sideState->remoteMediaStates++;
+        },
+        .signalingDataEmitted = [sendSignaling, role](const std::vector<uint8_t>& data) {
+            logMsg(role, "signaling data emitted (%zu bytes)", data.size());
+            sendSignaling(data);
+        },
+        .createAudioDeviceModule = tgcalls::FakeAudioDeviceModule::Creator(
+            renderer, recorder,
+            cliAudioDeviceOptions()
+        ),
+    };
+
+    auto instance = std::shared_ptr<tgcalls::Instance>(createInstance(o.version, std::move(descriptor)).release());
+    if (!instance) {
+        fprintf(stderr, "Error: unknown version '%s'\n", o.version.c_str());
+        return 1;
+    }
+    logMsg(role, "created (version %s)", o.version.c_str());
+    std::vector<std::vector<uint8_t>> early;
+    {
+        std::lock_guard<std::mutex> lock(incoming->mutex);
+        incoming->instance = instance;
+        early.swap(incoming->pending);
+    }
+    for (const auto& data : early) {
+        instance->receiveSignalingData(data);
+    }
+    if (videoCapture) {
+        instance->setIncomingVideoOutput(videoSink);
+    }
+
+    std::this_thread::sleep_for(std::chrono::seconds(o.duration));
+
+    // What the call delivered, read before teardown (see main()).
+    const int audibleFrames = renderer->audibleFrames();
+    const double firstAudibleAt = renderer->firstAudibleAt();
+    const int videoFrames = videoSink->frameCount();
+    const int64_t firstFrameTime = videoSink->firstFrameTime();
+    const auto decodedFrames = tgcalls::fakePlatformDecodedFramesByCodec();
+
+    logMsg(role, "stopping...");
+    if (videoCapture) {
+        videoCapture->setState(tgcalls::VideoState::Inactive);
+    }
+    auto stopped = std::make_shared<std::atomic<bool>>(false);
+    instance->stop([stopped](tgcalls::FinalState) { stopped->store(true); });
+    for (int i = 0; i < 50 && !stopped->load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    {
+        std::lock_guard<std::mutex> lock(incoming->mutex);
+        incoming->instance.reset();
+    }
+    channel->shutdown();
+    reader.join();
+    instance.reset();
+
+    const auto stats = parseStatsLog(statsPath);
+    unlink(statsPath.c_str());
+
+    std::lock_guard<std::mutex> lock(sideState->mutex);
+    const bool established = sideState->establishedAt >= 0;
+    std::string receiveCodec = "none";
+    int receiveCodecFrames = 0;
+    for (const auto& entry : decodedFrames) {
+        if (entry.second > receiveCodecFrames) {
+            receiveCodec = entry.first;
+            receiveCodecFrames = entry.second;
+        }
+    }
+    printf("\n=== Call Summary ===\n");
+    printf("Split:             %s (protocol %d), version %s\n", o.role.c_str(), kSplitProtocolVersion, o.version.c_str());
+    printf("Duration:          %ds\n", o.duration);
+    if (o.dropRate > 0.0 || o.delayMaxMs > 0) {
+        printf("Signaling:         drop=%.0f%% delay=%d-%dms (this side's sends)\n", o.dropRate * 100.0, o.delayMinMs, o.delayMaxMs);
+    }
+    printf("Mode:              p2p\n");
+    printf("State:             %s\n", stateName(sideState->state));
+    if (established) {
+        printf("Call established:  yes (at %.3fs)\n", sideState->establishedAt);
+    } else {
+        printf("Call established:  no\n");
+    }
+    printf("Stats log:         %d bitrate records\n", stats.bitrateRecords);
+    printf("BWE non-zero:      %s\n", stats.hasNonZeroBwe ? "yes" : "no");
+    printf("Remote media state: %d updates\n", sideState->remoteMediaStates);
+    printf("Audio heard:       %d frames (first at %.3fs)\n", audibleFrames, firstAudibleAt);
+    if (videoCapture) {
+        const double firstFrameAt = firstFrameTime == 0 ? -1.0 :
+            std::chrono::duration<double>(std::chrono::steady_clock::duration(firstFrameTime - gStartTime.time_since_epoch().count())).count();
+        printf("Video frames:      received %d\n", videoFrames);
+        printf("Video first frame: at %.3fs\n", firstFrameAt);
+        printf("Video decoded:     %s\n", formatDecodedFrames(decodedFrames).c_str());
+        printf("Video receive codec: %s (%d frames)\n", receiveCodec.c_str(), receiveCodecFrames);
+    }
+    if (sideState->errors.empty()) {
+        printf("Errors:            none\n");
+    } else {
+        printf("Errors:\n");
+        for (const auto& err : sideState->errors) {
+            printf("  - %s\n", err.c_str());
+        }
+    }
+    const bool success = established && audibleFrames > 0 && (!videoCapture || videoFrames > 0);
+    printf("Result:            %s\n", success ? "SUCCESS" : "FAILED");
+    fflush(stdout);
+    fflush(stderr);
+    _exit(success ? 0 : 1);
+}
+
+// Checks the options of a split run (--split): one side per process, so options naming the other side (--version2,
+// caller:/callee: events, ...) and options this mode does not carry over the socket are refused, as is anything
+// unknown. Returns the error, empty when the run may go on.
+static std::string validateSplitOptions(const std::string& mode, const std::string& role, const std::string& socketPath,
+                                        int participantIdOffset, const std::set<std::string>& seenOptions,
+                                        const std::vector<std::string>& unknownOptions) {
+    if (role.empty()) {
+        return "--split-socket and --participant-id-offset need --split";
+    }
+    if (socketPath.empty()) {
+        return "--split needs --split-socket PATH";
+    }
+    if (!unknownOptions.empty()) {
+        return "unknown option " + unknownOptions.front() + " (with --split every option must be known)";
+    }
+    std::set<std::string> allowed = {"--mode", "--split", "--split-socket", "--duration", "--quiet", "--video",
+                                      "--builtin-codec-order"};
+    if (mode == "p2p") {
+        if (role != "caller" && role != "callee") {
+            return "--mode p2p --split takes caller or callee, got " + role;
+        }
+        for (const char* option : {"--version", "--wasm-core", "--custom-params", "--log-file", "--video-screencast",
+                                   "--delay", "--drop-rate", "--opus-dnn-weights"}) {
+            allowed.insert(option);
+        }
+    } else if (mode == "group") {
+        if (role != "host" && role != "join") {
+            return "--mode group --split takes host or join, got " + role;
+        }
+        for (const char* option : {"--participants", "--reference-participants", "--e2e", "--screencast-participants",
+                                   "--av1-screencast", "--av1-screencast-layers", "--av1-test-encoder-fails",
+                                   "--video-quality", "--video-via-capture", "--video-via-capture-late",
+                                   "--dred-loss", "--dred-receive", "--opus-dnn-weights"}) {
+            allowed.insert(option);
+        }
+        if (role == "host") {
+            allowed.insert("--sfu-av1");
+            allowed.insert("--sfu-dd-id");
+            allowed.insert("--egress-loss");
+            allowed.insert("--ingress-loss");
+            allowed.insert("--ingress-bandwidth");
+        } else {
+            allowed.insert("--participant-id-offset");
+            if (participantIdOffset <= 0) {
+                return "--split join needs --participant-id-offset K (the host's participant count)";
+            }
+        }
+    } else {
+        return "--split works with --mode p2p and --mode group";
+    }
+    for (const auto& option : seenOptions) {
+        if (allowed.count(option) == 0) {
+            return option + " is not supported with --mode " + mode + " --split " + role;
+        }
+    }
+    return std::string();
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
 int main(int argc, char* argv[]) {
+    cliIgnoreBrokenPipes();
+    // The summary (stdout) goes out a line at a time: WebRTC's log goes to stderr, flushed per message, and with both
+    // redirected to one file a fully buffered stdout was cut wherever its buffer flushed, in the middle of a line the
+    // test scripts read ("Wire: P0 (screen) layer 1 pt 106: 574 pac(probe_controller.cc:490): …").
+    setvbuf(stdout, nullptr, _IOLBF, 0);
     int duration = 10;
     std::string mode;
     std::string reflectorAddr;
@@ -267,11 +744,37 @@ int main(int argc, char* argv[]) {
     int referenceParticipants = 0;
     bool enableVideo = false;
     bool videoLate = false;
+    // --video-screencast: p2p/reflector captures are created as screen captures
+    // (isScreenCapture), what the iOS screencast capturer is.
+    bool videoScreencast = false;
     // --video-late-caller-ms / --video-late-callee-ms: attach that side's camera N ms
     // after the instances are created (the Android app's shape: the capturer reaches
     // the engine while the first offer is still in flight). -1 = not used.
     int videoLateCallerMs = -1;
     int videoLateCalleeMs = -1;
+    // --video-screen-callee-ms: the callee's capture is replaced by a screen capture N ms
+    // after start (a camera switched to a screen share mid-call). -1 = not used.
+    int videoScreenCalleeMs = -1;
+    // --av1-power-off-ms / --av1-power-on-ms caller|callee:MS: that side's power state stops (or again allows)
+    // sending AV1 MS after the instances are created (Instance::setVideoSendAv1AllowedByPower), on the camera
+    // schedule. Repeatable.
+    struct Av1PowerEvent {
+        int ms;
+        bool caller;
+        bool allowed;
+    };
+    std::vector<Av1PowerEvent> av1PowerEvents;
+    // --video-codec-override caller|callee:MS:CODEC (CODEC "auto" clears it) and --video-max-bitrate
+    // caller|callee:MS:KBPS (0: the engine's own): that side's debug controls MS after the instances are created
+    // (Instance::setVideoSendCodecOverride / setVideoSendMaxBitrateKbps). Repeatable.
+    struct VideoSendDebugEvent {
+        int ms;
+        bool caller;
+        bool isCodec;
+        std::string codec;
+        int kbps;
+    };
+    std::vector<VideoSendDebugEvent> videoSendDebugEvents;
     bool earlyVideoRequest = false;
     bool videoSinkChurn = false;
     bool videoRerequest = false;
@@ -282,8 +785,18 @@ int main(int argc, char* argv[]) {
     std::string networkScenario;
     std::set<int> mutedParticipants;
     int unmuteAfterSeconds = 0;
+    // --split ROLE --split-socket PATH: one side of the call in this process (p2p caller|callee, group host|join).
+    std::string splitRole;
+    std::string splitSocket;
+    // --participant-id-offset K: a group join process's participants are K, K+1, ...
+    int participantIdOffset = 0;
+    std::set<std::string> seenOptions;
+    std::vector<std::string> unknownOptions;
 
     for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]).rfind("--", 0) == 0) {
+            seenOptions.insert(argv[i]);
+        }
         if (std::string(argv[i]) == "--duration" && i + 1 < argc) {
             duration = std::atoi(argv[++i]);
         } else if (std::string(argv[i]) == "--quiet") {
@@ -318,10 +831,42 @@ int main(int argc, char* argv[]) {
             enableVideo = true;
         } else if (std::string(argv[i]) == "--video-late") {
             videoLate = true;
+        } else if (std::string(argv[i]) == "--video-screencast") {
+            videoScreencast = true;
         } else if (std::string(argv[i]) == "--video-late-caller-ms" && i + 1 < argc) {
             videoLateCallerMs = std::atoi(argv[++i]);
+        } else if (std::string(argv[i]) == "--video-screen-callee-ms" && i + 1 < argc) {
+            videoScreenCalleeMs = std::atoi(argv[++i]);
         } else if (std::string(argv[i]) == "--video-late-callee-ms" && i + 1 < argc) {
             videoLateCalleeMs = std::atoi(argv[++i]);
+        } else if ((std::string(argv[i]) == "--av1-power-off-ms" || std::string(argv[i]) == "--av1-power-on-ms") && i + 1 < argc) {
+            const bool allowed = std::string(argv[i]) == "--av1-power-on-ms";
+            const std::string value = argv[++i];
+            const auto colon = value.find(':');
+            const std::string side = colon == std::string::npos ? std::string() : value.substr(0, colon);
+            if (side != "caller" && side != "callee") {
+                fprintf(stderr, "%s takes caller:MS or callee:MS, got %s\n", argv[i - 1], value.c_str());
+                return 1;
+            }
+            av1PowerEvents.push_back({std::atoi(value.c_str() + colon + 1), side == "caller", allowed});
+        } else if ((std::string(argv[i]) == "--video-codec-override" || std::string(argv[i]) == "--video-max-bitrate") && i + 1 < argc) {
+            const bool isCodec = std::string(argv[i]) == "--video-codec-override";
+            const std::string value = argv[++i];
+            const auto first = value.find(':');
+            const auto second = first == std::string::npos ? std::string::npos : value.find(':', first + 1);
+            const std::string side = first == std::string::npos ? std::string() : value.substr(0, first);
+            if ((side != "caller" && side != "callee") || second == std::string::npos) {
+                fprintf(stderr, "%s takes caller|callee:MS:%s, got %s\n", argv[i - 1], isCodec ? "CODEC" : "KBPS", value.c_str());
+                return 1;
+            }
+            VideoSendDebugEvent event;
+            event.ms = std::atoi(value.substr(first + 1, second - first - 1).c_str());
+            event.caller = side == "caller";
+            event.isCodec = isCodec;
+            const std::string argument = value.substr(second + 1);
+            event.codec = isCodec && argument != "auto" ? argument : std::string();
+            event.kbps = isCodec ? 0 : std::atoi(argument.c_str());
+            videoSendDebugEvents.push_back(event);
         } else if (std::string(argv[i]) == "--early-video-request") {
             earlyVideoRequest = true;
         } else if (std::string(argv[i]) == "--e2e") {
@@ -342,6 +887,65 @@ int main(int argc, char* argv[]) {
                 fprintf(stderr, "--video-quality must be thumbnail, medium or full\n");
                 return 1;
             }
+        } else if (std::string(argv[i]) == "--screencast-participants" && i + 1 < argc) {
+            std::string list = argv[++i];
+            size_t pos = 0;
+            while (pos < list.size()) {
+                size_t next = list.find(',', pos);
+                if (next == std::string::npos) next = list.size();
+                std::string idStr = list.substr(pos, next - pos);
+                if (!idStr.empty()) gGroupScreencast.sharers.insert(std::atoi(idStr.c_str()));
+                pos = next + 1;
+            }
+        } else if (std::string(argv[i]) == "--sfu-av1") {
+            gGroupScreencast.sfuListsAv1 = true;
+        } else if (std::string(argv[i]) == "--sfu-dd-id" && i + 1 < argc) {
+            gGroupScreencast.sfuDependencyDescriptorId = std::atoi(argv[++i]);
+        } else if (std::string(argv[i]) == "--av1-screencast") {
+            gGroupScreencast.allowAv1 = true;
+        } else if (std::string(argv[i]) == "--av1-screencast-layers" && i + 1 < argc) {
+            const std::string layers = argv[++i];
+            if (layers == "single") {
+                gGroupScreencast.av1Layers = tgcalls::GroupAv1ScreencastLayers::Single;
+            } else if (layers == "top") {
+                gGroupScreencast.av1Layers = tgcalls::GroupAv1ScreencastLayers::Top;
+            } else if (layers == "every") {
+                gGroupScreencast.av1Layers = tgcalls::GroupAv1ScreencastLayers::Every;
+            } else {
+                fprintf(stderr, "--av1-screencast-layers: single, top or every\n");
+                return 2;
+            }
+        } else if (std::string(argv[i]) == "--av1-test-encoder-fails") {
+            gGroupScreencast.av1TestEncoderFails = true;
+        } else if (std::string(argv[i]) == "--video-quality-switch" && i + 1 < argc) {
+            gGroupScreencast.qualitySwitchMs = std::atoi(argv[++i]);
+        } else if (std::string(argv[i]) == "--dred-loss" && i + 1 < argc) {
+            gGroupDred.fixedPacketLossPercent = std::atoi(argv[++i]);
+        } else if (std::string(argv[i]) == "--dred-receive") {
+            gGroupDred.receive = true;
+        } else if (std::string(argv[i]) == "--opus-dnn-weights" && i + 1 < argc) {
+            const char* path = argv[++i];
+            FILE* file = std::fopen(path, "rb");
+            if (!file) {
+                fprintf(stderr, "--opus-dnn-weights: cannot open %s\n", path);
+                return 1;
+            }
+            auto weights = std::make_shared<std::vector<uint8_t>>();
+            uint8_t buffer[65536];
+            size_t count = 0;
+            while ((count = std::fread(buffer, 1, sizeof(buffer), file)) > 0) {
+                weights->insert(weights->end(), buffer, buffer + count);
+            }
+            std::fclose(file);
+            gGroupDred.opusDnnWeights = std::move(weights);
+        } else if (std::string(argv[i]) == "--egress-loss" && i + 1 < argc) {
+            gGroupDred.egressLoss = std::atof(argv[++i]);
+        } else if (std::string(argv[i]) == "--ingress-loss" && i + 1 < argc) {
+            gGroupDred.ingressLoss = std::atof(argv[++i]);
+        } else if (std::string(argv[i]) == "--ingress-bandwidth" && i + 1 < argc) {
+            gGroupDred.ingressBandwidthBps = std::atoll(argv[++i]);
+        } else if (std::string(argv[i]) == "--sharer-ingress-loss" && i + 1 < argc) {
+            gGroupScreencast.sharerIngressLoss = std::atof(argv[++i]);
         } else if (std::string(argv[i]) == "--video-via-capture") {
             videoFeed = VideoFeed::CaptureAtJoin;
         } else if (std::string(argv[i]) == "--video-via-capture-late") {
@@ -376,6 +980,14 @@ int main(int argc, char* argv[]) {
                 delayMinMs = 0;
                 delayMaxMs = std::atoi(delayStr.c_str());
             }
+        } else if (std::string(argv[i]) == "--split" && i + 1 < argc) {
+            splitRole = argv[++i];
+        } else if (std::string(argv[i]) == "--split-socket" && i + 1 < argc) {
+            splitSocket = argv[++i];
+        } else if (std::string(argv[i]) == "--participant-id-offset" && i + 1 < argc) {
+            participantIdOffset = std::atoi(argv[++i]);
+        } else {
+            unknownOptions.push_back(argv[i]);
         }
     }
 
@@ -428,9 +1040,37 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    if (!splitRole.empty() || !splitSocket.empty() || participantIdOffset != 0) {
+        const std::string splitError = validateSplitOptions(mode, splitRole, splitSocket, participantIdOffset, seenOptions, unknownOptions);
+        if (!splitError.empty()) {
+            fprintf(stderr, "Error: %s\n", splitError.c_str());
+            return 1;
+        }
+    }
+
     // Group mode: dispatch to separate implementation
     if (mode == "group") {
-        return runGroupMode(participants, referenceParticipants, duration, gQuiet, enableVideo, networkScenario, mutedParticipants, earlyVideoRequest, videoSinkChurn, e2e, videoFeed, requestOwnVideo, unmuteAfterSeconds, videoRerequest);
+        GroupSplitOptions groupSplit;
+        groupSplit.role = splitRole;
+        groupSplit.socketPath = splitSocket;
+        groupSplit.participantIdOffset = participantIdOffset;
+        return runGroupMode(participants, referenceParticipants, duration, gQuiet, enableVideo, networkScenario, mutedParticipants, earlyVideoRequest, videoSinkChurn, e2e, videoFeed, requestOwnVideo, unmuteAfterSeconds, videoRerequest, groupSplit);
+    }
+    if (mode == "p2p" && !splitRole.empty()) {
+        SplitP2pOptions options;
+        options.role = splitRole;
+        options.socketPath = splitSocket;
+        options.version = version;
+        options.wasmCore = wasmCore;
+        options.customParams = customParams;
+        options.logFile = logFile;
+        options.duration = duration;
+        options.video = enableVideo;
+        options.videoScreencast = videoScreencast;
+        options.dropRate = dropRate;
+        options.delayMinMs = delayMinMs;
+        options.delayMaxMs = delayMaxMs;
+        return runSplitP2p(options);
     }
     if (mode == "group-churn") {
         return runGroupChurnMode(participants, referenceParticipants, duration, gQuiet, enableVideo, churnCycles);
@@ -477,7 +1117,9 @@ int main(int argc, char* argv[]) {
     }
 
     // Register implementations
+#if TGCALLS_ENABLE_CUSTOM_P2P_ENGINE
     tgcalls::Register<tgcalls::InstanceV2Impl>();
+#endif
     tgcalls::Register<tgcalls::InstanceV2CompatImpl>();
     tgcalls::Register<tgcalls::InstanceV2ReferenceImpl>();
     tgcalls::Register<tgcalls::InstanceV2PumpImpl>();
@@ -501,9 +1143,9 @@ int main(int argc, char* argv[]) {
 
     // Audio components
     auto callerRecorder = std::make_shared<SineRecorder>();
-    auto callerRenderer = std::make_shared<NoOpRenderer>();
+    auto callerRenderer = std::make_shared<ToneRenderer>();
     auto calleeRecorder = std::make_shared<SineRecorder>();
-    auto calleeRenderer = std::make_shared<NoOpRenderer>();
+    auto calleeRenderer = std::make_shared<ToneRenderer>();
 
     // Stats log paths (per-process to avoid collisions in parallel runs)
     std::string callerStatsPath = "/tmp/tgcalls_cli_caller_" + std::to_string(getpid()) + ".json";
@@ -514,11 +1156,16 @@ int main(int argc, char* argv[]) {
     // This is the shape that exposed the 18/19 start-glare renegotiation loop.
     std::shared_ptr<tgcalls::VideoCaptureInterface> callerVideoCapture;
     std::shared_ptr<tgcalls::VideoCaptureInterface> calleeVideoCapture;
+    std::shared_ptr<tgcalls::VideoCaptureInterface> calleeScreenCapture;
     const bool videoLateMs = videoLateCallerMs >= 0 || videoLateCalleeMs >= 0;
-    if (enableVideo || videoLate || videoLateMs) {
+    if (enableVideo || videoLate || videoLateMs || videoScreenCalleeMs >= 0) {
         auto threads = tgcalls::StaticThreads::getThreads();
-        callerVideoCapture = tgcalls::VideoCaptureInterface::Create(threads, "caller");
-        calleeVideoCapture = tgcalls::VideoCaptureInterface::Create(threads, "callee");
+        callerVideoCapture = tgcalls::VideoCaptureInterface::Create(threads, "caller", videoScreencast);
+        calleeVideoCapture = tgcalls::VideoCaptureInterface::Create(threads, "callee", videoScreencast);
+        if (videoScreenCalleeMs >= 0) {
+            calleeScreenCapture = tgcalls::VideoCaptureInterface::Create(threads, "callee-screen", true);
+            logMsg("Main", "the callee's capture becomes a screen capture %d ms after start", videoScreenCalleeMs);
+        }
         if (videoLate) {
             logMsg("Main", "video capture will be attached mid-call (callee at 3s, caller at 5s)");
         } else if (videoLateMs) {
@@ -547,10 +1194,10 @@ int main(int argc, char* argv[]) {
             .initializationTimeout = 10.0,
             .receiveTimeout = 10.0,
             .enableP2P = (mode == "p2p"),
-            .statsLogPath = {callerStatsPath},
             // rtc log sinks are process-global, so wiring logPath on just the caller
             // captures RTC_LOG output for both sides of the call.
             .logPath = {logFile},
+            .statsLogPath = {callerStatsPath},
             .customParameters = buildCustomParameters(wasmCore, customParams),
         },
         .rtcServers = (mode == "reflector")
@@ -577,11 +1224,11 @@ int main(int argc, char* argv[]) {
         .signalingDataEmitted = [bridge](const std::vector<uint8_t>& data) {
             logMsg("Caller", "signaling data emitted (%zu bytes)", data.size());
             std::lock_guard<std::mutex> lock(bridge->mutex);
-            bridge->deliver("Caller", data, bridge->callee);
+            bridge->deliver("Caller", data, /*toCallee=*/true);
         },
         .createAudioDeviceModule = tgcalls::FakeAudioDeviceModule::Creator(
             callerRenderer, callerRecorder,
-            tgcalls::FakeAudioDeviceModule::Options{.samples_per_sec = 48000, .num_channels = 2}
+            cliAudioDeviceOptions()
         ),
     };
 
@@ -619,17 +1266,17 @@ int main(int argc, char* argv[]) {
         .signalingDataEmitted = [bridge](const std::vector<uint8_t>& data) {
             logMsg("Callee", "signaling data emitted (%zu bytes)", data.size());
             std::lock_guard<std::mutex> lock(bridge->mutex);
-            bridge->deliver("Callee", data, bridge->caller);
+            bridge->deliver("Callee", data, /*toCallee=*/false);
         },
         .createAudioDeviceModule = tgcalls::FakeAudioDeviceModule::Creator(
             calleeRenderer, calleeRecorder,
-            tgcalls::FakeAudioDeviceModule::Options{.samples_per_sec = 48000, .num_channels = 2}
+            cliAudioDeviceOptions()
         ),
     };
 
     // Create instances
     auto callerInstance = std::shared_ptr<tgcalls::Instance>(
-        tgcalls::Meta::Create(version, std::move(callerDesc)).release());
+        createInstance(version, std::move(callerDesc)).release());
     if (!callerInstance) {
         fprintf(stderr, "Error: unknown version '%s'\n", version.c_str());
         return 1;
@@ -637,18 +1284,31 @@ int main(int argc, char* argv[]) {
     logMsg("Caller", "created (version %s)", version.c_str());
 
     auto calleeInstance = std::shared_ptr<tgcalls::Instance>(
-        tgcalls::Meta::Create(version2, std::move(calleeDesc)).release());
+        createInstance(version2, std::move(calleeDesc)).release());
     if (!calleeInstance) {
         fprintf(stderr, "Error: unknown callee version '%s'\n", version2.c_str());
         return 1;
     }
     logMsg("Callee", "created (version %s)", version2.c_str());
 
-    // Wire bridge
+    // Wire bridge, then hand over what arrived for a side before it was wired.
+    std::vector<std::vector<uint8_t>> earlyToCaller;
+    std::vector<std::vector<uint8_t>> earlyToCallee;
     {
         std::lock_guard<std::mutex> lock(bridge->mutex);
         bridge->caller = callerInstance;
         bridge->callee = calleeInstance;
+        earlyToCaller.swap(bridge->pendingToCaller);
+        earlyToCallee.swap(bridge->pendingToCallee);
+    }
+    for (const auto &data : earlyToCallee) {
+        calleeInstance->receiveSignalingData(data);
+    }
+    for (const auto &data : earlyToCaller) {
+        callerInstance->receiveSignalingData(data);
+    }
+    if (!earlyToCaller.empty() || !earlyToCallee.empty()) {
+        logMsg("Main", "handed over %zu early signaling packet(s) to the caller, %zu to the callee", earlyToCaller.size(), earlyToCallee.size());
     }
 
     if (callerVideoCapture) {
@@ -656,43 +1316,137 @@ int main(int argc, char* argv[]) {
         calleeInstance->setIncomingVideoOutput(calleeVideoSink);
     }
 
+    // --mute-participants in p2p/reflector: 0 is the caller, 1 the callee, muted
+    // right after creation (a call that starts muted). Read the --log-file: a muted
+    // side's AudioSendStream must not run until the "unmuting" marker.
+    const bool muteCaller = mutedParticipants.count(0) > 0;
+    const bool muteCallee = mutedParticipants.count(1) > 0;
+    if (muteCaller) {
+        callerInstance->setMuteMicrophone(true);
+    }
+    if (muteCallee) {
+        calleeInstance->setMuteMicrophone(true);
+    }
+
     logMsg("Main", "sleeping for %d seconds...", duration);
-    if (videoLateMs) {
-        // The camera reaches the engine a fixed time after start, on each side
-        // that asked for it, in time order.
-        std::vector<std::pair<int, bool>> events; // (ms, isCaller)
-        if (videoLateCallerMs >= 0) events.push_back({videoLateCallerMs, true});
-        if (videoLateCalleeMs >= 0) events.push_back({videoLateCalleeMs, false});
-        std::sort(events.begin(), events.end());
+    const bool unmuteMidCall = (muteCaller || muteCallee) && unmuteAfterSeconds > 0 && unmuteAfterSeconds < duration;
+    // --video-late: the camera switched on mid-call, the app's setVideoCapture
+    // path, the callee first, so the callee has to offer its own new channel.
+    const bool videoLateFixed = videoLate && !videoLateMs && duration > 5;
+    if (videoLateMs || videoLateFixed || unmuteMidCall || calleeScreenCapture || !av1PowerEvents.empty() || !videoSendDebugEvents.empty()) {
+        // Mid-call events in time order: a side's camera reaching the engine a
+        // fixed time after start, the callee's switch to a screen capture, the unmute,
+        // and AV1 paused or allowed by power.
+        enum class Event { CallerCamera, CalleeCamera, CalleeScreen, Unmute, CallerAv1PowerOff, CallerAv1PowerOn, CalleeAv1PowerOff, CalleeAv1PowerOn, VideoSendDebug };
+        std::vector<std::pair<int, Event>> events; // (ms, event)
+        size_t nextVideoSendDebugEvent = 0;
+        std::stable_sort(videoSendDebugEvents.begin(), videoSendDebugEvents.end(), [](const VideoSendDebugEvent &lhs, const VideoSendDebugEvent &rhs) {
+            return lhs.ms < rhs.ms;
+        });
+        for (const auto &debugEvent : videoSendDebugEvents) {
+            events.push_back({debugEvent.ms, Event::VideoSendDebug});
+        }
+        for (const auto &power : av1PowerEvents) {
+            const Event event = power.caller
+                ? (power.allowed ? Event::CallerAv1PowerOn : Event::CallerAv1PowerOff)
+                : (power.allowed ? Event::CalleeAv1PowerOn : Event::CalleeAv1PowerOff);
+            events.push_back({power.ms, event});
+        }
+        if (videoLateCallerMs >= 0) events.push_back({videoLateCallerMs, Event::CallerCamera});
+        if (videoLateCalleeMs >= 0) events.push_back({videoLateCalleeMs, Event::CalleeCamera});
+        if (calleeScreenCapture) events.push_back({videoScreenCalleeMs, Event::CalleeScreen});
+        if (videoLateFixed) {
+            events.push_back({3000, Event::CalleeCamera});
+            events.push_back({5000, Event::CallerCamera});
+        }
+        if (unmuteMidCall) events.push_back({unmuteAfterSeconds * 1000, Event::Unmute});
+        // By time, then by kind as before; debug events, the last kind, keep their order among themselves.
+        std::stable_sort(events.begin(), events.end(), [](const std::pair<int, Event> &lhs, const std::pair<int, Event> &rhs) {
+            return lhs.first != rhs.first ? lhs.first < rhs.first : lhs.second < rhs.second;
+        });
         int elapsedMs = 0;
         for (const auto &event : events) {
             if (event.first > elapsedMs) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(event.first - elapsedMs));
                 elapsedMs = event.first;
             }
-            logMsg("Main", "attaching the %s's video capture at %d ms", event.second ? "caller" : "callee", event.first);
-            if (event.second) {
-                callerInstance->setVideoCapture(callerVideoCapture);
-            } else {
-                calleeInstance->setVideoCapture(calleeVideoCapture);
+            switch (event.second) {
+                case Event::CallerCamera:
+                    logMsg("Main", "attaching the caller's video capture at %d ms", event.first);
+                    callerInstance->setVideoCapture(callerVideoCapture);
+                    break;
+                case Event::CalleeCamera:
+                    logMsg("Main", "attaching the callee's video capture at %d ms", event.first);
+                    calleeInstance->setVideoCapture(calleeVideoCapture);
+                    break;
+                case Event::CalleeScreen:
+                    logMsg("Main", "switching the callee to a screen capture at %d ms", event.first);
+                    RTC_LOG(LS_INFO) << "tgcalls_cli: switching the callee to a screen capture";
+                    calleeInstance->setVideoCapture(calleeScreenCapture);
+                    break;
+                case Event::Unmute:
+                    logMsg("Main", "unmuting at %d ms", event.first);
+                    RTC_LOG(LS_INFO) << "tgcalls_cli: unmuting the muted side(s)";
+                    if (muteCaller) {
+                        callerInstance->setMuteMicrophone(false);
+                    }
+                    if (muteCallee) {
+                        calleeInstance->setMuteMicrophone(false);
+                    }
+                    break;
+                case Event::CallerAv1PowerOff:
+                case Event::CallerAv1PowerOn:
+                case Event::CalleeAv1PowerOff:
+                case Event::CalleeAv1PowerOn: {
+                    const bool caller = event.second == Event::CallerAv1PowerOff || event.second == Event::CallerAv1PowerOn;
+                    const bool allowed = event.second == Event::CallerAv1PowerOn || event.second == Event::CalleeAv1PowerOn;
+                    logMsg("Main", "AV1 %s by power on the %s at %d ms", allowed ? "allowed" : "paused", caller ? "caller" : "callee", event.first);
+                    RTC_LOG(LS_INFO) << "tgcalls_cli: AV1 " << (allowed ? "allowed" : "paused") << " by power on the " << (caller ? "caller" : "callee");
+                    (caller ? callerInstance : calleeInstance)->setVideoSendAv1AllowedByPower(allowed);
+                    break;
+                }
+                case Event::VideoSendDebug: {
+                    // Debug events keep their command-line order among themselves (stable sorts on time).
+                    const auto &debugEvent = videoSendDebugEvents[nextVideoSendDebugEvent++];
+                    const char *sideName = debugEvent.caller ? "caller" : "callee";
+                    auto &instance = debugEvent.caller ? callerInstance : calleeInstance;
+                    if (debugEvent.isCodec) {
+                        logMsg("Main", "video codec override on the %s at %d ms: %s", sideName, event.first, debugEvent.codec.empty() ? "auto" : debugEvent.codec.c_str());
+                        RTC_LOG(LS_INFO) << "tgcalls_cli: video codec override on the " << sideName << ": " << (debugEvent.codec.empty() ? "auto" : debugEvent.codec);
+                        instance->setVideoSendCodecOverride(debugEvent.codec);
+                    } else {
+                        logMsg("Main", "video max bitrate on the %s at %d ms: %d kbps", sideName, event.first, debugEvent.kbps);
+                        RTC_LOG(LS_INFO) << "tgcalls_cli: video max bitrate on the " << sideName << ": " << debugEvent.kbps << " kbps";
+                        instance->setVideoSendMaxBitrateKbps(debugEvent.kbps);
+                    }
+                    break;
+                }
             }
         }
         int remainingMs = duration * 1000 - elapsedMs;
         if (remainingMs > 0) {
             std::this_thread::sleep_for(std::chrono::milliseconds(remainingMs));
         }
-    } else if (videoLate && duration > 5) {
-        // The camera switched on mid-call, the app's setVideoCapture path: the
-        // callee first, so the callee has to offer its own new channel.
-        std::this_thread::sleep_for(std::chrono::seconds(3));
-        logMsg("Main", "attaching the callee's video capture");
-        calleeInstance->setVideoCapture(calleeVideoCapture);
-        std::this_thread::sleep_for(std::chrono::seconds(2));
-        logMsg("Main", "attaching the caller's video capture");
-        callerInstance->setVideoCapture(callerVideoCapture);
-        std::this_thread::sleep_for(std::chrono::seconds(duration - 5));
     } else {
         std::this_thread::sleep_for(std::chrono::seconds(duration));
+    }
+
+    // What the call delivered, read before teardown: on a loaded host a teardown can
+    // stall for minutes while media still flows, and that must not count.
+    const int callerAudibleFrames = callerRenderer->audibleFrames();
+    const int calleeAudibleFrames = calleeRenderer->audibleFrames();
+    const double callerFirstAudibleAt = callerRenderer->firstAudibleAt();
+    const double calleeFirstAudibleAt = calleeRenderer->firstAudibleAt();
+    const int callerVideoFrames = callerVideoSink->frameCount();
+    const int calleeVideoFrames = calleeVideoSink->frameCount();
+    const int64_t callerFirstFrameTime = callerVideoSink->firstFrameTime();
+    const int64_t calleeFirstFrameTime = calleeVideoSink->firstFrameTime();
+    // Both sides' decoders together: one process.
+    const auto decodedFrames = tgcalls::fakePlatformDecodedFramesByCodec();
+    double establishedAt = -1.0;
+    {
+        std::lock_guard<std::mutex> lock(callState->mutex);
+        establishedAt = callState->establishedAt;
     }
 
     // Stop both instances
@@ -738,29 +1492,6 @@ int main(int argc, char* argv[]) {
     calleeInstance.reset();
 
     // Read stats logs: count bitrate records and check for non-zero BWE
-    struct StatsResult {
-        int bitrateRecords = 0;
-        bool hasNonZeroBwe = false;
-    };
-    auto parseStatsLog = [](const std::string& path) -> StatsResult {
-        StatsResult result;
-        std::ifstream f(path);
-        if (!f.is_open()) return result;
-        std::string content((std::istreambuf_iterator<char>(f)),
-                             std::istreambuf_iterator<char>());
-        size_t pos = 0;
-        while ((pos = content.find("\"b\":", pos)) != std::string::npos) {
-            pos += 4;
-            result.bitrateRecords++;
-            // Parse the integer value after "b":
-            int val = std::atoi(content.c_str() + pos);
-            if (val > 0) {
-                result.hasNonZeroBwe = true;
-            }
-        }
-        return result;
-    };
-
     auto callerStats = parseStatsLog(callerStatsPath);
     auto calleeStats = parseStatsLog(calleeStatsPath);
     unlink(callerStatsPath.c_str());
@@ -770,7 +1501,7 @@ int main(int argc, char* argv[]) {
     {
         std::lock_guard<std::mutex> lock(callState->mutex);
 
-        bool established = (callState->establishedAt >= 0);
+        bool established = (establishedAt >= 0);
 
         printf("\n=== Call Summary ===\n");
         printf("Duration:          %ds\n", duration);
@@ -785,8 +1516,8 @@ int main(int argc, char* argv[]) {
         }
         printf("Caller state:      %s\n", stateName(callState->callerState));
         printf("Callee state:      %s\n", stateName(callState->calleeState));
-        if (callState->establishedAt >= 0) {
-            printf("Call established:  yes (at %.3fs)\n", callState->establishedAt);
+        if (established) {
+            printf("Call established:  yes (at %.3fs)\n", establishedAt);
         } else {
             printf("Call established:  no\n");
         }
@@ -797,9 +1528,22 @@ int main(int argc, char* argv[]) {
         printf("BWE non-zero:      %s\n", bweNonZero ? "yes" : "no");
         printf("Remote media state: caller=%d callee=%d updates\n",
                callState->callerRemoteMediaStates, callState->calleeRemoteMediaStates);
+        // What each side heard of the other's tone, and when it first did.
+        printf("Audio heard:       caller %d frames (first at %.3fs), callee %d frames (first at %.3fs)\n",
+               callerAudibleFrames, callerFirstAudibleAt, calleeAudibleFrames, calleeFirstAudibleAt);
         if (callerVideoCapture) {
             printf("Video frames:      caller received %d, callee received %d\n",
-                   callerVideoSink->frameCount(), calleeVideoSink->frameCount());
+                   callerVideoFrames, calleeVideoFrames);
+            const auto firstFrameAt = [](int64_t time) -> double {
+                if (time == 0) {
+                    return -1.0;
+                }
+                const auto start = gStartTime.time_since_epoch().count();
+                return std::chrono::duration<double>(std::chrono::steady_clock::duration(time - start)).count();
+            };
+            printf("Video first frame: caller at %.3fs, callee at %.3fs\n",
+                   firstFrameAt(callerFirstFrameTime), firstFrameAt(calleeFirstFrameTime));
+            printf("Video decoded:     %s (both sides)\n", formatDecodedFrames(decodedFrames).c_str());
         }
 
         bool statsCollected = (callerStats.bitrateRecords > 0 && calleeStats.bitrateRecords > 0);

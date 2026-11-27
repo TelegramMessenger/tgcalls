@@ -23,7 +23,7 @@
 
 -(id)initWithHelper:(tgcalls::DesktopCaptureSourceHelper)helper {
     if (self = [super initWithFrame:CGRectZero]) {
-        std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink = [self getSink];
+        std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink = [self getSink];
         helper.setOutput(sink);
         [self setVideoContentMode:kCAGravityResizeAspectFill];
     }
@@ -49,7 +49,7 @@
 
 @interface DesktopCaptureSourceMac ()
 {
-    absl::optional<tgcalls::DesktopCaptureSource> _source;
+    std::optional<tgcalls::DesktopCaptureSource> _source;
     BOOL _isWindow;
 }
 -(id)initWithSource:(tgcalls::DesktopCaptureSource)source isWindow:(BOOL)isWindow;

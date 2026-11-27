@@ -1,14 +1,125 @@
 #import <TgVoipWebrtc/OngoingCallThreadLocalContext.h>
 
 #import "MediaUtils.h"
+#include "BroadcastAudio/BroadcastAudioCore.h"
 #include "BroadcastAudio/BroadcastAudioCoreBridge.h"
 #import "CallAudioTap/CallAudioTap.h"
 #include "AudioFrame.h"
+#include "modules/audio_device/include/audio_device_data_observer.h"
+#include "api/audio/create_audio_device_module.h"
+#include "api/environment/environment_factory.h"
+
+#include <array>
+#include <atomic>
+#include <mutex>
+
+namespace {
+
+class CaptionAudioTap {
+public:
+    void setSink(CallCaptionAudioSink sink) {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _sink = [sink copy];
+        _enabled.store(sink != nil, std::memory_order_relaxed);
+    }
+
+    void setMuted(bool muted) {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _muted = muted;
+    }
+
+    void emit(uint32_t ssrc, const int16_t *samples, size_t frames, size_t channels, uint32_t rate) {
+        if (!_enabled.load(std::memory_order_relaxed) || !samples || channels == 0 || channels > 2 || rate == 0) {
+            return;
+        }
+
+        const size_t outputFrames = frames * 16000 / rate;
+        std::array<float, 512> output;
+        if (outputFrames == 0 || outputFrames > output.size()) {
+            return;
+        }
+
+        for (size_t i = 0; i < outputFrames; ++i) {
+            const size_t start = i * rate / 16000;
+            const size_t end = std::max(start + 1, (i + 1) * rate / 16000);
+            int32_t sum = 0;
+            for (size_t j = start * channels; j < end * channels; ++j) {
+                sum += samples[j];
+            }
+            output[i] = static_cast<float>(sum) / ((end - start) * channels * 32768.0f);
+        }
+
+        std::lock_guard<std::mutex> lock(_mutex);
+        if (_sink && (ssrc != 0 || !_muted)) {
+            @autoreleasepool {
+                _sink(ssrc, [NSData dataWithBytes:output.data() length:outputFrames * sizeof(float)]);
+            }
+        }
+    }
+
+private:
+    std::atomic<bool> _enabled{false};
+    std::mutex _mutex;
+    CallCaptionAudioSink _sink = nil;
+    bool _muted = true;
+};
+
+class PrivateCallCaptionAudioObserver final : public webrtc::AudioDeviceDataObserver {
+public:
+    PrivateCallCaptionAudioObserver(std::shared_ptr<CaptionAudioTap> tap, std::shared_ptr<tgcalls_macos::CallAudioTapSlot> slot, std::shared_ptr<std::atomic<bool>> muted) : _tap(std::move(tap)), _slot(std::move(slot)), _muted(std::move(muted)) {}
+
+    void OnCaptureData(const void *samples, size_t frames, size_t bytesPerFrame, size_t channels, uint32_t rate) override {
+        if (bytesPerFrame == channels * sizeof(int16_t)) {
+            _tap->emit(0, static_cast<const int16_t *>(samples), frames, channels, rate);
+            if (!_muted->load(std::memory_order_relaxed)) {
+                _slot->push(0, static_cast<const int16_t *>(samples), frames, channels, rate);
+            }
+        }
+    }
+
+    void OnRenderData(const void *samples, size_t frames, size_t bytesPerFrame, size_t channels, uint32_t rate) override {
+        if (bytesPerFrame == channels * sizeof(int16_t)) {
+            _tap->emit(1, static_cast<const int16_t *>(samples), frames, channels, rate);
+            _slot->push(1, static_cast<const int16_t *>(samples), frames, channels, rate);
+        }
+    }
+
+private:
+    std::shared_ptr<CaptionAudioTap> _tap;
+    std::shared_ptr<tgcalls_macos::CallAudioTapSlot> _slot;
+    std::shared_ptr<std::atomic<bool>> _muted;
+};
+
+class GroupCallFrameObserver final : public webrtc::AudioDeviceDataObserver {
+public:
+    GroupCallFrameObserver(std::shared_ptr<broadcast_audio::Core> core, std::shared_ptr<CaptionAudioTap> tap, bool disableAudioInput) : _core(std::move(core)), _tap(std::move(tap)), _disableAudioInput(disableAudioInput) {}
+
+    void OnCaptureData(const void *samples, size_t frames, size_t bytesPerFrame, size_t channels, uint32_t rate) override {
+        if (!_disableAudioInput && bytesPerFrame == channels * sizeof(int16_t)) {
+            _tap->emit(0, static_cast<const int16_t *>(samples), frames, channels, rate);
+        }
+    }
+
+    void OnRenderData(const void *samples, size_t frames, size_t bytesPerFrame, size_t channels, uint32_t rate) override {
+        if (!_core || bytesPerFrame != channels * sizeof(int16_t) || rate % 100 != 0 || frames != rate / 100) {
+            return;
+        }
+        _core->render(const_cast<int16_t *>(static_cast<const int16_t *>(samples)), frames, channels, rate);
+    }
+
+private:
+    std::shared_ptr<broadcast_audio::Core> _core;
+    std::shared_ptr<CaptionAudioTap> _tap;
+    bool _disableAudioInput;
+};
+
+}
+
 
 #import "Instance.h"
-#import "InstanceImpl.h"
 #import "v2/InstanceV2Impl.h"
 #import "v2/InstanceV2ReferenceImpl.h"
+#import "v2/InstanceV2CompatImpl.h"
 #include "StaticThreads.h"
 
 #import "VideoCaptureInterface.h"
@@ -17,7 +128,6 @@
 #ifndef WEBRTC_IOS
 #import "platform/darwin/VideoMetalViewMac.h"
 #import "platform/darwin/VideoSampleBufferViewMac.h"
-#include "modules/audio_device/include/audio_device_data_observer.h"
 #define UIViewContentModeScaleAspectFill kCAGravityResizeAspectFill
 #define UIViewContentModeScaleAspect kCAGravityResizeAspect
 
@@ -34,6 +144,7 @@
 
 #import "group/GroupInstanceImpl.h"
 #import "group/GroupInstanceCustomImpl.h"
+#import "group/GroupInstanceReferenceImpl.h"
 
 #import "VideoCaptureInterfaceImpl.h"
 
@@ -231,7 +342,7 @@
 
 @implementation CallVideoFrameNV12Buffer
 
-- (instancetype)initWithBuffer:(rtc::scoped_refptr<webrtc::NV12BufferInterface>)nv12Buffer {
+- (instancetype)initWithBuffer:(webrtc::scoped_refptr<webrtc::NV12BufferInterface>)nv12Buffer {
     self = [super init];
     if (self != nil) {
         _width = nv12Buffer->width();
@@ -255,7 +366,7 @@
 
 @implementation CallVideoFrameI420Buffer
 
-- (instancetype)initWithBuffer:(rtc::scoped_refptr<webrtc::I420BufferInterface>)i420Buffer {
+- (instancetype)initWithBuffer:(webrtc::scoped_refptr<webrtc::I420BufferInterface>)i420Buffer {
     self = [super init];
     if (self != nil) {
         _width = i420Buffer->width();
@@ -334,7 +445,7 @@
 
 namespace {
 
-class GroupCallVideoSinkAdapter : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
+class GroupCallVideoSinkAdapter : public webrtc::VideoSinkInterface<webrtc::VideoFrame> {
 public:
     GroupCallVideoSinkAdapter(void (^frameReceived)(webrtc::VideoFrame const &)) {
         _frameReceived = [frameReceived copy];
@@ -422,10 +533,10 @@ private:
                     }
                 }
             } else if (videoFrame.video_frame_buffer()->type() == webrtc::VideoFrameBuffer::Type::kNV12) {
-                rtc::scoped_refptr<webrtc::NV12BufferInterface> nv12Buffer(static_cast<webrtc::NV12BufferInterface *>(videoFrame.video_frame_buffer().get()));
+                webrtc::scoped_refptr<webrtc::NV12BufferInterface> nv12Buffer(static_cast<webrtc::NV12BufferInterface *>(videoFrame.video_frame_buffer().get()));
                 mappedBuffer = [[CallVideoFrameNV12Buffer alloc] initWithBuffer:nv12Buffer];
             } else if (videoFrame.video_frame_buffer()->type() == webrtc::VideoFrameBuffer::Type::kI420) {
-                rtc::scoped_refptr<webrtc::I420BufferInterface> i420Buffer(static_cast<webrtc::I420BufferInterface *>(videoFrame.video_frame_buffer().get()));
+                webrtc::scoped_refptr<webrtc::I420BufferInterface> i420Buffer(static_cast<webrtc::I420BufferInterface *>(videoFrame.video_frame_buffer().get()));
                 mappedBuffer = [[CallVideoFrameI420Buffer alloc] initWithBuffer:i420Buffer];
             }
 
@@ -438,7 +549,7 @@ private:
     return self;
 }
 
-- (std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)sink {
+- (std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>>)sink {
     return _adapter;
 }
 
@@ -618,7 +729,7 @@ tgcalls::VideoCaptureInterfaceObject *GetVideoCaptureAssumingSameThread(tgcalls:
                 VideoSampleBufferView *remoteRenderer = [[VideoSampleBufferView alloc] initWithFrame:CGRectZero];
                 remoteRenderer.videoContentMode = UIViewContentModeScaleAspectFill;
 
-                std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink = [remoteRenderer getSink];
+                std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink = [remoteRenderer getSink];
                 interface->setOutput(sink);
 
                 VideoSampleBufferView *cloneRenderer = nil;
@@ -646,7 +757,7 @@ tgcalls::VideoCaptureInterfaceObject *GetVideoCaptureAssumingSameThread(tgcalls:
 #endif
                 }
 
-                std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink = [remoteRenderer getSink];
+                std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink = [remoteRenderer getSink];
 
                 interface->setOutput(sink);
 
@@ -678,35 +789,6 @@ tgcalls::VideoCaptureInterfaceObject *GetVideoCaptureAssumingSameThread(tgcalls:
 
 @end
 
-#ifndef WEBRTC_IOS
-namespace {
-
-class PrivateCallAudioObserver final : public webrtc::AudioDeviceDataObserver {
-public:
-    PrivateCallAudioObserver(std::shared_ptr<tgcalls_macos::CallAudioTapSlot> slot, std::shared_ptr<std::atomic<bool>> muted)
-    : _slot(std::move(slot)), _muted(std::move(muted)) {
-    }
-
-    void OnCaptureData(const void *samples, size_t frames, size_t bytesPerFrame, size_t channels, uint32_t rate) override {
-        if (!_muted->load(std::memory_order_relaxed) && bytesPerFrame == channels * sizeof(int16_t)) {
-            _slot->push(0, static_cast<const int16_t *>(samples), frames, channels, rate);
-        }
-    }
-
-    void OnRenderData(const void *samples, size_t frames, size_t bytesPerFrame, size_t channels, uint32_t rate) override {
-        if (bytesPerFrame == channels * sizeof(int16_t)) {
-            _slot->push(1, static_cast<const int16_t *>(samples), frames, channels, rate);
-        }
-    }
-
-private:
-    std::shared_ptr<tgcalls_macos::CallAudioTapSlot> _slot;
-    std::shared_ptr<std::atomic<bool>> _muted;
-};
-
-}
-#endif
-
 @interface OngoingCallThreadLocalContextWebrtc () {
     NSString *_version;
     id<OngoingCallThreadLocalContextQueueWebrtc> _queue;
@@ -723,11 +805,10 @@ private:
 
     
     std::unique_ptr<tgcalls::Instance> _tgVoip;
-#ifndef WEBRTC_IOS
+    std::shared_ptr<CaptionAudioTap> _captionAudioTap;
     std::shared_ptr<tgcalls_macos::CallAudioTapSlot> _captionAudioSlot;
     std::shared_ptr<std::atomic<bool>> _captionAudioMuted;
     OngoingCallIncomingAudioPump *_captionAudioPump;
-#endif
     bool _didStop;
     
     OngoingCallStateWebrtc _state;
@@ -822,9 +903,9 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
 + (void)ensureRegisteredImplementations {
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        tgcalls::Register<tgcalls::InstanceImpl>();
         tgcalls::Register<tgcalls::InstanceV2Impl>();
         tgcalls::Register<tgcalls::InstanceV2ReferenceImpl>();
+        tgcalls::Register<tgcalls::InstanceV2CompatImpl>();
     });
 }
 
@@ -844,17 +925,11 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
     return list;
 }
 
-+ (tgcalls::ProtocolVersion)protocolVersionFromLibraryVersion:(NSString *)version {
-    if ([version isEqualToString:@"2.7.7"]) {
-        return tgcalls::ProtocolVersion::V0;
-    } else if ([version isEqualToString:@"5.0.0"]) {
-        return tgcalls::ProtocolVersion::V1;
-    } else {
-        return tgcalls::ProtocolVersion::V0;
-    }
+- (instancetype _Nonnull)initWithVersion:(NSString * _Nonnull)version queue:(id<OngoingCallThreadLocalContextQueueWebrtc> _Nonnull)queue proxy:(VoipProxyServerWebrtc * _Nullable)proxy networkType:(OngoingCallNetworkTypeWebrtc)networkType dataSaving:(OngoingCallDataSavingWebrtc)dataSaving derivedState:(NSData * _Nonnull)derivedState key:(NSData * _Nonnull)key isOutgoing:(bool)isOutgoing connections:(NSArray<OngoingCallConnectionDescriptionWebrtc *> * _Nonnull)connections maxLayer:(int32_t)maxLayer allowP2P:(BOOL)allowP2P allowTCP:(BOOL)allowTCP enableStunMarking:(BOOL)enableStunMarking logPath:(NSString * _Nonnull)logPath statsLogPath:(NSString * _Nonnull)statsLogPath sendSignalingData:(void (^)(NSData * _Nonnull))sendSignalingData videoCapturer:(OngoingCallThreadLocalContextVideoCapturer * _Nullable)videoCapturer preferredVideoCodec:(NSString * _Nullable)preferredVideoCodec inputDeviceId: (NSString * _Nonnull)inputDeviceId outputDeviceId: (NSString * _Nonnull)outputDeviceId {
+    return [self initWithVersion:version queue:queue proxy:proxy networkType:networkType dataSaving:dataSaving derivedState:derivedState key:key isOutgoing:isOutgoing connections:connections maxLayer:maxLayer allowP2P:allowP2P allowTCP:allowTCP enableStunMarking:enableStunMarking logPath:logPath statsLogPath:statsLogPath sendSignalingData:sendSignalingData videoCapturer:videoCapturer preferredVideoCodec:preferredVideoCodec inputDeviceId:inputDeviceId outputDeviceId:outputDeviceId customParameters:nil opusDnnWeights:nil];
 }
 
-- (instancetype _Nonnull)initWithVersion:(NSString * _Nonnull)version queue:(id<OngoingCallThreadLocalContextQueueWebrtc> _Nonnull)queue proxy:(VoipProxyServerWebrtc * _Nullable)proxy networkType:(OngoingCallNetworkTypeWebrtc)networkType dataSaving:(OngoingCallDataSavingWebrtc)dataSaving derivedState:(NSData * _Nonnull)derivedState key:(NSData * _Nonnull)key isOutgoing:(bool)isOutgoing connections:(NSArray<OngoingCallConnectionDescriptionWebrtc *> * _Nonnull)connections maxLayer:(int32_t)maxLayer allowP2P:(BOOL)allowP2P allowTCP:(BOOL)allowTCP enableStunMarking:(BOOL)enableStunMarking logPath:(NSString * _Nonnull)logPath statsLogPath:(NSString * _Nonnull)statsLogPath sendSignalingData:(void (^)(NSData * _Nonnull))sendSignalingData videoCapturer:(OngoingCallThreadLocalContextVideoCapturer * _Nullable)videoCapturer preferredVideoCodec:(NSString * _Nullable)preferredVideoCodec inputDeviceId: (NSString * _Nonnull)inputDeviceId outputDeviceId: (NSString * _Nonnull)outputDeviceId {
+- (instancetype _Nonnull)initWithVersion:(NSString * _Nonnull)version queue:(id<OngoingCallThreadLocalContextQueueWebrtc> _Nonnull)queue proxy:(VoipProxyServerWebrtc * _Nullable)proxy networkType:(OngoingCallNetworkTypeWebrtc)networkType dataSaving:(OngoingCallDataSavingWebrtc)dataSaving derivedState:(NSData * _Nonnull)derivedState key:(NSData * _Nonnull)key isOutgoing:(bool)isOutgoing connections:(NSArray<OngoingCallConnectionDescriptionWebrtc *> * _Nonnull)connections maxLayer:(int32_t)maxLayer allowP2P:(BOOL)allowP2P allowTCP:(BOOL)allowTCP enableStunMarking:(BOOL)enableStunMarking logPath:(NSString * _Nonnull)logPath statsLogPath:(NSString * _Nonnull)statsLogPath sendSignalingData:(void (^)(NSData * _Nonnull))sendSignalingData videoCapturer:(OngoingCallThreadLocalContextVideoCapturer * _Nullable)videoCapturer preferredVideoCodec:(NSString * _Nullable)preferredVideoCodec inputDeviceId: (NSString * _Nonnull)inputDeviceId outputDeviceId: (NSString * _Nonnull)outputDeviceId customParameters:(NSString * _Nullable)customParameters opusDnnWeights:(NSData * _Nullable)opusDnnWeights {
     self = [super init];
     if (self != nil) {
         _version = version;
@@ -931,10 +1006,11 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
         
         std::vector<tgcalls::Endpoint> endpoints;
         
-#ifndef WEBRTC_IOS
-        _captionAudioSlot = std::make_shared<tgcalls_macos::CallAudioTapSlot>();
-        _captionAudioMuted = std::make_shared<std::atomic<bool>>(true);
-#endif
+        std::string customParametersString = "{}";
+        if (customParameters && customParameters.length != 0) {
+            customParametersString = std::string(customParameters.UTF8String);
+        }
+        
         tgcalls::Config config = {
             .initializationTimeout = _callConnectTimeout,
             .receiveTimeout = _callPacketTimeout,
@@ -951,7 +1027,7 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
             .maxApiLayer = [OngoingCallThreadLocalContextWebrtc maxLayer],
             .enableHighBitrateVideo = true,
             .preferredVideoCodecs = preferredVideoCodecs,
-            .protocolVersion = [OngoingCallThreadLocalContextWebrtc protocolVersionFromLibraryVersion:version]
+            .customParameters = customParametersString
         };
         
         auto encryptionKeyValue = std::make_shared<std::array<uint8_t, 256>>();
@@ -962,6 +1038,9 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
         [OngoingCallThreadLocalContextWebrtc ensureRegisteredImplementations];
         
         __weak OngoingCallThreadLocalContextWebrtc *weakSelf = self;
+        _captionAudioTap = std::make_shared<CaptionAudioTap>();
+        _captionAudioSlot = std::make_shared<tgcalls_macos::CallAudioTapSlot>();
+        _captionAudioMuted = std::make_shared<std::atomic<bool>>(true);
         _tgVoip = tgcalls::Meta::Create([version UTF8String], (tgcalls::Descriptor){
             .version = [version UTF8String],
             .config = config,
@@ -1085,17 +1164,21 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
                     }
                 }];
             },
-#ifndef WEBRTC_IOS
-            .createAudioDeviceModule = [slot = _captionAudioSlot, muted = _captionAudioMuted](webrtc::TaskQueueFactory *taskQueueFactory) {
-                return webrtc::CreateAudioDeviceWithDataObserver(
-                    webrtc::AudioDeviceModule::kPlatformDefaultAudio,
-                    taskQueueFactory,
-                    std::make_unique<PrivateCallAudioObserver>(slot, muted)
-                );
-            },
-#endif
             .initialInputDeviceId = inputDeviceId.UTF8String,
             .initialOutputDeviceId = outputDeviceId.UTF8String,
+            // M159 wraps an existing module (the overload taking an audio layer and a task queue factory is gone):
+            // the platform's own, made in an environment that borrows the instance's task queue factory. Null (no
+            // platform module in the build) falls back to the instance's default.
+            .createAudioDeviceModule = [tap = _captionAudioTap, slot = _captionAudioSlot, muted = _captionAudioMuted](webrtc::TaskQueueFactory *taskQueueFactory) -> webrtc::scoped_refptr<webrtc::AudioDeviceModule> {
+                auto platformModule = webrtc::CreateAudioDeviceModule(webrtc::CreateEnvironment(taskQueueFactory), webrtc::AudioDeviceModule::kPlatformDefaultAudio);
+                if (!platformModule) {
+                    return nullptr;
+                }
+                return webrtc::CreateAudioDeviceWithDataObserver(platformModule, std::make_unique<PrivateCallCaptionAudioObserver>(tap, slot, muted));
+            },
+            .opusDnnWeights = opusDnnWeights.length == 0 ? nullptr : std::make_shared<const std::vector<uint8_t>>(
+                static_cast<const uint8_t *>(opusDnnWeights.bytes),
+                static_cast<const uint8_t *>(opusDnnWeights.bytes) + opusDnnWeights.length)
         });
         _state = OngoingCallStateInitializing;
         _signalBars = 4;
@@ -1137,9 +1220,7 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
 }
 
 - (void)stop:(void (^)(NSString *, int64_t, int64_t, int64_t, int64_t))completion {
-#ifndef WEBRTC_IOS
     [_captionAudioPump setHandler:nil];
-#endif
     if (!_tgVoip) {
         return;
     }
@@ -1247,21 +1328,28 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
 }
 
 - (void)setIncomingAudioHandler:(void (^ _Nullable)(NSArray<OngoingCallIncomingAudio *> * _Nonnull))handler {
-#ifndef WEBRTC_IOS
-    if (_didStop) {
+    if (_didStop || !_captionAudioSlot) {
         return;
     }
     if (_captionAudioPump == nil && handler != nil) {
         _captionAudioPump = [[OngoingCallIncomingAudioPump alloc] initWithSlot:_captionAudioSlot];
     }
     [_captionAudioPump setHandler:handler];
-#endif
+}
+
+- (void)setCaptionAudioSink:(CallCaptionAudioSink)sink {
+    if (_captionAudioTap) {
+        _captionAudioTap->setSink(sink);
+    }
 }
 
 - (void)setIsMuted:(bool)isMuted {
-#ifndef WEBRTC_IOS
-    _captionAudioMuted->store(isMuted, std::memory_order_relaxed);
-#endif
+    if (_captionAudioMuted) {
+        _captionAudioMuted->store(isMuted, std::memory_order_relaxed);
+    }
+    if (_captionAudioTap) {
+        _captionAudioTap->setMuted(isMuted);
+    }
     if (_tgVoip) {
         _tgVoip->setMuteMicrophone(isMuted);
     }
@@ -1326,7 +1414,7 @@ static void (*InternalVoipLoggingFunction)(NSString *) = NULL;
             remoteRenderer.videoContentMode = UIViewContentModeScaleAspect;
 #endif
             
-            std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink = [remoteRenderer getSink];
+            std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink = [remoteRenderer getSink];
             __strong OngoingCallThreadLocalContextWebrtc *strongSelf = weakSelf;
             if (strongSelf) {
                 [remoteRenderer setOrientation:strongSelf->_remoteVideoOrientation];
@@ -1420,11 +1508,13 @@ private:
 @interface GroupCallThreadLocalContext () {
     BroadcastAudioCoreRef _broadcastAudioCore;
     std::shared_ptr<tgcalls_macos::CallAudioTapSlot> _incomingAudioSlot;
-    std::shared_ptr<std::atomic<bool>> _incomingAudioMuted;
     OngoingCallIncomingAudioPump *_incomingAudioPump;
     id<OngoingCallThreadLocalContextQueueWebrtc> _queue;
 
     std::unique_ptr<tgcalls::GroupInstanceInterface> _instance;
+    std::shared_ptr<CaptionAudioTap> _captionAudioTap;
+    dispatch_queue_t _captionDrainQueue;
+    dispatch_source_t _captionDrain;
     OngoingCallThreadLocalContextVideoCapturer *_videoCapturer;
 
     void (^_networkStateUpdated)(GroupCallNetworkState);
@@ -1446,6 +1536,9 @@ private:
 }
 
 - (void)dealloc {
+    if (_captionDrain) {
+        dispatch_source_cancel(_captionDrain);
+    }
     if (_broadcastAudioCore) {
         BroadcastAudioCoreRelease(_broadcastAudioCore);
     }
@@ -1470,6 +1563,32 @@ audioDevice:(SharedCallAudioDevice * _Nullable)audioDevice
 isConference:(bool)isConference
 isActiveByDefault:(bool)isActiveByDefault
 encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, bool, int32_t))encryptDecrypt {
+    return [self initWithQueue:queue networkStateUpdated:networkStateUpdated audioLevelsUpdated:audioLevelsUpdated activityUpdated:activityUpdated inputDeviceId:inputDeviceId outputDeviceId:outputDeviceId videoCapturer:videoCapturer requestMediaChannelDescriptions:requestMediaChannelDescriptions outgoingAudioBitrateKbit:outgoingAudioBitrateKbit dredFixedPacketLossPercent:0 dredReceiveEnabled:false opusDnnWeights:nil videoContentType:videoContentType enableNoiseSuppression:enableNoiseSuppression disableAudioInput:disableAudioInput prioritizeVP8:prioritizeVP8 logPath:logPath statsLogPath:statsLogPath audioDevice:audioDevice isConference:isConference isActiveByDefault:isActiveByDefault encryptDecrypt:encryptDecrypt useReferenceImpl:false];
+}
+
+- (instancetype _Nonnull)initWithQueue:(id<OngoingCallThreadLocalContextQueueWebrtc> _Nonnull)queue
+    networkStateUpdated:(void (^ _Nonnull)(GroupCallNetworkState))networkStateUpdated
+    audioLevelsUpdated:(void (^ _Nonnull)(NSArray<NSNumber *> * _Nonnull))audioLevelsUpdated
+    activityUpdated:(void (^ _Nonnull)(NSArray<NSNumber *> * _Nonnull))activityUpdated
+    inputDeviceId:(NSString * _Nonnull)inputDeviceId
+    outputDeviceId:(NSString * _Nonnull)outputDeviceId
+    videoCapturer:(OngoingCallThreadLocalContextVideoCapturer * _Nullable)videoCapturer
+    requestMediaChannelDescriptions:(id<OngoingGroupCallMediaChannelDescriptionTask> _Nonnull (^ _Nonnull)(NSArray<NSNumber *> * _Nonnull, void (^ _Nonnull)(NSArray<OngoingGroupCallMediaChannelDescription *> * _Nonnull)))requestMediaChannelDescriptions
+    outgoingAudioBitrateKbit:(int32_t)outgoingAudioBitrateKbit
+    dredFixedPacketLossPercent:(int32_t)dredFixedPacketLossPercent
+    dredReceiveEnabled:(bool)dredReceiveEnabled
+    opusDnnWeights:(NSData * _Nullable)opusDnnWeights
+    videoContentType:(OngoingGroupCallVideoContentType)videoContentType
+    enableNoiseSuppression:(bool)enableNoiseSuppression
+    disableAudioInput:(bool)disableAudioInput
+    prioritizeVP8:(bool)prioritizeVP8
+    logPath:(NSString * _Nonnull)logPath
+statsLogPath:(NSString * _Nonnull)statsLogPath
+audioDevice:(SharedCallAudioDevice * _Nullable)audioDevice
+isConference:(bool)isConference
+isActiveByDefault:(bool)isActiveByDefault
+encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, bool, int32_t))encryptDecrypt
+useReferenceImpl:(bool)useReferenceImpl {
     self = [super init];
     if (self != nil) {
         _queue = queue;
@@ -1557,13 +1676,10 @@ encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, boo
 
         __weak GroupCallThreadLocalContext *weakSelf = self;
         _broadcastAudioCore = BroadcastAudioCoreCreate();
+        _captionAudioTap = std::make_shared<CaptionAudioTap>();
         _incomingAudioSlot = std::make_shared<tgcalls_macos::CallAudioTapSlot>();
-        _incomingAudioMuted = std::make_shared<std::atomic<bool>>(true);
-        const auto incomingAudioSlot = _incomingAudioSlot;
-        broadcast_audio::Core::SourceAudio broadcastSourceAudio = [incomingAudioSlot](uint32_t ssrc, const int16_t *samples) {
-            incomingAudioSlot->push(ssrc, samples, broadcast_audio::Core::kBlockSamples, 1, broadcast_audio::Core::kSampleRate);
-        };
-        _instance.reset(new tgcalls::GroupInstanceCustomImpl((tgcalls::GroupInstanceDescriptor){
+        std::shared_ptr<tgcalls_macos::CallAudioTapSlot> incomingAudioSlot = _incomingAudioSlot;
+        tgcalls::GroupInstanceDescriptor descriptor = (tgcalls::GroupInstanceDescriptor){
             .threads = tgcalls::StaticThreads::getThreads(),
             .config = config,
             .statsLogPath = statsLogPathValue,
@@ -1602,8 +1718,11 @@ encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, boo
                 }
                 audioLevelsUpdated(result);
             },
-            .onAudioFrame = [incomingAudioSlot](uint32_t ssrc, tgcalls::AudioFrame const &frame) {
+            .onAudioFrame = [tap = _captionAudioTap, incomingAudioSlot](uint32_t ssrc, tgcalls::AudioFrame const &frame) {
                 incomingAudioSlot->push(ssrc, frame.audio_samples, frame.num_samples, frame.num_channels, frame.samples_per_sec);
+                if (frame.bytes_per_sample == sizeof(int16_t)) {
+                    tap->emit(ssrc, frame.audio_samples, frame.num_samples, frame.num_channels, frame.samples_per_sec);
+                }
             },
             .ssrcActivityUpdated = [activityUpdated](tgcalls::GroupActivitiesUpdate const &update) {
                 NSMutableArray *result = [[NSMutableArray alloc] init];
@@ -1616,6 +1735,11 @@ encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, boo
             .initialOutputDeviceId = outputDeviceId.UTF8String,
             .videoCapture = [_videoCapturer getInterface],
             .outgoingAudioBitrateKbit = outgoingAudioBitrateKbit,
+            .dredFixedPacketLossPercent = dredFixedPacketLossPercent,
+            .dredReceiveEnabled = dredReceiveEnabled,
+            .opusDnnWeights = opusDnnWeights.length == 0 ? nullptr : std::make_shared<const std::vector<uint8_t>>(
+                static_cast<const uint8_t *>(opusDnnWeights.bytes),
+                static_cast<const uint8_t *>(opusDnnWeights.bytes) + opusDnnWeights.length),
             .disableOutgoingAudioProcessing = disableOutgoingAudioProcessing,
             .disableAudioInput = disableAudioInput,
             .ios_enableSystemMute = false,
@@ -1656,12 +1780,19 @@ encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, boo
                 return std::make_shared<RequestMediaChannelDescriptionTaskImpl>(task);
             },
             .minOutgoingVideoBitrateKbit = minOutgoingVideoBitrateKbit,
-//            .createAudioDeviceModule = [weakSelf, queue, disableAudioInput, enableSystemMute, audioDeviceModule, onMutedSpeechActivityDetected = _onMutedSpeechActivityDetected](webrtc::TaskQueueFactory *taskQueueFactory) -> rtc::scoped_refptr<webrtc::AudioDeviceModule> {
+            .createAudioDeviceModule = _videoContentType == tgcalls::VideoContentType::Screencast ? std::function<webrtc::scoped_refptr<webrtc::AudioDeviceModule>(webrtc::TaskQueueFactory *)>() : [useReferenceImpl, core = BroadcastAudioCoreShared(_broadcastAudioCore), tap = _captionAudioTap, disableAudioInput](webrtc::TaskQueueFactory *taskQueueFactory) -> webrtc::scoped_refptr<webrtc::AudioDeviceModule> {
+                auto platformModule = webrtc::CreateAudioDeviceModule(webrtc::CreateEnvironment(taskQueueFactory), webrtc::AudioDeviceModule::kPlatformDefaultAudio);
+                if (!platformModule || !useReferenceImpl) {
+                    return platformModule;
+                }
+                return webrtc::CreateAudioDeviceWithDataObserver(platformModule, std::make_unique<GroupCallFrameObserver>(core, tap, disableAudioInput));
+            },
+//            .createAudioDeviceModule = [weakSelf, queue, disableAudioInput, enableSystemMute, audioDeviceModule, onMutedSpeechActivityDetected = _onMutedSpeechActivityDetected](webrtc::TaskQueueFactory *taskQueueFactory) -> webrtc::scoped_refptr<webrtc::AudioDeviceModule> {
 //                if (audioDeviceModule) {
 //                    return audioDeviceModule->getSyncAssumingSameThread()->audioDeviceModule();
 //                } else {
-//                    rtc::Thread *audioDeviceModuleThread = rtc::Thread::Current();
-//                    auto resultModule = rtc::make_ref_counted<webrtc::tgcalls_ios_adm::AudioDeviceModuleIOS>(false, disableAudioInput, enableSystemMute, disableAudioInput ? 2 : 1);
+//                    webrtc::Thread *audioDeviceModuleThread = webrtc::Thread::Current();
+//                    auto resultModule = webrtc::make_ref_counted<webrtc::tgcalls_ios_adm::AudioDeviceModuleIOS>(false, disableAudioInput, enableSystemMute, disableAudioInput ? 2 : 1);
 //                    if (resultModule) {
 //                        resultModule->mutedSpeechDetectionChanged = ^(bool value) {
 //                            if (onMutedSpeechActivityDetected) {
@@ -1690,15 +1821,20 @@ encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, boo
 //            .e2eEncryptDecrypt = mappedEncryptionKey,
             .e2eEncryptDecrypt = mappedEncryptDecrypt,
             .isConference = isConference,
-            .onPlayoutFrame = [core = BroadcastAudioCoreShared(_broadcastAudioCore), sourceAudio = std::move(broadcastSourceAudio)](int16_t *samples, size_t count, size_t channels, uint32_t rate) {
-                core->render(samples, count, channels, rate, sourceAudio);
+            .onPlayoutFrame = [core = BroadcastAudioCoreShared(_broadcastAudioCore)](int16_t *samples, size_t count, size_t channels, uint32_t rate) {
+                core->render(samples, count, channels, rate);
             },
-            .onCaptureFrame = [incomingAudioSlot, muted = _incomingAudioMuted, disableAudioInput](const int16_t *samples, size_t count, size_t channels, uint32_t rate) {
-                if (!disableAudioInput && !muted->load(std::memory_order_relaxed)) {
-                    incomingAudioSlot->push(0, samples, count, channels, rate);
+            .onCaptureFrame = [tap = _captionAudioTap, disableAudioInput](const int16_t *samples, size_t count, size_t channels, uint32_t rate) {
+                if (!disableAudioInput) {
+                    tap->emit(0, samples, count, channels, rate);
                 }
             }
-        }));
+        };
+        if (useReferenceImpl) {
+            _instance.reset(new tgcalls::GroupInstanceReferenceImpl(std::move(descriptor)));
+        } else {
+            _instance.reset(new tgcalls::GroupInstanceCustomImpl(std::move(descriptor)));
+        }
     }
     return self;
 }
@@ -1749,8 +1885,46 @@ encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, boo
     }
 }
 
+- (void)setCaptionAudioSink:(CallCaptionAudioSink)sink {
+    if (!_captionAudioTap) {
+        return;
+    }
+    _captionAudioTap->setSink(sink);
+    if (!_captionDrain && !sink) {
+        return;
+    }
+    auto core = BroadcastAudioCoreShared(_broadcastAudioCore);
+    if (_captionDrain) {
+        dispatch_source_cancel(_captionDrain);
+        _captionDrain = nil;
+    }
+    if (!_captionDrainQueue) {
+        _captionDrainQueue = dispatch_queue_create("Telegram.BroadcastCaptionDrain", DISPATCH_QUEUE_SERIAL);
+    }
+    dispatch_sync(_captionDrainQueue, ^{
+        core->setCaptionsEnabled(false);
+        if (sink) {
+            core->setCaptionsEnabled(true);
+        }
+    });
+    if (sink) {
+        auto tap = _captionAudioTap;
+        _captionDrain = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, _captionDrainQueue);
+        dispatch_source_set_timer(_captionDrain, DISPATCH_TIME_NOW, 30 * NSEC_PER_MSEC, 5 * NSEC_PER_MSEC);
+        dispatch_source_set_event_handler(_captionDrain, ^{
+            broadcast_audio::Core::CaptionAudioBlock block;
+            for (size_t i = 0; i < 256 && core->takeCaptionAudio(block); ++i) {
+                tap->emit(block.ssrc, block.samples, broadcast_audio::Core::kBlockSamples, 1, broadcast_audio::Core::kSampleRate);
+            }
+        });
+        dispatch_resume(_captionDrain);
+    }
+}
+
 - (void)setIsMuted:(bool)isMuted {
-    _incomingAudioMuted->store(isMuted, std::memory_order_relaxed);
+    if (_captionAudioTap) {
+        _captionAudioTap->setMuted(isMuted);
+    }
     if (_instance) {
         _instance->setIsMuted(isMuted);
     }
@@ -1856,7 +2030,7 @@ encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, boo
                 VideoSampleBufferView *remoteRenderer = [[VideoSampleBufferView alloc] initWithFrame:CGRectZero];
                 remoteRenderer.videoContentMode = UIViewContentModeScaleAspectFill;
 
-                std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink = [remoteRenderer getSink];
+                std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink = [remoteRenderer getSink];
 
                 VideoSampleBufferView *cloneRenderer = nil;
                 if (requestClone) {
@@ -1878,7 +2052,7 @@ encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, boo
                 completion(remoteRenderer, cloneRenderer, ^(BroadcastVideoFrame frame) {
                     webrtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer;
                     if (frame.pixelBuffer) {
-                        buffer = rtc::make_ref_counted<webrtc::ObjCFrameBuffer>([[RTCCVPixelBuffer alloc] initWithPixelBuffer:frame.pixelBuffer]);
+                        buffer = webrtc::make_ref_counted<webrtc::ObjCFrameBuffer>([[RTCCVPixelBuffer alloc] initWithPixelBuffer:frame.pixelBuffer]);
                     } else if (frame.y && frame.u && frame.v && frame.width > 0 && frame.height > 0) {
                         buffer = webrtc::I420Buffer::Copy(frame.width, frame.height, frame.y, frame.strideY, frame.u, frame.strideU, frame.v, frame.strideV);
                     }
@@ -1915,8 +2089,8 @@ encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, boo
 #endif
                 }
                 
-                std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink = [remoteRenderer getSink];
-                std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> cloneSink = [cloneRenderer getSink];
+                std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink = [remoteRenderer getSink];
+                std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> cloneSink = [cloneRenderer getSink];
                 
                 [queue dispatch:^{
                     __strong GroupCallThreadLocalContext *strongSelf = weakSelf;

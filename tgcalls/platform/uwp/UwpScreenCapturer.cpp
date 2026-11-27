@@ -72,7 +72,7 @@ std::pair<int, int> CappedSize(int width, int height) {
 } // namespace
 
 UwpScreenCapturer::UwpScreenCapturer(
-	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink, GraphicsCaptureItem item)
+	std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink, GraphicsCaptureItem item)
 : _sink(sink),
 item_(item) {
 }
@@ -243,7 +243,7 @@ void UwpScreenCapturer::ProcessFrame() {
 		// the last frame through them. The source itself is what to ask: a window that is gone
 		// or minimized reports no size. The run of empty polls only keeps that off the fast
 		// path.
-		const int64_t now_ms = rtc::TimeMillis();
+		const int64_t now_ms = webrtc::TimeMillis();
 		if (first_empty_poll_ms_ == 0) {
 			first_empty_poll_ms_ = now_ms;
 		}
@@ -361,7 +361,7 @@ void UwpScreenCapturer::ProcessFrame() {
 	d3d_context_->Flush();
 
 	pending_frame_ = capture_frame;
-	pending_capture_ms_ = rtc::TimeMillis();
+	pending_capture_ms_ = webrtc::TimeMillis();
 }
 
 void UwpScreenCapturer::DeliverPendingFrame() {
@@ -377,7 +377,7 @@ void UwpScreenCapturer::DeliverPendingFrame() {
 	const int width = output_width_;
 	const int height = output_height_;
 
-	rtc::scoped_refptr<webrtc::NV12Buffer> buffer = buffer_pool_.CreateNV12Buffer(width, height);
+	webrtc::scoped_refptr<webrtc::NV12Buffer> buffer = buffer_pool_.CreateNV12Buffer(width, height);
 	if (buffer == nullptr) {
 		buffer = webrtc::NV12Buffer::Create(width, height);
 	}
@@ -408,7 +408,7 @@ void UwpScreenCapturer::DeliverPendingFrame() {
 	// detect_updated_region option buys for the desktop capturers we cannot link: rows that
 	// match cost nothing to encode. Two luma rows and the chroma row they share at a time,
 	// since a change to either moves both.
-	absl::optional<webrtc::VideoFrame::UpdateRect> update_rect;
+	std::optional<webrtc::VideoFrame::UpdateRect> update_rect;
 	if (previous_frame_ != nullptr && previous_frame_->width() == width
 		&& previous_frame_->height() == height) {
 		const uint8_t* const y = buffer->DataY();
@@ -456,7 +456,7 @@ void UwpScreenCapturer::DeliverPendingFrame() {
 	// Delivered whether or not anything changed: an identical frame costs the encoder almost
 	// nothing and is how it converges on a low quantiser. What the comparison above buys is
 	// the update rect.
-	last_delivery_ms_ = rtc::TimeMillis();
+	last_delivery_ms_ = webrtc::TimeMillis();
 	OnFrame(buffer, pending_capture_ms_, update_rect);
 
 	previous_frame_ = std::move(buffer);
@@ -478,7 +478,7 @@ void UwpScreenCapturer::MaybeRepeatLastFrame(int64_t now_ms) {
 	last_delivery_ms_ = now_ms;
 	// No update rect: nothing changed, and an empty one would tell the encoder to leave the
 	// picture alone, which is the opposite of what a repeat is for.
-	OnFrame(previous_frame_, now_ms, absl::nullopt);
+	OnFrame(previous_frame_, now_ms, std::nullopt);
 }
 
 void UwpScreenCapturer::OnClosed(GraphicsCaptureItem const& sender, winrt::Windows::Foundation::IInspectable const&)
@@ -707,8 +707,8 @@ void UwpScreenCapturer::destroy() {
 	stop();
 }
 
-void UwpScreenCapturer::OnFrame(rtc::scoped_refptr<webrtc::NV12Buffer> buffer, int64_t timestamp_ms,
-																const absl::optional<webrtc::VideoFrame::UpdateRect>& updateRect) {
+void UwpScreenCapturer::OnFrame(webrtc::scoped_refptr<webrtc::NV12Buffer> buffer, int64_t timestamp_ms,
+																const std::optional<webrtc::VideoFrame::UpdateRect>& updateRect) {
 	if (_state != VideoState::Active) {
 		return;
 	}

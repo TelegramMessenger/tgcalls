@@ -17,11 +17,11 @@ LogSinkImpl::LogSinkImpl(const FilePath &logPath) {
 	}
 }
 
-void LogSinkImpl::OnLogMessage(const std::string &msg, rtc::LoggingSeverity severity, const char *tag) {
+void LogSinkImpl::OnLogMessage(const std::string &msg, webrtc::LoggingSeverity severity, const char *tag) {
 	OnLogMessage(std::string(tag) + ": " + msg);
 }
 
-void LogSinkImpl::OnLogMessage(const std::string &message, rtc::LoggingSeverity severity) {
+void LogSinkImpl::OnLogMessage(const std::string &message, webrtc::LoggingSeverity severity) {
 	OnLogMessage(message);
 }
 

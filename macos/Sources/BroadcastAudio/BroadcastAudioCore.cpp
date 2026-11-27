@@ -4,6 +4,7 @@
 #include "BroadcastSpscQueue.h"
 
 #include "api/audio/audio_frame.h"
+#include "api/audio/audio_view.h"
 #include "audio/utility/audio_frame_operations.h"
 #include "common_audio/resampler/include/push_resampler.h"
 #include "modules/audio_mixer/frame_combiner.h"
@@ -13,6 +14,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <span>
 
 namespace broadcast_audio {
 
@@ -118,8 +120,10 @@ public:
     SpscQueue<Segment *, kRetiredCapacity> _retired;
     SpscQueue<Level, kLevelRecordCapacity> _levelRecords;
     std::atomic<bool> _active{false};
+    SpscQueue<Core::CaptionAudioBlock, 256> _captionAudio;
+    std::atomic<uint32_t> _captionGeneration{0};
 
-    bool render(int16_t *samples, size_t frames, size_t channels, uint32_t sampleRate, const Core::SourceAudio &sourceAudio) {
+    bool render(int16_t *samples, size_t frames, size_t channels, uint32_t sampleRate) {
         // Taken even while inactive, so the control thread's commands (the app sets volumes on every participant
         // update) never fill the queue while the call's own playout is heard.
         drainCommands();
@@ -129,7 +133,7 @@ public:
         if (channels == 0 || channels > kMaxDeviceChannels || sampleRate == 0 || sampleRate % 100 != 0 || frames != sampleRate / 100) {
             return false;
         }
-        renderMono(_clock(), sourceAudio);
+        renderMono(_clock());
         writeOutput(samples, frames, channels, sampleRate);
         return true;
     }
@@ -292,7 +296,7 @@ private:
     // the clock only when it drifts more than the tolerance (devices pull in bursts). Each position plays from the
     // play it belongs to, at offset + (position - start), so a block straddles plays and segments played back to
     // back are heard without a gap.
-    void renderMono(int64_t now, const Core::SourceAudio &sourceAudio) {
+    void renderMono(int64_t now) {
         std::memset(_mono, 0, sizeof(_mono));
         const int64_t hostNow = hostSamples(now);
         if (!_hasCursor || std::llabs(_cursor - hostNow) > kResyncToleranceSamples) {
@@ -319,6 +323,7 @@ private:
         }
 
         _mixList.clear();
+        const uint32_t captionGeneration = _captionGeneration.load(std::memory_order_acquire);
         for (size_t i = 0; i < _blockSsrcCount; i++) {
             BlockSsrc const &entry = _blockSsrcs[i];
             // Levels on the block as decoded, before gain; a full queue drops the record.
@@ -328,8 +333,12 @@ private:
             record.level = value.first;
             record.voice = value.second;
             _levelRecords.push(record);
-            if (sourceAudio && entry.ssrc != 0 && entry.gain > 0.0f) {
-                sourceAudio(entry.ssrc, entry.samples);
+            if ((captionGeneration & 1) != 0 && entry.ssrc != 0 && entry.gain > 0.0f) {
+                Core::CaptionAudioBlock block;
+                block.generation = captionGeneration;
+                block.ssrc = entry.ssrc;
+                std::memcpy(block.samples, entry.samples, sizeof(block.samples));
+                _captionAudio.push(block);
             }
 
             webrtc::AudioFrame &frame = _frames[i];
@@ -339,7 +348,7 @@ private:
             }
             _mixList.push_back(&frame);
         }
-        _combiner.Combine(rtc::ArrayView<webrtc::AudioFrame *const>(_mixList.data(), _mixList.size()), 1, (int)Core::kSampleRate, _mixList.size(), &_mixed);
+        _combiner.Combine(std::span<webrtc::AudioFrame *const>(_mixList.data(), _mixList.size()), 1, (int)Core::kSampleRate, _mixList.size(), &_mixed);
         std::memcpy(_mono, _mixed.data(), sizeof(_mono));
     }
 
@@ -353,14 +362,12 @@ private:
         if (sampleRate == Core::kSampleRate) {
             return;
         }
-        if (_resampler.InitializeIfNeeded((int)Core::kSampleRate, (int)sampleRate, channels) != 0) {
+        // The resampler takes exactly 10 ms on each side.
+        if (frames * 100 != sampleRate) {
             std::memset(samples, 0, frames * channels * sizeof(int16_t));
             return;
         }
-        const int written = _resampler.Resample(_interleaved, Core::kBlockSamples * channels, samples, frames * channels);
-        if (written != (int)(frames * channels)) {
-            std::memset(samples, 0, frames * channels * sizeof(int16_t));
-        }
+        _resampler.Resample(webrtc::InterleavedView<const int16_t>(_interleaved, Core::kBlockSamples, channels), webrtc::InterleavedView<int16_t>(samples, frames, channels));
     }
 
     Clock const &_clock;
@@ -512,12 +519,32 @@ std::vector<Level> Core::takeLevels() {
     return result;
 }
 
+void Core::setCaptionsEnabled(bool enabled) {
+    const uint32_t generation = _device->_captionGeneration.load(std::memory_order_relaxed);
+    if (((generation & 1) != 0) != enabled) {
+        _device->_captionGeneration.store(generation + 1, std::memory_order_release);
+    }
+}
+
+bool Core::takeCaptionAudio(CaptionAudioBlock &block) {
+    const uint32_t generation = _device->_captionGeneration.load(std::memory_order_acquire);
+    if ((generation & 1) == 0) {
+        return false;
+    }
+    while (_device->_captionAudio.pop(block)) {
+        if (block.generation == generation) {
+            return true;
+        }
+    }
+    return false;
+}
+
 int64_t Core::nowUs() const {
     return _clock();
 }
 
-bool Core::render(int16_t *samples, size_t frames, size_t channels, uint32_t sampleRate, const SourceAudio &sourceAudio) {
-    return _device->render(samples, frames, channels, sampleRate, sourceAudio);
+bool Core::render(int16_t *samples, size_t frames, size_t channels, uint32_t sampleRate) {
+    return _device->render(samples, frames, channels, sampleRate);
 }
 
 } // namespace broadcast_audio

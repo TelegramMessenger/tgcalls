@@ -13,6 +13,7 @@
 
 #include "../StaticThreads.h"
 #include "GroupJoinPayload.h"
+#include "GroupAv1Decision.h"
 
 namespace webrtc {
 class AudioDeviceModule;
@@ -148,10 +149,34 @@ struct GroupInstanceDescriptor {
     std::shared_ptr<VideoCaptureInterface> videoCapture; // deprecated
     std::function<webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface>()> getVideoSource;
     int outgoingAudioBitrateKbit{32};
+    // Opus DRED (GroupOpusDred.h): > 0 sends 1 s of DRED in every audio packet, libopus told this loss figure
+    // (percent) whatever the network reports, at a fixed 40 kbit/s (outgoingAudioBitrateKbit then unused), without
+    // in-band FEC; 0 sends none.
+    int dredFixedPacketLossPercent{0};
+    // Opus DRED: rebuild lost audio from incoming DRED and conceal the rest with Opus's concealment.
+    bool dredReceiveEnabled{false};
+    // Opus DRED: libopus's neural weights (GroupOpusDred.h, the blob //third-party/opus:opus_dnn_weights), which libopus
+    // is built without. None, or a malformed blob: no DRED, sending or receiving, whatever the two settings above say.
+    std::shared_ptr<const std::vector<uint8_t>> opusDnnWeights;
     bool disableOutgoingAudioProcessing{false};
     bool disableAudioInput{false};
     bool ios_enableSystemMute{false};
     VideoContentType videoContentType{VideoContentType::None};
+    // A screencast captured in-app on iOS (ScreenCaptureKit): hardware H264 at level 5.2, up to 60 fps,
+    // 2 Mbit/s. Otherwise (the ReplayKit broadcast, other platforms) a screencast encodes as before.
+    // GroupInstanceReferenceImpl also honours it on a Generic (main) connection, whose camera video is
+    // then the screen capture (the iOS app's debug "screen share as camera"); CustomImpl ignores it there.
+    bool iosInAppScreencast{false};
+    // Debug Settings "Group calls: AV1 screen sharing": the in-app screen share may send AV1 when the SFU lists AV1
+    // (GroupAv1Decision has every condition). Both engines; not the reference engine's main connection that sends the
+    // screen as its camera video.
+    bool allowAv1ScreencastSending{false};
+    // How it sends AV1: on both of two layers, as WebRTC's AV1 simulcast with L1T3 on each (Every, the default), on the
+    // top layer beside an H264 one (Top), or as one AV1 layer (Single).
+    GroupAv1ScreencastLayers av1ScreencastLayers{GroupAv1ScreencastLayers::Every};
+    // The CLI's --av1-test-encoder-fails: that AV1 encoder fails to initialise. Read only in builds with
+    // TGCALLS_ALLOW_TEST_KNOBS.
+    bool av1TestEncoderFails{false};
     bool initialEnableNoiseSuppression{false};
     std::vector<VideoCodecName> videoCodecPreferences;
     std::function<std::shared_ptr<RequestMediaChannelDescriptionTask>(std::vector<uint32_t> const &, std::function<void(std::vector<MediaChannelDescription> &&)>)> requestMediaChannelDescriptions;
@@ -191,8 +216,8 @@ public:
     virtual void setAudioInputDevice(std::string id) = 0;
     virtual void addExternalAudioSamples(std::vector<uint8_t> &&samples) = 0;
 
-    virtual void addOutgoingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) = 0;
-    virtual void addIncomingVideoOutput(std::string const &endpointId, std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) = 0;
+    virtual void addOutgoingVideoOutput(std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) = 0;
+    virtual void addIncomingVideoOutput(std::string const &endpointId, std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) = 0;
 
     virtual void setVolume(uint32_t ssrc, double volume) = 0;
     virtual void setRequestedVideoChannels(std::vector<VideoChannelDescription> &&requestedVideoChannels) = 0;

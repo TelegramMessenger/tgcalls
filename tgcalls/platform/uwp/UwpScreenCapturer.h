@@ -7,7 +7,7 @@
 #include "api/video/video_frame.h"
 #include "api/video/video_source_interface.h"
 #include "common_video/include/video_frame_buffer_pool.h"
-#include "media/base/video_adapter.h"
+#include "api/video/video_adapter.h"
 #include "modules/video_capture/video_capture.h"
 
 #include "VideoCaptureInterface.h"
@@ -33,7 +33,7 @@ namespace tgcalls {
 class UwpScreenCapturer {
 public:
 	explicit UwpScreenCapturer(
-		std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink, GraphicsCaptureItem item);
+		std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink, GraphicsCaptureItem item);
 	~UwpScreenCapturer();
 
 	void setState(VideoState state);
@@ -54,8 +54,8 @@ private:
 
 	// Takes, when only part of the screen changed, the area that did: the software
 	// encoders use it to leave the rest alone.
-	void OnFrame(rtc::scoped_refptr<webrtc::NV12Buffer> buffer, int64_t timestamp_ms,
-		const absl::optional<webrtc::VideoFrame::UpdateRect>& updateRect);
+	void OnFrame(webrtc::scoped_refptr<webrtc::NV12Buffer> buffer, int64_t timestamp_ms,
+		const std::optional<webrtc::VideoFrame::UpdateRect>& updateRect);
 
 	bool item_closed_ = false;
 	bool is_capture_started_ = false;
@@ -94,7 +94,7 @@ private:
 	webrtc::VideoFrameBufferPool buffer_pool_;
 	// The frame that went out last: it is both what the next capture is compared against and
 	// what gets sent again while the screen sits still.
-	rtc::scoped_refptr<webrtc::NV12Buffer> previous_frame_;
+	webrtc::scoped_refptr<webrtc::NV12Buffer> previous_frame_;
 	int64_t last_delivery_ms_ = 0;
 	int64_t first_empty_poll_ms_ = 0;
 
@@ -113,7 +113,7 @@ private:
 	void ProcessFrame();
 	void OnClosed(GraphicsCaptureItem const& sender, winrt::Windows::Foundation::IInspectable const& args);
 
-	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _sink;
+	std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> _sink;
 
 	VideoState _state = VideoState::Inactive;
 	std::pair<int, int> _dimensions;

@@ -1,9 +1,20 @@
 load("@io_bazel_rules_go//go:def.bzl", "go_binary")
 
+# The broadcast server's fixture slices (made by testdata/broadcast/make-broadcast-fixtures.sh).
+filegroup(
+    name = "broadcast_fixtures",
+    srcs = glob(["testdata/broadcast/*.mp4"]),
+    visibility = ["//visibility:public"],
+)
+
 go_binary(
     name = "go_sfu",
     srcs = glob(["*.go"]),
     cgo = True,
+    # The broadcast server's listener audio decodes and re-encodes Opus with the vendored libopus, the same library
+    # webrtc links (broadcast_libopus.go; `go test` builds without the tag and injects a fake codec).
+    cdeps = ["//third-party/opus:opus"],
+    gotags = ["tgcalls_vendored_opus"],
     linkmode = "c-archive",
     visibility = ["//visibility:public"],
     deps = [

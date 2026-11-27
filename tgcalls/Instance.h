@@ -11,10 +11,10 @@
 #include "Stats.h"
 #include "DirectConnectionChannel.h"
 
-namespace rtc {
+namespace webrtc {
 template <typename VideoFrameT>
 class VideoSinkInterface;
-} // namespace rtc
+} // namespace webrtc
 
 namespace webrtc {
 class VideoFrame;
@@ -74,11 +74,6 @@ struct Endpoint {
 	unsigned char peerTag[16] = { 0 };
 };
 
-enum class ProtocolVersion {
-    V0,
-    V1 // Low-cost network negotiation
-};
-
 enum class NetworkType {
 	Unknown,
 	Gprs,
@@ -121,7 +116,6 @@ struct Config {
 	int maxApiLayer = 0;
     bool enableHighBitrateVideo = false;
     std::vector<std::string> preferredVideoCodecs;
-    ProtocolVersion protocolVersion = ProtocolVersion::V0;
     std::string customParameters = "";
 };
 
@@ -189,7 +183,7 @@ public:
 	virtual void setEchoCancellationStrength(int strength) = 0;
 
 	virtual bool supportsVideo() = 0;
-	virtual void setIncomingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) = 0;
+	virtual void setIncomingVideoOutput(std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) = 0;
 
 	virtual void setAudioInputDevice(std::string id) = 0;
 	virtual void setAudioOutputDevice(std::string id) = 0;
@@ -200,6 +194,22 @@ public:
     }
 
     virtual void setIsLowBatteryLevel(bool isLowBatteryLevel) = 0;
+    // Whether the device's power state (Low Power Mode, battery, thermal state) lets this side send AV1. Only
+    // InstanceV2ReferenceImpl sends AV1; every other engine ignores it.
+    virtual void setVideoSendAv1AllowedByPower(bool allowed) {
+    }
+    // Debug controls for the camera sender, applied at once and without a renegotiation: the codec forced to
+    // `codecName` among the negotiated ones ("AV1", "H265", "H264", "VP9", "VP8"; empty: the engine's own choice) and
+    // the bitrate cap in kbps (0: the engine's own). Only InstanceV2ReferenceImpl implements them.
+    virtual void setVideoSendCodecOverride(std::string const &codecName) {
+    }
+    virtual void setVideoSendMaxBitrateKbps(int kbps) {
+    }
+    // The latest "video stats" line (InstanceV2ReferenceImpl; empty elsewhere and before the first one), for a debug
+    // readout. Any thread.
+    virtual std::string getVideoStatsLine() {
+        return std::string();
+    }
 
 	virtual std::string getLastError() = 0;
 	virtual std::string getDebugInfo() = 0;
@@ -242,6 +252,9 @@ struct Descriptor {
     std::string initialInputDeviceId;
     std::string initialOutputDeviceId;
     std::shared_ptr<DirectConnectionChannel> directConnectionChannel;
+    // libopus's neural weights, for Opus DRED (InstanceV2ReferenceImpl only; group/GroupOpusDred.h): none, or a blob
+    // that is not well formed, means no DRED.
+    std::shared_ptr<const std::vector<uint8_t>> opusDnnWeights;
 };
 
 class Meta {

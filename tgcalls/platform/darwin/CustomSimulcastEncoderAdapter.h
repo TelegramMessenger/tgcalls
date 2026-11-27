@@ -13,6 +13,7 @@
 #define TGCALLS_CUSTOM_SIMULCAST_ENCODER_ADAPTER_H_
 
 #include <cstdint>
+#include <functional>
 #include <atomic>
 #include <list>
 #include <memory>
@@ -21,7 +22,7 @@
 #include <utility>
 #include <vector>
 
-#include "absl/types/optional.h"
+#include <optional>
 #include "api/fec_controller_override.h"
 #include "api/sequence_checker.h"
 #include "api/video_codecs/sdp_video_format.h"
@@ -32,6 +33,7 @@
 #include "rtc_base/experiments/encoder_info_settings.h"
 #include "rtc_base/system/no_unique_address.h"
 #include "rtc_base/system/rtc_export.h"
+#include "api/environment/environment.h"
 #include "api/field_trials_view.h"
 
 namespace webrtc {
@@ -42,16 +44,23 @@ namespace webrtc {
 // interfaces should be called from the encoder task queue.
 class RTC_EXPORT CustomSimulcastEncoderAdapter : public VideoEncoder {
  public:
-  // TODO(bugs.webrtc.org/11000): Remove when downstream usage is gone.
-  CustomSimulcastEncoderAdapter(VideoEncoderFactory* primarty_factory,
-                          const SdpVideoFormat& format);
   // `primary_factory` produces the first-choice encoders to use.
   // `fallback_factory`, if non-null, is used to create fallback encoder that
   // will be used if InitEncode() fails for the primary encoder.
-  CustomSimulcastEncoderAdapter(VideoEncoderFactory* primary_factory,
+  // `top_stream_encoder_factory`, if set, makes the encoder of the
+  // highest-quality stream whenever there are two or more streams (tgcalls:
+  // the group screen share's AV1 top layer beside H264 streams); the other
+  // streams, and every stream of a single-stream setup, come from the
+  // factories as before. With `top_stream_encoder_for_every_stream` it makes
+  // the encoder of every stream, whatever their number (an AV1 sender's
+  // simulcast: `format` is AV1, which the factories need not make).
+  CustomSimulcastEncoderAdapter(const Environment& env,
+                          VideoEncoderFactory* primary_factory,
                           VideoEncoderFactory* hardware_factory,
                           const SdpVideoFormat& format,
-                          const FieldTrialsView& field_trials);
+                          std::function<std::unique_ptr<VideoEncoder>()>
+                              top_stream_encoder_factory = nullptr,
+                          bool top_stream_encoder_for_every_stream = false);
   ~CustomSimulcastEncoderAdapter() override;
 
   // Implements VideoEncoder.
@@ -76,11 +85,14 @@ class RTC_EXPORT CustomSimulcastEncoderAdapter : public VideoEncoder {
     EncoderContext(std::unique_ptr<VideoEncoder> encoder,
                    bool prefer_temporal_support,
                    VideoEncoder::EncoderInfo primary_info,
-                   VideoEncoder::EncoderInfo fallback_info);
+                   VideoEncoder::EncoderInfo fallback_info,
+                   bool is_top_stream = false);
     EncoderContext& operator=(EncoderContext&&) = delete;
 
     VideoEncoder& encoder() { return *encoder_; }
     bool prefer_temporal_support() { return prefer_temporal_support_; }
+    // Made by the top-stream encoder factory: reused only for the top stream.
+    bool is_top_stream() { return is_top_stream_; }
     void Release();
 
     const VideoEncoder::EncoderInfo& PrimaryInfo() { return primary_info_; }
@@ -90,6 +102,7 @@ class RTC_EXPORT CustomSimulcastEncoderAdapter : public VideoEncoder {
    private:
     std::unique_ptr<VideoEncoder> encoder_;
     bool prefer_temporal_support_;
+    bool is_top_stream_;
     const VideoEncoder::EncoderInfo primary_info_;
     const VideoEncoder::EncoderInfo fallback_info_;
   };
@@ -110,7 +123,9 @@ class RTC_EXPORT CustomSimulcastEncoderAdapter : public VideoEncoder {
     Result OnEncodedImage(
         const EncodedImage& encoded_image,
         const CodecSpecificInfo* codec_specific_info) override;
-    void OnDroppedFrame(DropReason reason) override;
+    void OnFrameDropped(uint32_t rtp_timestamp,
+                        int spatial_id,
+                        bool is_end_of_temporal_unit) override;
 
     VideoEncoder& encoder() { return encoder_context_->encoder(); }
     const VideoEncoder& encoder() const { return encoder_context_->encoder(); }
@@ -123,10 +138,10 @@ class RTC_EXPORT CustomSimulcastEncoderAdapter : public VideoEncoder {
     void set_is_keyframe_needed() { is_keyframe_needed_ = true; }
     bool is_paused() const { return is_paused_; }
     void set_is_paused(bool is_paused) { is_paused_ = is_paused; }
-    absl::optional<double> target_fps() const {
+    std::optional<double> target_fps() const {
       return framerate_controller_ == nullptr
-                 ? absl::nullopt
-                 : absl::optional<double>(
+                 ? std::nullopt
+                 : std::optional<double>(
                        framerate_controller_->GetMaxFramerate());
     }
 
@@ -170,10 +185,16 @@ class RTC_EXPORT CustomSimulcastEncoderAdapter : public VideoEncoder {
 
   void OverrideFromFieldTrial(VideoEncoder::EncoderInfo* info) const;
 
+  // Whether the stream's encoder comes from `top_stream_encoder_factory_`.
+  bool UsesTopStreamEncoder(bool is_highest_quality_stream) const;
+
   std::atomic<int> inited_;
+  const Environment env_;
   VideoEncoderFactory* const primary_encoder_factory_;
   VideoEncoderFactory* const hardware_encoder_factory_;
   const SdpVideoFormat video_format_;
+  const std::function<std::unique_ptr<VideoEncoder>()> top_stream_encoder_factory_;
+  const bool top_stream_encoder_for_every_stream_;
   VideoCodec codec_;
   int total_streams_count_;
   bool bypass_mode_;
@@ -189,7 +210,7 @@ class RTC_EXPORT CustomSimulcastEncoderAdapter : public VideoEncoder {
   // GetEncoderInfo(), which is const.
   mutable std::list<std::unique_ptr<EncoderContext>> cached_encoder_contexts_;
 
-  const absl::optional<unsigned int> experimental_boosted_screenshare_qp_;
+  const std::optional<unsigned int> experimental_boosted_screenshare_qp_;
   const bool boost_base_layer_quality_;
   const bool prefer_temporal_support_on_base_layer_;
 

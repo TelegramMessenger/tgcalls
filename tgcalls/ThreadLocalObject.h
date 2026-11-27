@@ -14,7 +14,7 @@ public:
 	template <
 		typename Generator,
 		typename = std::enable_if_t<std::is_same<std::shared_ptr<T>, decltype(std::declval<Generator>()())>::value>>
-	ThreadLocalObject(rtc::Thread *thread, Generator &&generator) :
+	ThreadLocalObject(webrtc::Thread *thread, Generator &&generator) :
 	_thread(thread),
 	_valueHolder(std::make_unique<ValueHolder>()) {
 		assert(_thread != nullptr);
@@ -48,7 +48,7 @@ private:
 		std::shared_ptr<T> _value;
 	};
 
-	rtc::Thread *_thread = nullptr;
+	webrtc::Thread *_thread = nullptr;
 	std::unique_ptr<ValueHolder> _valueHolder;
 
 };

@@ -36,6 +36,10 @@ inline bool getCustomParameterBoolDefaultTrue(std::map<std::string, json11::Json
     return true;
 }
 
+// json11 stores a number with a fraction, an exponent or 10+ digits as a double,
+// and its int_value() casts that unchecked (undefined behaviour past int's
+// range), so the double is range-checked here: a number that does not fit an
+// int reads as absent. A fraction is truncated.
 inline int getCustomParameterInt(std::map<std::string, json11::Json> const &parameters, std::string const &name) {
     const auto value = parameters.find(name);
     if (value != parameters.end() && value->second.is_number()) {

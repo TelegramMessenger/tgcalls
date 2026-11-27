@@ -92,7 +92,7 @@ API_AVAILABLE(macos(12.3))
     NSString *_colorSpaceName;
     std::function<void()> _onFatalError;
     std::function<void(bool)> _onPause;
-    std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _secondarySink;
+    std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> _secondarySink;
     RTC_OBJC_TYPE(RTCCVPixelBuffer) *_lastBuffer;
     int64_t _lastDeliveryNs;
     dispatch_source_t _repeatTimer;
@@ -184,7 +184,7 @@ API_AVAILABLE(macos(12.3))
     });
 }
 
-- (void)setSecondaryOutput:(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>)sink {
+- (void)setSecondaryOutput:(std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>>)sink {
     dispatch_async(_queue, ^{
         self->_secondarySink = sink;
     });
@@ -291,7 +291,7 @@ API_AVAILABLE(macos(12.3))
     if (!_isRunning || _isPaused || _lastBuffer == nil) {
         return;
     }
-    if (rtc::TimeNanos() - _lastDeliveryNs >= (int64_t)(interval * 3 / 2)) {
+    if (webrtc::TimeNanos() - _lastDeliveryNs >= (int64_t)(interval * 3 / 2)) {
         [self deliver:_lastBuffer];
     }
 }
@@ -321,7 +321,7 @@ API_AVAILABLE(macos(12.3))
 }
 
 - (void)deliver:(RTC_OBJC_TYPE(RTCCVPixelBuffer) *)buffer {
-    int64_t timestampNs = rtc::TimeNanos();
+    int64_t timestampNs = webrtc::TimeNanos();
     _lastBuffer = buffer;
     _lastDeliveryNs = timestampNs;
     RTC_OBJC_TYPE(RTCVideoFrame) *frame = [[RTC_OBJC_TYPE(RTCVideoFrame) alloc] initWithBuffer:buffer rotation:RTCVideoRotation_0 timeStampNs:timestampNs];
@@ -330,9 +330,9 @@ API_AVAILABLE(macos(12.3))
     }
     if (const auto sink = _secondarySink) {
         webrtc::VideoFrame nativeFrame = webrtc::VideoFrame::Builder()
-            .set_video_frame_buffer(rtc::make_ref_counted<webrtc::ObjCFrameBuffer>(buffer))
+            .set_video_frame_buffer(webrtc::make_ref_counted<webrtc::ObjCFrameBuffer>(buffer))
             .set_rotation(webrtc::kVideoRotation_0)
-            .set_timestamp_us(timestampNs / rtc::kNumNanosecsPerMicrosec)
+            .set_timestamp_us(timestampNs / webrtc::kNumNanosecsPerMicrosec)
             .build();
         sink->OnFrame(nativeFrame);
     }

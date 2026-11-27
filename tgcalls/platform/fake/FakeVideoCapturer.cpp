@@ -2,6 +2,7 @@
 
 #include "api/video/i420_buffer.h"
 #include "api/video/video_rotation.h"
+#include "api/video/video_common.h"
 #include "rtc_base/time_utils.h"
 
 #include <chrono>
@@ -28,20 +29,47 @@ constexpr UVTint kTints[6] = {
 
 } // namespace
 
-rtc::scoped_refptr<FakePlatformVideoSource> FakePlatformVideoSource::Create() {
-    return rtc::scoped_refptr<FakePlatformVideoSource>(
-        new rtc::RefCountedObject<FakePlatformVideoSource>());
+webrtc::scoped_refptr<FakePlatformVideoSource> FakePlatformVideoSource::Create() {
+    return webrtc::scoped_refptr<FakePlatformVideoSource>(
+        new webrtc::RefCountedObject<FakePlatformVideoSource>());
 }
 
 void FakePlatformVideoSource::PushFrame(const webrtc::VideoFrame &frame) {
-    OnFrame(frame);
+    int adaptedWidth = 0;
+    int adaptedHeight = 0;
+    int cropWidth = 0;
+    int cropHeight = 0;
+    int cropX = 0;
+    int cropY = 0;
+    if (!AdaptFrame(frame.width(), frame.height(), frame.timestamp_us(), &adaptedWidth, &adaptedHeight, &cropWidth,
+                    &cropHeight, &cropX, &cropY)) {
+        return;
+    }
+    if (adaptedWidth == frame.width() && adaptedHeight == frame.height()) {
+        OnFrame(frame);
+        return;
+    }
+    webrtc::scoped_refptr<webrtc::I420Buffer> scaled = webrtc::I420Buffer::Create(adaptedWidth, adaptedHeight);
+    scaled->CropAndScaleFrom(*frame.video_frame_buffer()->ToI420(), cropX, cropY, cropWidth, cropHeight);
+    OnFrame(webrtc::VideoFrame::Builder()
+        .set_video_frame_buffer(scaled)
+        .set_rotation(frame.rotation())
+        .set_timestamp_us(frame.timestamp_us())
+        .build());
 }
 
-FakeVideoCapturer::FakeVideoCapturer(rtc::scoped_refptr<FakePlatformVideoSource> source,
+void FakePlatformVideoSource::OnOutputFormatRequest(int width, int height, int fps) {
+    webrtc::VideoFormat format(width, height, webrtc::VideoFormat::FpsToInterval(fps), 0);
+    video_adapter()->OnOutputFormatRequest(format);
+}
+
+FakeVideoCapturer::FakeVideoCapturer(webrtc::scoped_refptr<FakePlatformVideoSource> source,
                                      std::string deviceId,
-                                     std::function<void(VideoState)> stateUpdated)
+                                     std::function<void(VideoState)> stateUpdated,
+                                     std::function<void(PlatformCaptureInfo)> captureInfoUpdated)
 : _source(std::move(source))
-, _stateUpdated(std::move(stateUpdated)) {
+, _stateUpdated(std::move(stateUpdated))
+, _captureInfoUpdated(std::move(captureInfoUpdated)) {
     int tintIndex = std::atoi(deviceId.c_str());
     if (tintIndex < 0) tintIndex = -tintIndex;
     _uTint = kTints[tintIndex % 6].u;
@@ -54,6 +82,14 @@ FakeVideoCapturer::~FakeVideoCapturer() {
 
 void FakeVideoCapturer::setState(VideoState state) {
     if (state == VideoState::Active) {
+        // Darwin's camera reports its rotation once it runs, and that report is what applies the capture interface's
+        // format request (adaptVideoSource: size and frame-rate cap). A landscape camera: rotation 0.
+        if (_captureInfoUpdated) {
+            PlatformCaptureInfo info;
+            info.shouldBeAdaptedToReceiverAspectRate = false;
+            info.rotation = 0;
+            _captureInfoUpdated(info);
+        }
         start();
     } else {
         stop();
@@ -63,7 +99,7 @@ void FakeVideoCapturer::setState(VideoState state) {
     }
 }
 
-void FakeVideoCapturer::setUncroppedOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+void FakeVideoCapturer::setUncroppedOutput(std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
     std::lock_guard<std::mutex> lock(_sinkMutex);
     _uncroppedSink = std::move(sink);
 }
@@ -82,6 +118,9 @@ void FakeVideoCapturer::stop() {
 
 void FakeVideoCapturer::generateThread() {
     int frameNumber = 0;
+    // Paced on a schedule, not by a fixed sleep after each frame, so that the camera delivers kFps whatever a frame
+    // costs to draw (a sleep after the work ran at ~27.5 fps).
+    const auto start = std::chrono::steady_clock::now();
     while (_running.load(std::memory_order_relaxed)) {
         auto buffer = webrtc::I420Buffer::Create(kWidth, kHeight);
 
@@ -99,12 +138,12 @@ void FakeVideoCapturer::generateThread() {
         auto frame = webrtc::VideoFrame::Builder()
             .set_video_frame_buffer(buffer)
             .set_rotation(webrtc::kVideoRotation_0)
-            .set_timestamp_us(rtc::TimeMicros())
+            .set_timestamp_us(webrtc::TimeMicros())
             .build();
 
         _source->PushFrame(frame);
 
-        std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink;
+        std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink;
         {
             std::lock_guard<std::mutex> lock(_sinkMutex);
             sink = _uncroppedSink;
@@ -114,7 +153,7 @@ void FakeVideoCapturer::generateThread() {
         }
 
         ++frameNumber;
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000 / kFps));
+        std::this_thread::sleep_until(start + std::chrono::microseconds(int64_t(frameNumber) * 1000000 / kFps));
     }
 }
 

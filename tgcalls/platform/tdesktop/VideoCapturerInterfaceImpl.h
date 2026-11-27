@@ -19,7 +19,7 @@ class PlatformContext;
 class VideoCapturerInterfaceImpl final : public VideoCapturerInterface {
 public:
 	VideoCapturerInterfaceImpl(
-		rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source,
+		webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> source,
 		std::string deviceId,
 		std::function<void(VideoState)> stateUpdated,
 		std::shared_ptr<PlatformContext> platformContext,
@@ -28,7 +28,7 @@ public:
 
 	void setState(VideoState state) override;
 	void setPreferredCaptureAspectRatio(float aspectRatio) override;
-	void setUncroppedOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) override;
+	void setUncroppedOutput(std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) override;
 	int getRotation() override {
 		return 0;
 	}
@@ -36,15 +36,15 @@ public:
 	void setOnPause(std::function<void(bool)> pause) override;
 
 private:
-	rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _source;
-	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _sink;
+	webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> _source;
+	std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> _sink;
 #ifdef TGCALLS_UWP_DESKTOP
 	std::unique_ptr<UwpScreenCapturer> _screenCapturer;
 #else // TGCALLS_UWP_DESKTOP
 	std::unique_ptr<DesktopCaptureSourceHelper> _desktopCapturer;
 #endif // TGCALLS_UWP_DESKTOP
 	std::unique_ptr<VideoCameraCapturer> _cameraCapturer;
-	std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _uncroppedSink;
+	std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> _uncroppedSink;
 	std::function<void(VideoState)> _stateUpdated;
 	std::function<void()> _onFatalError;
 

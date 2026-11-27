@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <span>
 
 #include "api/array_view.h"
 #include "rtc_base/async_packet_socket.h"
@@ -23,17 +24,12 @@
 #include "rtc_base/socket_address.h"
 #include "rtc_base/async_tcp_socket.h"
 
-namespace rtc {
+namespace webrtc {
 
 class RawTcpSocket : public AsyncTCPSocketBase {
  public:
-  // Binds and connects `socket` and creates RawTcpSocket for
-  // it. Takes ownership of `socket`. Returns null if bind() or
-  // connect() fail (`socket` is destroyed in that case).
-  static RawTcpSocket* Create(Socket* socket,
-                                const SocketAddress& bind_address,
-                                const SocketAddress& remote_address);
-  explicit RawTcpSocket(Socket* socket);
+  // Takes ownership of an already bound and connecting `socket`.
+  explicit RawTcpSocket(std::unique_ptr<Socket> socket);
   ~RawTcpSocket() override {}
 
   RawTcpSocket(const RawTcpSocket&) = delete;
@@ -41,13 +37,13 @@ class RawTcpSocket : public AsyncTCPSocketBase {
 
   int Send(const void* pv,
            size_t cb,
-           const rtc::PacketOptions& options) override;
-  size_t ProcessInput(rtc::ArrayView<const uint8_t>) override;
+           const webrtc::AsyncSocketPacketOptions& options) override;
+  size_t ProcessInput(std::span<const uint8_t> data) override;
 
  private:
   bool did_send_mtproto_prologue_ = false;
 };
 
-}  // namespace rtc
+}  // namespace webrtc
 
 #endif  // TG_CALLS_RAW_TCP_SOCKET_H_

@@ -5,7 +5,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -52,6 +51,15 @@ public:
     static constexpr size_t kMaxChannelsPerSegment = 32;
     static constexpr int64_t kResyncToleranceUs = 40000;
 
+    struct CaptionAudioBlock {
+        uint32_t generation = 0;
+        uint32_t ssrc = 0;
+        int16_t samples[kBlockSamples] = {};
+    };
+
+    void setCaptionsEnabled(bool enabled);
+    bool takeCaptionAudio(CaptionAudioBlock &block);
+
     explicit Core(Clock clock = defaultClockMicroseconds);
     ~Core();
 
@@ -77,8 +85,7 @@ public:
     // Device thread. Overwrites `samples` (`frames` × `channels` interleaved signed 16-bit at `sampleRate`) with the
     // audio due now, zeros where nothing is due. Returns false, leaving the buffer untouched, when inactive or when
     // the block is not 10 ms.
-    using SourceAudio = std::function<void(uint32_t, const int16_t *)>;
-    bool render(int16_t *samples, size_t frames, size_t channels, uint32_t sampleRate, const SourceAudio &sourceAudio = {});
+    bool render(int16_t *samples, size_t frames, size_t channels, uint32_t sampleRate);
 
 private:
     void collect();

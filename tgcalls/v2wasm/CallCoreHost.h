@@ -44,7 +44,7 @@ public:
     void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture);
     void setMuteMicrophone(bool mute);
     void setIsLowBatteryLevel(bool low);
-    void setIncomingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
+    void setIncomingVideoOutput(std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink);
     void setAudioInputDevice(std::string id);
     void setAudioOutputDevice(std::string id);
     void stop(std::function<void(FinalState)> completion);
@@ -123,10 +123,10 @@ private:
 
     // webrtc
     std::unique_ptr<webrtc::TaskQueueFactory> _taskQueueFactory;
-    std::unique_ptr<rtc::NetworkMonitorFactory> _networkMonitorFactory;
-    std::unique_ptr<rtc::BasicPacketSocketFactory> _socketFactory;
-    std::unique_ptr<rtc::BasicNetworkManager> _networkManager;
-    std::unique_ptr<cricket::RelayPortFactoryInterface> _relayPortFactory;
+    std::unique_ptr<webrtc::NetworkMonitorFactory> _networkMonitorFactory;
+    std::unique_ptr<webrtc::BasicPacketSocketFactory> _socketFactory;
+    std::unique_ptr<webrtc::BasicNetworkManager> _networkManager;
+    std::unique_ptr<webrtc::RelayPortFactoryInterface> _relayPortFactory;
     webrtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> _peerConnectionFactory;
     std::unique_ptr<webrtc::PeerConnectionObserver> _peerConnectionObserver;
     webrtc::scoped_refptr<webrtc::PeerConnectionInterface> _peerConnection;
@@ -141,7 +141,7 @@ private:
     // Incoming mids the core asked to bind the app video sink to.
     std::set<std::string> _requestedSinkMids;
     std::map<std::string, webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>> _incomingVideoTransceivers;
-    std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _currentStrongSink;
+    std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> _currentStrongSink;
     // Exactly the tracks we called AddOrUpdateSink on. RemoveSink DCHECKs when the
     // sink was never added, and attachment is asymmetric (a transceiver added while
     // no sink is set is never attached), so removal must be driven by this set, not

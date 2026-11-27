@@ -26,19 +26,19 @@ static RTCVideoFrame *customToObjCVideoFrame(const webrtc::VideoFrame &frame, RT
     RTCVideoFrame *videoFrame =
     [[RTCVideoFrame alloc] initWithBuffer:webrtc::ToObjCVideoFrameBuffer(frame.video_frame_buffer())
                                  rotation:rotation
-                              timeStampNs:frame.timestamp_us() * rtc::kNumNanosecsPerMicrosec];
-    videoFrame.timeStamp = frame.timestamp();
+                              timeStampNs:frame.timestamp_us() * webrtc::kNumNanosecsPerMicrosec];
+    videoFrame.timeStamp = frame.rtp_timestamp();
 
     return videoFrame;
 }
 
-static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const rtc::scoped_refptr<webrtc::VideoTrackSourceInterface> nativeSource) {
+static tgcalls::DarwinVideoTrackSource *getObjCVideoSource(const webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface> nativeSource) {
     webrtc::VideoTrackSourceProxy *proxy_source =
     static_cast<webrtc::VideoTrackSourceProxy *>(nativeSource.get());
     return static_cast<tgcalls::DarwinVideoTrackSource *>(proxy_source->internal());
 }
 
-class RendererAdapterImpl : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
+class RendererAdapterImpl : public webrtc::VideoSinkInterface<webrtc::VideoFrame> {
 public:
     RendererAdapterImpl(void (^frameReceived)(CGSize, RTCVideoFrame *, RTCVideoRotation)) {
         _frameReceived = [frameReceived copy];
@@ -61,14 +61,14 @@ private:
 };
 
 @implementation DesktopSharingCapturer {
-    absl::optional<tgcalls::DesktopCaptureSourceHelper> renderer;
+    std::optional<tgcalls::DesktopCaptureSourceHelper> renderer;
     std::shared_ptr<RendererAdapterImpl> _sink;
     BOOL _isPaused;
 #ifdef TGCALLS_USE_SCREENCAPTUREKIT
     id _screenCaptureKitCapturer;
 #endif
 }
-- (instancetype)initWithSource:(rtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)trackSource captureSource:(tgcalls::DesktopCaptureSource)captureSource {
+- (instancetype)initWithSource:(webrtc::scoped_refptr<webrtc::VideoTrackSourceInterface>)trackSource captureSource:(tgcalls::DesktopCaptureSource)captureSource {
     self = [super init];
     if (self != nil) {
         _sink.reset(new RendererAdapterImpl(^(CGSize size, RTCVideoFrame *videoFrame, RTCVideoRotation rotation) {
@@ -160,7 +160,7 @@ private:
 - (void)setPreferredCaptureAspectRatio:(float)aspectRatio {
 }
 
-- (void)setUncroppedSink:(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame> >)sink {
+- (void)setUncroppedSink:(std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame> >)sink {
 #ifdef TGCALLS_USE_SCREENCAPTUREKIT
     if (@available(macOS 12.3, *)) {
         if (_screenCaptureKitCapturer != nil) {

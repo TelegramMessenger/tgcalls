@@ -2,6 +2,7 @@
 #include "group_participant.h"
 
 #include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <thread>
 #include <unistd.h>
@@ -188,7 +189,7 @@ int runGroupChurnMode(
     printf("Video:                  %s\n", video ? "yes" : "no");
     printf("Stabilization:          %ds\n", duration);
     printf("Base connected:         %d/%d\n", result.connectedCount, result.totalParticipants);
-    printf("Base audio received:    %d/%d\n", result.audioReceivedCount, result.totalParticipants);
+    printf("Base audio received:    %d/%d\n", result.audioReceivedCount, result.audioListeners);
     if (video) {
         printf("Base video received:    %d/%d\n", result.videoReceivedPairs, result.videoExpectedPairs);
     }

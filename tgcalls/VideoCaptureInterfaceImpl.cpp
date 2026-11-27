@@ -1,8 +1,6 @@
 #include "VideoCaptureInterfaceImpl.h"
 
 #include "VideoCapturerInterface.h"
-#include "Manager.h"
-#include "MediaManager.h"
 #include "platform/PlatformInterface.h"
 #include "StaticThreads.h"
 
@@ -110,6 +108,9 @@ void VideoCaptureInterfaceObject::setPreferredAspectRatio(float aspectRatio) {
     updateAspectRateAdaptation();
 }
 
+// The frame rate a call's camera video is capped at, for every call type and codec (the camera captures at 30).
+constexpr int kMaxCaptureFramerate = 30;
+
 void VideoCaptureInterfaceObject::updateAspectRateAdaptation() {
     if (_videoCapturer) {
         if (_videoCapturerResolution.first != 0 && _videoCapturerResolution.second != 0) {
@@ -126,15 +127,15 @@ void VideoCaptureInterfaceObject::updateAspectRateAdaptation() {
                     ? originalHeight
                     : int(std::round(originalHeight / aspectRatio));
 
-                PlatformInterface::SharedInstance()->adaptVideoSource(_videoSource, (int)width, (int)height, 25);
+                PlatformInterface::SharedInstance()->adaptVideoSource(_videoSource, (int)width, (int)height, kMaxCaptureFramerate);
             } else {
-                PlatformInterface::SharedInstance()->adaptVideoSource(_videoSource, _videoCapturerResolution.first, _videoCapturerResolution.second, 25);
+                PlatformInterface::SharedInstance()->adaptVideoSource(_videoSource, _videoCapturerResolution.first, _videoCapturerResolution.second, kMaxCaptureFramerate);
             }
         }
     }
 }
 
-void VideoCaptureInterfaceObject::setOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+void VideoCaptureInterfaceObject::setOutput(std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
 	if (_videoCapturer) {
 		_videoCapturer->setUncroppedOutput(sink);
 	}
@@ -214,7 +215,7 @@ void VideoCaptureInterfaceImpl::setOnIsActiveUpdated(std::function<void(bool)> o
     });
 }
 
-void VideoCaptureInterfaceImpl::setOutput(std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+void VideoCaptureInterfaceImpl::setOutput(std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
 	_impl.perform([sink](VideoCaptureInterfaceObject *impl) {
 		impl->setOutput(sink);
 	});

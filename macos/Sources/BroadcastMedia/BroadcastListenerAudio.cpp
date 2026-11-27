@@ -3,7 +3,7 @@
 #include "BroadcastAudioCore.h"
 #include "BroadcastMediaIO.h"
 
-#include "rtc_base/third_party/base64/base64.h"
+#include "rtc_base/base64.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -16,6 +16,7 @@ extern "C" {
 #include <cstring>
 #include <cstdint>
 #include <cmath>
+#include <optional>
 #include <set>
 #include <sstream>
 
@@ -174,11 +175,9 @@ private:
         }
         AVDictionaryEntry *entry = av_dict_get(metadata, "TG_META", nullptr, 0);
         if (entry && entry->value) {
-            std::string decoded;
-            size_t used = 0;
-            rtc::Base64::Decode(std::string(entry->value), rtc::Base64::DO_LAX, &decoded, &used);
-            if (!decoded.empty()) {
-                updates = parseChannelUpdates(decoded);
+            std::optional<std::string> decoded = webrtc::Base64Decode(entry->value, webrtc::Base64DecodeOptions::kForgiving);
+            if (decoded && !decoded->empty()) {
+                updates = parseChannelUpdates(*decoded);
             }
         }
         uint32_t mask = 0;

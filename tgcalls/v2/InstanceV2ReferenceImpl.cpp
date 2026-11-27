@@ -6,12 +6,15 @@
 #include "LogSinkImpl.h"
 #include "VideoCaptureInterfaceImpl.h"
 #include "VideoCapturerInterface.h"
-#include "v2/NativeNetworkingImpl.h"
+#include "v2/InstanceNetworking.h"
 #include "v2/Signaling.h"
-#include "v2/ContentNegotiation.h"
+#include "group/GroupOpusDred.h"
+#include "group/ScreencastSendParameters.h"
 
-#include "CodecSelectHelper.h"
 
+#include "api/audio/builtin_audio_processing_builder.h"
+#include "api/create_modular_peer_connection_factory.h"
+#include "api/environment/environment_factory.h"
 #include "api/audio_codecs/audio_decoder_factory_template.h"
 #include "api/audio_codecs/audio_encoder_factory_template.h"
 #include "api/audio_codecs/opus/audio_decoder_opus.h"
@@ -21,18 +24,17 @@
 #include "api/audio_codecs/L16/audio_encoder_L16.h"
 #include "api/task_queue/default_task_queue_factory.h"
 #include "media/engine/webrtc_media_engine.h"
-#include "system_wrappers/include/field_trial.h"
+#include "api/field_trials_view.h"
 #include "api/video/builtin_video_bitrate_allocator_factory.h"
 #include "call/call.h"
 #include "api/call/audio_sink.h"
 #include "modules/audio_processing/audio_buffer.h"
 #include "absl/strings/match.h"
 #include "audio/audio_state.h"
-#include "modules/audio_coding/neteq/default_neteq_factory.h"
+#include "api/neteq/default_neteq_factory.h"
 #include "modules/audio_coding/include/audio_coding_module.h"
 #include "api/candidate.h"
 #include "api/jsep_ice_candidate.h"
-#include "pc/used_ids.h"
 #include "media/base/sdp_video_format_utils.h"
 #include "pc/media_session.h"
 #include "rtc_base/rtc_certificate_generator.h"
@@ -48,12 +50,9 @@
 
 #include "AudioFrame.h"
 #include "ThreadLocalObject.h"
-#include "Manager.h"
-#include "NetworkManager.h"
 #include "VideoCaptureInterfaceImpl.h"
 #include "platform/PlatformInterface.h"
 #include "LogSinkImpl.h"
-#include "CodecSelectHelper.h"
 #include "AudioDeviceHelper.h"
 #include "SignalingEncryption.h"
 #include "ReflectorRelayPortFactory.h"
@@ -61,13 +60,18 @@
 #include "v2/ExternalSignalingConnection.h"
 #include "v2/SignalingSctpConnection.h"
 #include "v2/ReflectorRelayPortFactory.h"
-#if !defined(SWIFT_PACKAGE)
 #include "v2/MtProtoDtlsTransport.h"
-#endif
 #include "v2/CustomParameters.h"
+#include "v2/VideoStatsLog.h"
+#if TGCALLS_ENABLE_AV1
+#include "av1/Av1EncoderFallback.h"
+#include "av1/Av1SendCodec.h"
+#include "av1/Av1VideoCodecFactories.h"
+#endif
 #ifdef WEBRTC_IOS
 #include "platform/darwin/iOS/tgcalls_audio_device_module_ios.h"
 #endif
+#include <mutex>
 #include <random>
 #include <sstream>
 #include <map>
@@ -160,13 +164,13 @@ class PeerConnectionDelegateAdapter: public webrtc::PeerConnectionObserver {
 public:
     struct Parameters {
         std::function<void()> onRenegotiationNeeded;
-        std::function<void(const webrtc::IceCandidateInterface *)> onIceCandidate;
+        std::function<void(const webrtc::IceCandidate *)> onIceCandidate;
         std::function<void(webrtc::PeerConnectionInterface::SignalingState state)> onSignalingChange;
         std::function<void(webrtc::PeerConnectionInterface::IceConnectionState state)> onConnectionChange;
         std::function<void(webrtc::scoped_refptr<webrtc::DataChannelInterface>)> onDataChannel;
         std::function<void(webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>)> onTransceiverAdded;
         std::function<void(webrtc::scoped_refptr<webrtc::RtpReceiverInterface>)> onTransceiverRemoved;
-        std::function<void(const cricket::CandidatePairChangeEvent &)> onCandidatePairChangeEvent;
+        std::function<void(const webrtc::CandidatePairChangeEvent &)> onCandidatePairChangeEvent;
     };
 
 public:
@@ -223,16 +227,14 @@ public:
     void OnIceGatheringChange(webrtc::PeerConnectionInterface::IceGatheringState new_state) override {
     }
 
-    void OnIceCandidate(const webrtc::IceCandidateInterface *candidate) override {
+    void OnIceCandidate(const webrtc::IceCandidate *candidate) override {
         if (_parameters.onIceCandidate) {
             _parameters.onIceCandidate(candidate);
         }
     }
 
-    void OnIceCandidatesRemoved(const std::vector<cricket::Candidate> &candidates) override {
-    }
 
-    void OnIceSelectedCandidatePairChanged(const cricket::CandidatePairChangeEvent &event) override {
+    void OnIceSelectedCandidatePairChanged(const webrtc::CandidatePairChangeEvent &event) override {
         if (_parameters.onCandidatePairChangeEvent) {
             _parameters.onCandidatePairChangeEvent(event);
         }
@@ -266,7 +268,7 @@ private:
     std::function<void(const webrtc::scoped_refptr<const webrtc::RTCStatsReport> &)> completion;
 };
 
-class VideoSinkImpl : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
+class VideoSinkImpl : public webrtc::VideoSinkInterface<webrtc::VideoFrame> {
 public:
     VideoSinkImpl() {
     }
@@ -297,7 +299,7 @@ public:
         }
     }
 
-    void addSink(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> impl) {
+    void addSink(std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> impl) {
         _sinks.push_back(impl);
         if (_lastFrame) {
             auto strong = impl.lock();
@@ -308,8 +310,8 @@ public:
     }
 
 private:
-    std::vector<std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>>> _sinks;
-    absl::optional<webrtc::VideoFrame> _lastFrame;
+    std::vector<std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>>> _sinks;
+    std::optional<webrtc::VideoFrame> _lastFrame;
 };
 
 class DataChannelObserverImpl : public webrtc::DataChannelObserver {
@@ -357,8 +359,8 @@ struct StateLogRecord {
 struct NetworkStateLogRecord {
     bool isConnected = false;
     bool isFailed = false;
-    absl::optional<InstanceNetworking::RouteDescription> route;
-    absl::optional<InstanceNetworking::ConnectionDescription> connection;
+    std::optional<InstanceNetworking::RouteDescription> route;
+    std::optional<InstanceNetworking::ConnectionDescription> connection;
 
     bool operator==(NetworkStateLogRecord const &rhs) const {
         if (isConnected != rhs.isConnected) {
@@ -382,13 +384,41 @@ struct NetworkBitrateLogRecord {
     int32_t bitrate = 0;
 };
 
+// How often a call logs its video stats ("video stats (<side>): ...").
+constexpr int kVideoStatsLogIntervalMs = 5000;
+
+// The camera sender's bitrate cap unless the debug control sets one.
+constexpr int kDefaultVideoSendMaxBitrateBps = 1200 * 1024;
+
+class StatsReportCallback : public webrtc::RTCStatsCollectorCallback {
+public:
+    explicit StatsReportCallback(std::function<void(const webrtc::scoped_refptr<const webrtc::RTCStatsReport> &)> onReport) :
+    _onReport(std::move(onReport)) {
+    }
+
+    void OnStatsDelivered(const webrtc::scoped_refptr<const webrtc::RTCStatsReport> &report) override {
+        _onReport(report);
+    }
+
+private:
+    std::function<void(const webrtc::scoped_refptr<const webrtc::RTCStatsReport> &)> _onReport;
+};
+
 } // namespace
+
+// The latest "video stats" line, written on the media thread and read from any (getVideoStatsLine).
+struct VideoStatsLineStore {
+    std::mutex mutex;
+    std::string line;
+};
 
 class InstanceV2ReferenceImplInternal : public std::enable_shared_from_this<InstanceV2ReferenceImplInternal> {
 public:
-    InstanceV2ReferenceImplInternal(Descriptor &&descriptor, std::shared_ptr<Threads> threads) :
+    InstanceV2ReferenceImplInternal(Descriptor &&descriptor, std::shared_ptr<Threads> threads,
+                                    std::shared_ptr<VideoStatsLineStore> videoStatsLine) :
     _signalingProtocolVersion(signalingProtocolVersion(descriptor.version)),
     _threads(threads),
+    _videoStatsLine(std::move(videoStatsLine)),
     _rtcServers(descriptor.rtcServers),
     _proxy(std::move(descriptor.proxy)),
     _enableP2P(descriptor.config.enableP2P),
@@ -406,6 +436,7 @@ public:
     _eventLog(std::make_unique<webrtc::RtcEventLogNull>()),
     _taskQueueFactory(webrtc::CreateDefaultTaskQueueFactory()),
     _videoCapture(descriptor.videoCapture) {
+        _opusDnnWeights = std::move(descriptor.opusDnnWeights);
         if (!descriptor.config.customParameters.empty()) {
             std::string parsingError;
             auto customParametersJson = json11::Json::parse(descriptor.config.customParameters, parsingError);
@@ -413,6 +444,15 @@ public:
                 _customParameters = customParametersJson.object_items();
             }
         }
+
+        // Opus DRED in libopus's adaptive mode (group/GroupOpusDred.h): on unless the server sends false, and only
+        // with usable weights.
+        _dredRequested = getCustomParameterBoolDefaultTrue(_customParameters, "audio_dred");
+        _dred = p2pOpusDredEnabled(_dredRequested, _opusDnnWeights);
+        // The call's own field trials, for every Environment it creates. Nothing goes into the process-wide string,
+        // which WebRTC reads whenever an object asks: setting it here replaced a running custom-engine group call's
+        // trials (and that call's replaced ours).
+        _fieldTrials = CreateP2PFieldTrials(_dred);
 
         // Default on since 2026-10-12. With AddTransceiver the callee's own audio
         // transceiver is never associated with the caller's m=0, so every call
@@ -427,11 +467,6 @@ public:
         // failure chain against the backstop in sendLocalDescription().
         _immediateCaptureRenegotiation = getCustomParameterBool(_customParameters, "network_reference_immediate_capture_renegotiation");
 #endif
-
-        webrtc::field_trial::InitFieldTrialsFromString(
-            "WebRTC-DataChannel-Dcsctp/Enabled/"
-            "WebRTC-Audio-iOS-Holding/Enabled/"
-        );
     }
 
     ~InstanceV2ReferenceImplInternal() {
@@ -460,7 +495,13 @@ public:
 
         RTC_DCHECK(_threads->getMediaThread()->IsCurrent());
 
+        RTC_LOG(LS_INFO) << "InstanceV2ReferenceImpl: Opus DRED " << p2pOpusDredDescription(_dredRequested, _opusDnnWeights)
+                         << ", audio " << (_dred ? std::to_string(kP2PDredMinBitrateBps) + "-" : std::string())
+                         << outgoingAudioMaxBitrateBps() << " bps (" << sideName() << ")";
+
         if (_signalingProtocolVersion == SignalingProtocolVersion::V2) {
+            auto signalingOptions = SignalingSctpConnection::Options::fromCustomParameters(_customParameters);
+            signalingOptions.fieldTrials = _fieldTrials;
             _signalingConnection = std::make_unique<SignalingSctpConnection>(
                 _threads,
                 [threads = _threads, weak](const std::vector<uint8_t> &data) {
@@ -477,7 +518,7 @@ public:
                     signalingDataEmitted(data);
                 },
                 _encryptionKey.isOutgoing,
-                SignalingSctpConnection::Options::fromCustomParameters(_customParameters)
+                signalingOptions
             );
         }
         if (!_signalingConnection) {
@@ -507,33 +548,80 @@ public:
         webrtc::PeerConnectionFactoryDependencies peerConnectionFactoryDependencies;
         peerConnectionFactoryDependencies.network_thread = _threads->getNetworkThread();
         peerConnectionFactoryDependencies.signaling_thread = _threads->getMediaThread();
-        peerConnectionFactoryDependencies.worker_thread = _threads->getWorkerThread();
-        peerConnectionFactoryDependencies.task_queue_factory = webrtc::CreateDefaultTaskQueueFactory();
+        // M159: the task queue factory and the field trials (the call's own, not the process-wide string) live in the
+        // factory's Environment; the network thread is also the worker.
+        peerConnectionFactoryDependencies.env = webrtc::CreateEnvironment(createFieldTrials(),
+                                                                          webrtc::CreateDefaultTaskQueueFactory());
         peerConnectionFactoryDependencies.network_monitor_factory = PlatformInterface::SharedInstance()->createNetworkMonitorFactory();
 
         peerConnectionFactoryDependencies.adm = _audioDeviceModule;
         
-        webrtc:: AudioProcessingBuilder builder;
-        peerConnectionFactoryDependencies.audio_processing = builder.Create();
+        peerConnectionFactoryDependencies.audio_processing_builder = webrtc::CustomAudioProcessing(
+            webrtc::BuiltinAudioProcessingBuilder().Build(*peerConnectionFactoryDependencies.env));
         
-        peerConnectionFactoryDependencies.audio_encoder_factory = webrtc::CreateAudioEncoderFactory<webrtc::AudioEncoderOpus>();
-        peerConnectionFactoryDependencies.audio_decoder_factory = webrtc::CreateAudioDecoderFactory<webrtc::AudioDecoderOpus>();
+        // Opus only, as webrtc::CreateAudio{En,De}coderFactory<AudioEncoderOpus/AudioDecoderOpus>; with DRED the
+        // encoders get its duration and the weights, the decoders the weights (group/GroupOpusDred.h).
+        peerConnectionFactoryDependencies.audio_encoder_factory = CreateP2PAudioEncoderFactory(_dred, _opusDnnWeights);
+        peerConnectionFactoryDependencies.audio_decoder_factory =
+            CreateGroupAudioDecoderFactory(_dred ? _opusDnnWeights : nullptr, false);
 #if defined(WEBRTC_MAC) && __has_include("CallsRemoteAudio.hpp")
         const bool sandboxAudio = calls::audio::enabled();
-        peerConnectionFactoryDependencies.audio_decoder_factory = calls::audio::wrapFactory(peerConnectionFactoryDependencies.audio_decoder_factory, sandboxAudio);
+        peerConnectionFactoryDependencies.audio_decoder_factory = calls::audio::wrapFactory(peerConnectionFactoryDependencies.audio_decoder_factory, sandboxAudio, _dred ? _opusDnnWeights : nullptr);
         if (sandboxAudio) peerConnectionFactoryDependencies.audio_mixer = calls::audio::makeMixer();
 #endif
 
+#if TGCALLS_ENABLE_AV1
+        // AV1 is offered (and decoded) unless the server's video_av1 is false; this side encodes it only where the
+        // chip gate and video_av1_send allow, and the send pin (applyVideoSendCodecPin) decides what is sent.
+        _av1Settings = Av1CallSettingsFromCustomParameters(_customParameters, PlatformInterface::SharedInstance()->canEncodeAv1Realtime());
+        if (_av1Settings.offerAv1) {
+            const bool allowAv1Encoding = _av1Settings.sendAv1 && _av1Settings.deviceMaySendAv1;
+            RTC_LOG(LS_INFO) << "InstanceV2ReferenceImpl: AV1 offered, encoding allowed: " << (allowAv1Encoding ? 1 : 0) << " (" << sideName() << ")";
+            peerConnectionFactoryDependencies.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactoryWithAv1(true, allowAv1Encoding);
+            peerConnectionFactoryDependencies.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactoryWithAv1();
+        } else {
+            RTC_LOG(LS_INFO) << "InstanceV2ReferenceImpl: AV1 not offered (" << sideName() << ")";
+            peerConnectionFactoryDependencies.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory(true);
+            peerConnectionFactoryDependencies.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactory();
+        }
+#if TGCALLS_ALLOW_TEST_KNOBS
+        if (_av1Settings.offerAv1 && _av1Settings.testEncoderFails) {
+            RTC_LOG(LS_INFO) << "InstanceV2ReferenceImpl: test knob: the AV1 encoder fails (" << sideName() << ")";
+            peerConnectionFactoryDependencies.video_encoder_factory = WrapEncoderFactoryWithFailingAv1ForTesting(std::move(peerConnectionFactoryDependencies.video_encoder_factory));
+        }
+        // CLI-only: this side lists H264 at another level, as two devices may.
+        const auto h264Level = _customParameters.find("video_test_h264_level");
+        if (h264Level != _customParameters.end() && h264Level->second.is_string()) {
+            RTC_LOG(LS_INFO) << "InstanceV2ReferenceImpl: test knob: H264 level " << h264Level->second.string_value() << " (" << sideName() << ")";
+            peerConnectionFactoryDependencies.video_encoder_factory = WrapEncoderFactoryWithH264LevelForTesting(std::move(peerConnectionFactoryDependencies.video_encoder_factory), h264Level->second.string_value());
+            peerConnectionFactoryDependencies.video_decoder_factory = WrapDecoderFactoryWithH264LevelForTesting(std::move(peerConnectionFactoryDependencies.video_decoder_factory), h264Level->second.string_value());
+        }
+#endif
+        if (_av1Settings.offerAv1) {
+            // A broken AV1 encoder is replaced by the codec this side would pin next, not WebRTC's VP8, and stops the
+            // AV1 pins (onAv1EncoderFailed).
+            const auto weak = std::weak_ptr<InstanceV2ReferenceImplInternal>(shared_from_this());
+            const auto threads = _threads;
+            _av1EncoderFallback = std::make_shared<Av1EncoderFallback>([weak, threads] {
+                threads->getMediaThread()->PostTask([weak] {
+                    if (const auto strong = weak.lock()) {
+                        strong->onAv1EncoderFailed();
+                    }
+                });
+            });
+            peerConnectionFactoryDependencies.video_encoder_factory = WrapEncoderFactoryWithAv1Fallback(std::move(peerConnectionFactoryDependencies.video_encoder_factory), _av1EncoderFallback);
+        }
+#else
         peerConnectionFactoryDependencies.video_encoder_factory = PlatformInterface::SharedInstance()->makeVideoEncoderFactory(true);
         peerConnectionFactoryDependencies.video_decoder_factory = PlatformInterface::SharedInstance()->makeVideoDecoderFactory();
-        
+#endif
+
         webrtc::EnableMedia(peerConnectionFactoryDependencies);
 
-        peerConnectionFactoryDependencies.event_log_factory = std::make_unique<webrtc::RtcEventLogFactory>(peerConnectionFactoryDependencies.task_queue_factory.get());
+        peerConnectionFactoryDependencies.event_log_factory = std::make_unique<webrtc::RtcEventLogFactory>();
 
         _peerConnectionFactory = webrtc::CreateModularPeerConnectionFactory(std::move(peerConnectionFactoryDependencies));
 
-#if !defined(SWIFT_PACKAGE)
         _useMtProto = getCustomParameterBool(_customParameters, "network_use_mtproto");
         if (_useMtProto) {
             // Half one of two that MUST travel together (the other is the
@@ -546,8 +634,6 @@ public:
             factoryOptions.external_transport_security = true;
             _peerConnectionFactory->SetOptions(factoryOptions);
         }
-
-#endif
 
         webrtc::PeerConnectionDependencies peerConnectionDependencies(nullptr);
 
@@ -578,7 +664,7 @@ public:
                 }
             });
         };
-        delegateParameters.onIceCandidate = [weak](const webrtc::IceCandidateInterface *iceCandidate) {
+        delegateParameters.onIceCandidate = [weak](const webrtc::IceCandidate *iceCandidate) {
             const auto strong = weak.lock();
             if (!strong) {
                 return;
@@ -651,7 +737,7 @@ public:
             std::string mid = transceiver->mid().value();
 
             switch (transceiver->media_type()) {
-                case cricket::MediaType::MEDIA_TYPE_VIDEO: {
+                case webrtc::MediaType::VIDEO: {
                     if (strong->_incomingVideoTransceivers.find(mid) == strong->_incomingVideoTransceivers.end()) {
                         strong->_incomingVideoTransceivers.insert(std::make_pair(mid, transceiver));
 
@@ -685,7 +771,7 @@ public:
                 break;
             }
         };
-        delegateParameters.onCandidatePairChangeEvent = [weak](const cricket::CandidatePairChangeEvent &event) {
+        delegateParameters.onCandidatePairChangeEvent = [weak](const webrtc::CandidatePairChangeEvent &event) {
             const auto strong = weak.lock();
             if (!strong) {
                 return;
@@ -706,11 +792,11 @@ public:
         peerConnectionDependencies.observer = _peerConnectionObserver.get();
         
         _networkMonitorFactory = PlatformInterface::SharedInstance()->createNetworkMonitorFactory();
-        _socketFactory = std::make_unique<rtc::BasicPacketSocketFactory>(_threads->getNetworkThread()->socketserver());
-        _networkManager = std::make_unique<rtc::BasicNetworkManager>(_networkMonitorFactory.get(), _threads->getNetworkThread()->socketserver());
+        _socketFactory = std::make_unique<webrtc::BasicPacketSocketFactory>(_threads->getNetworkThread()->socketserver());
+        _networkManager = std::make_unique<webrtc::BasicNetworkManager>(webrtc::CreateEnvironment(createFieldTrials()), _threads->getNetworkThread()->socketserver(), _networkMonitorFactory.get());
         _relayPortFactory = std::make_unique<ReflectorRelayPortFactory>(_rtcServers, false, 0, _threads->getNetworkThread()->socketserver(), getCustomParameterBoolDefaultTrue(_customParameters, "network_reflector_resolve_remote_candidate_ip"));
         
-        auto portAllocator = std::make_unique<cricket::BasicPortAllocator>(_networkManager.get(), _socketFactory.get(), nullptr, _relayPortFactory.get());
+        auto portAllocator = std::make_unique<webrtc::BasicPortAllocator>(webrtc::CreateEnvironment(createFieldTrials()), _networkManager.get(), _socketFactory.get(), nullptr, _relayPortFactory.get());
 
         if (getCustomParameterBool(_customParameters, "network_disable_stun_when_unconfigured")) {
             bool hasStunServer = false;
@@ -735,7 +821,7 @@ public:
                 //
                 // InitializePortAllocator_n ORs onto the existing flags, so setting
                 // this before the allocator is moved survives.
-                portAllocator->set_flags(portAllocator->flags() | cricket::PORTALLOCATOR_DISABLE_STUN);
+                portAllocator->set_flags(portAllocator->flags() | webrtc::PORTALLOCATOR_DISABLE_STUN);
             }
         }
 
@@ -764,7 +850,7 @@ public:
                 continue;
             }
 
-            rtc::SocketAddress address(server.host, server.port);
+            webrtc::SocketAddress address(server.host, server.port);
 
             // SocketAddress is only "complete" for IP literals, so this check used
             // to discard every TURN/STUN server given as a DNS name - which is how
@@ -816,12 +902,10 @@ public:
             }
         }
 
-#if !defined(SWIFT_PACKAGE)
         if (_useMtProto) {
             // Half two: see the factory option above.
             peerConnectionDependencies.dtls_transport_factory = std::make_unique<MtProtoDtlsTransportFactory>(_encryptionKey);
         }
-#endif
 
         auto peerConnectionOrError = _peerConnectionFactory->CreatePeerConnectionOrError(peerConnectionConfiguration, std::move(peerConnectionDependencies));
         if (peerConnectionOrError.ok()) {
@@ -847,7 +931,7 @@ public:
             webrtc::RtpTransceiverInit transceiverInit;
             transceiverInit.stream_ids = { "0" };
 
-            cricket::AudioOptions audioSourceOptions;
+            webrtc::AudioOptions audioSourceOptions;
             webrtc::scoped_refptr<webrtc::AudioSourceInterface> audioSource = _peerConnectionFactory->CreateAudioSource(audioSourceOptions);
 
             webrtc::scoped_refptr<webrtc::AudioTrackInterface> audioTrack = _peerConnectionFactory->CreateAudioTrack("0", audioSource.get());
@@ -860,7 +944,7 @@ public:
                 if (parameters.encodings.empty()) {
                     parameters.encodings.push_back(webrtc::RtpEncodingParameters());
                 }
-                parameters.encodings[0].max_bitrate_bps = 32 * 1024;
+                parameters.encodings[0].max_bitrate_bps = outgoingAudioMaxBitrateBps();
                 _outgoingAudioTransceiver->sender()->SetParameters(parameters);
 
                 _outgoingAudioTrack->set_enabled(true);
@@ -900,7 +984,8 @@ public:
         beginSignaling();
 
         beginLogTimer(0);
-        _lastDisconnectedTimestamp = rtc::TimeMillis();
+        beginVideoStatsTimer();
+        _lastDisconnectedTimestamp = webrtc::TimeMillis();
         beginCheckConnectionTimer();
 
         // Emit a baseline record so a call that never transitions still uploads a
@@ -924,7 +1009,7 @@ public:
         if (_signalingConnection && _signalingEncryptedConnection) {
             switch (_signalingProtocolVersion) {
                 case SignalingProtocolVersion::V1: {
-                    rtc::CopyOnWriteBuffer message;
+                    webrtc::CopyOnWriteBuffer message;
                     message.AppendData(data.data(), data.size());
 
                     commitSendSignalingMessage(_signalingEncryptedConnection->prepareForSendingRawMessage(message, true));
@@ -949,7 +1034,7 @@ public:
                         packetData = data;
                     }
 
-                    if (const auto message = _signalingEncryptedConnection->encryptRawPacket(rtc::CopyOnWriteBuffer(packetData.data(), packetData.size()))) {
+                    if (const auto message = _signalingEncryptedConnection->encryptRawPacket(webrtc::CopyOnWriteBuffer(std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(packetData.data()), packetData.size())))) {
                         _signalingConnection->send(std::vector<uint8_t>(message.value().data(), message.value().data() + message.value().size()));
                     } else {
                         RTC_LOG(LS_ERROR) << "Could not encrypt signaling message";
@@ -967,7 +1052,7 @@ public:
         }
     }
 
-    void commitSendSignalingMessage(absl::optional<EncryptedConnection::EncryptedPacket> packet) {
+    void commitSendSignalingMessage(std::optional<EncryptedConnection::EncryptedPacket> packet) {
         if (!packet) {
             return;
         }
@@ -991,6 +1076,50 @@ public:
         }, webrtc::TimeDelta::Millis(delayMs));
     }
 
+    // Every kVideoStatsLogIntervalMs while video flows, one line per call side: per direction the codec, encoder or
+    // decoder, resolution, frame rate, encode or decode time per frame, bitrate and QP, then the process's CPU use.
+    void beginVideoStatsTimer() {
+        const auto weak = std::weak_ptr<InstanceV2ReferenceImplInternal>(shared_from_this());
+        _threads->getMediaThread()->PostDelayedTask([weak]() {
+            auto strong = weak.lock();
+            if (!strong || strong->_isStopped.load()) {
+                return;
+            }
+            strong->logVideoStats();
+            strong->beginVideoStatsTimer();
+        }, webrtc::TimeDelta::Millis(kVideoStatsLogIntervalMs));
+    }
+
+    void logVideoStats() {
+        if (!_peerConnection) {
+            return;
+        }
+        const auto weak = std::weak_ptr<InstanceV2ReferenceImplInternal>(shared_from_this());
+        const auto threads = _threads;
+        _peerConnection->GetStats(webrtc::make_ref_counted<StatsReportCallback>([weak, threads](const webrtc::scoped_refptr<const webrtc::RTCStatsReport> &report) {
+            if (!report) {
+                return;
+            }
+            VideoStatsSample sample = MakeVideoStatsSample(*report, webrtc::TimeMillis(), ProcessCpuSeconds());
+            threads->getMediaThread()->PostTask([weak, sample = std::move(sample)]() mutable {
+                auto strong = weak.lock();
+                if (!strong || strong->_isStopped.load()) {
+                    return;
+                }
+                if (strong->_lastVideoStatsSample) {
+                    if (const auto line = FormatVideoStatsInterval(*strong->_lastVideoStatsSample, sample)) {
+                        RTC_LOG(LS_INFO) << "InstanceV2ReferenceImpl: video stats (" << strong->sideName() << "): " << *line;
+                        if (strong->_videoStatsLine) {
+                            std::lock_guard<std::mutex> lock(strong->_videoStatsLine->mutex);
+                            strong->_videoStatsLine->line = *line;
+                        }
+                    }
+                }
+                strong->_lastVideoStatsSample = std::move(sample);
+            });
+        }).get());
+    }
+
     void beginCheckConnectionTimer() {
         const auto weak = std::weak_ptr<InstanceV2ReferenceImplInternal>(shared_from_this());
         _threads->getMediaThread()->PostDelayedTask([weak]() {
@@ -1002,7 +1131,7 @@ public:
                 return;
             }
 
-            int64_t currentTimestamp = rtc::TimeMillis();
+            int64_t currentTimestamp = webrtc::TimeMillis();
             const int64_t maxTimeout = 20000;
 
             if (!strong->_isConnected && !strong->_isFailed && strong->_lastDisconnectedTimestamp + maxTimeout < currentTimestamp) {
@@ -1025,7 +1154,7 @@ public:
         if (isConnected) {
             onNetworkStateUpdated();
         } else {
-            _lastDisconnectedTimestamp = rtc::TimeMillis();
+            _lastDisconnectedTimestamp = webrtc::TimeMillis();
 
             // The legacy ICE state reports kIceConnectionDisconnected on a ~2.5s
             // receiving timeout, so brief loss blips would surface as Reconnecting
@@ -1061,7 +1190,7 @@ public:
             return;
         }
 
-        int64_t timestamp = rtc::TimeMillis();
+        int64_t timestamp = webrtc::TimeMillis();
         const int64_t minRestartIntervalMs = 5000;
         if (_lastIceRestartTimestamp != 0 && _lastIceRestartTimestamp + minRestartIntervalMs > timestamp) {
             return;
@@ -1113,7 +1242,7 @@ public:
                 NetworkBitrateLogRecord networkBitrateLogRecord;
                 networkBitrateLogRecord.bitrate = (int32_t)sendBitrateKbps;
 
-                strong->_networkBitrateLogRecords.emplace_back(rtc::TimeMillis(), std::move(networkBitrateLogRecord));
+                strong->_networkBitrateLogRecords.emplace_back(webrtc::TimeMillis(), std::move(networkBitrateLogRecord));
             });
         });
     }
@@ -1146,7 +1275,7 @@ public:
 
         _isMakingOffer = true;
 
-        webrtc::scoped_refptr<webrtc::SetLocalDescriptionObserverInterface> observer(new rtc::RefCountedObject<SetSessionDescriptionObserver>([threads = _threads, weak](webrtc::RTCError error) {
+        webrtc::scoped_refptr<webrtc::SetLocalDescriptionObserverInterface> observer(new webrtc::RefCountedObject<SetSessionDescriptionObserver>([threads = _threads, weak](webrtc::RTCError error) {
             const bool isOk = error.ok();
             if (!isOk) {
                 RTC_LOG(LS_ERROR) << "SetLocalDescription failed: " << error.message();
@@ -1168,6 +1297,13 @@ public:
                 strong->doSendLocalDescription();
 
                 strong->maybeCommitPendingIceCandidates();
+
+#if TGCALLS_ENABLE_AV1
+                // Our answer just completed a negotiation round (an offer leaves us in have-local-offer).
+                if (strong->_peerConnection->signaling_state() == webrtc::PeerConnectionInterface::SignalingState::kStable) {
+                    strong->applyVideoSendCodecPin();
+                }
+#endif
 
                 // An answer just took us back to stable; after an offer this is
                 // a no-op until its answer lands.
@@ -1191,11 +1327,11 @@ public:
             // thread, so no other operation (a further remote offer, say) can
             // land between creating and applying the answer; that is the same
             // atomicity the implicit SetLocalDescription(observer) has.
-            webrtc::scoped_refptr<CreateSessionDescriptionObserverImpl> createObserver(new rtc::RefCountedObject<CreateSessionDescriptionObserverImpl>([peerConnection = _peerConnection, observer](std::unique_ptr<webrtc::SessionDescriptionInterface> description) {
+            webrtc::scoped_refptr<CreateSessionDescriptionObserverImpl> createObserver(new webrtc::RefCountedObject<CreateSessionDescriptionObserverImpl>([peerConnection = _peerConnection, observer](std::unique_ptr<webrtc::SessionDescriptionInterface> description) {
                 int changed = 0;
                 for (auto &transportInfo : description->description()->transport_infos()) {
-                    if (transportInfo.description.connection_role == cricket::CONNECTIONROLE_ACTIVE) {
-                        transportInfo.description.connection_role = cricket::CONNECTIONROLE_PASSIVE;
+                    if (transportInfo.description.connection_role == webrtc::CONNECTIONROLE_ACTIVE) {
+                        transportInfo.description.connection_role = webrtc::CONNECTIONROLE_PASSIVE;
                         changed++;
                     }
                 }
@@ -1249,7 +1385,7 @@ public:
         sendLocalDescription();
     }
 
-    void sendIceCandidate(const webrtc::IceCandidateInterface *iceCandidate) {
+    void sendIceCandidate(const webrtc::IceCandidate *iceCandidate) {
         std::string sdp;
         iceCandidate->ToString(&sdp);
 
@@ -1310,7 +1446,7 @@ public:
                     break;
                 }
                 case SignalingProtocolVersion::V2: {
-                    if (const auto message = _signalingEncryptedConnection->decryptRawPacket(rtc::CopyOnWriteBuffer(data.data(), data.size()))) {
+                    if (const auto message = _signalingEncryptedConnection->decryptRawPacket(webrtc::CopyOnWriteBuffer(std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(data.data()), data.size())))) {
                         processSignalingMessage(message.value());
                     } else {
                         RTC_LOG(LS_ERROR) << "receiveSignalingData could not decrypt signaling data";
@@ -1329,7 +1465,7 @@ public:
         }
     }
 
-    void processSignalingMessage(rtc::CopyOnWriteBuffer const &data) {
+    void processSignalingMessage(webrtc::CopyOnWriteBuffer const &data) {
         std::vector<uint8_t> decryptedData = std::vector<uint8_t>(data.data(), data.data() + data.size());
 
         if (isGzip(decryptedData)) {
@@ -1385,9 +1521,9 @@ public:
             }
 
             webrtc::SdpParseError parseError;
-            webrtc::IceCandidateInterface *iceCandidate = webrtc::CreateIceCandidate(jsonMid->second.string_value(), jsonMLineIndex->second.int_value(), jsonSdp->second.string_value(), &parseError);
+            webrtc::IceCandidate *iceCandidate = webrtc::CreateIceCandidate(jsonMid->second.string_value(), jsonMLineIndex->second.int_value(), jsonSdp->second.string_value(), &parseError);
             if (iceCandidate) {
-                std::unique_ptr<webrtc::IceCandidateInterface> candidarePtr;
+                std::unique_ptr<webrtc::IceCandidate> candidarePtr;
                 candidarePtr.reset(iceCandidate);
 
                 _pendingIceCandidates.push_back(std::move(candidarePtr));
@@ -1400,7 +1536,7 @@ public:
             }
             const auto messageData = &message->data;
 
-            if (const auto mediaState = absl::get_if<signaling::MediaStateMessage>(messageData)) {
+            if (const auto mediaState = std::get_if<signaling::MediaStateMessage>(messageData)) {
                 AudioState mappedAudioState;
                 if (mediaState->isMuted) {
                     mappedAudioState = AudioState::Muted;
@@ -1466,7 +1602,8 @@ public:
     
     void handleRemoteSdp(std::string const &type, std::string const &sdp) {
         webrtc::SdpParseError sdpParseError;
-        std::unique_ptr<webrtc::SessionDescriptionInterface> remoteDescription(webrtc::CreateSessionDescription(type, sdp, &sdpParseError));
+        const auto parsedType = webrtc::SdpTypeFromString(type);
+        std::unique_ptr<webrtc::SessionDescriptionInterface> remoteDescription(parsedType ? webrtc::CreateSessionDescription(*parsedType, sdp, &sdpParseError) : nullptr);
         if (!remoteDescription) {
             RTC_LOG(LS_ERROR) << "Failed to parse remote SDP";
             return;
@@ -1486,7 +1623,7 @@ public:
         }
 
         const auto weak = std::weak_ptr<InstanceV2ReferenceImplInternal>(shared_from_this());
-        webrtc::scoped_refptr<webrtc::SetRemoteDescriptionObserverInterface> observer(new rtc::RefCountedObject<SetSessionDescriptionObserver>([threads = _threads, weak, type](webrtc::RTCError error) {
+        webrtc::scoped_refptr<webrtc::SetRemoteDescriptionObserverInterface> observer(new webrtc::RefCountedObject<SetSessionDescriptionObserver>([threads = _threads, weak, type](webrtc::RTCError error) {
             const bool isOk = error.ok();
             if (!isOk) {
                 RTC_LOG(LS_ERROR) << "SetRemoteDescription failed: " << error.message();
@@ -1509,6 +1646,13 @@ public:
                 }
 
                 strong->maybeCommitPendingIceCandidates();
+
+#if TGCALLS_ENABLE_AV1
+                // An answer just completed a negotiation round.
+                if (type == "answer") {
+                    strong->applyVideoSendCodecPin();
+                }
+#endif
 
                 if (type == "offer") {
                     strong->sendLocalDescription();
@@ -1546,7 +1690,7 @@ public:
 
         if (!_currentNetworkStateLogRecord || !(_currentNetworkStateLogRecord.value() == record)) {
             _currentNetworkStateLogRecord = record;
-            _networkStateLogRecords.emplace_back(rtc::TimeMillis(), std::move(record));
+            _networkStateLogRecords.emplace_back(webrtc::TimeMillis(), std::move(record));
         }
 
         State mappedState;
@@ -1678,8 +1822,10 @@ public:
 
         auto videoCaptureImpl = GetVideoCaptureAssumingSameThread(videoCapture.get());
         if (videoCaptureImpl) {
-            if (videoCaptureImpl->isScreenCapture()) {
-            } else {
+            // On iOS and Android a screen capture goes out as the camera does (this engine has no
+            // separate screencast channel); only its encoding differs, below.
+            const bool isScreenCapture = videoCaptureImpl->isScreenCapture();
+            if (!isScreenCapture || kPrivateCallScreenAsVideo) {
                 _videoCapture = videoCapture;
 
                 auto videoTrack = _peerConnectionFactory->CreateVideoTrack(videoCaptureImpl->source(), "1");
@@ -1692,14 +1838,21 @@ public:
                         _outgoingVideoTrack = videoTrack;
                         _outgoingVideoTransceiver = videoTransceiverOrError.value();
 
-                        auto currentCapabilities = _peerConnectionFactory->GetRtpSenderCapabilities(cricket::MediaType::MEDIA_TYPE_VIDEO);
+                        auto currentCapabilities = _peerConnectionFactory->GetRtpSenderCapabilities(webrtc::MediaType::VIDEO);
 
                         std::vector<std::string> codecPreferences = {
                             #ifndef WEBRTC_DISABLE_H265
-                            cricket::kH265CodecName,
+                            webrtc::kH265CodecName,
                             #endif
-                            cricket::kH264CodecName
+                            webrtc::kH264CodecName
                         };
+#if TGCALLS_ENABLE_AV1
+                        if (_av1Settings.testOfferAv1First) {
+                            // CLI-only: lead with AV1, as a peer whose stock list does, so the answerer's default
+                            // send codec is AV1 until its pin lands.
+                            codecPreferences.insert(codecPreferences.begin(), webrtc::kAv1CodecName);
+                        }
+#endif
 
                         for (const auto &codecCapability : currentCapabilities.codecs) {
                             if (std::find_if(codecPreferences.begin(), codecPreferences.end(), [&](std::string const &value) {
@@ -1733,7 +1886,13 @@ public:
                         if (parameters.encodings.empty()) {
                             parameters.encodings.push_back(webrtc::RtpEncodingParameters());
                         }
-                        parameters.encodings[0].max_bitrate_bps = 1200 * 1024;
+                        _videoSendIsScreenCapture = isScreenCapture;
+                        if (isScreenCapture) {
+                            const auto screencast = iosScreencastLayerParameters(1)[0];
+                            parameters.encodings[0].max_framerate = screencast.maxFramerate;
+                            parameters.encodings[0].scale_resolution_down_by = screencast.scaleResolutionDownBy;
+                        }
+                        parameters.encodings[0].max_bitrate_bps = videoSendMaxBitrateBps();
                         _outgoingVideoTransceiver->sender()->SetParameters(parameters);
 
                         _outgoingVideoTrack->set_enabled(true);
@@ -1752,6 +1911,231 @@ public:
                 requestRenegotiation();
             }
         }
+    }
+
+    const char *sideName() const {
+        return _encryptionKey.isOutgoing ? "caller" : "callee";
+    }
+
+    // The audio sender's max bitrate: higher with DRED, whose bits come out of the same bitrate. Without DRED WebRTC's
+    // voice engine sends at it (min = max); with DRED the call's WebRTC-Audio-Allocation lowers the min to
+    // kP2PDredMinBitrateBps, so the audio floats between the two with the bandwidth estimate.
+    int outgoingAudioMaxBitrateBps() const {
+        return _dred ? kP2PDredMaxBitrateBps : 32 * 1024;
+    }
+
+    // A copy of the call's field trials for one Environment, which owns it.
+    std::unique_ptr<webrtc::FieldTrialsView> createFieldTrials() const {
+        return _fieldTrials->CreateCopy();
+    }
+
+#if TGCALLS_ENABLE_AV1
+    // Pins the camera sender among the codecs the last negotiation round gave it (VideoSendCodecCandidates): AV1 when
+    // this side may send it, else H.265, else H.264; nothing when AV1 was not negotiated, so a peer without AV1 gets
+    // today's call. Called after every completed round (a renegotiation keeps a pin whose codec is still negotiated
+    // and clears one that is not; webrtc_video_engine.cc). Before the first round the sender has no codecs and nothing
+    // is pinned: a codec pinned then from the capabilities would reach the first send stream with the init parameters,
+    // and against a peer without it the whole parameter set, max_bitrate_bps included, would be rejected there.
+    // Without AV1 offered nothing is pinned either.
+    //
+    // The debug override (setVideoSendCodecOverride) replaces the candidates with every negotiated variant of its
+    // codec, in a call with or without AV1.
+    void applyVideoSendCodecPin() {
+        if (!_outgoingVideoTransceiver || (_videoSendCodecOverride.empty() && !_av1Settings.offerAv1)) {
+            return;
+        }
+        const auto sender = _outgoingVideoTransceiver->sender();
+        const webrtc::RtpParameters parameters = sender->GetParameters();
+        if (parameters.encodings.empty() || parameters.codecs.empty()) {
+            return;
+        }
+        const std::vector<webrtc::RtpCodec> available(parameters.codecs.begin(), parameters.codecs.end());
+        updateAv1EncoderFallback(available);
+        if (!_videoSendCodecOverride.empty() && _av1EncoderFailed && absl::EqualsIgnoreCase(_videoSendCodecOverride, webrtc::kAv1CodecName)) {
+            RTC_LOG(LS_WARNING) << "InstanceV2ReferenceImpl: video send codec override AV1 ignored: the AV1 encoder failed (" << sideName() << ")";
+        } else if (!_videoSendCodecOverride.empty()) {
+            const auto candidates = VideoSendCodecOverrideCandidates(available, _videoSendCodecOverride);
+            if (candidates.empty()) {
+                std::string negotiated;
+                for (const auto &codec : available) {
+                    negotiated += (negotiated.empty() ? "" : ", ") + codec.name;
+                }
+                RTC_LOG(LS_WARNING) << "InstanceV2ReferenceImpl: video send codec override " << _videoSendCodecOverride << " is not negotiated (negotiated: " << negotiated << ") (" << sideName() << ")";
+                return;
+            }
+            if (!_videoSendCodecBeforeOverride) {
+                // GetParameters lists the codec being sent first.
+                _videoSendCodecBeforeOverride = parameters.codecs.front();
+            }
+            PinVideoSendCodec(candidates, [&](const webrtc::RtpCodec &codec) {
+                return pinVideoSendCodec(codec);
+            }, [] {
+                return true;
+            });
+            return;
+        }
+        PinVideoSendCodec(VideoSendCodecCandidates(available, av1SendAllowed()), [&](const webrtc::RtpCodec &codec) {
+            return pinVideoSendCodec(codec);
+        }, [&] {
+            // GetParameters lists the codec being sent first.
+            const auto current = sender->GetParameters();
+            return !current.codecs.empty() && absl::EqualsIgnoreCase(current.codecs.front().name, webrtc::kAv1CodecName);
+        });
+    }
+
+    bool av1SendAllowed() const {
+        return _av1Settings.sendAv1 && _av1Settings.deviceMaySendAv1 && _av1SendAllowedByPower && !_av1EncoderFailed;
+    }
+
+    // What a broken AV1 encoder is replaced by: the first codec the pin would choose without AV1 (H.265, else H.264,
+    // else the rest), as negotiated; nothing when AV1 was not negotiated.
+    void updateAv1EncoderFallback(const std::vector<webrtc::RtpCodec> &available) {
+        if (!_av1EncoderFallback) {
+            return;
+        }
+        const auto candidates = VideoSendCodecCandidates(available, false);
+        if (candidates.empty()) {
+            _av1EncoderFallback->setFallbackFormat(std::nullopt);
+        } else {
+            _av1EncoderFallback->setFallbackFormat(webrtc::SdpVideoFormat(candidates.front().name, candidates.front().parameters));
+        }
+    }
+
+    // The AV1 encoder failed to be created, to start or to encode (Av1EncoderFallback): WebRTC has switched to the
+    // fallback; AV1 is not pinned again in this call, and the pin moves to what the fallback named.
+    void onAv1EncoderFailed() {
+        if (_av1EncoderFailed) {
+            return;
+        }
+        _av1EncoderFailed = true;
+        RTC_LOG(LS_WARNING) << "InstanceV2ReferenceImpl: the AV1 encoder failed (" << sideName() << "); AV1 is not sent again in this call";
+        applyVideoSendCodecPin();
+    }
+
+    // One attempt: a fresh transaction, since SetParameters ends the previous one, accepted or not.
+    bool pinVideoSendCodec(const webrtc::RtpCodec &codec) {
+        const auto sender = _outgoingVideoTransceiver->sender();
+        webrtc::RtpParameters attempt = sender->GetParameters();
+        if (attempt.encodings.empty()) {
+            return false;
+        }
+        for (auto &encoding : attempt.encodings) {
+            encoding.codec = codec;
+        }
+        const auto result = sender->SetParameters(attempt);
+        if (!result.ok()) {
+            RTC_LOG(LS_ERROR) << "InstanceV2ReferenceImpl: pinning the video send codec to " << codec.name << " failed: " << result.message() << " (" << sideName() << ")";
+            return false;
+        }
+        RTC_LOG(LS_INFO) << "InstanceV2ReferenceImpl: video send codec pinned to " << codec.name << " (" << sideName() << ")";
+        return true;
+    }
+
+    // Back to the engine's own choice. Where it pins (AV1 negotiated) that pin replaces the override's. Elsewhere the
+    // codec sent before the override is pinned again and the pin then dropped: dropping a pin alone (codec nullopt)
+    // keeps WebRTC sending the pinned codec until the next negotiation (webrtc_video_engine.cc, SetRtpSendParameters),
+    // and without a pin the next negotiation chooses as it would have.
+    void clearVideoSendCodecOverride() {
+        const auto before = _videoSendCodecBeforeOverride;
+        _videoSendCodecBeforeOverride.reset();
+        if (!_outgoingVideoTransceiver) {
+            return;
+        }
+        const auto sender = _outgoingVideoTransceiver->sender();
+        const webrtc::RtpParameters parameters = sender->GetParameters();
+        if (parameters.encodings.empty() || parameters.codecs.empty()) {
+            return;
+        }
+        const std::vector<webrtc::RtpCodec> available(parameters.codecs.begin(), parameters.codecs.end());
+        if (_av1Settings.offerAv1 && !VideoSendCodecCandidates(available, av1SendAllowed()).empty()) {
+            applyVideoSendCodecPin();
+            return;
+        }
+        if (before) {
+            pinVideoSendCodec(*before);
+        }
+        webrtc::RtpParameters unpinned = sender->GetParameters();
+        for (auto &encoding : unpinned.encodings) {
+            encoding.codec = std::nullopt;
+        }
+        const auto result = sender->SetParameters(unpinned);
+        if (!result.ok()) {
+            RTC_LOG(LS_ERROR) << "InstanceV2ReferenceImpl: removing the video send codec pin failed: " << result.message() << " (" << sideName() << ")";
+            return;
+        }
+        RTC_LOG(LS_INFO) << "InstanceV2ReferenceImpl: video send codec pin removed (" << sideName() << ")";
+    }
+#endif
+
+    // Debug control: at once, SetParameters on the sender; before the camera exists only the value is kept.
+    void setVideoSendCodecOverride(const std::string &codecName) {
+#if TGCALLS_ENABLE_AV1
+        if (_videoSendCodecOverride == codecName) {
+            return;
+        }
+        _videoSendCodecOverride = codecName;
+        if (codecName.empty()) {
+            RTC_LOG(LS_INFO) << "InstanceV2ReferenceImpl: video send codec override cleared (" << sideName() << ")";
+            clearVideoSendCodecOverride();
+        } else {
+            RTC_LOG(LS_INFO) << "InstanceV2ReferenceImpl: video send codec override: " << codecName << " (" << sideName() << ")";
+            applyVideoSendCodecPin();
+        }
+#else
+        (void)codecName;
+#endif
+    }
+
+    // The debug cap, else the default: a screen capture's (ScreencastSendParameters) or the camera's.
+    int videoSendMaxBitrateBps() const {
+        if (_videoSendMaxBitrateKbps > 0) {
+            return _videoSendMaxBitrateKbps * 1000;
+        }
+        return _videoSendIsScreenCapture ? iosScreencastLayerParameters(1)[0].maxBitrateBps : kDefaultVideoSendMaxBitrateBps;
+    }
+
+    // Debug control: the camera sender's bitrate cap, at once; 0 restores the default.
+    void setVideoSendMaxBitrateKbps(int kbps) {
+        const int value = std::max(0, kbps);
+        if (_videoSendMaxBitrateKbps == value) {
+            return;
+        }
+        _videoSendMaxBitrateKbps = value;
+        if (value > 0) {
+            RTC_LOG(LS_INFO) << "InstanceV2ReferenceImpl: video send max bitrate: " << value << " kbps (" << sideName() << ")";
+        } else {
+            RTC_LOG(LS_INFO) << "InstanceV2ReferenceImpl: video send max bitrate: default (" << sideName() << ")";
+        }
+        if (!_outgoingVideoTransceiver) {
+            return;
+        }
+        const auto sender = _outgoingVideoTransceiver->sender();
+        webrtc::RtpParameters parameters = sender->GetParameters();
+        if (parameters.encodings.empty()) {
+            return;
+        }
+        for (auto &encoding : parameters.encodings) {
+            encoding.max_bitrate_bps = videoSendMaxBitrateBps();
+        }
+        const auto result = sender->SetParameters(parameters);
+        if (!result.ok()) {
+            RTC_LOG(LS_ERROR) << "InstanceV2ReferenceImpl: setting the video send max bitrate failed: " << result.message() << " (" << sideName() << ")";
+        }
+    }
+
+    // Re-pins at once: SetParameters on the sender, no renegotiation. Before the camera's first negotiation round
+    // only the value is kept, and that round's pin reads it.
+    void setVideoSendAv1AllowedByPower(bool allowed) {
+#if TGCALLS_ENABLE_AV1
+        if (_av1SendAllowedByPower == allowed) {
+            return;
+        }
+        _av1SendAllowedByPower = allowed;
+        RTC_LOG(LS_INFO) << "InstanceV2ReferenceImpl: AV1 sending " << (allowed ? "allowed" : "paused") << " by power (" << sideName() << ")";
+        applyVideoSendCodecPin();
+#else
+        (void)allowed;
+#endif
     }
 
     void setRequestedVideoAspect(float aspect) {
@@ -1781,7 +2165,7 @@ public:
             return;
         }
         webrtc::VideoTrackInterface *videoTrack = (webrtc::VideoTrackInterface *)track.get();
-        videoTrack->AddOrUpdateSink(_currentStrongSink.get(), rtc::VideoSinkWants());
+        videoTrack->AddOrUpdateSink(_currentStrongSink.get(), webrtc::VideoSinkWants());
         _attachedSinkTracks.insert(videoTrack);
     }
 
@@ -1812,7 +2196,7 @@ public:
         _attachedSinkTracks.clear();
     }
 
-    void setIncomingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+    void setIncomingVideoOutput(std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
         disconnectAllIncomingVideoSinks();
 
         _currentStrongSink = sink.lock();
@@ -1942,11 +2326,9 @@ private:
     webrtc::scoped_refptr<webrtc::AudioDeviceModule> createAudioDeviceModule() {
         const auto create = [&](webrtc::AudioDeviceModule::AudioLayer layer) {
 #ifdef WEBRTC_IOS
-            return rtc::make_ref_counted<webrtc::tgcalls_ios_adm::AudioDeviceModuleIOS>(false, false, false, 1);
+            return webrtc::make_ref_counted<webrtc::tgcalls_ios_adm::AudioDeviceModuleIOS>(false, false, false, 1);
 #else
-            return webrtc::AudioDeviceModule::Create(
-                layer,
-                _taskQueueFactory.get());
+            return webrtc::scoped_refptr<webrtc::AudioDeviceModule>() /* no platform ADM: WebRTC's own is not built; hosts pass createAudioDeviceModule */;
 #endif
         };
         const auto check = [&](const webrtc::scoped_refptr<webrtc::AudioDeviceModule> &result) {
@@ -1969,8 +2351,20 @@ private:
 private:
     SignalingProtocolVersion _signalingProtocolVersion;
     std::shared_ptr<Threads> _threads;
+    std::shared_ptr<VideoStatsLineStore> _videoStatsLine;
     std::vector<RtcServer> _rtcServers;
     std::map<std::string, json11::Json> _customParameters;
+#if TGCALLS_ENABLE_AV1
+    Av1CallSettings _av1Settings;
+    bool _av1SendAllowedByPower = true;
+    // The debug codec override (empty: none), and the codec sent when it was first applied.
+    std::string _videoSendCodecOverride;
+    std::optional<webrtc::RtpCodec> _videoSendCodecBeforeOverride;
+    std::shared_ptr<Av1EncoderFallback> _av1EncoderFallback;
+    bool _av1EncoderFailed = false;
+#endif
+    int _videoSendMaxBitrateKbps = 0;
+    bool _videoSendIsScreenCapture = false;
     std::unique_ptr<Proxy> _proxy;
     bool _enableP2P = false;
     EncryptionKey _encryptionKey;
@@ -1993,11 +2387,12 @@ private:
     int64_t _lastDisconnectedTimestamp = 0;
     int32_t _disconnectReportGeneration = 0;
     int64_t _lastIceRestartTimestamp = 0;
-    absl::optional<InstanceNetworking::ConnectionDescription> _currentConnectionDescription;
+    std::optional<InstanceNetworking::ConnectionDescription> _currentConnectionDescription;
 
-    absl::optional<NetworkStateLogRecord> _currentNetworkStateLogRecord;
+    std::optional<NetworkStateLogRecord> _currentNetworkStateLogRecord;
     std::vector<StateLogRecord<NetworkStateLogRecord>> _networkStateLogRecords;
     std::vector<StateLogRecord<NetworkBitrateLogRecord>> _networkBitrateLogRecords;
+    std::optional<VideoStatsSample> _lastVideoStatsSample;
 
     bool _didBeginNegotiation = false;
     bool _isMakingOffer = false;
@@ -2008,6 +2403,10 @@ private:
     bool _pendingRenegotiation = false;
     bool _isPerformingConfiguration = false;
     bool _useAddTrack = false;
+    GroupOpusDnnWeights _opusDnnWeights;
+    bool _dredRequested = true;
+    bool _dred = false;
+    std::shared_ptr<const webrtc::FieldTrialsView> _fieldTrials;
     bool _immediateCaptureRenegotiation = false;
     // The peer answered one of our offers with setup:active (see sendLocalDescription).
     bool _peerAnsweredAsDtlsClient = false;
@@ -2022,7 +2421,7 @@ private:
 
     std::map<std::string, webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>> _incomingVideoTransceivers;
 
-    std::vector<std::unique_ptr<webrtc::IceCandidateInterface>> _pendingIceCandidates;
+    std::vector<std::unique_ptr<webrtc::IceCandidate>> _pendingIceCandidates;
 
     std::unique_ptr<DataChannelObserverImpl> _dataChannelObserver;
     webrtc::scoped_refptr<webrtc::DataChannelInterface> _dataChannel;
@@ -2031,10 +2430,10 @@ private:
     std::unique_ptr<webrtc::RtcEventLogNull> _eventLog;
     std::unique_ptr<webrtc::TaskQueueFactory> _taskQueueFactory;
     
-    std::unique_ptr<rtc::NetworkMonitorFactory> _networkMonitorFactory;
-    std::unique_ptr<rtc::BasicPacketSocketFactory> _socketFactory;
-    std::unique_ptr<rtc::BasicNetworkManager> _networkManager;
-    std::unique_ptr<cricket::RelayPortFactoryInterface> _relayPortFactory;
+    std::unique_ptr<webrtc::NetworkMonitorFactory> _networkMonitorFactory;
+    std::unique_ptr<webrtc::BasicPacketSocketFactory> _socketFactory;
+    std::unique_ptr<webrtc::BasicNetworkManager> _networkManager;
+    std::unique_ptr<webrtc::RelayPortFactoryInterface> _relayPortFactory;
     
     webrtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> _peerConnectionFactory;
     std::unique_ptr<PeerConnectionDelegateAdapter> _peerConnectionObserver;
@@ -2047,7 +2446,7 @@ private:
     bool _isBatteryLow = false;
     std::atomic<bool> _isStopped{false};
 
-    std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _currentStrongSink;
+    std::shared_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> _currentStrongSink;
     // Exactly the tracks we called AddOrUpdateSink on. RemoveSink DCHECKs when the
     // sink was never added, and attachment is asymmetric (a transceiver added while
     // no sink is set is never attached, and setIncomingVideoOutput attaches only the
@@ -2061,15 +2460,16 @@ InstanceV2ReferenceImpl::InstanceV2ReferenceImpl(Descriptor &&descriptor) {
     if (descriptor.config.logPath.data.size() != 0) {
         _logSink = std::make_unique<LogSinkImpl>(descriptor.config.logPath);
     }
-    rtc::LogMessage::LogToDebug(rtc::LS_INFO);
-    rtc::LogMessage::SetLogToStderr(false);
+    webrtc::LogMessage::LogToDebug(webrtc::LS_INFO);
+    webrtc::LogMessage::SetLogToStderr(false);
     if (_logSink) {
-        rtc::LogMessage::AddLogToStream(_logSink.get(), rtc::LS_INFO);
+        webrtc::LogMessage::AddLogToStream(_logSink.get(), webrtc::LS_INFO);
     }
 
     _threads = StaticThreads::getThreads();
-    _internal.reset(new ThreadLocalObject<InstanceV2ReferenceImplInternal>(_threads->getMediaThread(), [descriptor = std::move(descriptor), threads = _threads]() mutable {
-        return std::make_shared<InstanceV2ReferenceImplInternal>(std::move(descriptor), threads);
+    _videoStatsLine = std::make_shared<VideoStatsLineStore>();
+    _internal.reset(new ThreadLocalObject<InstanceV2ReferenceImplInternal>(_threads->getMediaThread(), [descriptor = std::move(descriptor), threads = _threads, videoStatsLine = _videoStatsLine]() mutable {
+        return std::make_shared<InstanceV2ReferenceImplInternal>(std::move(descriptor), threads, videoStatsLine);
     }));
     _internal->perform([](InstanceV2ReferenceImplInternal *internal) {
         internal->start();
@@ -2077,7 +2477,7 @@ InstanceV2ReferenceImpl::InstanceV2ReferenceImpl(Descriptor &&descriptor) {
 }
 
 InstanceV2ReferenceImpl::~InstanceV2ReferenceImpl() {
-    rtc::LogMessage::RemoveLogToStream(_logSink.get());
+    webrtc::LogMessage::RemoveLogToStream(_logSink.get());
 }
 
 void InstanceV2ReferenceImpl::receiveSignalingData(const std::vector<uint8_t> &data) {
@@ -2110,7 +2510,7 @@ void InstanceV2ReferenceImpl::setMuteMicrophone(bool muteMicrophone) {
     });
 }
 
-void InstanceV2ReferenceImpl::setIncomingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+void InstanceV2ReferenceImpl::setIncomingVideoOutput(std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
     _internal->perform([sink](InstanceV2ReferenceImplInternal *internal) {
         internal->setIncomingVideoOutput(sink);
     });
@@ -2132,6 +2532,32 @@ void InstanceV2ReferenceImpl::setIsLowBatteryLevel(bool isLowBatteryLevel) {
     _internal->perform([isLowBatteryLevel](InstanceV2ReferenceImplInternal *internal) {
         internal->setIsLowBatteryLevel(isLowBatteryLevel);
     });
+}
+
+void InstanceV2ReferenceImpl::setVideoSendAv1AllowedByPower(bool allowed) {
+    _internal->perform([allowed](InstanceV2ReferenceImplInternal *internal) {
+        internal->setVideoSendAv1AllowedByPower(allowed);
+    });
+}
+
+void InstanceV2ReferenceImpl::setVideoSendCodecOverride(std::string const &codecName) {
+    _internal->perform([codecName](InstanceV2ReferenceImplInternal *internal) {
+        internal->setVideoSendCodecOverride(codecName);
+    });
+}
+
+void InstanceV2ReferenceImpl::setVideoSendMaxBitrateKbps(int kbps) {
+    _internal->perform([kbps](InstanceV2ReferenceImplInternal *internal) {
+        internal->setVideoSendMaxBitrateKbps(kbps);
+    });
+}
+
+std::string InstanceV2ReferenceImpl::getVideoStatsLine() {
+    if (!_videoStatsLine) {
+        return std::string();
+    }
+    std::lock_guard<std::mutex> lock(_videoStatsLine->mutex);
+    return _videoStatsLine->line;
 }
 
 void InstanceV2ReferenceImpl::setInputVolume(float level) {

@@ -38,8 +38,8 @@ public:
     void setAudioInputDevice(std::string id) override;
     void addExternalAudioSamples(std::vector<uint8_t> &&samples) override;
 
-    void addOutgoingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) override;
-    void addIncomingVideoOutput(std::string const &endpointId, std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) override;
+    void addOutgoingVideoOutput(std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) override;
+    void addIncomingVideoOutput(std::string const &endpointId, std::weak_ptr<webrtc::VideoSinkInterface<webrtc::VideoFrame>> sink) override;
 
     void setVolume(uint32_t ssrc, double volume) override;
     void setRequestedVideoChannels(std::vector<VideoChannelDescription> &&requestedVideoChannels) override;

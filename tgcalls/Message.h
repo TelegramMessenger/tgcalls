@@ -4,8 +4,8 @@
 #include <cstdint>
 #include "api/candidate.h"
 #include "api/video_codecs/sdp_video_format.h"
-#include "absl/types/variant.h"
-#include "absl/types/optional.h"
+#include <variant>
+#include <optional>
 #include "rtc_base/copy_on_write_buffer.h"
 #include "rtc_base/byte_buffer.h"
 
@@ -35,7 +35,7 @@ struct CandidatesListMessage {
 	static constexpr uint8_t kId = 1;
 	static constexpr bool kRequiresAck = true;
 
-	std::vector<cricket::Candidate> candidates;
+	std::vector<webrtc::Candidate> candidates;
     PeerIceParameters iceParameters;
 };
 
@@ -64,21 +64,21 @@ struct AudioDataMessage {
 	static constexpr uint8_t kId = 5;
 	static constexpr bool kRequiresAck = false;
 
-	rtc::CopyOnWriteBuffer data;
+	webrtc::CopyOnWriteBuffer data;
 };
 
 struct VideoDataMessage {
 	static constexpr uint8_t kId = 6;
 	static constexpr bool kRequiresAck = false;
 
-	rtc::CopyOnWriteBuffer data;
+	webrtc::CopyOnWriteBuffer data;
 };
 
 struct UnstructuredDataMessage {
     static constexpr uint8_t kId = 7;
     static constexpr bool kRequiresAck = true;
 
-    rtc::CopyOnWriteBuffer data;
+    webrtc::CopyOnWriteBuffer data;
 };
 
 struct VideoParametersMessage {
@@ -109,7 +109,7 @@ struct RemoteNetworkStatusMessage {
 // 3. Add Serialize/Deserialize methods in Message module.
 
 struct Message {
-	absl::variant<
+	std::variant<
 		CandidatesListMessage,
 		VideoFormatsMessage,
         RequestVideoMessage,
@@ -122,15 +122,15 @@ struct Message {
         RemoteNetworkStatusMessage> data;
 };
 
-rtc::CopyOnWriteBuffer SerializeMessageWithSeq(
+webrtc::CopyOnWriteBuffer SerializeMessageWithSeq(
 	const Message &message,
 	uint32_t seq,
 	bool singleMessagePacket);
-absl::optional<Message> DeserializeMessage(
-	rtc::ByteBufferReader &reader,
+std::optional<Message> DeserializeMessage(
+	webrtc::ByteBufferReader &reader,
 	bool singleMessagePacket);
-absl::optional<rtc::CopyOnWriteBuffer> DeserializeRawMessage(
-    rtc::ByteBufferReader &reader,
+std::optional<webrtc::CopyOnWriteBuffer> DeserializeRawMessage(
+    webrtc::ByteBufferReader &reader,
     bool singleMessagePacket);
 
 struct DecryptedMessage {
@@ -139,7 +139,7 @@ struct DecryptedMessage {
 };
 
 struct DecryptedRawMessage {
-    rtc::CopyOnWriteBuffer message;
+    webrtc::CopyOnWriteBuffer message;
     uint32_t counter = 0;
 };
 

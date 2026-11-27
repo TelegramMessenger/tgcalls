@@ -15,6 +15,7 @@
 
 #import "base/RTCMacros.h"
 
+#include "api/environment/environment.h"
 #include "api/video_codecs/video_encoder_factory.h"
 
 @protocol RTC_OBJC_TYPE
@@ -24,19 +25,23 @@ namespace webrtc {
 
 class CustomObjCVideoEncoderFactory : public VideoEncoderFactory {
  public:
-  explicit CustomObjCVideoEncoderFactory(id<RTC_OBJC_TYPE(RTCVideoEncoderFactory)>);
+  // trustsRateController: the ObjC encoders it makes (VideoToolbox) report a trusted rate
+  // controller, so WebRTC's frame dropper stays off and VideoToolbox's own rate control
+  // absorbs bursts (the in-app iOS screencast). Wrapped native encoders are unaffected.
+  explicit CustomObjCVideoEncoderFactory(id<RTC_OBJC_TYPE(RTCVideoEncoderFactory)>, bool trustsRateController = false);
   ~CustomObjCVideoEncoderFactory() override;
 
   id<RTC_OBJC_TYPE(RTCVideoEncoderFactory)> wrapped_encoder_factory() const;
 
   std::vector<SdpVideoFormat> GetSupportedFormats() const override;
   std::vector<SdpVideoFormat> GetImplementations() const override;
-  std::unique_ptr<VideoEncoder> CreateVideoEncoder(
+  std::unique_ptr<VideoEncoder> Create(const Environment& env,
       const SdpVideoFormat& format) override;
   std::unique_ptr<EncoderSelectorInterface> GetEncoderSelector() const override;
 
  private:
   id<RTC_OBJC_TYPE(RTCVideoEncoderFactory)> encoder_factory_;
+  bool trusts_rate_controller_ = false;
 };
     
     
@@ -47,8 +52,8 @@ public:
     
     std::vector<SdpVideoFormat> GetSupportedFormats() const override;
     std::vector<SdpVideoFormat> GetImplementations() const override;
-    std::unique_ptr<VideoEncoder> CreateVideoEncoder(
-                                                     const SdpVideoFormat& format) override;
+    std::unique_ptr<VideoEncoder> Create(const Environment& env,
+                                         const SdpVideoFormat& format) override;
     std::unique_ptr<EncoderSelectorInterface> GetEncoderSelector() const override;
     
 private:
