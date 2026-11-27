@@ -1771,7 +1771,10 @@ public:
             if (!weak.lock() || adm->Playing()) {
                 return;
             }
-            SetAudioOutputDeviceById(adm.get(), output);
+            if (!adm->PlayoutIsInitialized()) {
+                adm->InitPlayout();
+            }
+            adm->StartPlayout();
             RTC_LOG(LS_INFO) << "GroupRef: playout restarted (" << reason << "): output '" << output << "', playout " << (adm->Playing() ? "started" : "not started");
         });
 #endif
@@ -2660,6 +2663,7 @@ private:
                 }
                 auto strong = weak.lock();
                 if (!strong) return;
+                strong->ensurePlayout("renegotiation");
                 strong->_threads->getMediaThread()->PostTask([weak]() {
                     if (auto s = weak.lock()) {
                         s->onRenegotiationComplete();
