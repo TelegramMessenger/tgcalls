@@ -5,16 +5,12 @@
 #include <memory>
 
 #include "AudioFrame.h"
+#include "api/scoped_refptr.h"
 
 namespace webrtc {
 class AudioDeviceModule;
 class TaskQueueFactory;
 }  // namespace webrtc
-
-namespace webrtc {
-template <class T>
-class scoped_refptr;
-}
 
 namespace tgcalls {
 class FakeAudioDeviceModule {

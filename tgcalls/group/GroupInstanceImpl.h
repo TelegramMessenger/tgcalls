@@ -14,16 +14,12 @@
 #include "../StaticThreads.h"
 #include "GroupJoinPayload.h"
 #include "GroupAv1Decision.h"
+#include "api/scoped_refptr.h"
 
 namespace webrtc {
 class AudioDeviceModule;
 class TaskQueueFactory;
 class VideoTrackSourceInterface;
-}
-
-namespace webrtc {
-template <class T>
-class scoped_refptr;
 }
 
 namespace tgcalls {

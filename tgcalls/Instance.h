@@ -10,6 +10,7 @@
 
 #include "Stats.h"
 #include "DirectConnectionChannel.h"
+#include "api/scoped_refptr.h"
 
 namespace webrtc {
 template <typename VideoFrameT>
@@ -20,8 +21,6 @@ namespace webrtc {
 class VideoFrame;
 class AudioDeviceModule;
 class TaskQueueFactory;
-template <class T>
-class scoped_refptr;
 } // namespace webrtc
 
 namespace tgcalls {
