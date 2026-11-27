@@ -1391,7 +1391,7 @@ public:
         }
 
         if (_useDummyChannel && _videoContentType != VideoContentType::Screencast) {
-            addIncomingAudioChannel(ChannelId(1), true);
+            addIncomingAudioChannel(ChannelId(1), 0, true);
         }
 
         if (_videoContentType == VideoContentType::Screencast) {
