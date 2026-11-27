@@ -1290,7 +1290,7 @@ public:
         peerConnectionFactoryDeps.audio_decoder_factory = CreateGroupAudioDecoderFactory(_opusDnnWeights, true);
 #if defined(WEBRTC_MAC) && __has_include("CallsRemoteAudio.hpp")
         const bool sandboxAudio = calls::audio::enabled();
-        peerConnectionFactoryDeps.audio_decoder_factory = calls::audio::wrapFactory(peerConnectionFactoryDeps.audio_decoder_factory, sandboxAudio);
+        peerConnectionFactoryDeps.audio_decoder_factory = calls::audio::wrapFactory(peerConnectionFactoryDeps.audio_decoder_factory, sandboxAudio, _opusDnnWeights);
         if (sandboxAudio) peerConnectionFactoryDeps.audio_mixer = calls::audio::makeMixer();
 #endif
 

@@ -66,9 +66,7 @@ let package = Package(
                       "tgcalls/platform/darwin/Av1VideoToolboxDecoder.cpp",
                       "tgcalls/platform/darwin/Av1VideoToolboxDecoder.h",
                       "tgcalls/platform/darwin/TGRTCVideoDecoderAV1.mm",
-                      "tgcalls/platform/darwin/TGRTCVideoDecoderAV1.h",
-                      "tgcalls/legacy/InstanceImplLegacy.h",
-                      "tgcalls/legacy/InstanceImplLegacy.cpp"
+                      "tgcalls/platform/darwin/TGRTCVideoDecoderAV1.h"
                      ],
             publicHeadersPath: "macos/PublicHeaders",
             cxxSettings: [
