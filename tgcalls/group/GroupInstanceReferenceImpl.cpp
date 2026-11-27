@@ -564,8 +564,10 @@ public:
         , _disableAudioInput(descriptor.disableAudioInput)
         , _enableSystemMute(descriptor.ios_enableSystemMute)
         , _videoContentType(descriptor.videoContentType)
+#if defined(WEBRTC_MAC) && !defined(WEBRTC_IOS)
         , _initialInputDeviceId(std::move(descriptor.initialInputDeviceId))
-        , _initialOutputDeviceId(std::move(descriptor.initialOutputDeviceId))
+        , _currentOutputDeviceId(descriptor.initialOutputDeviceId.empty() ? std::string("default") : std::move(descriptor.initialOutputDeviceId))
+#endif
         , _iosInAppScreencast(descriptor.iosInAppScreencast && descriptor.videoContentType != VideoContentType::None)
         , _allowAv1ScreencastSending(descriptor.allowAv1ScreencastSending)
         , _av1ScreencastLayers(descriptor.av1ScreencastLayers)
@@ -788,16 +790,25 @@ public:
             return;
         }
 
-#if !defined(WEBRTC_IOS)
-        // Android, Windows and macOS hosts render the group broadcast over the call's playout (an ADM data observer), so
-        // playout must run before any RTP audio arrives, as CustomImpl starts it (its initial devices at start). WebRTC
-        // itself starts playout only with a receive stream. The initial devices are applied here too, as CustomImpl does.
+#if defined(WEBRTC_ANDROID) || defined(WEBRTC_WIN)
+        // Android and Windows hosts render the group broadcast over the call's playout (an ADM data observer), so playout must
+        // run before any RTP audio arrives, as CustomImpl starts it (setAudioOutputDevice at start). WebRTC itself
+        // starts playout only with a receive stream.
         if (_audioDeviceModule && _videoContentType != VideoContentType::Screencast) {
-            _threads->getWorkerThread()->BlockingCall([adm = _audioDeviceModule, input = _initialInputDeviceId, output = _initialOutputDeviceId]() {
+            _threads->getWorkerThread()->BlockingCall([adm = _audioDeviceModule]() {
+                SetAudioOutputDeviceById(adm.get(), "default");
+            });
+        }
+#endif
+#if defined(WEBRTC_MAC) && !defined(WEBRTC_IOS)
+        // macOS renders the group broadcast over the call's playout too (the bridge's data observer), and CustomImpl
+        // applies the initial devices at start: do both here.
+        if (_audioDeviceModule && _videoContentType != VideoContentType::Screencast) {
+            _threads->getWorkerThread()->BlockingCall([adm = _audioDeviceModule, input = _initialInputDeviceId, output = _currentOutputDeviceId]() {
                 if (!input.empty()) {
                     SetAudioInputDeviceById(adm.get(), input);
                 }
-                SetAudioOutputDeviceById(adm.get(), output.empty() ? std::string("default") : output);
+                SetAudioOutputDeviceById(adm.get(), output);
                 RTC_LOG(LS_INFO) << "GroupRef: audio devices at start: input '" << input << "', output '" << output << "', playout " << (adm->Playing() ? "started" : "not started");
             });
         }
@@ -1254,6 +1265,7 @@ public:
                 }
                 auto strong = weak.lock();
                 if (!strong) return;
+                strong->ensurePlayout("remote description");
                 strong->_threads->getMediaThread()->PostTask([weak]() {
                     if (auto s = weak.lock()) {
                         s->addRemoteIceCandidates();
@@ -1744,7 +1756,25 @@ public:
     }
 
     void setConnectionMode(GroupConnectionMode mode) {
-        // No-op: PeerConnection manages its own connection state.
+        ensurePlayout("connection mode");
+    }
+
+    // WebRTC stops playout when the last receive stream goes away (AudioState::RemoveReceivingStream), and macOS
+    // renders the broadcast core over that playout, so a call whose streams ended (or that became a broadcast
+    // listener) would stay silent until a device switch. Restart it after every remote description and mode change.
+    void ensurePlayout(const char *reason) {
+#if defined(WEBRTC_MAC) && !defined(WEBRTC_IOS)
+        if (!_audioDeviceModule || _videoContentType == VideoContentType::Screencast) {
+            return;
+        }
+        _threads->getWorkerThread()->PostTask([weak = std::weak_ptr<GroupInstanceReferenceInternal>(shared_from_this()), adm = _audioDeviceModule, output = _currentOutputDeviceId, reason]() {
+            if (!weak.lock() || adm->Playing()) {
+                return;
+            }
+            SetAudioOutputDeviceById(adm.get(), output);
+            RTC_LOG(LS_INFO) << "GroupRef: playout restarted (" << reason << "): output '" << output << "', playout " << (adm->Playing() ? "started" : "not started");
+        });
+#endif
     }
 
     void setIsMuted(bool isMuted) {
@@ -2005,6 +2035,9 @@ public:
     }
 
     void setAudioOutputDevice(const std::string &id) {
+#if defined(WEBRTC_MAC) && !defined(WEBRTC_IOS)
+        _currentOutputDeviceId = id;
+#endif
 #ifndef WEBRTC_IOS
         _threads->getWorkerThread()->BlockingCall([&] {
             if (_audioDeviceModule) {
@@ -3047,8 +3080,10 @@ private:
 
     // Video configuration from descriptor.
     VideoContentType _videoContentType = VideoContentType::None;
+#if defined(WEBRTC_MAC) && !defined(WEBRTC_IOS)
     std::string _initialInputDeviceId;
-    std::string _initialOutputDeviceId;
+    std::string _currentOutputDeviceId;
+#endif
     // See GroupInstanceDescriptor::iosInAppScreencast. On this engine also a main connection
     // (Generic) whose camera video is the screen (the app's debug "screen share as camera").
     bool _iosInAppScreencast = false;
