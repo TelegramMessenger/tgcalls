@@ -251,6 +251,7 @@ typedef void (^CallCaptionAudioSink)(uint32_t ssrc, NSData * _Nonnull monoFloatP
 @property (nonatomic, copy) void (^ _Nullable audioLevelUpdated)(float);
 
 - (instancetype _Nonnull)initWithVersion:(NSString * _Nonnull)version queue:(id<OngoingCallThreadLocalContextQueueWebrtc> _Nonnull)queue proxy:(VoipProxyServerWebrtc * _Nullable)proxy networkType:(OngoingCallNetworkTypeWebrtc)networkType dataSaving:(OngoingCallDataSavingWebrtc)dataSaving derivedState:(NSData * _Nonnull)derivedState key:(NSData * _Nonnull)key isOutgoing:(bool)isOutgoing connections:(NSArray<OngoingCallConnectionDescriptionWebrtc *> * _Nonnull)connections maxLayer:(int32_t)maxLayer allowP2P:(BOOL)allowP2P allowTCP:(BOOL)allowTCP enableStunMarking:(BOOL)enableStunMarking logPath:(NSString * _Nonnull)logPath statsLogPath:(NSString * _Nonnull)statsLogPath sendSignalingData:(void (^ _Nonnull)(NSData * _Nonnull))sendSignalingData videoCapturer:(OngoingCallThreadLocalContextVideoCapturer * _Nullable)videoCapturer preferredVideoCodec:(NSString * _Nullable)preferredVideoCodec inputDeviceId: (NSString * _Nonnull)inputDeviceId outputDeviceId: (NSString * _Nonnull)outputDeviceId;
+- (instancetype _Nonnull)initWithVersion:(NSString * _Nonnull)version queue:(id<OngoingCallThreadLocalContextQueueWebrtc> _Nonnull)queue proxy:(VoipProxyServerWebrtc * _Nullable)proxy networkType:(OngoingCallNetworkTypeWebrtc)networkType dataSaving:(OngoingCallDataSavingWebrtc)dataSaving derivedState:(NSData * _Nonnull)derivedState key:(NSData * _Nonnull)key isOutgoing:(bool)isOutgoing connections:(NSArray<OngoingCallConnectionDescriptionWebrtc *> * _Nonnull)connections maxLayer:(int32_t)maxLayer allowP2P:(BOOL)allowP2P allowTCP:(BOOL)allowTCP enableStunMarking:(BOOL)enableStunMarking logPath:(NSString * _Nonnull)logPath statsLogPath:(NSString * _Nonnull)statsLogPath sendSignalingData:(void (^ _Nonnull)(NSData * _Nonnull))sendSignalingData videoCapturer:(OngoingCallThreadLocalContextVideoCapturer * _Nullable)videoCapturer preferredVideoCodec:(NSString * _Nullable)preferredVideoCodec inputDeviceId: (NSString * _Nonnull)inputDeviceId outputDeviceId: (NSString * _Nonnull)outputDeviceId opusDnnWeights:(NSData * _Nullable)opusDnnWeights;
 
 - (void)beginTermination;
 - (void)stop:(void (^_Nullable)(NSString * _Nullable debugLog, int64_t bytesSentWifi, int64_t bytesReceivedWifi, int64_t bytesSentMobile, int64_t bytesReceivedMobile))completion;
@@ -393,6 +394,30 @@ typedef NS_ENUM(int32_t, OngoingGroupCallRequestedVideoQuality) {
     isConference:(bool)isConference
     isActiveByDefault:(bool)isActiveByDefault
     encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, bool, int32_t))encryptDecrypt;
+
+- (instancetype _Nonnull)initWithQueue:(id<OngoingCallThreadLocalContextQueueWebrtc> _Nonnull)queue
+    networkStateUpdated:(void (^ _Nonnull)(GroupCallNetworkState))networkStateUpdated
+    audioLevelsUpdated:(void (^ _Nonnull)(NSArray<NSNumber *> * _Nonnull))audioLevelsUpdated
+    activityUpdated:(void (^ _Nonnull)(NSArray<NSNumber *> * _Nonnull))activityUpdated
+    inputDeviceId:(NSString * _Nonnull)inputDeviceId
+    outputDeviceId:(NSString * _Nonnull)outputDeviceId
+    videoCapturer:(OngoingCallThreadLocalContextVideoCapturer * _Nullable)videoCapturer
+    requestMediaChannelDescriptions:(id<OngoingGroupCallMediaChannelDescriptionTask> _Nonnull (^ _Nonnull)(NSArray<NSNumber *> * _Nonnull, void (^ _Nonnull)(NSArray<OngoingGroupCallMediaChannelDescription *> * _Nonnull)))requestMediaChannelDescriptions
+    outgoingAudioBitrateKbit:(int32_t)outgoingAudioBitrateKbit
+    dredFixedPacketLossPercent:(int32_t)dredFixedPacketLossPercent
+    dredReceiveEnabled:(bool)dredReceiveEnabled
+    opusDnnWeights:(NSData * _Nullable)opusDnnWeights
+    videoContentType:(OngoingGroupCallVideoContentType)videoContentType
+    enableNoiseSuppression:(bool)enableNoiseSuppression
+    disableAudioInput:(bool)disableAudioInput
+    prioritizeVP8:(bool)prioritizeVP8
+    logPath:(NSString * _Nonnull)logPath
+    statsLogPath:(NSString * _Nonnull)statsLogPath
+    audioDevice:(SharedCallAudioDevice * _Nullable)audioDevice
+    isConference:(bool)isConference
+    isActiveByDefault:(bool)isActiveByDefault
+    encryptDecrypt:(NSData * _Nullable (^ _Nullable)(NSData * _Nonnull, int64_t, bool, int32_t))encryptDecrypt
+useReferenceImpl:(bool)useReferenceImpl;
 
 - (void)stop:(void (^ _Nullable)())completion;
 
